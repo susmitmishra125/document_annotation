@@ -40,11 +40,5 @@ for filename in os.listdir(pdf_folder):
     sentences = [s.translate(translator) for s in sentences]
     # write the text to a file
     textfilename = filename[:-4]+".txt"
-    # with open(os.path.join(text_folder,textfilename), 'w', encoding='utf8') as outputFile:
-        # outputFile.write(text)
-    # list to text file using writelines
-    print(len(sentences))
-    print(sentences[0])
     with open(os.path.join(text_folder,textfilename), 'w', encoding='utf8') as outputFile:
-        # outputFile.writelines(sentences)
         outputFile.write("\n".join(sentences))
