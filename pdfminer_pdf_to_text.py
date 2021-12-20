@@ -1,5 +1,7 @@
+import os
 from io import StringIO
-
+import nltk
+from nltk.tokenize import sent_tokenize
 from pdfminer.converter import TextConverter
 from pdfminer.layout import LAParams
 from pdfminer.pdfdocument import PDFDocument
@@ -7,16 +9,18 @@ from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
 from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfparser import PDFParser
 
-str1 = "2021.acl-long."
-spdf = ".pdf"
-stext = ".txt"
+pdf_folder = "acl-2019"
+text_folder = "acl-2019-text"
+# check if folder exists if not create it
+if not os.path.exists(text_folder):
+    os.makedirs(text_folder)
 
-number_of_files = 10
-
-# outputFile = open('2021.acl-long.1.txt', 'a')
-for i in range(1, int(number_of_files)+1):
+for filename in os.listdir(pdf_folder):
     output_string = StringIO()
-    with open(str1 + str(i) + spdf, 'rb') as in_file:
+    if filename[-4:]!=".pdf":# only process pdf files
+      continue
+    file_path = os.path.join(pdf_folder, filename)
+    with open(file_path, 'rb') as in_file:
         parser = PDFParser(in_file)
         doc = PDFDocument(parser)
         rsrcmgr = PDFResourceManager()
@@ -24,5 +28,23 @@ for i in range(1, int(number_of_files)+1):
         interpreter = PDFPageInterpreter(rsrcmgr, device)
         for page in PDFPage.create_pages(doc):
             interpreter.process_page(page)
-    with open(str1 + str(i) + stext, 'w', encoding='utf8') as outputFile:
-        outputFile.write(output_string.getvalue())
+    # preprocessing the text
+    text = output_string.getvalue()
+    text = text.lower()
+    text = text.replace("\n\n", ".\n")
+    # split into sentences
+    sentences = nltk.sent_tokenize(text)
+    # remove special characters
+    escapes = ''.join([chr(char) for char in range(1, 32)])
+    translator = str.maketrans('', '', escapes)
+    sentences = [s.translate(translator) for s in sentences]
+    # write the text to a file
+    textfilename = filename[:-4]+".txt"
+    # with open(os.path.join(text_folder,textfilename), 'w', encoding='utf8') as outputFile:
+        # outputFile.write(text)
+    # list to text file using writelines
+    print(len(sentences))
+    print(sentences[0])
+    with open(os.path.join(text_folder,textfilename), 'w', encoding='utf8') as outputFile:
+        # outputFile.writelines(sentences)
+        outputFile.write("\n".join(sentences))
