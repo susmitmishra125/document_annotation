@@ -21,6 +21,7 @@ for filename in os.listdir(json_folder):
     JsonF = json.load(f)
     list_1 = JsonF["entities"]
     for a in list_1:
+      if len(a["offsets"][0]['text'].lower())>3:
         ent_list.append(a["offsets"][0]['text'].lower())
     for word in ent_list:
         ent_dict[word] = -1
@@ -36,10 +37,10 @@ for filename in os.listdir(text_folder):
     count_list = []  # to store frequency
     sentences = text_corp.split("\n")
     for sent in sentences:
-        count=0
+        count = 0
         for word in ent_list:
-          if word in sent:
-            count+=1
+            if word in sent:
+                count += 1
         count_list.append(count)
     # writing the count_list in a doc
     bin_file = "count_" + filename
