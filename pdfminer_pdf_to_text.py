@@ -9,8 +9,8 @@ from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
 from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfparser import PDFParser
 
-pdf_folder = "acl-2019"
-text_folder = "acl-2019-text"
+pdf_folder = "pdf"
+text_folder = "pdf2txt"
 # check if folder exists if not create it
 if not os.path.exists(text_folder):
     os.makedirs(text_folder)

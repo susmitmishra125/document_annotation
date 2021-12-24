@@ -1,9 +1,9 @@
 import os
 import json
 
-json_folder = "acl-2019-json"
-text_folder = "acl-2019-text"
-bin_folder = "acl-2019-bin"
+json_folder = "annotation"
+text_folder = "pdf2txt"
+bin_folder = "count"
 # check if folder exists if not create it
 if not os.path.exists(bin_folder):
     os.makedirs(bin_folder)
@@ -21,36 +21,29 @@ for filename in os.listdir(json_folder):
     JsonF = json.load(f)
     list_1 = JsonF["entities"]
     for a in list_1:
-        ent_list.append(a["offsets"][0]['text'])
+        ent_list.append(a["offsets"][0]['text'].lower())
     for word in ent_list:
         ent_dict[word] = -1
     f.close()
 # reading from the text file and counting the frequency
-
 for filename in os.listdir(text_folder):
-    if filename[-4:] != ".txt":  # only process pdf files
+    if filename[-4:] != ".txt":  # only process txt files
         continue
     file_path = os.path.join(text_folder, filename)
     txt_file = open(file_path, 'r', encoding='UTF8')
     text_corp = txt_file.read()
     # splitting into sentences
     count_list = []  # to store frequency
-    count = 0
     sentences = text_corp.split("\n")
-
     for sent in sentences:
-        word_list = sent.split()
-        for word in word_list:
-            if word in ent_dict.keys():
-                count += 1
-            else:
-                continue
+        count=0
+        for word in ent_list:
+          if word in sent:
+            count+=1
         count_list.append(count)
-        count = 0
-
-    # writeing the count_list in a doc
-    bin_file = "bin_" + filename
-    with open(os.path.join(bin_folder, bin_file), 'a', encoding='utf8') as outputFile:
+    # writing the count_list in a doc
+    bin_file = "count_" + filename
+    with open(os.path.join(bin_folder, bin_file), 'w', encoding='utf8') as outputFile:
         for num in count_list:
             outputFile.write(str(num))
             outputFile.write("\n")
