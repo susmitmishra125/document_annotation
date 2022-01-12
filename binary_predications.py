@@ -38,4 +38,3 @@ result, model_outputs, wrong_predictions = model.eval_model(test_df)
 # print result
 print(result)
 print(model_outputs)
-print(wrong_predictions)
