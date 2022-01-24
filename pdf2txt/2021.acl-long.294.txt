@@ -1,0 +1,1065 @@
+h-transformer-1d: fast one-dimensional hierarchical attention forsequences.
+zhenhai zhugoogle researchzhenhai@google.com.
+radu soricutgoogle researchrsoricut@google.com.
+abstract.
+we describe an efﬁcient hierarchical method tocompute attention in the transformer architec-ture.
+the proposed attention mechanism ex-ploits a matrix structure similar to the hier-archical matrix (h-matrix) developed by thenumerical analysis community, and has linearrun time and memory complexity.
+we per-form extensive experiments to show that theinductive bias embodied by our hierarchical at-tention is effective in capturing the hierarchi-cal structure in the sequences typical for nat-ural language and vision tasks.
+our methodis superior to alternative sub-quadratic propos-als by over +6 points on average on the longrange arena benchmark.
+it also sets a newsota test perplexity on one-billion worddataset with 5x fewer model parameters thanthat of the previous-best transformer-basedmodels..1.introduction.
+linearly combining information using content-based weights, a method generically known as at-tention, is a key building block in many deep neu-ral networks such as recurrent neural networks(rnn) (luong et al., 2015), convolutional neu-ral networks (cnn) (bello et al., 2019) and graphconvolutional networks (gcn) (velickovic et al.,2018).
+one particular type of such attention,called multi-head scaled dot-product attention, isone of the main components of the transformerarchitecture proposed by vaswani et al.
+(2017),which has been shown to push the state-of-the-art (sota) performance for various understandingand generation tasks.
+these include standard nat-ural language processing (nlp) tasks such as ma-chine translation, document classiﬁcation, entail-ment, summarization and question answering (za-heer et al., 2020; dai et al., 2019; baevski andauli, 2019), as well as music generation (huang.
+image generation (parmar et al.,et al., 2018),2018; chen et al., 2020) and genomics (zaheeret al., 2020; choromanski et al., 2020).
+thetransformer is also the backbone architecture formodels such as bert (devlin et al., 2019) (andits numerous relatives) and gpt3 (brown et al.,2020), which have delivered impressive perfor-mance across many nlp tasks.
+however, thestandard attention mechanism of the transformerhas a run time and memory usage that scalesquadratically with sequence length.
+therefore,this quadratic complexity has become a criticalbottleneck in processing long sequences (over1,000 tokens), and has since motivated many newattention algorithms, see (tay et al., 2020d) for asurvey of such work..in this paper, we draw inspiration from twobranches in numerical analysis: hierarchical ma-trix (h-matrix) (hackbusch, 1999, 2000) andmultigrid method (briggs et al., 2000).
+we pro-pose a hierarchical attention that has linear com-plexity in run time and memory, and only uti-lizes dense linear algebra operations optimized forgpus or tpus..we hypothesize that the inductive bias embod-ied by the proposed hierarchical structure for theattention matrix is effective in capturing the hier-archical structure in the sequences typically seenin many natural language processing and com-puter vision tasks.
+the main benchmark we use inthis paper is the long range arena (lra) bench-mark (tay et al., 2020c), which has been specif-ically designed to evaluate and compare varioussub-quadratic attention algorithms.
+our new hier-archical attention mechanism achieves best aver-age performance to-date on the lra benchmarkby more than 6 points over the previous-best big-bird algorithm (zaheer et al., 2020), while push-ing sota performance higher in 4 of the 5 suc-cessful tasks.
+furthermore, using this new atten-.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages3801–3815august1–6,2021.©2021associationforcomputationallinguistics3801tion, a transformer-based language model trainedon the one-billion word dataset (chelba et al.,2014) sets a new sota performance record byreducing the test perplexity by 1.55 points com-paring to the previous-best transformer-xl (daiet al., 2019) with 5x more parameters.
+overall,these empirical results both validate the soundnessof our approximation method for computing atten-tion weights, as well as the the appropriateness ofthe inductive bias present in the proposed hierar-chical attention..2 related works.
+it is well established in the nlp literature that theembeddings of nearby tokens tend to be more sim-ilar than the distant ones (manning and sch¨utze,1999).
+this leads to the intuition that token simi-larity and hence the attention should decrease withthe sequence distance between a query token and akey token1.
+this motivates the sliding-window lo-cal attention (parmar et al., 2018; ramachandranet al., 2019; qiu et al., 2019) which amounts totruncating off-diagonal entries in the attention ma-trix beyond a user-speciﬁed sequence distance.
+asecond approach is to keep o(1) number of nonze-ros per row in the attention matrix.
+the nonzeroentry selection is either content-based (kitaevet al., 2020; roy et al., 2020; tay et al., 2020b;zhou et al., 2020), hand-crafted (beltagy et al.,2020; brown et al., 2020; child et al., 2019; hoet al., 2019) or simply random (zaheer et al.,2020).
+it is also well known in the nlp litera-ture that long-range contextual information is nec-essary for many nlp tasks (khandelwal et al.,2018; liu and lapata, 2019).
+so a set of globaltokens are also considered.
+this adds o(1) num-ber of dense rows and columns to the attention ma-trix (zaheer et al., 2020; ainslie et al., 2020; belt-agy et al., 2020).
+a third approach is to approxi-mate the attention matrix with a low-rank factoredform (choromanski et al., 2020; wang et al., 2020;tay et al., 2020a)..the ﬁrst.
+two approaches are based on thepremise that one needs to explicitly zero outentries in the attention matrix in order to re-duce the quadratic complexity.
+decades of re-search by the scientiﬁc computing and numeri-cal analysis community has resulted in more so-phisticated algorithms to sparsify matrices.
+a.
+1eq.
+(11) and (12) offer a simple illustration of this intu-.
+ition..small set of samples of these algorithms and theirengineering applications include fast multipolemethod (greengard and rokhlin, 1987; green-gard, 1994; nabors et al., 1994; shi et al., 1998),pre-corrected fft (phillips and white, 1997; zhuet al., 2005), hierarchical singular value decom-position (svd) (kapur and long, 1997) and hi-erarchical matrix (h-matrix) (hackbusch, 1999,2000; zhu and white, 2005).
+these are generallycalled multilevel methods (brandt and lubrecht,1990).
+the hierarchical attention proposed in thispaper is inspired by these multilevel methods ingeneral and the h-matrix in particular.
+the hier-archical matrix structure allows a linear complex-ity in both constructing and applying the attentionmatrix..3 deﬁnition and notation.
+given matrices q, k and v , with rows represent-ing sequences of token embedding or feature vec-tors for query, key and value respectively, the out-put weighted by the scaled dot-product attention inthe transformer (vaswani et al., 2017) is deﬁnedas.
+z = softmax(.
+(1).
+qkt√d.)v.where z, q, k, v ∈ rl×d, l is the length of thesequences, and d is the embedding or feature size.
+in a more compact matrix form, eq.
+(1) can bewritten as.
+z = d−1av.
+where.
+a = es.
+si,j =.
+qiktj√d.d = diag{a · 1l}1l = [1, 1, ..., 1]t ..(2).
+(3).
+(4).
+(5).
+(6).
+here, a, s ∈ rl×l, 1l ∈ rl is a vector with allones, and si,j represents the unnormalized cosinesimilarity between query embedding qi (the i-throw in q) and key embedding kj (the j-th row ink)..for the sake of clarity, we focus on the single-head attention in the exposition of the proposedalgorithm.
+extension to the multi-head case isstraightforward since each attention head is com-puted independently (vaswani et al., 2017)..3802computing the similarity matrix s in eq.
+(4)and the attention matrix a in eq.
+(3) takes o(l2d)time and o(l2) memory.
+similarly, computingav in eq.
+(2) takes o(l2d) time, and computinga · 1l in eq.
+(5) takes o(l2) time.
+the o(l2d)and o(l2) complexities are the bottlenecks for ap-plying the attention mechanism over very long se-quences..4.introduction on h-matrix andmultigrid method.
+4.1 h-matrix.
+the singular-value decomposition of the attentionmatrix a in eq.
+(3) is.
+a = u σv t.(7).
+where σ = diag{σ1, σ2, ..., σl} and σi is the i-thsingular value.
+the numerical rank of matrix a isr if (cid:80)li=r+1 σi < (cid:15) for a given tolerance (cid:15) (tre-fethen and bau, 1997).
+the standard rank-r ap-proximation to matrix a is.
+a ≈ ˆu ˆσ ˆv t = ˆu ˜v t.(8).
+where ˆσ = diag{σ1, σ2, ..., σr}, ˆu , ˆv ∈ rl×rhave the ﬁrst r columns of u and v , and ˜v =ˆv ˆσ.
+this is the low-rank approximation usedin (choromanski et al., 2020; wang et al., 2020;tay et al., 2020a).
+this approximation compressesl2 entries in a to 2rl entries in ˆu and ˜v t .
+so thecompression rate is l2r ..the h-matrix generalizes this low-rank approx-imation by using matrix block hierarchy.
+considera two-level h-matrix with 4 × 4 and 2 × 2 blockpartition at level-0 and level-1, respectively.
+ma-trix a is partitioned as.
+.
+12.a(0)11 a(0)21 a(0)a(0)a(1)21.
+22.
+.
+a =.
+a(1)12.a(0)33 a(0)43 a(0)a(0).
+34.
+44.
+...
+the low-rank approximation in eq.
+(8) is appliedto the off-diagonal blocks at each level.
+for exam-ple,.
+where l = 0, 1. to give a concrete example, sup-pose each entry in matrix a has the analytical form.
+12 ≈ ˆu (l)a(l).
+12.
+˜v (l)12.t.ai,j = esi,j− 1.si,j = 2e−(i−j)2.
+(9).
+(10).
+(11).
+(12).
+where i, j = 0, 1, 2, ..., 15 2. with the block hi-erarchy deﬁned in eq.
+(9), the size of the matrixblock at level-1 and level-0 is 8 × 8 and 4 × 4, re-spectively.
+for tolerance (cid:15) = 10−3, one can verifythat the numerical rank map of matrix a is.
+.
+.
+4 22 4.
+2.
+.
+.
+2.
+4 22 4.
+(13).
+where the number in each block is the numericalrank of the corresponding block in eq.
+(9).
+notethat matrix a still has full numerical rank of 16at a looser tolerance 10−1.
+so the standard low-rank approximation is ineffective in this case.
+buteven this simple two-level h-matrix already offersa compression rate of 43 since storing an h-matrixwith the rank map in eq.
+(13) takes 192 entries 3.in addition, one can verify that no entry ai,j ineq.
+(11) is very small, since si,j ∈ [−1, 1] ineq.
+(12).
+therefore, truncating off-diagonal en-tries of matrix a, as proposed in (parmar et al.,2018), would produce a poor approximation.
+inpractice, the number of levels is adapted to the un-derlining governing equations that result in matrixa and it can easily be over 10 (kapur and long,1997; hackbusch, 2000; zhu and white, 2005).
+inturn, this can substantially increase the compres-sion rate.
+in general, the computation complexityof the h-matrix is either o(l) or o(l log l), de-pending on the underlining physics (hackbusch,1999, 2000)..4.2 elements of the multigrid method.
+multigrid method is a multi-level nested itera-tive method for solving large-scale sparse matri-ces resulting from discretized partial-differentialequations (pdes) (briggs et al., 2000; trottenberget al., 2000).
+at its core are two simple but power-fully complementary ideas: relaxation and correc-tion.
+our proposed hierarchical attention only usesthe correction scheme as a building block sincethere is no sparse matrix to relax on..the correction scheme has two components: re-striction or coarsening, and interpolation or pro-.
+2matrix a in eq.
+(11) is a symmetric toeplitz ma-trix (golub and loan, 1996) and hence only has 16 uniqueentries.
+but we ignore this fact and treat a as a general ma-trix here..3each one of four diagonal blocks at level-0 takes 16 en-tries.
+each one of four off-diagonal blocks at level-0 takes 16entries.
+each one of two off-diagonal blocks at level-1 takes32 entries..3803longation.
+consider a vector ¯vh of scalar valuesdeﬁned on a set of n grids with uniform intervalh. the simplest coarsening is to take the averageof the scalar values on each pair of grids, i.e.,.
+¯v2hj =.
+(¯vh.
+2j + ¯vh.
+2j+1).
+(14).
+12.where j = 0, 1, 2, ...n/2 − 1. the superscript ineq.
+(14) indicates that the grid interval at these twolevels is h and 2h, respectively.
+the simplest in-terpolation is to duplicate the value on each coarsegrid to values on a pair of ﬁne grids, i.e.,.
+2j = ¯v2h¯vhj ,.
+2j+1 = ¯v2h¯vhj.
+(15).
+where j = 0, 1, 2, ...n/2 − 1..5.intuition for hierarchical attention.
+the hierarchical low-rank structure like eq.
+(13)turns out to be pervasive in many if not all physicsphenomena.
+much of the theoretical analysisby (greengard and rokhlin, 1987; hackbusch,1999) is concerned with quantifying such aspects.
+the key insight into these multilevel methods canbe summarized as follows: perform no approxi-mation for near interactions, and apply progres-sively lower-precision approximation for progres-sively longer distance interactions.
+the simplecase shown in eq.
+(9)-(13) is a good example.
+tosatisfy the tolerance of 10−3, we need full rank (noapproximation) for the diagonal blocks (near inter-actions), higher precision approximation (rank-2vs full-rank of 4) for the 4 × 4 off-diagonal blocksat level-0 (mid-distance) and lower precision ap-proximation (rank-2 vs full-rank of 8) for the 8 × 8off-diagonal blocks at level-1 (long-distance)..in this section, we present some intuition to an-swer two important questions: 1) does the hier-archical low-rank structure hold for the attentionmatrix a in eq.
+(3)?
+2) what is the algorithm to ef-ﬁciently compute the hierarchical low-rank struc-ture?
+we only give an informal exposition of thehierarchical attention.
+the formal mathematicalderivation is deferred to the appendix..5.1 hierarchical structure as inductive bias.
+the error analysis in (greengard and rokhlin,1987; hackbusch, 1999) offers little direct insightsince the attention matrix a in eq.
+(3) is data de-pendent by deﬁnition and hence its analytical formlike eq.
+(11) and (12) is generally unknown.
+so.
+gathering empirical evidences seems the only vi-able path to answer the ﬁrst question listed above.
+the ablation studies by (khandelwal et al.,2018) examine the effect of context words on alanguage model.
+within the context range of about200 tokens, word order is only relevant within the20 most recent tokens or about a sentence.
+in thelong-range context, order has almost no effect onperformance, suggesting that the model maintainsa high-level, rough semantic representation of far-away words.
+the observation is succinctly sum-marized by the title of the paper ”sharp nearby,fuzzy far away”.
+remarkably, this is in spirit veryclose to the key insight into the multilevel meth-ods..a few recent attention-related studies have ex-plored this direction with some success, suchas word-level and sentence-level attentions in(miculicich et al., 2018; abreu et al., 2019),and sentence-level and paragraph-level attentionsin (liu and lapata, 2019).
+even though the pro-posed hierarchical attention in these studies onlyhas two levels, as opposed to ten or more levelstypically used by the multilevel methods, the re-ported positive results are quite suggestive..we therefore hypothesize that the same hier-archical low-rank structure as shown in eq (13)might also hold for the attention matrix in manynlp tasks.
+and we treat it as the inductive biasin the hierarchical attention mechanism proposedin this paper.
+as pointed out in (goyal and ben-gio, 2020), inductive biases encourage the learningalgorithm to prioritise solutions with certain prop-erties.
+hence good benchmark performance deliv-ered by a transformer-based model with proposedhierarchical attention can be regarded as a posi-tive evidence to support the hierarchical low-rankstructure hypothesis..5.2.informal exposition of hierarchicalattention.
+in the standard deﬁnition of attention in eq.
+(3)and (4), there is no preference given to any keysbased on the sequence distance between a queryand keys.
+the observation in (khandelwal et al.,2018) clearly suggests that a distance-dependentattention mechanism should be a better alternative.
+we will take three steps to informally explainthe hierarchical attention mechanism.
+first, theattention matrix blocks for nearby, mid-distanceand long-distance attention are separated in sec-.
+3804(16).
+(17).
+(18).
+.
+.
+..tion 5.2.1.this is the ﬁrst step toward thedistance-dependent attention mentioned above.
+second, a token hierarchy is established in sec-tion 5.2.2. third, the hierarchical attention is con-structed in section 5.2.3.
+5.2.1 attention partitionconsider a 16-word sentence in fig.
+1. the sen-tence is partitioned at three segment granularity.
+this induces a three-level partition of the attentionmatrix a for the original sequence:.
+where.
+a = a(2) + a(1) + a(0).
+a(2) =.
+(cid:34).
+0a(2)21.
+(cid:35).
+a(2)120.a(1) =.
+a(1)21.
+.
+.
+a(1)12.a(1)32.a(1)23.a(1)43.
+.
+.
+a(1)34.
+.
+.
+12.
+11 a(0)a(0)22 a(0)21 a(0)a(0).
+.
+.
+.
+.
+..23.a(0) =.
+.
+.
+.
+87 a(0)a(0).
+88.ij.
+(19)note that the nonzero entries in a(0), a(1) anda(2) are the same as the corresponding entries ofmatrix a in eq.
+(3).
+matrix block size of a(0)ij ,a(1)ij and a(2)is 2×2, 4×4 and 8×8, respectively.
+following the key insight into multilevel meth-ods, we perform no approximation to any level-0matrix block a(0)ij and apply a low-rank approxi-mation to off-diagonal matrix blocks in a(1) anda(2).
+if we set the numerical rank of all theseblocks to 2, then we can assemble the three rankmaps into a single rank map as 4.
+2 22 2.
+2.
+2.
+2 22 2.
+2.
+.
+.
+.
+.
+2.
+2 22 2.
+2.
+2.
+2 22 2.
+4we omit some of implementation details to handle the.
+overlapping entries between adjacent levels..figure 1: token sequence partitions in three segmentgranularity..the hierarchical structure embodied by the prede-termined rank map in eq.
+(20) represents the in-ductive bias for the attention matrix a in eq.
+(16).
+but this construction step is inefﬁcient because weneed to form the original attention matrix and thenperform svd to discover the low-rank approxima-tion..5.2.2 token hierarchy.
+to illustrate the notion of token hierarchy, con-sider the same 16-word sentence in fig.
+2. asimple 3-level binary-tree hierarchy can be setup by following the simple coarsening deﬁned ineq.
+(14): 1) at level-0, each one of the 16 wordsis mapped to its word embedding; 2) at level-1,each token (parent node) corresponds to a pair ofadjacent words at level-0 (child nodes), which areshown inside each box.
+the embedding of eachparent token is simply the average of its child to-ken embeddings; 3) at level-2, each token (parentnode) corresponds to one pair of adjacent tokens atlevel-1 (child nodes) or 4 adjacent words at level-0(grand child nodes), which are shown inside eachbox.
+the embedding of each parent token is sim-ply the average of its child token embeddings..in general,.
+the height of the binary tree iso(log2(l) and the total number of tree nodes iso(2l), where l is the sequence length.
+we onlyneed word embeddings for the leaf nodes since theembeddings of all other tree nodes can be recur-sively computed.
+the formal deﬁnition and no-tations of the recursion for query and key are de-tailed in section 6.1....(20).
+5.2.3.informal construction of hierarchicalattention.
+it is clear from fig.
+2 that the embeddings ofhigher level tokens represent a coarser level repre-sentation of a larger chunk of the text.
+the tokensat different levels can be understood as multi-scalesnapshots of the original token sequence at level-0..3805this sentence is toillustrate how to setup token hierarchy levelby level with aggregationa)  level-0:  16 tokens partitioned into 8 segmentsb)  level-1:  16 tokens partitioned in 4 segmentsc)  level-2:  16 tokens partitioned in 2 segmentsthis sentenceis toto setup tokenillustrate howhierarchy levelby levelwith aggregationthis sentence is to illustrate how to setup token hierarchy level by level with aggregationit.
+to a(0).
+is clear that ˜a(0).
+where the 2 in the nonzero blocks indicates thatthese are dense blocks of size 2 × 2.is identical.
+ineq.
+(19).
+the efﬁciency gain comes from ˜a(2) and˜a(1).
+each nonzero entry in ˜a(2) and ˜a(1) cap-tures the aggregated or coarse attention betweentwo disjoint chunk of four and two tokens, re-spectively.
+progressively larger token chunks leadto progressively lower-precision approximation tothe original attention blocks.
+this is precisely theintention of the rank map in eq.
+(20).
+we can nowsee that ˜a(2) and ˜a(1) provide an efﬁcient way toapproximate a(2) in eq.
+(17) and a(1) in eq.
+(18),respectively..6 key components in hierarchical.
+attention.
+6.1 constructing hierarchical attention.
+the simple example in fig.
+2 can be easily gener-alized.
+eq.
+(14) is used to coarsen or merge rowsin matrices q, k and v in eq.
+(1).
+for sequencelength l = 2m +1, the coarsening establishes abinary tree of depth m for q, k and v , respec-tively.
+each tree node represents a matrix row andthere are 2m +1−l nodes or rows at level-l. to fa-cilitate the discussion, we deﬁne a few hierarchyrelated notations here.
+let ˜q(l), ˜k(l) and ˜v (l) becoarsened versions of q, k and v at level-l in thebinary tree.
+we note that l = 0 is a special case,which is deﬁned as.
+˜q(0) = q, ˜k(0) = k, ˜v (0) = v..(24).
+following eq.
+(14), the recursion to coarsen q, kand v is:.
+˜q(l+1)j.
+˜k(l+1)j˜v (l+1)j.
+=.
+1212= ( ˜v (l).
+=.
+( ˜q(l).
+2j + ˜q(l).
+2j+1).
+( ˜k(l).
+2j + ˜k(l).
+2j+1).
+2j + ˜v (l).
+2j+1).
+(25).
+(26).
+(27).
+(21).
+(22).
+(23).
+where l = 0, 1, ..., m − 2 and j =0, 1, 2, ..., 2m −l.
+it should be noted that the coars-ening of v in eq.
+(27) does not have the averagingfactor 12 .
+we defer more details on coarsening toappendix section a.1..now we are ready to compute the nonzero en-tries in eq.
+(21), (22) and (23) and constructhierarchical attention matrix ˜a(l).
+substitutingeq.
+(25) and (26) into (4) and then into (3), weobtain.
+˜a(l).
+ij = e.˜s(l)ij = e.(l)˜qi.
+)t.(l)( ˜kj√d.(28).
+figure 2: a three-level token hierarchy.
+dashed boxesrepresent segmentation and solid boxes represents to-kens..hence this token hierarchy naturally induces a setof multi-scale attention matrices.
+let ˜a(i) be theattention matrix induced by the tokens at level-i.
+itis clear from fig.
+2 that the size of ˜a(0), ˜a(1) and˜a(2) is 16 × 16, 8 × 8 and 4 × 4, respectively.
+thismulti-scale viewpoint does not directly lead to auseful algorithm since matrix ˜a(0) contains all theinformation and there is little additional informa-tion from ˜a(1) and ˜a(2)..a key step to arrive at the hierarchical attentionis to apply the contextual sliding window at eachhierarchy level.
+the tokens at each level are parti-tioned into segments of size 2 in fig.
+2. one wayto implement the local attention is to allow eachquery token segment to attend only two adjacentkey token segments, one to its left and another toits right.
+at level-0, each query token segment alsoattends to the collocated key token segment.
+thetoken segment partition and local attention leadto a tri-diagonal block sparse matrix structure for˜a(0) and bi-diagonal block sparse matrix structurefor ˜a(1) and ˜a(2).
+their sparsity patterns are.
+2 22 2 2.
+2 2 2.
+˜a(0) ∝.
+2 2 2.
+2 2 2.
+.
+.
+2 2 2.
+2 2 22 2.
+.
+.
+.
+.
+2.
+˜a(1) ∝.
+(cid:20).
+˜a(2) ∝.
+.
+.
+2.
+2.
+2.
+2.
+(cid:21).
+2.
+2.
+2.
+3806this sentence is to illustrate how to set up token hierarchy level by level with aggregationthissentenceistoillustratehowtosetuptokenhierarchylevelby levelwith aggregationthissentence is toillustratehowhosetuptokenhierarchylevelbylevelwith aggregationa)  level-0:  16 tokens partitioned into 8 segmentsb)  level-1:  8 tokens partitioned into 4 segmentsc)  level-2:  4 tokens partitioned into 2 segmentsagain, we note that l = 0 is a special case because˜a(0).
+ij = aij..6.2 applying hierarchical attention.
+the hierarchical matrix structure in eq.
+(17), (18)and (19) naturally leads to a hierarchical approachto the matrix-matrix multiplication in eq.
+(2) andthe matrix-vector multiplication in eq.
+(5).
+weuse the matrix-matrix multiplication as an exam-ple since matrix-vector multiplication is just a spe-cial case of the matrix-matrix multiplication..in view of eq.
+(17), (18) and (19), we write the.
+matrix-matrix multiplication in eq.
+(2) as.
+y = av ≈ a(0)v (0) + ˜a(1) ˜v (1) + ˜a(2) ˜v (2)= y (0) + p (0) (cid:16) ˜y (1) + p (1) ˜y (2)(cid:17)(29).
+where.
+˜y (l) = ˜a(l) ˜v (l),.
+l = 1, 2.
+(30).
+we defer the detailed derivation of eq.
+(29) to ap-pendix section a.5 and a.6..7 algorithm and computational.
+complexity.
+to facilitate the description and the complexityanalysis of the algorithm, we deﬁne a few morein addition to se-hierarchy-related notations.
+quence length l, number of hierarchy levels mand embedding or feature size d in eq.
+(1), the newnotations include: 1) nr : numerical rank of theoff-diagonal blocks (for instance, 2 in eq.
+(20)).
+this is also the diagonal block size at level-0; 2)n (l): number of blocks at level-l. note that l andbd are usually data-dependent hyper-parameters,while nr is the only model hyper-parameter re-sponsible for our method’s inductive bias.
+in turn,n (l)and m are derived parameters, computed as:b.n (0)b.
+=.
+, n (l+1)b.lnrm = log2(n (0).
+)..b.
+=.
+n (l)b2.it is easy to verify that.
+m −1(cid:88).
+l=0.
+n (l).
+b =.
+m −1(cid:88).
+l=0.
+n (0)2l ≈ 2n (0)b.b.
+..(31).
+(32).
+(33).
+shown in eq.
+(21)- (23).
+this means that onlyn (l)b − 1 super-diagonal and sub-diagonal blocksare computed at level-l. this is crucial to the over-all linear complexity in run time and memory..we should also note that all matrix blocks incoarse attention matrix ˜a(l) have the same sizenr × nr.
+this is due to the rank map in eq.
+(20).
+this is crucial for efﬁciency reason since thesingle-instruction-multiple-data (simd) program-ming style supported by the dense linear algebralibraries for gpu and tpu encourages uniformtensor shapes..we summarize the main steps to construct and.
+apply the hierarchical attention in algorithm 1..algorithm 1 h-transformer-1dinput: q(query), k(key), v (value)output: z.coarsen q using eq.
+(25) and coarsen k usingeq.
+(26)compute diagonal blocks in ˜a(0) and super-diagonal and sub-diagonal blocks in ˜a(l) usingeq.
+(28)coarsen v using eq.
+(27)compute y = av in eq.
+(2) using eq.
+(29)compute d in eq.
+(5) using eq.
+(29)compute z = d−1y.
+the computational cost for algorithm 1 has two.
+parts:.
+1. computing the hierarchical attention matrix:.
+(a) diagonal blocks at level-0: dn 2(b) super- and sub-diagonal blocks at level-.
+r n (0).
+b.l: 4dn 2.r (n (l)(c) total: 5dlnr = o(dl).
+b − 1).
+2. computing matrix-matrix (mm) multiplica-tion in eq.
+(2) and matrix-vector (mv) mul-tiplication in eq.
+(5):.
+(a) mm: 5dlnr(b) mv: 5lnr(c) total: 5(d + 1)lnr = o(dl).
+it is important to note that only the diagonalblocks at level-0 and the super-diagonal and sub-diagonal blocks at level-l are needed in applyingthe hierarchical attention matrix.
+this is clearly.
+so the overall run time complexity of the hierar-chical attention algorithm is o(dl).
+likewise, thememory complexity can be shown to be o(dl) aswell.
+we defer the detailed analysis to appendixsection a.5 and a.6..3807model.
+listops.
+text.
+retrieval.
+image pathﬁnder path-x avg.
+chancetransformer.
+local attentionsparse trans.
+longformerlinformerreformersinkhorn trans.
+synthesizerbigbirdlinear trans.
+performerh-transformer-1d.
+10.0036.37.
+15.8217.0735.6335.7037.2733.6736.9936.0516.1318.0149.53.
+50.0064.27.
+52.9863.5862.8553.9456.1061.2061.6864.0265.9065.4078.69.
+50.0057.46.
+53.3959.5956.8952.2753.4053.8354.6759.2953.0953.8263.99.
+10.0042.44.
+41.4644.2442.2238.5638.0741.2341.6140.8342.3442.7746.05.
+50.0071.40.
+66.6371.7169.7176.3468.5067.4569.4574.8775.3077.0568.78.
+50.00fail.
+failfailfailfailfailfailfailfailfailfailfail.
+44.0054.39.
+46.0651.2453.4651.3650.6751.3952.8855.0150.5551.4161.41.table 1: experimental results on long-range arena benchmark.
+best model is in boldface and second best isunderlined.
+all models do not learn anything on path-x task, contrary to the pathﬁnder task and this is denoted byfail.
+path-x is not counted toward the average score as it has no impact on relative performance..8 experiments and results.
+we have implemented the proposed hierarchicalattention using jax, an open source library 5 forautomatic gradient computation and linear alge-bra operations on gpus and tpus.
+all numer-ical operations in our algorithm use the numpynative linear algebra functions supported by jax.
+in all our experiments in this section, we usethe standard transformer architecture described in(vaswani et al., 2017) as the backbone for our h-transformer-1d model.
+unless speciﬁed other-wise, the model parameters are: number of lay-ers is 6, number of heads is 8, word embeddingsize is 512 and the feed-forward module (ffn)size is 2048. we follow the api for the standardmultihead scaled dot-product attention implemen-tation 6 so that we can perform a simple drop-in re-placement of the standard multihead attention withour hierarchical attention implementation.
+this al-lows for an easy and fair comparison..8.1 long-range arena.
+the open-source long-range arena (lra)benchmark 7 has been proposed as a standardway to probe and quantify the capabilities of var-ious xformer (long-range transformer) architec-tures (tay et al., 2020c).
+in our case, it also servesto highlight the effectiveness of the inductive bias.
+5https://github.com/google/jax6https://github.com/google/ﬂax/blob/master/ﬂax/nn7https://github.com/google-research/long-range-arena.
+inspired by the h-matrix method, as well as thecapability of our hierarchical attention to handlelong sequences..the lra has several desirable qualities thatmade us focus on it as a primary evaluation bench-mark: generality (restricted to encoder-only tasksto accommodate most proposals); simplicity (nopretraining, no data augmentation allowed); difﬁ-culty (large headroom with existing approaches);long-input focus (so that modeling improvementsin this area are visible); diverse (6 tasks, cover-ing math, language, image, and spatial modeling);and lightweight (so that modeling improvementsare measurable independently of the ability to trainand run high-capacity models)..the tasks that comprise lra are: listops(sequences of arithmetical expressions of lengthsof up to 2k that tests the ability to reason hi-erarchically while handling long context); text(byte/character-level text classiﬁcation at docu-ment level, which both simulates longer input se-quences – max length 4k – and increases the difﬁ-culty level); retrieval (byte/character-level doc-ument retrieval, which simulates the ability tomodel document similarity as a score betweentwo independently-encoded long input sequences– max length 4k + 4k = 8k); image (image clas-siﬁcation based on the cifar-10 dataset, wherean nxn image is ﬂattened to a sequence of lengthn2 pixels); pathﬁnder (long-range spatial depen-dency task, with images consisting of two small.
+3808model.
+perplexity.
+parameters.
+(dai et al., 2019)(baevski and auli, 2019)(dai et al., 2019)(baevski and auli, 2019)(shazeer et al., 2018).
+transformer baselinetransformer baselineh-transformer-1d nr = 16h-transformer-1d nr = 16.
+21.823.0223.523.9124.0.
+30.0424.823.9520.25.
+800m1000m465m465m4900m.
+53m144m53m144m.
+table 2: experimental results on one-billion word benchmark.
+we compare previous sota results obtained withmodels of size 465m-4900m parameters against the performance of the quadratic attention baseline and the h-transformer-1d models..circles and dash-line paths that either connect thetwo circles or not – image dimensions of 32x32for a pixel sequence of length 1,024); path-x(same as pathﬁnder, but for image dimensionsof 128x128 for a total pixel sequence of length16,384).
+the default transformer model parame-ters such as number of layers and number of headsetc are pre-determined by the benchmark conﬁgu-ration for each task..the results obtained by our h-transformer-1dmodel on the lra benchmark are given in table 1.overall,the h-transformer-1d model achieves61.41 average accuracy, a +6.4 points improve-ment over the previous-best average performancefrom bigbird (zaheer et al., 2020).
+we want tohighlight listops, text and retrieval because theyall involve long sequences and h-transformer-1dmodel improves sota performance by relativelylarge margins.
+these should be strong evidencesto support our hypothesis in section 5.1 and vali-date the inductive bias due to the hierarchical at-tention..8.2 language models trained on one-billion.
+words.
+we have used flax, an open-source library 8 totrain neural networks, as the code base for themodel training.
+our h-transformer-1d modeluses the standard transformer decoder implemen-tation in flax as the backbone.
+only the atten-tion is replaced with our hierarchical attention.
+we trained both the transformer baseline and h-transformer-1d on the one-billion word bench-mark (chelba et al., 2014).
+we tried different nr.
+8https://github.com/google/ﬂax.
+(numerical rank) in our h-transformer-1d model.
+these represent different inductive bias.
+we foundthat h-transformer-1d with nr = 16 generatedtext with quality comparable to that of the base-line transformer.
+for both transformer baselineand h-transformer-1d, we also tried two sets ofmodel parameters: 1) embedding size is 512 andfeed-forward module size is 2048 and hence theparameter count is 53m; 2) embedding size is1024 and feed-forward module size is 4096 andhence the parameter count is 144m.
+the test per-plexity results of these four models and varioussota models are shown in table 2..h-transformer-1d delivers the lowest perplex-ity to-date while using 5× smaller model ca-pacity than that of the previous sota modeltransformer-xl (dai et al., 2019).
+this is anotherstrong evidence to support our hypothesis in sec-tion 5.1 and validate the inductive bias due to thehierarchical attention..9 conclusions and future work.
+we have proposed a new transformer atten-tion using the inductive bias inspired by the h-matrix.
+the new algorithm has linear complex-ity in run time and memory usage and is fullycompatible with dense linear algebra libraries ongpu and tpu.
+the effectiveness of this newattention is demonstrated by the empirical ev-idences from long-range arena benchmark andone-billion word language modeling.
+futurework include applying the new attention to mu-sic and genomics, developing proper inductivebias for cross-attention and extending the one-dimensional hierarchical attention to 2d images..3809references.
+jader abreu, luis fred, david macˆedo,.
+andc. zanchettin.
+2019. hierarchical attentional hybridneural networks for document classiﬁcation.
+arxiv,abs/1901.06610..joshua ainslie, s. onta˜n´on, c. alberti, v. cvicek,zachary kenneth fisher, philip pham, anirudhravula, s. sanghai, qifan wang, and l. yang.
+2020.etc: encoding long and structured inputs in trans-formers.
+in emnlp..alexei baevski and m. auli.
+2019. adaptive input rep-resentations for neural language modeling.
+arxiv,abs/1809.10853..i. bello, barret zoph, ashish vaswani, jonathonshlens, and quoc v. le.
+2019. attention augmented2019 ieee/cvf inter-convolutional networks.
+national conference on computer vision (iccv),pages 3285–3294..iz beltagy, matthew e. peters, and arman cohan.
+trans-.
+longformer: the long-document.
+2020.former.
+arxiv, abs/2004.05150..a. brandt and a. a. lubrecht.
+1990. multilevel matrixmultiplication and fast solution of integral equations.
+90:348–370..w.l.
+briggs, v.e.
+henson, and s.f.
+mccormick.
+2000..a multigrid tutorial.
+siam..tom b. brown, benjamin pickman mann, nick ryder,melanie subbiah, jean kaplan, prafulla dhariwal,arvind neelakantan, pranav shyam, girish sastry,amanda askell, sandhini agarwal, ariel herbert-voss, g. kr¨uger, tom henighan, rewon child,aditya ramesh, daniel m. ziegler, jeffrey wu,clemens winter, christopher hesse, mark chen,eric j sigler, mateusz litwin, scott gray, benjaminchess, jack clark, christopher berner, sam mc-candlish, alec radford, ilya sutskever, and darioamodei.
+2020.language models are few-shotlearners.
+arxiv, abs/2005.14165..ciprian chelba, tomas mikolov, m. schuster, qi ge,t. brants, phillipp koehn, and t. robinson.
+2014. one billion word benchmark for measuringprogress in statistical language modeling.
+arxiv,abs/1312.3005..mark chen, alec radford, rewon child, jeffrey wu,heewoo jun, david luan, and ilya sutskever.
+2020.generative pretraining from pixels.
+proceedingsof the 37th international conference on machinelearning, pmlr 119..2020. masked language modeling for proteins vialinearly scalable long-context transformers.
+arxiv,abs/2006.03555..zihang dai, z. yang, yiming yang,.
+j. car-bonell, quoc v. le, and r. salakhutdinov.
+2019.transformer-xl: attentive language models beyonda ﬁxed-length context.
+in acl..j. devlin, ming-wei chang, kenton lee, and kristinatoutanova.
+2019. bert: pre-training of deep bidirec-tional transformers for language understanding.
+innaacl-hlt..g.h.
+golub and c.f.
+van loan.
+1996. matrix compu-tation.
+the john hopkins university press, balti-more..anirudh goyal and yoshua bengio.
+2020..inductivebiases for deep learning of higher-level cognition.
+arxiv, abs/2011.15091..l greengard.
+1994..fast algorithms for classical.
+physics.
+science, 265:909–914..l greengard and v rokhlin.
+1987. a fast algorithm.
+for particle simulations.
+73:325–348..w. hackbusch.
+1999. a sparse matrix arithmetic basedon h-matrices.
+part i: introduction to h-matrices.
+computing, 62:89–108..w. hackbusch.
+2000. a sparse matrix arithmeticbased on h-matrices.
+part ii: application to multi-dimensional problems.
+computing, 64:21–47..jonathan ho, nal kalchbrenner, dirk weissenborn,and tim salimans.
+2019. axial attention in multi-dimensional transformers.
+arxiv, abs/1912.12180..cheng-zhi anna huang, ashish vaswani,.
+jakobuszkoreit, noam shazeer,ian simon, curtishawthorne, andrew m. dai, matthew d. hoffman,monica dinculescu, and douglas eck.
+2018. musictransformer.
+arxiv: learning..s. kapur and d.e.
+long.
+1997. ies3: a fast integralequation solver for efﬁcient 3-dimensional extrac-tion.
+international conference on computer aided-design, pages 448–455..urvashi khandelwal, he he, peng qi, and dan ju-rafsky.
+2018.fuzzy far away:sharp nearby,how neural language models use context.
+arxiv,abs/1805.04623..nikita kitaev, lukasz kaiser, and anselm levskaya.
+2020. reformer: the efﬁcient transformer.
+arxiv,abs/2001.04451..r. child, scott gray, a. radford, and ilya sutskever.
+2019. generating long sequences with sparse trans-formers.
+arxiv, abs/1904.10509..yang liu and mirella lapata.
+2019. hierarchicaltransformers for multi-document summarization.
+inacl..krzysztof choromanski, valerii likhosherstov, daviddohan, xingyou song, jared davis, tam´as sarl´os,david belanger, lucy j. colwell, and adrian weller..thang luong, hieu pham, and christopher d. man-ning.
+2015. effective approaches to attention-basedneural machine translation.
+arxiv, abs/1508.04025..3810chris manning and hinrich sch¨utze.
+1999. founda-tions of statistical natural language processing.
+mit press, cambridge, ma..yi tay, m. dehghani, dara bahri, and donald metzler.
+2020d.
+efﬁcient transformers: a survey.
+arxiv,abs/2009.06732..l.n.
+trefethen and d. bau.
+1997. numerical linear.
+algebra.
+siam, philadelphia..ulrich trottenberg, cornelius w. oosterlee, and anton.
+schuller.
+2000. multigrid.
+academic press..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n. gomez, lukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+arxiv, abs/1706.03762..petar velickovic, guillem cucurull, arantxa casanova,adriana romero, pietro li`o, and yoshua ben-arxiv,gio.
+2018. graph attention networks.
+abs/1710.10903..sinong wang, belinda z. li, madian khabsa, hanfang, and hao ma.
+2020. linformer: self-attentionwith linear complexity.
+arxiv, abs/2006.04768..manzil zaheer, guru guruganesh, kumar avinavadubey, joshua ainslie, chris alberti, santiagoonta˜n´on, philip pham, anirudh ravula, qifanwang, li yang, and amr ahmed.
+2020. big bird:transformers for longer sequences..hao-yi zhou, shanghang zhang, jieqi peng, shuaizhang, jianxin li, hui xiong, and wancai zhang.
+2020.transformerfor long sequence time-series forecasting.
+arxiv,abs/2012.07436..informer: beyond efﬁcient.
+zhenhai zhu, ben song, and j. k. white.
+2005. algo-rithms in fastimp: a fast and wideband impedanceextraction program for complicated 3d geometries.
+ieee transactions on computer-aided design ofintegrated circuits and systems..zhenhai zhu and j. k. white.
+2005. fastsies: a faststochastic integral equation solver for modeling theinternational conference onrough surface effect.
+computer aided-design, pages 675–682..lesly miculicich, dhananjay ram, nikolaos pappas,and james henderson.
+2018. document-level neuralmachine translation with hierarchical attention net-works.
+in emnlp..k. nabors, t. korsmeyer, and j. white.
+1994. mul-tipole accelerated preconditioned iterative methodsfor three-dimensional potential integral equations ofthe ﬁrst kind.
+siam j. sci.
+and stat.
+comp..niki parmar, ashish vaswani,.
+jakob uszkoreit,lukasz kaiser, noam shazeer, alexander ku, andimage transformer.
+arxiv,dustin tran.
+2018.abs/1802.05751..joel r. phillips and j. k. white.
+1997. a precorrected-fft method for electrostatic analysis of complicatedieee transactions on computer-3d structures.
+aided design of integrated circuits and systems,pages 1059–1072..jiezhong qiu, hao ma, omer levy, scott yih, sinongwang, and jie tang.
+2019.blockwise self-attention for long document understanding.
+arxiv,abs/1911.02972..prajit ramachandran, niki parmar, ashish vaswani, ir-wan bello, anselm levskaya, and jonathon shlens.
+2019. stand-alone self-attention in vision models.
+arxiv, abs/1906.05909..aurko roy, m. saffar, ashish vaswani, and davidefﬁcient content-based sparsearxiv,.
+grangier.
+2020.attention with routing transformers.
+abs/2003.05997..noam shazeer, youlong cheng, niki parmar, dustintran, ashish vaswani, penporn koanantakool,p. hawkins, h. lee, mingsheng hong, c. young,ryan sepassi, and blake a. hechtman.
+2018. mesh-tensorﬂow: deep learning for supercomputers.
+inneurips..w. shi, j. liu, n. kakani, and t. yu.
+1998. a fast hi-erarchical algorithm for 3-d capacitance extraction.
+acm/ieee design automation conference..yi tay, dara bahri, donald metzler, d. juan, zhezhao, and che zheng.
+2020a.
+synthesizer: rethink-ing self-attention in transformer models.
+arxiv,abs/2005.00743..yi tay, dara bahri, l. yang, donald metzler, andin.
+sparse sinkhorn attention..d. juan.
+2020b.
+icml..yi tay, m. dehghani, samira abnar, y. shen, darabahri, philip pham, j. rao, liu yang, sebastianruder, and donald metzler.
+2020c.
+long rangearena: a benchmark for efﬁcienttransformers.
+arxiv, abs/2011.04006..3811a appendix.
+a.1 restriction or coarsening matricesfor sequence length l = 2m , the coarsening es-tablishes a binary tree of depth m for q, k and v ,respectively.
+the root of the binary tree at level-(m − 1) has two nodes which correspond to thetwo matrix rows coarsened from four matrix rowsat level-(m − 2).
+the piecewise constant restric-tion matrix at level-(m − 2) is.
+r(m −2) =.
+(cid:20) 1 1 0 00 0 1 1.
+(cid:21).
+2×4.
+..(34).
+likewise, the piecewise constant restriction matrixat level-(m − 3) is.
+r(m −3) =.
+.
+.
+1 1 0 0 0 0 0 00 0 1 1 0 0 0 00 0 0 0 1 1 0 00 0 0 0 0 0 1 1.
+.
+.
+=.
+(cid:20) r(m −2)0.
+0r(m −2).
+(cid:21).
+..4×8.
+(35).
+in general, the restriction matrices follow the re-cursion.
+likewise, the piecewise constant interpolation ma-trix at level-(m − 2) is.
+p (m −2) =.
+.
+.
+1 0 0 01 0 0 00 1 0 00 1 0 00 0 1 00 0 1 00 0 0 10 0 0 1.
+.
+.
+=.
+(cid:20) p (m −1)0.
+8×40p (m −1).
+(cid:21).
+.
+(39).
+in general, the interpolation matrices follow the re-cursion.
+p (l−1) =.
+(cid:20) p (l)0.
+(cid:21).
+0p (l).
+(40).
+which starts from p (m −1) of size 4 × 2 and goesbackward to p (0) of size l× l2 .
+in view of eq.
+(34)and (38), it is obvious that.
+p (m −1) = (r(m −2))t ..(41).
+in view of the recursions in eq.
+(36) and (40), it iseasy to prove by induction that.
+p (l) = (r(l−1))t ..(42).
+for the purpose of factored low-rank approxima-tion for the off-diagonal attention matrix blocks,we design a series of so-called expansion matri-ces.
+the ﬁrst two expansion matrices in this seriesare.
+t (m −1) = p (m −1) =.
+=.
+(cid:20) 120.
+012.
+.
+.
+1 01 00 10 1.
+.
+.
+(cid:21).
+4×2.
+(43).
+r(l−1) =.
+(cid:20) r(l).
+00 r(l).
+(cid:21).
+(36).
+a.3 expansion matrices.
+which starts from r(m −2) of size 2 × 4 and goesbackward to r(0) of size l.2 × l..interpolation matrices.
+a.2given y (l) at level-l, the interpolated y (l−1) atlevel-(l − 1) can be written as.
+y (l−1) = p (l)y (l).
+(37).
+where l = 1, 2, ..., m − 1, sparse matrix p (l) hassize l(l−1) × l(l), and l(l) = 2m −l is the nodecount at level-l of the binary tree..this recursion also follows the binary tree hi-erarchy.
+the four matrix rows at level-(m − 2)are interpolated from the two matrix rows at level-(m − 1).
+speciﬁcally, the piecewise constant in-terpolation matrix at level-(m − 1) is.
+and.
+t (m −2) = p (m −2)p (m −1) =.
+p (m −1) =.
+..(38).
+.
+.
+1 01 00 10 1.
+.
+.
+4×2.
+=.
+(cid:20) 140.
+(cid:21).
+014.
+.
+.
+.
+.
+1 01 01 01 00 10 10 10 1.
+8×2.
+(44).
+3812where 1n is a length-n vector of ones.
+the gen-eral form of matrix t (l) is deﬁned as.
+block in the original attention matrix a at level-lis.
+t (l) = πm −1.
+i=l p (i).
+(45).
+where l = 1, 2, ..., m − 1. in view of eq.
+(43),(45) and (40), it is easy to prove by induction that(cid:20) 12m −l0.t (l) =.
+012m −l.
+(46).
+(cid:21).
+and it has size 2m −l+1 × 2. further more, in viewof eq.
+(45) and (42), we have.
+(t (l))t = πl.
+i=m −1r(i−1)..(47).
+a.4 low-rank factored formmatrix t (l) plays a pivotal role in constructing thelow-rank approximation to the off-diagonal atten-tion matrix blocks.
+let the ij-th block in the coars-ened attention matrix at level-1 be(cid:20) a11 a12a21 a22.
+ij =.
+˜a(1).
+(48).
+(cid:21).
+where aij is the entry resulted from the inner prod-uct between a row in ˜q(1) and ˜k(1).
+the rank-2approximation to the corresponding ij-th block inthe original attention matrix a at level-1 can bewritten as.
+ij (t (m −1))t.(49).
+a(1)ij ≈ t (m −1) ˜a(1)1 01 00 10 1.
+(cid:20) a11 a12a21 a22.
+.
+.
+.
+.
+a11 a11 a12 a12a11 a11 a12 a12a21 a21 a22 a22a21 a21 a22 a22.
+.
+.
+..=.
+=.
+it is clear that the resulting 4 × 4 matrix a(1)isijessentially the piecewise constant interpolation ofthe 2 × 2 matrix ˜a(1)ij along row and column di-rection.
+and since both t (m −1) and ˜a(1)ij havefull rank 2, a(1)ij necessarily has rank 2. one canalso view aij as being similar to the average valueat the ij-th cluster center in the k-mean method.
+the role of matrix t (m −1) is to expand from these2 × 2 clusters to the 4 × 4 grid and hence the nameexpansion matrix..since we maintain the same numerical rank2 for all super- and sub-diagonal attention ma-trix blocks, the rank-2 approximation to the ij-th.
+ij ≈ t (m −l) ˜a(l)a(l)= πm −1.
+ij (t (m −l))tij πm −l.
+i=m −lp (i) ˜a(l).
+i=m −1r(i−1)(51).
+where the last equality is due to eq.
+(45) and (47).
+we note that matrix t (l) has full column rank2 by design and this can be easily shown fromeq.
+(46).
+we have used this fact to construct therank-2 approximation in eq.
+(51)..a.5 construct hierarchical attention matrix.
+to see how eq.
+(51) can be used, consider a simplethree-level partition of the attention matrix a forsequence length l = 16.a(2).
+11 =.
+(cid:34).
+a =.
+(cid:35).
+a(2)11 a(2)21 a(2)a(2).
+22.
+12.
+.
+.
+.
+.
+12.
+11 a(0)a(0)21 a(0)a(0)a(1)21.
+22.
+56.
+55 a(0)a(0)65 a(0)a(0)a(1)43.
+66.
+.
+.
+.
+.
+a(1)12.a(0)33 a(0)43 a(0)a(0).
+44.
+34.a(1)34.
+77 a(0)a(0)87 a(0)a(0).
+78.
+88.
+(50).
+where the size of level-0, level-1 and level-2 ma-trix blocks is 2 × 2, 4 × 4 and 8 × 8, respec-tively.
+note that the number of levels is m =log2(l/2) = 3. we use this simple three-level ex-ample to illustrate the key steps in both construct-ing and applying the hierarchical attention matrix..in view of eq.
+(51), we have.
+(cid:34).
+a ≈.
+˜a(2)11t (1) ˜a(2)21 (t (1))t.t (1) ˜a(2).
+12 (t (1))t˜a(2)22.
+˜a(2).
+11 =.
+.
+.
+12.
+11 a(0)a(0)21 a(0)a(0)21 (t (2))t.22.t (2) ˜a(1).
+t (2) ˜a(1).
+12 (t (2))t.33 a(0)a(0)43 a(0)a(0).
+44.
+34.
+(52).
+(53).
+(54).
+(55).
+(cid:35).
+.
+.
+(56).
+(cid:21) (cid:20) 1 1 0 00 0 1 1.
+(cid:21).
+a(2).
+22 =.
+3813˜a(2).
+22 =.
+.
+.
+56.
+55 a(0)a(0)65 a(0)a(0)43 (t (2))t.66.t (2) ˜a(1).
+t (2) ˜a(1).
+34 (t (2))t.77 a(0)a(0)87 a(0)a(0).
+78.
+88.
+.
+.
+..(57)we note that matrices t (l), l = 1, 2 are never ex-plicitly formed and are only implicitly used, asshown in next section.
+so only the diagonal blocksat level-0 and super- and sub-diagonal blocks ofthe coarsened matrix ˜a at level-l need to be ex-plicitly computed.
+by design, all these blockshave the same size 2 × 2 if we set the numeri-cal rank to nr = 2. the total number of super-and sub-diagonal blocks in the binary tree hier-archy is upper bounded by twice the number ofsuper- and sub-diagonal blocks at level-0, whichis 2n (0).
+hence the total number of entries isb5n (0)b n 2r = 5lnr = o(lnr).
+each entry isequal to the inner product between ˜q(l)and ˜k(l)jiand hence the run time cost per entry is o(d),where d is the embedding size.
+so the ﬁnal totalrun time cost is o(ld) and memory foot print iso(l).
+here we leave out nr since it is a constantmodel hyper parameter..a.6 apply hierarchical attention matrix.
+computing matrix-matrix product av follows thehierarchical structure of matrix a in eq.
+(55), (56)and (57).
+we ﬁrst partition matrix v according tothe three-level binary tree established by the coars-ening process, i.e.,.
+v =.
+=.
+.
+.
+.
+.
+v (0)1v (0)2...v (0)7v (0)8.
+.
+.
+.
+.
+v (1)1v (1)2v (1)3v (1)4.
+(cid:34).
+=.
+(cid:35).
+..v (2)1v (2)2.
+(58)note that these are partitions of the same matrixv at 3 different levels.
+for sequence length l =16, matrix v has size 16 × d, and the size of the, v (1)partitioned blocks v (0)are 2 × d,j4 × d and 8 × d, respectively.
+in the derivationto come, we may exchange partitions at differentlevels.
+for instance, in view of eq.
+(58), we have.
+and v (2).
+k.i.v (2)1 =.
+(cid:34).
+(cid:35).
+..v (1)1v (1)2.
+(59).
+so we may replace v (2)in eq.
+(59)..1 with the right-hand side.
+in view of eq.
+(52) and (58), matrix-matrix.
+product av can be written as.
+(cid:34).
+1.a(2)11 v (2)a(2)22 v (2)(cid:35).
+2.
+(cid:35).
+(cid:34).
++.
+(cid:35).
+a(2)12 v (2)21 v (2)a(2).
+1.
+2.
++ y (2)..(60).
+y = av =.
+(cid:34).
+=.
+a(2)11 v (2)22 v (2)a(2).
+1.
+2.in view of eq.
+(55), we have.
+y (2) =.
+(cid:34).
+(cid:34).
+(cid:34).
+≈.
+=.
+(cid:35).
+1.
+2.a(2)12 v (2)21 v (2)a(2)t (1) ˜a(2)t (1) ˜a(2)p (1)p (2) ˜a(2)p (1)p (2) ˜a(2)(cid:34) ˜a(2)12˜a(2)21(cid:34) ˜y (2)1˜y (2)2.
+= p (0)p (1).
+= p (0)p (1).
+˜v (2)2˜v (2)1(cid:35).
+(cid:35).
+12 (t (1))t v (2)21 (t (1))t v (2).
+1.
+2.
+(cid:35).
+12 r(1)r(0)v (2)21 r(1)r(0)v (2)(cid:35).
+2.
+1.
+(61).
+where.
+(cid:34) ˜v (2)1˜v (2)2.
+(cid:35).
+(cid:34).
+=.
+r(1)r(0)v (2)r(1)r(0)v (2).
+1.
+2.
+(cid:35).
+..(62).
+the third equality in eq.
+(61) is due to eq.
+(45) and(47) where l = 1. the fourth equality in eq.
+(61)is due to eq.
+(40)..in view of eq.
+(56), we have.
+11 v (2).
+1.
+1 ≈ ˜a(2)11 v (2)a(2)11 a(0)a(0)21 a(0)a(0)21 (t (2))t.t (2) ˜a(1).
+.
+22.
+12.
+.
+.
+.
+.
+y (0)1y (0)2y (0)3y (0)4.
++ y (1)1.
+=.
+=.
+t (2) ˜a(1).
+12 (t (2))t.33 a(0)a(0)43 a(0)a(0).
+44.
+34.
+.
+.
+v (2)1.
+(63).
+3814(65).
+to summarize, matrix-matrix product computa-.
+tion includes the following steps:.
+where.
+y (1)1.
+(cid:35).
+(cid:34).
+(cid:34).
+=.
+=.
+= p (1).
+= p (1).
+2.
+2.
+1.
+12 (t (2))t v (1)21 (t (2))t v (1)(cid:35)12 r(1)v (1)21 r(1)v (1)1(cid:35)˜v (1)2˜v (1)1(cid:35).
+t (2) ˜a(1)t (2) ˜a(1)p (2) ˜a(1)p (2) ˜a(1)(cid:34) ˜a(1)12˜a(1)21(cid:34) ˜y (1)1˜y (1)2.
+(64).
+and.
+(cid:34) ˜v (1)1˜v (1)2.
+(cid:35).
+(cid:34).
+=.
+(cid:35).
+..r(1)v (1)r(1)v (1).
+1.
+2.the second equality in eq.
+(64) is due to eq.
+(45)and (47) where l = 2. the third equality ineq.
+(64) is due to eq.
+(40)..in view of eq.
+(57), we have.
+t (1) ˜a(1).
+34 (t (1))t.a(0)77 a(0)87 a(0)a(0).
+88.
+78.
+.
+.
+v (2)2.
+22 v (2).
+2.
+22 v (2)a(2)2 ≈ ˜a(2)55 a(0)a(0)65 a(0)a(0)43 (t (1))t.t (1) ˜a(1).
+.
+56.
+66.
+.
+.
+.
+.
+y (0)5y (0)6y (0)7y (0)8.
++ y (1)2.
+=.
+=.
+where.
+(cid:34).
+y (1)2.
+=.
+(cid:35).
+4.
+34 r(1)v (1)43 r(1)v (1)3(cid:35)˜v (1)4˜v (1)3(cid:35).
+p (2) ˜a(1)p (2) ˜a(1)(cid:34) ˜a(1)34˜a(1)43(cid:34) ˜y (1)3˜y (1)4.
+= p (1).
+= p (1).
+and.
+(cid:34) ˜v (1)3˜v (1)4.
+(cid:35).
+(cid:34).
+=.
+(cid:35).
+..r(1)v (1)r(1)v (1).
+3.
+4.substituting eq.
+(61), (63) and (66) into (60),we obtain the ﬁnal result for the matrix-matrixproducty = av ≈ y (0) + p (0) (cid:16) ˜y (1) + p (1) ˜y (2)(cid:17).
+(69).
+(66).
+(67).
+where.
+.
+.
+.
+2.
+2.
+.
+.
+12 v (0)22 v (0).
+a(0)11 v (0)21 v (0)a(0).
+1 + a(0)1 + a(0)...88 v (0)7 + a(0)a(0)87 v (0)8˜a(1)˜y (1)˜v (1)1212˜v (1)˜a(1)˜y (1)1212˜a(1)˜y (1)˜v (1)3434˜y (1)˜v (1)˜a(1)4343(cid:34) ˜a(2)(cid:34) ˜y (2)˜v (2)2112˜a(2)˜y (2)˜v (2)2121.
+.
+.
+.
+=.
+=.
+(cid:35).
+.
+.
+(cid:35).
+(70).
+(71).
+(72).
+y (0) =.
+˜y (1) =.
+˜y (2) =.
+1. compute ˜v (1) in eq.
+(65) and (68), and com-.
+pute ˜v (2) in eq.
+(62);.
+2. compute y (0) in eq.
+(70), ˜y (1) in eq.
+(71).
+and ˜y (2) in eq.
+(72);.
+3. interpolate and cumulative sum in eq.
+(69);.
+note that all operations in step-2 are dense matrix-matrix product, well suited for dense linear alge-bra libraries optimized for gpu and tpu.
+the to-tal number of super- and sub-diagonal blocks isupper bounded by twice the number of super- andsub-diagonal blocks at level-0, which is 2n (0).
+the run time of each dense matrix-matrix productr d).
+so the total run time is 5n (0)is o(n 2r d =5lnrd = o(ld).
+here we leave out nr since itis a constant model hyper-parameter..b n 2.b.the coarsening in step-1 and interpolation instep-3 all use sparse matrices with ﬁxed sparsitypatterns.
+hence matrices p (l) and r(l) are neverexplicitly formed and applying them can be eas-ily done with standard library functions.
+take jaxnumpy library as an example, coarsening can bedone with sum() along row axis and interpolationcan be done with repeat() along row axis.
+for thisreason, step-1 and step-3 only have dense matrixoperations as well..the formulation of the matrix-matrix product.
+y = av = y (0) + p (0)( ˜y (1) + p (1)( ˜y (2).
++ p (2)(· · · + p (m −2) ˜y (m −1)) · · · )).
+(73).
+this formulation is a direct consequence of thenested attention matrix structure and can be de-rived similarly as eq.
+(69)..(68).
+for the general level-m case is.
+3815

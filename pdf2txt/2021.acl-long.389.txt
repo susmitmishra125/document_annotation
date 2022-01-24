@@ -1,0 +1,324 @@
+visualsparta: an embarrassingly simple approach to large-scaletext-to-image search with weighted bag-of-words.
+xiaopeng lu∗language technologies institutecarnegie mellon universityxiaopen2@andrew.cmu.edu.
+tiancheng zhao, kyusong leesoco incpittsburgh, usa{tianchez,kyusongl}@soco.ai.
+abstract.
+text-to-image retrieval is an essential task incross-modal information retrieval, i.e., retriev-ing relevant images from a large and unla-belled dataset given textual queries.
+in this pa-per, we propose visualsparta, a novel (visual-text sparse transformer matching) modelthat shows signiﬁcant improvement in termsof both accuracy and efﬁciency.
+visualspartais capable of outperforming previous state-of-the-art scalable methods in mscoco andflickr30k.
+we also show that it achieves sub-stantial retrieving speed advantages, i.e., fora 1 million image index, visualsparta usingcpu gets ∼391x speedup compared to cpuvector search and ∼5.4x speedup comparedto vector search with gpu acceleration.
+ex-periments show that this speed advantage evengets bigger for larger datasets because visu-alsparta can be efﬁciently implemented as aninverted index.
+to the best of our knowledge,visualsparta is the ﬁrst transformer-based text-to-image retrieval model that can achieve real-time searching for large-scale datasets, withsigniﬁcant accuracy improvement compared toprevious state-of-the-art methods..1.introduction.
+text-to-image retrieval is the task of retrieving a listof relevant images from a corpus given text queries.
+this task is challenging because in order to ﬁnd themost relevant images given text query, the modelneeds to not only have good representations forboth textual and visual modalities, but also capturethe ﬁne-grained interaction between them..existing text-to-image retrieval models can bebroadly divided into two categories: query-agnosticand query-dependent models.
+the dual-encoderarchitecture is a common query-agnostic model,which uses two encoders to encode the query.
+∗ this work was partially done during an internship at soco.
+inference time vs. model accuracy.
+figure 1:each dot represents recall@1 for different models onmscoco 1k split.
+by setting top n-terms to 500,our model signiﬁcantly outperforms the previous bestquery-agnostic retrieval models, with ∼2.8x speedup.
+see section 5.1 for details..and images separately and then compute the rel-evancy via inner product (faghri et al., 2017;lee et al., 2018; wang et al., 2019a).
+thetransformer architecture is a well-known query-dependent model (devlin et al., 2018; yang et al.,2019).
+in this case, each pair of text and imageis encoded by concatenating and passing into onesingle network, instead of being encoded by twoseparate encoders (lu et al., 2020; li et al., 2020b).
+this method borrows the knowledge from large pre-trained transformer models and shows much betteraccuracy compared to dual-encoder methods (li etal., 2020b)..besides improving the accuracy, retrieval speedhas also been a long-existing subject of study inthe information retrieval (ir) community (man-ning et al., 2008).
+query-dependent models areprohibitively slow to apply to the entire image cor-pus because it needs to recompute for every dif-.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages5020–5029august1–6,2021.©2021associationforcomputationallinguistics5020ferent query.
+on the other hand, query-agnosticmodel is able to scale by pre-computing an im-age data index.
+for dual-encoder systems, furtherspeed improvement can be obtained via approxi-mate nearest neighbors (ann) search and gpuacceleration (johnson et al., 2019)..in this work, we propose visualsparta, a sim-ple yet effective text-to-image retrieval model thatoutperforms all existing query-agnostic retrievalmodels in both accuracy and speed.
+by model-ing ﬁne-grained interaction between visual regionswith query text tokens, our model is able to harnessthe power of large pre-trained visual-text modelsand scale to very large datasets with real-time re-sponse.
+to our best knowledge, this is the ﬁrstmodel that integrates the power of transformer mod-els with real-time searching, showing that largepre-trained models can be used in a way with sig-niﬁcantly less amount of memory and computingtime.
+lastly, our method is embarrassingly simplebecause its image representation is essentially aweighted bag-of-words, and can be indexed in astandard inverted index for fast retrieval.
+compar-ing to other sophisticated models with distributedvector representations, our method does not dependon ann or gpu acceleration to scale up to verylarge datasets..contributions of this paper can be concludedas the following: (1) a novel retrieval model thatachieves new state-of-the-art results on two bench-mark datasets, i.e., mscoco and flickr 30k.
+(2)weighted bag-of-words is shown to be an effectiverepresentation for cross-modal retrieval that canbe efﬁciently indexed in an inverted index for fastretrieval.
+(3) detailed analysis and ablation studythat show advantages of the proposed method andinteresting properties that shine light for future re-search directions..2 related work.
+large amounts of work have been done on learn-ing a joint representation between texts and im-ages (karpathy and fei-fei, 2015; huang et al.,2018; lee et al., 2018; wehrmann et al., 2019;li et al., 2020b; lu et al., 2020).
+in this section,we revisit dual-encoder based retrieval model andtransformer-based retrieval model..2.1 dual-encoder matching network.
+most of the work in text-to-image retrieval taskchoose to use the dual-encoder network to en-.
+code information from text and image modalities.
+in karpathy and fei-fei (2015), the author used abi-directional recurrent neural network (brnn)to encode the textual information and used a re-gion convolutional neural network (rcnn) toencode the image information, and the ﬁnal similar-ity score is computed via the interaction of featuresfrom two encoders.
+lee et al.
+(2018) proposedstacked cross-attention network, where the text fea-tures are passed through two attention layers tolearn interactions with the image region.
+wanget al.
+(2019a) encoded the location informationas yet another feature and used both deep rcnnfeatures (ren et al., 2016) and the ﬁne-grained lo-cation features for the region of interest (roi) asimage representation.
+in wang et al.
+(2020), theauthor utilized the information from wikipedia asan external corpus to construct a graph neural net-work (gnn) to help model the relationships acrossobjects..2.2 pre-trained language models (plm).
+large pre-trained language models (plm) showgreat success over multiple tasks in nlp areas inrecent years (devlin et al., 2018; yang et al., 2019;dai et al., 2019).
+after that, research has also beendone on cross-modal transformer-based modelsand proves that the self-attention mechanism alsohelps jointly capture visual-text relationships (liet al., 2019; lu et al., 2020; qi et al., 2020; liet al., 2020b).
+by ﬁrst pretraining model underlarge-scale visual-text dataset, these transformer-based models capture rich semantic informationfrom both texts and images.
+models are then ﬁne-tuned for the text-to-image retrieval task and showimprovements by a large margin.
+however, theproblem of using transformer-based models is thatit is prohibitively slow in the retrieval context: themodel needs to compute pair-wise similarity scoresbetween all queries and answers, making it almostimpossible to use the model in any real-world sce-narios.
+our proposed method borrows the powerof large pre-trained models while reducing the in-ference time by orders of magnitude..plm has shown promising results in informa-tion retrieval (ir), despite its slow speed dueto the complex model structure.
+the ir com-munity recently started working on empower-ing the classical full-text retrieval methods withcontextualized information from plms (dai andcallan, 2019; macavaney et al., 2020; zhao et al.,.
+50212020).
+dai and callan (2019) proposed deepct,a model that learns to generate the query impor-tance score from the contextualized representa-tion of large transformer-based models.
+zhao etal.
+(2020) proposed sparse transformer matchingmodel (sparta), where the model learns term-level interaction between query and text answersand generates weighted term representations foranswers during index time.
+our work is motivatedby works in this direction and extends the scope tothe cross-modal understanding and retrieval..3 visualsparta retriever.
+in this section, we present visualsparta retriever,a fragment-level transformer-based model for efﬁ-cient text-image matching.
+the focus of our pro-posed model is two-fold:.
+• recall performance: ﬁne-grained relationshipbetween queries and image regions are learnedto enrich the cross-modal understanding..• speed performance: query embeddings arenon-contextualized, which allows the modelto put most of the computation ofﬂine..3.1 model architecture.
+3.1.1 query representation.
+as query processing is an online operation duringretrieval, the efﬁciency of encoding query needsto be well considered.
+previous methods pass thequery sentence into a bi-rnn to give token repre-sentation provided surrounding tokens (lee et al.,2018; wang et al., 2019a, 2020)..instead of encoding the query in a sequentialmanner, we drop the order information of the queryand only use the pretrained token embeddingsto represent each token.
+in other words, we donot encode the local contextual information forthe query and purely rely on independent wordembedding etok of each token.
+let a query beq = [w1, ..., wm] after tokenization, we have:.
+ˆwi = etok (wi).
+(1).
+where wi is the i-th token of the query.
+therefore,a query is represented as ˆw = { ˆw1, ..., ˆwm}, ˆwi ∈rdh .
+in this way, each token is represented inde-pendently and agnostic to its local context.
+this isessential for the efﬁcient indexing and inference,as described next in section 3.3..3.1.2 visual representation.
+compared with query information which needs tobe processed in real-time, answer processing canbe rich and complex, as answer corpus can be in-dexed ofﬂine before the query comes.
+therefore,we follow the recent works in vision-languagetransformers (li et al., 2019, 2020b) and use thecontextualized representation for the answer cor-pus..speciﬁcally, for an image, we represent it usinginformation from three sources: regional visual fea-tures, regional location features, and label featureswith attributes, as shown in figure 2..regional visual features and location featuresgiven an image v, we pass it through faster-rcnn (ren et al., 2016) to get n regional visualfeatures vi and their corresponding location fea-tures li:.
+v1, ..., vn = rcnn(v), vi ∈ rdrcnn.
+(2).
+and the location features are the normalized top leftand bottom right positions of the region proposedfrom faster-rcnn, together with the region widthand height:.
+li = [lxmin, lxmax, lymin, lymax, lwidth, lheight].
+(3)therefore, we represent one region by the concate-nation of two features:.
+ei = [vi; li]eimage = [e1, ..., en], ei ∈ rdrcnn+dloc.
+(4).
+(5).
+where eimage is the representation for a single im-age..label features with attributes additional to thedeep representations from the proposed image re-gion, previous work by li et al.
+(2020b) shows thatthe object label information is also useful as anadditional representation for the image.
+we alsoencode the predicted objects and corresponding at-tributes obtained from faster-rcnn model withpretrained word embeddings:.
+ˆoi = etok(oi) + epos(oi) + eseg(oi)elabel = [ ˆo1, ..., ˆok], ˆoi ∈ rdh.
+(6).
+(7).
+where k represents the number of tokens after thetokenization of attributes and object labels for n.5022figure 2: visualsparta model.
+it ﬁrst computes contextualized image region representation and non-contextualizedquery token representation.
+then it computes a matching score between every query token and image region thatcan be stored in an inverted index for efﬁcient searching..image regions.
+etok, epos, and eseg represent to-ken embeddings, position embeddings, and seg-mentation embeddings respectively, similar to theembedding structure in devlin et al.
+(2018)..therefore, one image can be represented by thelinear transformed image features concatenatedwith label features:.
+a = [(eimagew + b); elabel].
+(8).
+where w ∈ r(drcnn+dloc)×dh and b ∈ rdh are thetrainable linear combination weights and bias.
+theconcatenated embeddings a are then passed into atransformer encoder timage, and the ﬁnal imagefeature is the hidden output of it:.
+himage = timage(a).
+(9).
+where himage ∈ r(n+k)×dh is the ﬁnal contextu-alized representation for one image..3.1.3 scoring functiongiven the visual and query representations, thematching score can now be computed between aquery and an image.
+different from other dual-encoder based interaction model, we adopt the ﬁne-grained interaction model proposed by zhao et al.
+(2020) to compute the relevance score by:.
+yi = maxj∈[1,n+k]( ˆwt.
+i hj).
+φ(yi) = relu(yi + b)m(cid:88).
+f (q, v) =.
+log(φ(yi) + 1).
+i=1.
+(10).
+(11).
+(12).
+where eq.10 captures the fragment-level interactionbetween every image region and every query wordtoken; eq.11 produces sparse embedding outputsvia a combination of relu and trainable bias, andeq.12 sums up the score and prevents an overlylarge score using log operation..3.2 retriever training.
+following the training method presented in zhaoet al.
+(2020), we use cross entropy loss to trainvisualsparta.
+concretely, we maximize the objec-tive in eq.
+13, which tries to decide between theground truth image v+ and irrelevant/random im-ages v − for each text query q. the parameters tolearn include both the query encoder etok and theimage transformer encoder timage.
+parameters areoptimized using adam (kingma and ba, 2014)..j = f (q, v+) − log.
+ef (q,k)).
+(13).
+(cid:88).
+k∈v −.
+in order to achieve efﬁcient training, we use otherimage samples from the same batch as nega-tive examples for each training data, an effectivetechnique that is widely used in response selec-tion (zhang et al., 2018; henderson et al., 2019).
+preliminary experiments found that as long as thebatch size is large enough (we choose to use batchsize of 160), this simple approach performs equallywell compared to other more sophisticated meth-ods, for example, sample similar images that havenearby labels..5023image embeddingsapersonin...labels w. attributesfragment-level interactionpooling            position embeddingssegmentation embeddings++token embeddings                                                            transformer encoderquery(non-contextualized)image regionsanswer(contextualized)            3.3 efﬁcient indexing and inference.
+visualsparta model structure is suitable for real-time inference.
+as discussed in section 3.1.1, sincequery embeddings are non-contextualized, we areable to compute the relationship between eachquery term wi and every image v ofﬂine..concretely, during ofﬂine indexing, for each im-age v, we ﬁrst compute fragment-level interactionbetween its regions and every query term in thevocabulary, same as in eq.
+10. then, we cache thecomputed ranking score:.
+cache(w, v) = eq.
+11.
+(14).
+during test time, given a query q = [w1, ..., wm],.
+the ranking score between q and an image v is:.
+f (q, v) =.
+log(cache(wi, v) + 1).
+(15).
+m(cid:88).
+i=1.
+as shown in eq.
+15, the ﬁnal ranking score dur-ing inference time is an o(1) look-up operationfollowed by summation.
+also, the query-time com-putation can be ﬁt into an inverted index architec-ture (manning et al., 2008), which enables us touse visualsparta index with off-the-shelf searchengines, for example, elasticsearch (gheorghe etal., 2015)..4 experiments.
+4.1 datasets.
+in this paper, we use mscoco (lin et al., 2014)1and flickr30k (plummer et al., 2015)2 datasetsfor the training and evaluation of text-to-imageretrieval tasks.
+mscoco is a large-scale multi-task dataset including object detection, semanticsegmentation, and image captioning data.
+in thisexperiment, we follow the previous work and usethe image captioning data split for text-to-imagemodel training and evaluation.
+following the exper-imental settings from karpathy and fei-fei (2015),we split the data into 113,287 images for training,5,000 images for validation, and 5,000 images fortesting.
+each image is paired with 5 different cap-tions.
+the performance of 1,000 (1k) and 5,000(5k) test splits are reported and compared withprevious results..1 https://cocodataset.org2 http://bryanplummer.com/.
+flickr30kentities.
+flickr30k (plummer et al., 2015) is another pub-licly available image captioning dataset, which con-tains 31,783 images in total.
+following the splitfrom karpathy and fei-fei (2015), 29,783 imagesare used for training, and 1,000 images are usedfor validation.
+scores are reported based on resultsfrom 1,000 test images..for speed experiments, in addition to mscoco1k and 5k splits, we create 113k split and 1m split,two new data splits to test the performance in thelarge-scale retrieval setting.
+since these splits areonly used for speed experiments, we directly reusethe training data from the existing dataset withoutthe concern of data leaking between training andtesting phases.
+speciﬁcally, the 113k split refers tothe mscoco training set, which contains 113,287images, ∼23 times larger than the mscoco 5ktest set.
+the 1m split consists of one million im-ages randomly sampled from the mscoco train-ing set.
+speed experiments are done on these foursplits to give comprehensive comparisons underdifferent sizes of image index..4.2 evaluation metrics.
+following previous works, we use recall rate as ouraccuracy evaluation metrics.
+in both mscocoand flikr30k datasets, we report recall@t, t=[1, 5,10] and compare with previous works..for speed performance evaluation, we choosequery per second and latency(ms) as the evaluationmetric to test how each model performs in terms ofspeed under different sizes of image index..4.3.implementation details.
+all experiments are done using the pytorch li-brary.
+during training, one nvidia titan x gpuis used.
+during speed performance evaluation, onenvidia titan x gpu is used for models that needgpu acceleration.
+one 10-core intel 9820x cpuis used for models that needs cpu acceleration.
+forthe image encoder, we initialize the model weightsfrom oscar-base model (li et al., 2020b) with 12layers, 768 hidden dimensions, and 110m param-eters.
+for the query embedding, we initialize itfrom the oscar-base token embedding.
+the adamoptimizer (kingma and ba, 2014) is used with thelearning rate set to 5e-5.
+the number of trainingepochs is set to 20. the input sequence length is setto 120, with 70 for labels with attributes featuresand 50 for deep visual features.
+we search on batchsizes (96, 128, 160) with recall@1 validation ac-curacy, and set the batch size to 160..5024query-dependent.
+query-agnostic.
+unicoder-vl (li et al., 2020a)oscar (li et al., 2020b)sm-lstm (huang et al., 2017)dan (nam et al., 2017)vse++ (faghri et al., 2017)camp (wang et al., 2019b)scan (lee et al., 2018)pfan (wang et al., 2019a)cvse (wang et al., 2020)visualsparta (ours).
+flickr 30k.
+mscoco-1k.
+mscoco-5kr@1 r@5 r@10 r@1 r@5 r@10 r@1 r@5 r@1076.069.780.875.7-40.7---52.068.958.569.358.8-61.666.459.973.068.7.
+46.754.0--30.339.038.6-35.345.1.
+93.595.275.8--87.988.489.689.491.2.
+97.298.387.4-92.095.094.895.295.296.2.
+90.9-60.469.2-77.177.778.780.482.6.
+85.388.5--72.480.280.4-78.482.5.
+94.9-72.379.179.585.385.286.187.888.2.
+71.5-30.239.439.651.548.650.452.957.1.table 1: detailed comparisons of text-to-image retrieval results in mscoco (1k/5k) and flickr30k datasets.
+4.4 experimental results.
+we compare both recall and speed performancewith the current state-of-the-art retrieval modelin text-to-image search.
+query-dependent modelrefers to models in which image information cannotbe encoded ofﬂine, because each image encoding isdependent on the query information.
+these modelsusually achieve promising performance in recallbut suffer from prohibitively slow inference speed.
+query-agnostic model refers to models in whichimage information can be encoded ofﬂine and isindependent of query information.
+in section 4.4.1and 4.4.2, we evaluate accuracy and speed perfor-mance respectively for both lines of methods..4.4.1 recall performanceas shown in table 1, the results reveal that ourmodel is competitive compared with previous meth-ods.
+among query-agnostic methods, our model issigniﬁcantly superior to the state-of-the-art resultsin all evaluation metrics over both mscoco andflickr30k datasets and outperforms previous meth-ods by a large margin.
+speciﬁcally, in mscoco1k test set, our model outperforms the previouslybest query-agnostic method (wang et al., 2019a)by 7.1%, 1.6%, 1.0% for recall@1, 5, 10 respec-tively.
+in flickr30k dataset, visualsparta alsoshows strong improvement compared with the pre-vious best method: in recall@1,5,10, our modelgets 4.2%, 2.2%, 0.4% improvement respectively.
+we also observe that visualsparta reduces thegap by a large margin between query-agnosticand query-dependent methods.
+in mscoco-1ksplit, the performance of visualsparta is only 1.0%,2.3%, 1.0% lower than unicoder-vl method (li etal., 2020a) for recall@1,5,10 respectively.
+com-pared to oscar (li et al., 2020b), the current state-of-the-art query-dependent model, our model is 7%lower than the oscar model in mscoco-1k re-.
+call@1. this shows that there is still room for im-provement in terms of accuracy for query-agnosticmodel..4.4.2 speed performance.
+gpu.
+cpu.
+index size vs.query/s1k5k113k1m.
+oscar cvse cvse visualsparta451.4390.5275.5117.3.
+195.10.4191.00.06101.20.0030.0003 21.7.
+177.4162.05.40.3.table 2: model speed vs. index size: visualspartaexperiments are done under setting top-n term scoresto 1000. detailed settings are reported in section 4.4.2..to show the efﬁciency of visualsparta modelin both small-scale and large-scale settings, wecreate 113k dataset and 1m dataset in additionto the original 1k and 5k test split, as discussedin section 4.2. speed experiments are done usingthese four splits as testbeds..to make a fair comparison, we benchmarkeach method with its preferred hardware and soft-ware for speed acceleration.
+speciﬁcally, forcvse model (wang et al., 2020), both cpu andgpu inference time are recorded.
+for cpu set-ting, the maximum inner product search (mips)is performed using their original code based onnumpy (harris et al., 2020).
+for gpu setting, weadopt the model and use faiss (johnson et al.,2019), an optimized mips library, to test the speedperformance.
+for oscar model (li et al., 2020b),since the query-dependent method cannot be formu-lated as a mips problem, we run the original modelusing gpu acceleration and record the speed.
+forvisualsparta, we use the top-1000 term scores set-tings for the experiment.
+since visualsparta canbe ﬁt into an inverted-index architecture, gpu ac-.
+5025n5010050010002000all.
+inf.
+time (ms)↓1.91.92.12.43.96.9.query/s↑537.0514.7477.7414.5256.3144.1.mscoco-1k.
+r@1↑ r@5↑ r@10↑82.854.686.260.190.365.590.967.591.168.591.268.7.
+90.792.895.195.896.096.2.mscoco-5kr@1↑ r@5↑ r@10↑60.033.064.637.170.642.571.743.772.544.473.045.1.
+71.175.380.481.582.182.5.table 3: effect of top-n term scores in terms of speed and accuracy tested in mscoco dataset; ↑ means higherthe better, and ↓ means lower the better..celeration is not required.
+for all experiments, weuse 5000 queries from mscoco-1k split as queryinput to test the speed performance..as we can see from table 2, in all four data splits(1k, 5k, 113k, 1m), visualsparta signiﬁcantlyoutperforms both the best query-agnostic model(cvse (wang et al., 2020)) and the best query-dependent model (oscar (li et al., 2020b)).
+undercpu comparison, the speed of visualsparta is 2.5,2.4, 51, and 391 times faster than that of the cvsemodel in 1k, 5k, 113k, and 1m splits respectively.
+this speed advantage also holds even if previousmodels are accelerated with gpu acceleration.
+toapply the latest mips progress to the comparison,we adopt the cvse model to use faiss (johnsonet al., 2019) for better speed acceleration.
+resultsin the table reveal that the speed of visualspartacan also beat that of cvse by 2.5x in the 1ksetting, and this speed advantage increases to 5.4xwhen the index size increases to 1m..our model holds an absolute advantage whencomparing speed to query-dependent models suchas oscar (li et al., 2020b).
+since the image encod-ing is dependent on the query information, no of-ﬂine indexing can be done for the query-dependentmodel.
+as shown in table 2, even with gpu ac-celeration, oscar model is prohibitively slow: inthe 1k setting, oscar is ∼1128 times slower thanvisualsparta.
+the number increases to 391,000when index size increases to 1m..5 model analysis.
+5.1 speed-accuracy flexibility.
+as described in section 3.3, each image can be wellrepresented by a list of weighted tokens indepen-dently.
+this feature makes visualsparta ﬂexibleduring indexing time: users can choose to indexusing top-n term scores based on their memoryconstraint or speed requirement..table 3 compares recall and speed in bothmscoco 1k and 5k split under different choices.
+of n. from the comparison between using all termscores and using top-2000 term scores, we foundthat visualsparta can get ∼1.8x speedup with al-most no performance drop.
+if higher speed isneeded, n can always be set to a lower numberwith a sacriﬁce of accuracy, as shown in table 3..figure 1 visualizes the trade-off between modelaccuracy and inference speed.
+the x-axis repre-sents the average inference time of a single queryin millisecond, and the y-axis denotes the recall@1on mscoco 1k test set.
+for visualsparta, eachdot represents the model performance under cer-tain top-n term score settings.
+for other methods,each dot represents their speed and accuracy per-formance.
+the curve reveals that with larger n, therecall becomes higher and the speed gets slower.
+from the comparison between visualsparta andother methods, we observe that by setting top-nterm scores to 500, visualsparta can already beatthe accuracy performance of both pfan (wanget al., 2019a) and cvse (wang et al., 2020) with∼2.8x speedup..5.2 ablation study on image encoder.
+as shown in figure 2, the image encoder takesa concatenation of object label features with at-tributes and deep visual features as input.
+in thissection, we do an ablation study and analyze thecontributions of each part of the image features tothe ﬁnal score..in table 4, different components are removedfrom the image encoder for performance compar-ison.
+from the table, we observe that removingeither attributes features (row 1) or label featureswith attributes (row 2) only hurts the performanceby a small margin.
+however, when dropping visualfeatures and only using label with attributes fea-tures for image representation (row 3), it appearsthat the model performance drops by a large mar-gin, where the recall@1 score drops from 68.7%to 49.1%(−19.6%)..from this ablation study, we can conclude that.
+5026#1 visualsparta234.
+− attributes features− labels w. attributes features− visual features.
+r@168.768.2(-0.5)66.7(-2.0)49.1(-19.6).
+mscoco-1k.
+r@591.291.8(+0.6)91.2(+0.0)80.3(-10.9).
+r@1096.296.3(+0.1)95.9(-0.3)89.4(-6.8).
+r@145.144.4(-0.7)43.4(-1.7)26.5(-18.6).
+mscoco-5k.
+r@573.072.8(-0.2)71.6(-1.4)54.1(-18.9).
+r@1082.582.4(-0.1)81.6(-0.9)66.8(-15.7).
+table 4: ablation study with using different features in the image answer encoding.
+figure 3: example retrieved images with features attended given query terms; term scores are in parentheses..deep visual features make the most contribution tothe visualsparta model structure, which shows thatdeep visual features are signiﬁcantly more expres-sive compared to textual features, i.e., label withattributes features.
+more importantly, it shows thatvisualsparta is capable of learning cross-modalknowledge, and the biggest gain indeed comesfrom learning to match query term embeddingswith deep visual representations..5.3 cross-domain generalization.
+modelsvse++(faghri et al., 2017)lvse(engilberge et al., 2018)scan(lee et al., 2018)cvse(wang et al., 2020)visualsparta (ours).
+r@1 r@5 r@1055.428.462.434.965.038.467.338.971.045.4.
+66.673.574.476.179.2.table 5: cross-dataset performance; models are trainedon mscoco dataset and tested on flickr30k dataset..table 5 shows the cross-domain performancefor different models.
+all models are trained onmscoco and tested on flickr30k.
+we can seefrom the table that visualsparta consistently outper-forms other models in this setting.
+this indicatesthat the performance of visualsparta is consistent.
+across different data distributions, and the perfor-mance gain compared to other models is also con-sistent when testing in this cross-dataset settings..5.4 qualitative examples.
+we query visualsparta on the msoco 113k splitand check the results.
+as shown in figure 3, vi-sual and label features together represent the maxattended features for given query tokens.
+interest-ingly, we observe that visualsparta model is capa-ble of grounding adjectives and verbs to the rele-vant image regions.
+for example, “graz” groundsto the head of giraffe in the ﬁrst example.
+this fur-ther conﬁrms the hypothesis that weighted bag-of-words is a valid and rich representation for images..6 conclusion.
+in conclusion, this paper presents visualsparta, anaccurate and efﬁcient text-to-image retrieval modelthat shows the state-of-the-art scalable performancein both mscoco and flickr30k.
+its main nov-elty lies in the combination of powerful pre-trainedimage encoder with fragment-level scoring.
+de-tailed analysis also demonstrates that our approachhas substantial scalability advantages compared toprevious best methods when indexing large image.
+5027datasets for real-time searching, making it suitablefor real-world deployment..sentence matching.
+in proceedings of the ieee con-ference on computer vision and pattern recogni-tion, pages 6163–6171, 2018..references.
+zhuyun dai and jamie callan.
+context-aware sen-tence/passage term importance estimation for ﬁrststage retrieval.
+arxiv preprint arxiv:1910.10687,2019..zihang dai, zhilin yang, yiming yang,.
+jaimecarbonell, quoc v le, and ruslan salakhutdi-nov.transformer-xl: attentive language mod-els beyond a ﬁxed-length context.
+arxiv preprintarxiv:1901.02860, 2019..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+bert: pre-training of deep bidi-rectional transformers for language understanding.
+arxiv preprint arxiv:1810.04805, 2018..martin engilberge, louis chevallier, patrick p´erez, andmatthieu cord.
+finding beans in burgers: deepinsemantic-visual embedding with localization.
+proceedings of the ieee conference on computervision and pattern recognition, pages 3984–3993,2018..jeff johnson, matthijs douze, and herv´e j´egou.
+ieee.
+billion-scale similarity search with gpus.
+transactions on big data, 2019..andrej karpathy and li fei-fei.
+deep visual-semanticalignments for generating image descriptions.
+inproceedings of the ieee conference on computervision and pattern recognition, pages 3128–3137,2015..diederik p kingma and jimmy ba..adam: amethod for stochastic optimization.
+arxiv preprintarxiv:1412.6980, 2014..kuang-huei lee, xi chen, gang hua, houdong hu,and xiaodong he.
+stacked cross attention for image-text matching.
+in proceedings of the european con-ference on computer vision (eccv), pages 201–216, 2018..liunian harold li, mark yatskar, da yin, cho-juihsieh, and kai-wei chang.
+visualbert: a sim-ple and performant baseline for vision and language.
+arxiv preprint arxiv:1908.03557, 2019..fartash faghri, david j fleet, jamie ryan kiros, andimproving visual-semanticarxiv preprint.
+sanja fidler.
+vse++:embeddings with hard negatives.
+arxiv:1707.05612, 2017..gen li, nan duan, yuejian fang, ming gong, daxinjiang, and ming zhou.
+unicoder-vl: a universalencoder for vision and language by cross-modal pre-training.
+in aaai, pages 11336–11344, 2020..radu gheorghe, matthew lee hinman, and roy russo..elasticsearch in action.
+manning, 2015..charles r. harris, k. jarrod millman, st’efan j.van der walt, ralf gommers, pauli virtanen, davidcournapeau, eric wieser, julian taylor, sebas-tian berg, nathaniel j. smith, robert kern, mattipicus, stephan hoyer, marten h. van kerkwijk,matthew brett, allan haldane, jaime fern’andez delr’ıo, mark wiebe, pearu peterson, pierre g’erard-marchant, kevin sheppard, tyler reddy, warrenweckesser, hameer abbasi, christoph gohlke, andtravis e. oliphant.
+array programming withnumpy.
+nature, 585(7825):357–362, september2020..matthew henderson, i˜nigo casanueva, nikola mrkˇsi´c,pei-hao su, tsung-hsien wen, and ivan vuli´c.
+convert: efﬁcient and accurate conversational rep-arxiv preprintresentations from transformers.
+arxiv:1911.03688, 2019..yan huang, wei wang, and liang wang..instance-aware image and sentence matching with selectivemultimodal lstm.
+in proceedings of the ieee con-ference on computer vision and pattern recogni-tion, pages 2310–2318, 2017..yan huang, qi wu, chunfeng song, and liang wang.
+learning semantic concepts and order for image and.
+xiujun li, xi yin, chunyuan li, pengchuan zhang, xi-aowei hu, lei zhang, lijuan wang, houdong hu,li dong, furu wei, et al.
+oscar: object-semanticsinaligned pre-training for vision-language tasks.
+european conference on computer vision, pages121–137.
+springer, 2020..tsung-yi lin, michael maire, serge belongie, jameshays, pietro perona, deva ramanan, piotr doll´ar,and c lawrence zitnick.
+microsoft coco: commonobjects in context.
+in european conference on com-puter vision, pages 740–755.
+springer, 2014..jiasen lu, vedanuj goswami, marcus rohrbach, deviparikh, and stefan lee.
+12-in-1: multi-task visionin proceed-and language representation learning.
+ings of the ieee/cvf conference on computer vi-sion and pattern recognition, pages 10437–10446,2020..sean macavaney, franco maria nardini, raffaeleperego, nicola tonellotto, nazli goharian, andexpansion via prediction of im-ophir frieder.
+arxiv preprintportance with contextualization.
+arxiv:2004.14245, 2020..christopher d manning, hinrich sch¨utze, and prab-introduction to information re-.
+hakar raghavan.
+trieval.
+cambridge university press, 2008..5028hyeonseob nam, jung-woo ha, and jeonghee kim.
+dual attention networks for multimodal reasoningand matching.
+in proceedings of the ieee confer-ence on computer vision and pattern recognition,pages 299–307, 2017..bryan a plummer, liwei wang, chris m cervantes,juan c caicedo, julia hockenmaier, and svet-lana lazebnik.
+flickr30k entities: collectingregion-to-phrase correspondences for richer image-in proceedings of the ieeeto-sentence models.
+international conference on computer vision, pages2641–2649, 2015..di qi, lin su, jia song, edward cui, taroon bharti,imagebert: cross-modal pre-and arun sacheti.
+training with large-scale weak-supervised image-text data.
+arxiv preprint arxiv:2001.07966, 2020..shaoqing ren, kaiming he, ross girshick, and jiansun.
+faster r-cnn: towards real-time object detec-tion with region proposal networks.
+ieee transac-tions on pattern analysis and machine intelligence,39(6):1137–1149, 2016..yaxiong wang, hao yang, xueming qian, lin ma,jing lu, biao li, and xin fan.
+position focusedattention network for image-text matching.
+arxivpreprint arxiv:1907.09748, 2019..zihao wang, xihui liu, hongsheng li, lu sheng, jun-jie yan, xiaogang wang, and jing shao.
+camp:cross-modal adaptive message passing for text-image retrieval.
+in proceedings of the ieee interna-tional conference on computer vision, pages 5764–5773, 2019..haoran wang, ying zhang, zhong ji, yanwei pang,and lin ma.
+consensus-aware visual-semantic em-bedding for image-text matching.
+in european con-ference on computer vision, pages 18–34.
+springer,2020..jonatas wehrmann, douglas m souza, mauricio alopes, and rodrigo c barros.
+language-agnosticvisual-semantic embeddings.
+in proceedings of theieee international conference on computer vision,pages 5804–5813, 2019..zhilin yang, zihang dai, yiming yang, jaime car-bonell, russ r salakhutdinov, and quoc v le.
+xl-net: generalized autoregressive pretraining for lan-guage understanding.
+in advances in neural infor-mation processing systems, pages 5753–5763, 2019..saizheng zhang, emily dinan, jack urbanek, arthurszlam, douwe kiela, and jason weston.
+personaliz-ing dialogue agents: i have a dog, do you have petstoo?
+arxiv preprint arxiv:1801.07243, 2018..tiancheng zhao, xiaopeng lu, and kyusong lee.
+sparta: efﬁcient open-domain question answeringarxivvia sparse transformer matching retrieval.
+preprint arxiv:2009.13013, 2020..5029

@@ -1,0 +1,259 @@
+what is your article based on?
+inferring fine-grained provenance.
+yi zhang, zachary g. ives, dan rothdepartment of computer and information scienceuniversity of pennsylvania, philadelphia, pa, usa{yizhang5, zives, danroth}@cis.upenn.edu.
+abstract.
+when evaluating an article and the claims itmakes, a critical reader must be able to as-sess where the information presented comesfrom, and whether the various claims are mu-tually consistent and support the conclusion.
+this motivates the study of claim provenance,which seeks to trace and explain the origins ofclaims.
+in this paper, we introduce new tech-niques to model and reason about the prove-nance of multiple interacting claims, includinghow to capture ﬁne-grained information aboutthe context.
+our solution hinges on ﬁrst identi-fying the sentences that potentially contain im-portant external information.
+we then developa query generator with our novel rank-awarecross attention mechanism, which aims at gen-erating metadata for the source article, basedon the context and signals collected from asearch engine.
+this establishes relevant searchqueries, and it allows us to obtain source arti-cle candidates for each identiﬁed sentence andpropose an ilp based algorithm to infer thebest sources.
+we experiment with a newly cre-ated evaluation dataset 1, politi-prov, based onfact-checking articles from www.politifact.com; our experimental results show thatour solution leads to a signiﬁcant improvementover baselines..1.introduction.
+misinformation is on the rise, and people are ﬁght-ing it with fact checking.
+however, most of thework in the current literature (thorne et al., 2018;zhang et al., 2019; barr´on-cedeno et al., 2020;hidey et al., 2020) focuses on automating fact-checking for a single claim.
+in reality, a claimcan be complex, and proposed as a conclusion ofan article.
+therefore, understanding what infor-mation supports the article, especially information.
+1the data and the code will be available at http://co.
+gcomp.org/page/publication view/944.
+figure 1: an example of a claim (in the red box) withits article.
+sentence 1 and sentence 2 (blue boxes) showexamples from the article.
+each sentence refers to ex-ternal information: source article 1 and 2, respectively,with accompanying urls..that was not originated within the same article, andwhere it originates from, are very important forreaders who want to determine whether they canbelieve the claim..figure 1 shows an example of such a claim,“marco rubio says anthony faucilies aboutmasks.
+fauci didn’t.”2 with its article frompolitifact.com.
+a critical reader of the con-tent will ﬁnd that several major sources supportthe author’s claim: source article 1 in the ﬁgure iscbs news,“60 minutes” interview with anthonyfauci, on march 8, 2020, which reveals that dr.fauci’s main point was to preserve masks for thosewho were already ill and people providing care.
+ifreaders can validate all sources used in the article,they will be able to determine whether the articleis trustworthy.
+in this paper, our goal is to automat-ically ﬁnd these sources for a given article.
+thisis a different problem from fact-checking: fact-checking seeks evidence for a claim, while here weonly care about the information sources the authors.
+2https://www.politifact.com/factchecks/2020/dec/28/marco-rubio/marco-rubio-says-anthony-fauci-lied-about-masks-fa/.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages5894–5903august1–6,2021.©2021associationforcomputationallinguistics5894used when they were writing.
+furthermore, theproblem we address is critical also to authors whowant to give credit to those who have contributed totheir article, and it enables a recursive analysis thatcan trace back to the starting points of an article..this motivates the study of provenance fornatural language claims, which describes wherea speciﬁc claim may have come from and howit has spread.
+early work (zhang et al., 2020)proposed a formulation to model, and a solutionto infer, the provenance graph for the given claim.
+however, that model is insufﬁcient to capturethe provenance of an article, because (1) anarticle consists of multiple claims, and it leveragesinformation from other sources,therefore theprovenance of all claims should be included in thearticle’s provenance; (2) the inference solutionthey proposed can only extract domain-level prove-nance information, e.g., cbsnews.com, while it cannot directly link the claim to its source article,e.g., https://www.cbsnews.com/news/preventing-coronavirus-facemask-60-minutes-2020-03-08/.
+such ﬁne-grained provenance information isimportant because it can help people understandthe original context that inﬂuenced the informationthey read.
+therefore, in this work, we arguethat the notion of a provenance graph should beextended to incorporate provenance for articles,and that we need a more comprehensive solutionthat can identify important external informationused in the article and infer its correspondingsource article: namely, its ﬁne-grained provenanceinformation..technically, capturing ﬁne-grained provenancefor an article is challenging because (1) there maybe large numbers of sentences in an article, and notall are from external sources nor important (thus,their provenance may not be worth considering);(2) a sentence in an article is usually just a textualfragment of its source article, and simply lookingfor other articles with related content may resultin low precision with regards to ﬁnding the correctoriginal article.
+in our running example, sentence2in figure 1 is “on march 29, president donaldtrump and the coronavirus task force briefed thepress on steps underway to increase ...”, whosesource is white house’s coronavirus task forcepress brieﬁng on march 29, 2020. if we directlysearch for the sentence on the web, it is hard to ﬁndthis among popular articles from the news.
+instead,we need a model that can generate better keywords.
+for a more focused search..the key contributions of this paper are (1) we in-troduce and formalize the problem of inferring ﬁne-grained provenance for an article; (2) we propose ageneral framework to infer the source articles thathave provided important information for the givenarticle, including (a) a ranking module that canidentify sentences that contain important externalinformation based on the main topic and the mainentities in the article; (b) a query generator that cangenerate possible metadata for the source article,e.g., the title, the published date, the source web-site, based on the context of the selected sentences;(c) an integer linear program (ilp) based algorithmto jointly identify the source articles from all of thecandidates.
+(3) to evaluate our solutions, we collecta new dataset politi-prov from politifact.com,and our experimental results show that the solutionwe proposed can lead to a signiﬁcant improvementcompared with baselines..2 problem statement.
+figure 2: the pipeline of inferring ﬁne-grained prove-nance for an article..given an article d, we are to capture its ﬁne-grained provenance, by inferring k source articlessak(d) that provide the most important informa-tion for d. we adopt the notion of provenance from(zhang et al., 2020), while in this paper, we focuson inferring provenance for a claim based on theinformation from the given article.
+to ﬁnd sak(d),there are three subproblems we need to solve..first, we need to locate the important externalinformation in d, which means we need a sentenceranking module that can estimate a score σi foreach sentence in d = {si}ni=1, based on how likelysi contains external information.
+then we willchoose top-k sentences based on their score, andtry to ﬁnd source articles for those sentences..second, for each selected sentence, we need togenerate a list of candidate links, which can be.
+5895its source articles.
+to achieve this goal, we takeadvantage of a search engine, based on which wecan access all of the articles on the web.
+as wehave discussed in section 1, directly searching theidentiﬁed sentence on a search engine may resultin a low precision of ﬁnding the correct sourcearticle.
+therefore, we propose to develop a querygenerator to generate the possible metadata of thetarget source article as new search keywords, sothat the search engine is more likely to recall sourcearticles.
+we then collect all of the search results asthe candidates for a selected sentence..finally, we need to infer the correct source ar-ticle from the candidates, for each identiﬁed sen-tence.
+figure 2 depicts the three steps we needto conduct to infer the ﬁne-grained provenance,which correspond to the three subproblems listedabove.
+we will elaborate the details of each step insection 4..3 politi-prov dataset.
+to the best of our knowledge, there is no exist-ing dataset that can support inferring ﬁne-grainedprovenance for an article, therefore we create a newdataset based on the fact-checks from politifact.com to support the training and the evaluation ofthis problem..speciﬁcally, we crawled all of the fact-checkquestions from politifact.com on 4 differentissues: coronavirus, health care, immigration,taxes in september, 2020. for each question, wefurther crawled its webpage to obtain (1) the ti-tle, which is actually the fact-check question itself,(2) the sections of the main text and (3) the “oursources” section listing all of the articles (includingurls) that provide important information mentionedin the fact-check article.
+figure 3 shows an exam-ple of such a section..figure 3: an example of “our sources” section of anarticle from politifact.com, where we obtain the goldﬁne-grained provenance of the article..furthermore, we extract all of the hyperlinks inthe webpage, which can tell us where the sourcearticles are mentioned in the main text..to sum up, we use the main text of each webpage.
+as the given article, and the source articles listedin the section of “our sources” as the ground truthour system wants to return.
+we want to note it ispossible that there may be some sources missing inthe ground truth we can obtain, therefore, we focusmore on the recall in the evaluation..overall, we collected data from 1765 articles,where we use 883 of them for training, and 441and 441 for validation and testing respectively.
+onaverage, each article has 9.8 source articles..4.inferring fine-grained provenance.
+in this section, we will elaborate how we solve theproblems proposed in section 2..4.1 sentence ranking.
+given an article, the ﬁrst step is to identify thesentences that are most likely to contain impor-tant external information.
+to develop a generaldata-driven solution, rather than design a rankingfunction by domain-speciﬁc feature engineering,we take advantage of the hyperlinks inserted in thearticle, so that we can ﬁnd where the source arti-cles are mentioned.
+the hyperlink is helpful herebecause it is standard for the author to provide ex-ternal information on related topics to the reader.
+ifthe hyperlink refers one at the listed source articles,it means the sentence is the one that we are lookingfor.
+then our problem is to learn a model that candistinguish those sentences from the regular onesin the article..speciﬁcally, we ﬁrst extract all of the hyper-links with their corresponding sentences in thegiven article d, and denote the output as hp(d) ={(l, s)|s ∈ d}, where l represents the link of thearticle and s represents the sentence.
+then, wecreate a list of positive sentences for d denoted asp (d) by ﬁnding the intersection between the arti-cles in hp(d) and those in sak(d), i.e., p (d) ={s|s ∈ d, ∃(l, s) ∈ hp(d), s.t., l ∈ sak(d)}.
+meanwhile, we create a list of negative sentencesfor d by randomly sampling from the rest of itssentences, denoted as n (d).
+when a new article isgiven, the job of the model turns out to estimate ascore σi of how likely each sentence si in d refersto important external information..since the sentences referring to important exter-nal information are always either directly related tothe main topic or about the main entities mentionedin the article, we will leverage them to build ourmodel.
+denote the title of d as td, and the most.
+5896important entities mentioned in the article as ed.
+here, we simply use tf-idf to determine the impor-tance of an entity to an article.
+we build our modelby leveraging roberta (liu et al., 2019).
+usingthe same notation in the paper, we concatenate tdand each e ∈ ed, feeding it to the model as sen-tence a, and s ∈ p (d) or n (d) as sentence b, asthe input of roberta.
+we then use roberta as a bi-nary classiﬁcation model, that is, we use its [cls]vector as input to a two layer neural network toobtain the probability of s referring to importantexternal information.
+instead of learning the fea-tures independently for each example, we want tohelp the model better capture the discriminativefeature between the positive and negative exam-ples.
+therefore, we add a margin ranking loss tothe learning objective, so that it can enforce themodel to distinguish the representations betweenpositive and negative examples.
+we start trainingfrom a pre-trained roberta model and ﬁne-tune itto our ranking task using the following loss, givensi ∈ p (d) and sj ∈ n (d):.
+li,j = − log σi − log (1 − σj).
++ max (cid:0)0, τ (sj) − τ (si) + (cid:15)(cid:1).
+(1).
+where τ (si) and τ (sj) are the representations, ob-tained by the output of a single layer neural networkτ on top of the [cls] vector of roberta..4.2 candidate generation.
+identifying the sentences that are describing exter-nal information provides us with a clue to ﬁndingthe source articles.
+the next step is to ﬁnd candi-date articles that can be the source articles basedon the identiﬁed sentences.
+however, as we havedescribed in section 1, it is hard to ﬁnd the sourcearticle by directly searching the sentence on theweb, since so many articles may be talking aboutthe related information.
+therefore, we argue thatbesides using the sentence as the query, we needa query generator that can generate a better queryfor searching, so that it can increase the possibilitythat we can recall the correct source article..4.2.1 generating metadata as queryto generate a query that can improve the recall, thequestion here is what search keywords are goodfor ﬁnding the source articles besides the identi-ﬁed sentences themselves?
+in this work, we arguethat the metadata of the target article, including itssource domain, title and published date is a goodchoice.
+since most of those information may be.
+revealed in the sentence or its context, it is possiblethat we train a model where we can feed the contextof the sentence, and generate a combination of thepossible source domain, title and published date ofthe article it refers to..in our running example in figure 1, the sen-tence identiﬁed (sentence 2 in the ﬁgure) is “...on march 29, president ... ”.
+the source domainof the article it refers to (source article 2 in theﬁgure) is white house, the title of the article is coro-navirus task force press brieﬁng, and the publisheddate is march 29, 2020. it is obvious that most ofthose information has been somehow mentionedin the context or at least can be very easily asso-ciated with.
+therefore, we treat this problem as atext generation problem, where we feed the identi-ﬁed sentence with its context, and try to generateits metadata.
+as a baseline, we train this modelvia ﬁne-tuning bart (lewis et al., 2020), a pre-trained text generation model..4.2.2.integrating search engine signals.
+besides the metadata to generate, the content ofthe identiﬁed sentence itself should be useful forsearching, when there is an overlap between thesentence and the content of the target article.
+inthis case, if we search for the identiﬁed sentence ona search engine, the results returned can be relatedarticles, and their metadata may provide additionaluseful information that can tell the model whatshould be included in the target output..in our running example mentioned in the last sec-tion, if we search that sentence on google, one re-sult it returned is cspan’s article “president trumpwith coronavirus task press brieﬁng”, which hasbeen very close to the title of the target article.
+therefore, our generation model should leveragethose signals, which consist of metadata of relatedarticles to the target article..to incorporate the signals, we ﬁrst issue the iden-tiﬁed sentence as a query to the search engine andcollect its top-5 returned urls.
+then, as what we doto the identiﬁed sentence, we crawl its metadata,i.e., the source domain, title, and published date,and put them together as one document.
+then, ourproblem becomes to generating the metadata of thesource article, when we are given the identiﬁed sen-tence, its context, and a concatenation of possiblemetadata outputs..in this case, we actually have two types of in-puts for the model.
+one is the identiﬁed sentencewith its context, where we are to infer the metadata.
+5897from, and the other one is the concatenation of pos-sible outputs, where we want to extract the correctmetadata components directly from.
+to solve thisproblem, we extend the bart baseline to incorpo-rate two sources of inputs, by ﬁrst feeding the textinputs independently to the bart’s encoders, thenconcatenating the outputs of the encoders together,and ﬁnally feeding the uniﬁed representations tothe bart’s decoder..4.2.3 rank-aware generation.
+we collect multiple possible metadata for eachsource article, so that the integration can help usgenerate better keywords for the search.
+however,treating the multiple possible metadata as a singledocument neglects the rank of the urls returned,which reﬂects the different possibility for each can-didate to be the right metadata.
+therefore, wepropose a rank-aware multi-head cross-attentionto relieve this problem.
+the basic idea is whenbart’s decoders are performing cross-attentionover the text input of the sentences and the possi-ble metadata, we require that each set of attentionheads (vaswani et al., 2017) derives different atten-tion scores based on different metadata.
+concretely,each set of attention heads will explicitly pay atten-tion to different parts of the input corresponding todifferent pieces of metadata, and neglect the oth-ers.
+therefore, after training, each set of attentionheads can be used to project the input embeddingsinto different representation subspaces but focus-ing on a speciﬁc set of candidate metadata.
+forexample, we will have a set of attention heads docross-attention only over the positions of the sen-tences and the meta-data from the ﬁrst url, anotherset do it only over the positions of the sentencesand the meta-data from the ﬁrst and the second urls,and so on.
+note that the candidate metadata fromthe urls ranked higher will always receive moreattention than the others in this case..figure 4 summarizes our ﬁnal design of the gen-.
+eration model..4.3.joint inference.
+given the identiﬁed sentence and the query key-words generated, we can search for them on asearch engine and collect a set of links that are thecandidates of the source articles.
+the next problemis to infer the correct ones from them..figure 4: the architecture of the query generator.
+themodel extends (1) bart’s encoders to incorporate twotypes of input, one is the context of the selected sen-tence, and the other one is possible metadata collectedfrom a search engine, (2) bart’s decoders with a rank-aware multi-head cross attention to generate the goldmetadata..4.3.1.intuitions.
+based on our observations, the author is very likelyto leverage the external information coming fromthe same source websites.
+in our running exam-ple introduced in section 1, the author cited 8 ar-ticles in total, and among those articles, two ofthem come from whitehouse.gov and anothertwo come from politicfact.com, which are actu-ally two claims they have done fact-check before.
+besides the sources, the titles of the articles arealso very likely to be related.
+in the same example,some of them are all talking about the interviewsdone by anthony fauci at different time, and someof them are talking about the white house’s coro-navirus task force in press brieﬁng.
+therefore,we propose an algorithmic inference frameworkthat can take advantage of those relations betweenthe source articles to determine the correct sourcearticles of identiﬁed sentences jointly..4.3.2.ilp-based inference.
+we formulate the inference as an integer linearprogram (ilp) (roth and tau yih, 2004; cheng androth, 2013), that allows us to jointly determine thebest candidate for each identiﬁed sentence..formally, we introduce two types of booleanvariables: xki , which represents if the kth candidateis the source article of the ith sentence, and zklij ,which represents if the source article of the ith sen-tence and the source article of the jth sentence arerelated, which means either they come from relatedsource websites or provide related content..to infer the value of the boolean variables, our.
+5898objective is to assign the best candidate to eachidentiﬁed sentence that can (1) maximize the over-all relatedness of the source articles to the querydocument, and (2) maximize the relatedness be-tween the source articles.
+to compute the related-ness, we introduce wki , which represents the relat-edness score of the candidate article to the identi-ﬁed sentence, γklij , which represents the similarityscore between the representations of the sourcedomain of the ith article’s kth candidate and thesource domain of the jth article’s lth candidate, andτ klij , which represents the similarity score betweenthe representations of the title of the ith article’skth candidate and the source domain of the jth arti-cle’s lth candidate.
+then, the optimization goal toﬁnd the best assignments γd of candidates for theidentiﬁed sentences is as follows:.
+γd = argmaxγ.
+(cid:88).
+(cid:88).
+i xkωk.
+i +.
+(cid:88).
+(cid:88).
+(cid:0)τ kl.
+ij + γklij.
+(cid:1)zkl.
+ij.
+(2).
+i.k.i,j.
+k,l.
+s.t..i ∈ {0, 1}, zklxkij ∈ {0, 1}(cid:88)xki = 1.
+∀i,.
+kij ≤ xk.
+2zkl.
+i + xlj.
+(3).
+here, (cid:80).
+k xk.
+i = 1 means only one candidate willﬁnally be chosen as the source article of the ithsentence, and 2zkli + xlj means only if the kthcandidate of the ith sentence and the lth candidateof the jth sentence have been chosen, we need toconsider the relations between them..ij ≤ xk.
+in our experiments, we use the last hidden layerof bert-large (devlin et al., 2019) as the repre-sentation for titles and source domains, and usecosine similarity to compute the similarity score.
+the ilp problem is solved using an off-the-shelfhigh-performance package 3..5 experimental evaluation.
+in this section we aim to answer the following re-search questions:rq1 can we correctly identify the sentences thatrefer to important external information in thegiven article?.
+rq2 given the identiﬁed sentences, can we gen-erate the metadata of the target articles fromthe context?.
+rq3 given a list of candidates for each identiﬁedsentence in the article, can we assign thecorrect candidate to each identiﬁed sentence?.
+3https://www.python-mip.com/.
+rq4 given the identiﬁed sentences, can we usethe query we generated to ﬁnd candidates,and successfully use them to improve theinference of source articles?.
+among those questions, rq1-rq3 are to evalu-ate a speciﬁc component of our solution, and rq4is to evaluate the joint performance of candidategeneration and source article inference.
+in the fol-lowing part, we will elaborate the answers to thosequestions, and for each question, we will start withdescribing its experimental setting, baselines andthe metrics..5.1 sentence ranking (rq1).
+setup we use politi-prov dataset introduced insection 3. concretely, we train and validate ourmodels on the articles in the training and valida-tion set, and try to predict the score of a sentencereferring to a source article from the article belong-ing to the test set.
+to compare the performance,we implement our solution (sr-te) as describedin section 4.1, and compare it with (1) a retrievalbaseline that simply computes the cosine similaritybetween the embedding vectors (using roberta) ofthe title and the sentence in the article (sr).
+thisretrieval baseline only captures the relatedness be-tween the sentence and the main topic of the article;(2) a retrieval baseline similar to sr, but computingthe cosine similarity between the embedding vec-tors of the concatenation of the title and the mostimportant entities (top-50) and the sentence in thearticle (sr-e), where we want to show the effectof considering important entities; (3) our learningsolution without considering entities (sr-t).
+wereport the mean precision and recall of the top-kresults respectively..figure 5: the performance of sentence ranking.
+results the results are reported in figure 5. thegaps between sr, sr-e, and sr-t, sr-te showthat considering important entities always resultsin an improvement on both precision and recall,which reveals that the sentences can not be iden-tiﬁed based on their relatedness to the title (the.
+5899main topic) only, but also requires other importantinformation in the article.
+furthermore, the ﬁgurealso shows that the learning method is signiﬁcantlybetter than the retrieval baseline without a learningobjective..5.2 candidate generation (rq2).
+setup we collect all of the sentences that cor-respond to the source articles in training, valida-tion and test set of politi-prov serving as training,validation and testing respectively.
+overall, thereare 5279 cases for training, 1847 for validation,and 1538 for testing.
+for each case, the source in-put is the identiﬁed sentence with its context (twosentences which are before and after the sentencerespectively), and the target output to generate isthe metadata of the corresponding source articlein a form of a concatenation of its source domain,title and published date.
+to evaluate the perfor-mance, we report rouge 1, rouge 2 and rouge lscore of the text generated, and compare with theperformance produced by (1) the original bart,(2) our solution integrating signals from google(bart-s), and (3) our solution integrating signalsfrom google with our rank-aware multi-head crossattention (bart-sr)..results we report the results in table 1. asshown in the table, we can observe that integratingthe signals from a search engine can signiﬁcantlyimprove the performance of generating the meta-data, and considering the ranking of the searchresults can further lead to an improvement..rouge-1.
+rouge-2.
+rouge-l.bartbart-sbart-sr.30.10234.36336.679.
+14.23718.39819.017.
+28.13632.66034.682.table 1: the performance of generating the metadatafor identiﬁed sentences..5.3.ilp inference (rq3).
+setup to conduct an isolated evaluation of theilp based inference, in this experiment, we gen-erate the candidates for each identiﬁed sentencebased on its metadata from the ground truth.
+con-cretely, we assume there is an oracle that can gen-erate the metadata based on the context for eachidentiﬁed sentence, and we directly search the meta-data on google, and fetch its top-5 results returnedas candidates for each identiﬁed sentence.
+then,.
+our inference algorithm is to ﬁnd the correct sourcearticle for each sentence from those candidates..to evaluate the performance, we report the meanrecall of source articles for each article, and com-pare it with results provided by the baselines, in-cluding (1) simply choosing the top-1 article fromthe results returned by directly searching the iden-tiﬁed sentence on google (ss1), (2) choosing thetop-1 article from the results returned by searchingthe metadata on google (ms1), (3) our proposedsolution, which conducts ilp inference to ﬁnd thesource article from the search results returned bysearching the metadata on google (ms-ilp).
+tohave a better understanding of the performance, wealso report two upper bounds.
+the ﬁrst one is theupper bound of the mean recall of the results by di-rectly searching the identiﬁed sentence on google(ss-ub), and the second one is the upper bound ofthe mean recall of the results by directly searchingthe meta-data on google (ms-ub).
+to computethe upper bounds, if one of the articles returned bygoogle is correct, then we consider the sentence iscorrectly assigned.
+actually, they are equivalent tothe mean recall of the top-5 results, since we onlyrequest google for its top-5 search results..results we report the performance in figure 6.in the ﬁgure, we can observe that the mean recall ofss1 is only 0.067, and even its upper bound ss-ubcan only achieve 0.15, which reveals that directlysearching the identiﬁed sentence on a search engineto ﬁnd the source article is not feasible.
+using themetadata of the source article to search can improvethe mean recall to around 0.3, and considering therelatedness between the source articles by ilp canfurther improve it to around 0.37. it demonstratesthat the ilp inference is useful for capturing therelatedness between the source articles, and theresult has been very close to the mean recall of itstop-5 results (ms-ub), which is the upper boundof the performance that the inference can achievewith searching by metadata..5.4 source article inference (rq4).
+setup in this experiment, we issue the queriesgenerated by the query generation module togoogle, and fetched the top-5 results returned.
+wecombine these results with the top-5 links returnedby searching the identiﬁed sentence directly, as thecandidate pool for each identiﬁed sentence.
+then,we conduct ilp inference to assign the candidateto each sentence.
+we report the mean recall of.
+5900that a better text generation model may be neces-sary to further improve the performance, which wethink is an interesting topic for future work..6 related work.
+our work builds on earlier work on claim prove-nance (see section 2 for a discussion).
+beyond that,we discuss below additional related work..fact-checking fact-checking is related to ourproblem, since there is usually a document retrievalstep to ﬁnd articles that may provide evidence inmost of the solutions (wang et al., 2018; thorneet al., 2018; nadeem et al., 2019).
+typically, theinput of fact-checking is a single claim insteadof an article, therefore it is hard to directly ex-tend their solutions to our problem.
+even thoughfact-checking may ﬁnd various evidentiary articlesfor the claim, the source articles we are lookingfor are those that have been used by the author,which is actually a speciﬁc subset of the articlesthat fact-checking targets to, and the size is alsomuch smaller.
+furthermore, we try to extract themetadata of the source articles from the text to sup-port a better search, which is not considered in thedocument retrieval step of fact-checking..recommending citations recommending cita-tions for scholarly articles has similarities to ourwork.
+the source articles we are looking for canbe considered as the citations of the given newsarticle that should be recommended.
+however, themeaning of the “reference” is different in thesetwo problems.
+when recommending citations fora paper, the system is to look for previous worksthat are related to the arguments in the given paper.
+the argument was created by the author, and thecriteria of the recommendation is the relatedness.
+while inferring provenance is to do reverse engi-neering to the given article, so that we can ﬁnd thearticles whose information or claims were actuallyused when the author was writing.
+technically,there are two types of citation recommendationsystems (bhagavatula et al., 2018).
+one is calledlocal (huang et al., 2012, 2015), that is, a systemtakes a few sentences (and an optional placeholderfor the candidate citation) as input and recommendscitations based on the context of the input sentences.
+another one is called global (kataria et al., 2010;ren et al., 2014; bhagavatula et al., 2018), that is,a system takes the entire article (and its meta-datawhich is optional) as input and recommends cita-.
+figure 6: the performance of inferring source articlesfor each article, ms-ilp is our ilp based solution, andms-ub is the best possible performance that can beachieved when the candidates are the top-5 results re-turned by searching for metadata on google..the source articles, varying k, which represents thenumber of the links we returned for each identi-ﬁed sentence.
+note that ﬁnding the top-k assign-ments in ilp is actually relaxing the unique solu-tion constraint in eq 3 to be ∀i, (cid:80)i = k, whichmakes the problem require an additional signiﬁcantamount of time to solve.
+therefore, here we greed-ily select the best assignment for each variable asan approximate top-k solution..j xj.
+figure 7: the performance of inferring source articlesvarying k..results as shown in figure 7, we can observewhen k = 3, it has already beaten the performanceof ss-ub reported in figure 6, which reveals thatthe candidates found by the queries generated byour query generator are helpful.
+when k = 5,the mean recall can achieve around 0.21, whichis much better than 0.15, the best performanceachieved by searching the identiﬁed sentence di-rectly.
+however, as what we can observe in theﬁgure, there is still a gap to the performance ofms-ub in figure 6. this may result from the in-sufﬁciency of the query generation, which implies.
+5901the true facts, unaffected by agenda or biases, butjournalists set their own opinions aside as theywork to uphold principles of independence and fair-ness.
+furthermore, the website emphasizes primarysources and original documentation when listingsources, for example direct access to governmentreports, academic studies and other data, ratherthan second-hand sources..acknowledgements.
+the authors would like to thank aaron sharock-man, the executive director of politifact, for kindlygranting access to data from the website for aca-demic research.
+this work is supported in part bythe ofﬁce of the director of national intelligence(odni), intelligence advanced research projectsactivity (iarpa), via iarpa contract no.
+2019-19051600006 under the better program and bya google focused award..tions for the paper.
+our solution is more related tolocal recommendation systems, while we do notassume we can access all of the articles that canbe cited and have a way to represent them to bevectors.
+therefore, we propose to learn a querygenerator, which is different with previous works.
+furthermore, we do joint inference for all of theidentiﬁed sentences in the article, which is actuallya global inference..7 conclusion and future work.
+we propose new techniques to infer ﬁne-grainedprovenance for an article that contains multipleclaims; this is important for a critical reader tounderstand what information supports the articlehe/she is reading and what its origins are.
+theinference consists of models that can identify thesentences that refer to important external informa-tion, generate the metadata that can make it morelikely to recall the source articles using a search en-gine, and do an ilp inference to jointly determinethe correct source articles from the candidates.
+wecreate a new dataset, politi-prov, for this task, andour evaluation on it demonstrates the effectivenessof each component, and shows a big improvementcompared with the baselines of ﬁnding source arti-cles..however, the problem has not been solved yet.
+as shown in the analysis, a better text generationmodel would further improve the performance.
+fur-thermore, it has also been revealed in the experi-ments that the gold metadata can only recall onlyaround 40% of the source articles, which actuallybecomes a bottleneck.
+therefore, it would be aninteresting future work direction to explore whatother information should be added to the query,besides the target metadata, so that we can recallmore source articles..ethical considerations.
+our dataset politi-prov is collected from www.politifact.com.
+the executive director of politifact,based at the poynter institute for media studies,granted us permission to use their data for thisresearch and to make the new dataset available.
+thecollection process is automatic without additionalmanual work..our collection involves fact-check articles withsources in 4 topics, i.e., coronavirus, health care,immigration and taxes, which were written by thewebsite’s journalists.
+the website seeks to present.
+5902yinhan liu, myle ott, naman goyal, jingfei du, man-dar joshi, danqi chen, omer levy, mike lewis,luke zettlemoyer, and veselin stoyanov.
+2019.roberta: a robustly optimized bert pretraining ap-proach.
+arxiv preprint arxiv:1907.11692..moin nadeem, wei fang, brian xu, mitra mohtarami,and james glass.
+2019. fakta: an automatic end-in proceedings ofto-end fact checking system.
+the 2019 conference of the north american chap-ter of the association for computational linguistics(demonstrations), pages 78–83, minneapolis, min-nesota.
+association for computational linguistics..xiang ren, jialu liu, xiao yu, urvashi khandelwal,quanquan gu, lidan wang, and jiawei han.
+2014.cluscite: effective citation recommendation by in-formation network-based clustering.
+in proceedingsof the 20th acm sigkdd international conferenceon knowledge discovery and data mining, pages821–830..dan roth and wen tau yih.
+2004. a linear program-ming formulation for global inference in naturallanguage tasks.
+in proc.
+of the conference on com-putational natural language learning (conll),pages 1–8.
+association for computational linguis-tics..james.
+andreas vlachos,.
+christosthorne,christodoulopoulos,2018.fever: a large-scale dataset for fact extraction andveriﬁcation.
+arxiv preprint arxiv:1803.05355..and arpit mittal..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n gomez, lukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+arxiv preprint arxiv:1706.03762..xuezhi wang, cong yu, simon baumgartner, and flipkorn.
+2018. relevant document discovery for fact-checking articles.
+in companion proceedings of thethe web conference 2018, pages 525–533..yi zhang, zachary ives,.
+and dan roth.
+2019.evidence-based trustworthiness.
+in proceedings ofthe 57th annual meeting of the association for com-putational linguistics, pages 413–423, florence,italy.
+association for computational linguistics..yi zhang, zachary g. ives, and dan roth.
+2020.
+”whosaid it, and why?” provenance for natural languageclaims.
+in proc.
+of the annual meeting of the asso-ciation for computational linguistics (acl)..references.
+alberto barr´on-cedeno, tamer elsayed, preslavnakov, giovanni da san martino, maram hasanain,reem suwaileh, fatima haouari, nikolay bab-ulkov, bayan hamdan, alex nikolov, et al.
+2020.overview of checkthat!
+2020: automatic identiﬁca-tion and veriﬁcation of claims in social media.
+in in-ternational conference of the cross-language eval-uation forum for european languages, pages 215–236. springer..chandra bhagavatula, sergey feldman, russell power,and waleed ammar.
+2018. content-based citationrecommendation.
+arxiv preprint arxiv:1802.08301..xiao cheng and dan roth.
+2013. relational inferencein proceedings of the 2013 con-for wikiﬁcation.
+ference on empirical methods in natural languageprocessing, pages 1787–1796..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language under-in proceedings of the 2019 conferencestanding.
+of the north american chapter of the associationfor computational linguistics: human languagetechnologies, volume 1 (long and short papers),pages 4171–4186, minneapolis, minnesota.
+associ-ation for computational linguistics..christopher hidey, tuhin chakrabarty, tariq al-hindi, siddharth varia, kriste krstovski, monadiab, and smaranda muresan.
+2020. deseption:dual sequence prediction and adversarial exam-arxiv preprintples for improved fact-checking.
+arxiv:2004.12864..wenyi huang, saurabh kataria, cornelia caragea,prasenjit mitra, c lee giles, and lior rokach.
+2012.recommending citations: translating papers into ref-in proceedings of the 21st acm inter-erences.
+national conference on information and knowledgemanagement, pages 1910–1914..wenyi huang, zhaohui wu, chen liang, prasenjit mi-tra, and c giles.
+2015. a neural probabilistic modelfor context based citation recommendation.
+in pro-ceedings of the aaai conference on artiﬁcial intel-ligence, volume 29..saurabh kataria, prasenjit mitra, and sumit bhatia.
+2010. utilizing context in generative bayesian mod-in proceedings of the aaaiels for linked corpus.
+conference on artiﬁcial intelligence, volume 24..mike lewis, yinhan liu, naman goyal, mar-jan ghazvininejad, abdelrahman mohamed, omerlevy, veselin stoyanov, and luke zettlemoyer.
+2020. bart: denoising sequence-to-sequence pre-training for natural language generation, translation,and comprehension.
+in proceedings of the 58th an-nual meeting of the association for computationallinguistics, pages 7871–7880, online.
+associationfor computational linguistics..5903

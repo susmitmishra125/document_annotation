@@ -1,0 +1,323 @@
+best of both worlds: making high accuracy non-incrementaltransformer-based disﬂuency detection incremental.
+morteza rohanian and julian houghcognitive science groupschool of electronic engineering and computer sciencequeen mary university of london{m.rohanian, j.hough} @qmul.ac.uk.
+abstract.
+while transformer-based text classiﬁers pre-trained on large volumes of text have yieldedsigniﬁcant improvements on a wide range ofcomputational linguistics tasks,their imple-mentations have been unsuitable for live in-cremental processing thus far, operating onlyon the level of complete sentence inputs.
+weaddress the challenge of introducing meth-ods for word-by-word left-to-right incremen-tal processing to transformers such as bert,models without an intrinsic sense of linearorder.
+we modify the training method andlive decoding of non-incremental models to de-tect speech disﬂuencies with minimum latencyand without pre-segmentation of dialogue acts.
+we experiment with several decoding meth-ods to predict the rightward context of theword currently being processed using a gpt-2language model and apply a bert-based dis-ﬂuency detector to sequences, including pre-dicted words.
+we show our method of incre-mentalising transformers maintains most oftheir high non-incremental performance whileoperating strictly incrementally.
+we also evalu-ate our models’ incremental performance to es-tablish the trade-off between incremental per-formance and ﬁnal performance, using differ-ent prediction strategies.
+we apply our sys-tem to incremental speech recognition resultsas they arrive into a live system and achievestate-of-the-art results in this setting..1.introduction.
+conversational systems provide a signiﬁcant ad-dition to the present approaches in mental healthcare delivery.
+interactions with these conversa-tional agents have been shown to contain observ-able indicators of cognitive states, such as the rateof ﬁlled pauses and different temporal and turn-related features (gratch et al., 2014).
+alzheimer’sdisease (ad) patients, for example, have trouble.
+performing tasks that leverage semantic informa-tion; they have difﬁculties with verbal ﬂuency andobject recognition.
+ad patients speak more slowlywith long pauses and spend extra time looking forthe correct word, which leads to speech disﬂuency(l´opez-de ipi˜na et al., 2013; nasreen et al., 2021).
+disﬂuency markers can be key features for identi-fying certain cognitive disorders for application inconversational agents (rohanian et al., 2020)..such conversational systems are primarily usedfor content processing, which is then analyzed of-ﬂine.
+there is much work on detecting disﬂuen-cies for ofﬂine analysis of transcripts.
+however,given that these disﬂuency detection models do notwork for live systems and depend on rich transcrip-tion data, including pre-segmentation of dialogueacts, to facilitate more cost-effective analysis ofother data, we need systems capable of performingdirectly and incrementally off the speech signal,or at least from the results of automatic speechrecognition (asr) as they arrive in the system..as it receives word-by-word data, an incremen-tal model must operate with minimum latency anddo so without changing its initial assumptions anddelivering its best decisions as early as possiblefollowing the principles outlined in (hough andpurver, 2014).
+here we design and evaluating mod-els that work with online, incremental speech recog-nition output to detect disﬂuencies with varyinglevels of granularity..the best neural language encoders currentlyused in computational linguistics consider word se-quences as a whole, and their implementations havebeen unsuitable for live incremental processing.
+transformers (vaswani et al., 2017), for instance,operate on representations that do not naturallyhave an organizing principle of linear word or-der.
+we analyze how these models work underincremental frameworks, where it is essential topresent partial output relying on partial input pro-.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages3693–3703august1–6,2021.©2021associationforcomputationallinguistics3693vided up to a certain time step that may occur ininteractive healthcare systems.
+we explore whetherwe can adjust such models to function incremen-tally and how useful they are in terms of overallaccuracy and incremental metrics..to further enhance the models’ incremental per-formance, we use two general strategies to adjustthe training regime and the real-time procedure:incremental training (‘chunk-based’ training andadd-m training) and incremental decoding (con-stant latency and prophecies).
+we employ threeprominent decoding methods to predict the right-ward context of the word currently being processed:beam search, top-k sampling, and top-p sampling.
+we also measure our models’ incremental perfor-mance to set the trade-off between incremental per-formance and ﬁnal performance..2 related work.
+although considerable work has been done on de-tecting disﬂuencies, much of this work uses tran-scripts as texts rather than live speech inputs, withthe goal of ‘cleaning’ the disﬂuent content forpost-processing purposes.
+they are almost exclu-sively conducted on pre-segmented utterances ofthe switchboard corpus of telephone conversations(godfrey et al., 1992).
+several disﬂuency detec-tion efforts involve sentence-based parsing andlanguage models (johnson and charniak, 2004;zwarts et al., 2010).
+sequence labeling modelswith start-inside-outside (bio) style tags have beenused in recent neural sequence approaches to disﬂu-ency detection based on bi-directional long shortterm memory (bilstm) networks and transform-ers, in which the sequences are available in full(zayats et al., 2016; lou and johnson, 2020; wanget al., 2020)..such ofﬂine methods are insufﬁcient if we in-tend to infer meaning from repairs and edit wordsfor disﬂuency detection in real-time, which is ben-eﬁcial in a healthcare domain dialogue system thatseeks to get a consistent and clear understanding ofuser statements and the user’s cognitive state..methods based on strictly incremental opera-tion have been rare.
+hough and purver (2014) useda line of classiﬁers and language model featuresin a strong incremental operating system withoutlooking ahead.
+incremental dependency parsingcombined with the removal of disﬂuency was alsostudied (rasooli and tetreault, 2015).
+some studieshave used recurrent neural networks for live dis-.
+ﬂuency identiﬁcation.
+using a basic elman recur-rent neural network (rnn), hough and schlangen(2015) investigated incremental processing, withan objective coupling detection accuracy with lowlatency..language models have been used as an addi-tional task for the identiﬁcation of disﬂuencies, re-lying on the intuition that disﬂuencies can be de-tected by divergences from clean language models,with johnson and charniak (2004)’s noisy chan-nel model beginning this effort.
+shalyminov et al.
+(2018) made language modelling an auxiliary taskto disﬂuency detection in a deep multi-task learn-ing (mtl) set-up, gaining accuracy over a vanillarnn tagger.
+pos tags have also been used asan input for detecting disﬂuencies, showing slightincreases in disﬂuency detection over using wordvalues alone (purver et al., 2018)..while the work above operates only on tran-scripts pre-segmented into utterances, recent re-search has been performed on combining disﬂu-ency detection with utterance segmentation.
+thiswas done in a joint tagset of disﬂuency, and utter-ance segmentation tags by (hough and schlangen,2017), showing an improvement over the perfor-mance of the individual tasks, and (rohanian andhough, 2020) show an improvement in both taskswhen framed as a multi-task learning (mtl) set-upwith a long short-term memory network (lstm),also simultaneously doing pos-tagging and lan-guage modelling..the recent live incremental systems fall short ofthe same accuracies achievable on pre-segmentedtranscripts, so there is a natural interest in usingthe best non-incremental sequence models andadapting them for incrementality.
+madureira andschlangen (2020) take up this effort in several othersequence tagging and classiﬁcation tasks, showinghow bidirectional encoders and transformers canbe modiﬁed to work incrementally.
+to reduce theimpact of the partiality of the input, the models pre-dict future content and wait for more rightward con-text.
+dalvi et al.
+(2018) also use truncated inputsduring the training phase of live machine transla-tion to address the partial input sentence decodingproblem bidirectional encoders face.
+here, weseek to add to this growing effort to investigate thetrade-off of incremental performance against theﬁnal output quality of deep neural network-basedlanguage processing, applied to incremental disﬂu-ency detection..3694disﬂuencyutterance segmentationpos tags.
+| a uh ﬂight [ to boston + { uhi mean }efefe-w--w--w- -w-.w-u h p rpdt u h n n.f-w- -w-in n n p.e-w-v b.f.torps−5-w-in.
+denver ] on friday |frpnsub-w--w-in n n pn n p.f-w..thank you |f-w..f.w-v b p rp.
+figure 1: an utterance with the disﬂuency tags (repair structures and edit terms) and the utterance segmentationtags and pos tags used for preprocessing..3 disﬂuency detection.
+disﬂuencies are generally assumed to havea reparandum-interregnum-repair structure intheir fullest form as speech repairs (shriberg, 1994;meteer et al., 1995).
+a reparandum is a stretch ofspeech later corrected by the speaker; the correctedexpression is a repair, the beginning of which isreferred to as repair onset.
+an interregnum wordis a ﬁller or a reference expression between therepair and reparandum, usually an interruption andhesitation step when the speaker expresses a repair,giving the structure as in (1)..john.
+[ likes(cid:123)(cid:122)reparandum.
+(cid:124).
+(cid:125).
++ { uh }(cid:125)(cid:123)(cid:122)(cid:124)interregnum.
+loves ](cid:125)(cid:123)(cid:122)repair.
+(cid:124).
+mary.
+(1).
+in the absence of reparandum and repair, thedisﬂuency is reduced to an isolated edit term.
+amarked, lexicalised edit term such as a ﬁlled pause(“uh” or “um”) or more phrasal terms such as “imean” and “you know” may occur.
+the identiﬁ-cation of these elements and their structure is thenthe task of disﬂuency detection..the task of detecting incremental disﬂuenciesadds to the difﬁculty of doing this in real-time,word-by-word, from left to right.
+disﬂuency recog-nition is then treated as the same problem that ahuman processor faces with a disﬂuent expression:only when an interregnum is detected, or maybeeven when a repair is initiated, does it become clearthat the earlier content is now to be regarded as ‘tobe repaired,’ i.e., to be classiﬁed as a reparandum.
+therefore, the task cannot be deﬁned as a simplesequence labeling task in which the tags for thereparandum, interregnum, and repair phases are as-signed left-to-right over words as seen in the aboveexample; in this case, it will require the assumptionthat “likes” would be repaired, at a time when thereis no data to make it available..we use a tag set that encodes the start of thereparandum only at a time when it can be inferred,primarily when the repair starts – the disﬂuencydetection task is to tag words as in the top line oftags in fig.
+1 as either ﬂuent (f ) an edit term (e),.
+a repair onset word (rps−n for the reparandumstarting n words back) and a repair end word ofthe type repeat (rpnrep), substitution (rpnsub)or delete (rpndel)..4 model.
+to incrementalise a transformer-based model forword-by-word disﬂuency detection, we devise amodel built on top of a pre-trained bert archi-tecture (devlin et al., 2019) with a conditionalrandom field (crf) output architecture to tagsequences with tags such as those in the top lineof fig.
+1. we use a bert-based encoder and trydifferent strategies to incrementalise the system’soperation and output, using language models topredict future word sequences as described in sec-tion 5 while maintaining bert’s non-incrementalquality..utterance segmentation our models are de-signed to work not only with pre-segmented databut also on raw transcripts and asr results, whereutterance segmentation is required to leveragethe use of sentence-based linguistic knowledge inbert.
+utterance segmentation has a clear interde-pendence with and inﬂuence on the detection ofdisﬂuency as disﬂuent restarts and repairs may beincorrectly predicted at ﬂuent utterance boundarieswithout segmentation.
+in this paper, rather thanperforming utterance segmentation in tandem withdisﬂuency detection, we perform it on words asthey arrive in the system as a live segmentationtask before sending the current preﬁx of the utter-ance to the disﬂuency detection system.
+we usethe word-by-word segmentation system from (ro-hanian and hough, 2020) where four output tagsdeﬁne ranges of transcribed words or word hypothe-ses using a bies tag scheme (beginning, inside,end, and single) to allow for the prediction of anutterance ending.
+the tagset allows information tobe captured from the context of the word to decidewhether this word continues a current utterance(the - preﬁx) or starts anew (the .
+preﬁx), and alsoallows live prediction of whether the next wordwill continue the current utterance (the - sufﬁx) or.
+3695whether the current word ﬁnishes the utterance (the.
+sufﬁx).
+an example of the scheme is shown inthe second line of fig.
+1..crf we use a crf output architecture to pre-dict a tag for every token.
+although this modelgenerates predictions for the whole sequence, thelabels are outputted individually.
+there are impor-tant dependencies between adjacent labels in dis-ﬂuency detection, and explicit modeling of theserelationships can help.
+the addition of the crfenables the model to test for the most optimal pathacross all available label sequences..4.1.input features.
+in addition to the word values, we also experimentwith two other inputs:.
+part-of-speech tags pos tags may enhance theidentiﬁcation of disﬂuencies on various settings.
+pos tagging helps detect disﬂuency structure as theparallelism between the reparandum and repair insubstitutions, as shown in the repeated in n n psequences in fig.
+1..word timings we also experiment with the du-ration from the ending of the previous word tothe ending of the current word as it enters the sys-tem, either from ground truth word transcriptionsor from asr results..5 strategies for incrementalising bert.
+here we describe the different strategies we usedto modify the training and live decoding methodsof non-incremental models to detect speech disﬂu-encies word-by-word incrementally.
+the generalprinciple is to leverage high accuracy full sequenceclassiﬁcation using bert but deploying it on se-quences, including future predictions for words upto the hypothesised end of the current utterance..5.1 modifying the training procedure.
+training is performed on full sentences/utterances,but the decoder produces outputs based on par-tial input data at the test time.
+this disparity be-tween training and decoding can potentially affectour models’ performance.
+based on (dalvi et al.,2018), we present two methods to address this is-sue: chunk-based training and add-m training..chunk-based training in chunk-based training,we change the training scheme by removing theends of each sentence in the training set and sim-ply break each training sentence into chunks of ntokens.
+here we use 2 and 3 for n ..add-m training we begin with the ﬁrst nwords in training sentences in add-m training.
+the next training instances are then generated byn + m, n + 2m, n + 3m... words before the endof the sentence is reached.
+in our experiments, wefound setting n =1 and m =1 worked best..5.2 modifying the decoding procedure.
+constant latency the technique of constant la-tency requires allowing certain ‘future’ words tobe seen before a label to previous words is given.
+it is a form of look-ahead based on baumann et al.
+(2011), in which before making the ﬁrst decisionwith respect to previous time steps, the processoris required to wait for some correct context.
+weexplore the one- or two-word contexts of our in-put.
+this suggests that the model generates theﬁrst label for word t after the word t + 1 is seen orthe model observes words t + 1 and t + 2 beforetagging word t. this has an inherent limit on thelatency achievable, and we use this as a baselineincremental decoding system..prophecy-based decoding for our other decod-ing strategies, we use a ‘prophecy’-based approachto predicting future word sequences, following thetask of open-ended language generation, which,given an input text passage as context, is to pro-duce text that constitutes a cohesive continuation(holtzman et al., 2019).
+inspired by (madureiraand schlangen, 2020), using the gpt-2 languagemodel (radford et al., 2019), we ﬁrst give eachword as a left context and create a continuation un-til the end of an utterance to create a hypotheticalcomplete context that satisﬁes the requirements ofthe models’ non-incremental structure..formally, with m tokens x1...xm as our context,the task is to create the next n continuation tokensto achieve the completed sequence x1...xm+n.
+itis assumed that the models compute p (x1:m+n)using a standard left-to-right decomposition of thetext probability as in (2).
+this process is usedto build the utterance continuation token-by-tokenusing a speciﬁc decoding technique..p (x1:m+n) =.
+p (xi|x1...xi−1).
+(2).
+m+n(cid:89).
+i=1.
+three of the most common decoding methodsare used in this paper: beam search, top-k sam-pling, and top-p sampling.
+example word se-quence prophecies from these decoding methods.
+3696(fan et al., 2018).
+given a distribution p (x|x1:i−1),we extract its top-k vocabulary v (k) ⊂ v as the setof size k which maximizes (cid:80)x∈v (k) p (x|x1:i−1).
+after an initial investigation, we set k to 50 in allexperiments..top-p sampling rather than selecting only themost probable k words, in top-p sampling, weselect the smallest possible range of words withtheir total likelihood exceeds the probability p(holtzman et al., 2019).
+the probability mass isthen redistributed between this set of words.
+withthis method, the size of the word set will dynami-cally adjust based on the probability distribution ofthe next word.
+with the distribution p (x|x1:i−1),we consider its top-p sequence, with vocabularyv (p) ⊂ v as the smallest set with p (x|x1:i−1) ≥ p.we set p = 0.95..6 experimental set-up.
+we train on transcripts and test on both transcriptsand asr hypotheses.
+all models in testing havestrictly word-by-word left to right input.
+in additionto using the latest word hypothesis as input, wetrain and evaluate the presented models with twokinds of additional inputs: time elapsed from theend of the previous word (hypothesis) to the currentone and the pos tag of the current word.
+resultson the development set were used to ﬁnd the bestmodel to be evaluated on the test set..we used the data from (hough and schlangen,2017) for asr hypotheses – this was generatedby a free trial version of ibm’s watson speech-to-text service for incremental asr.
+the serviceoffers good quality asr on noisy data-on our se-lected held-out data on switchboard, and the aver-age wer is 26.5%.
+the watson service, cruciallyfor our task, does not ﬁlter out hesitation markersor disﬂuencies (baumann et al., 2017).
+the servicedelivers results incrementally, so silence-based end-pointing is not used.
+it also outputs word timings,which are close enough to the source timings to useas features in the live version of our system..the word embedding for lstm was initialisedwith 50-dimensional embedding trained on googlenews (mikolov et al., 2013).
+the model has beenimplemented using tensorﬂow 2.1. we train allmodels for a maximum of 50 epochs; otherwise,stop training if there is no improvement on the bestscore on the validation set after 7 epochs..a large version of the pre-trained bert is usedwith 340m parameters (24-layer blocks, 16 self-.
+(a).
+(b).
+(c).
+figure 2: using a ‘prophecy’-based approach to pre-dict future word sequences, following the task of open-ended language generation with three different decod-(a) beam search.
+(b) top-k sampling.
+ing methods.
+(c) top-p sampling..are shown in fig.
+2. the right-most block showsthe prediction of the continuation of the word se-quences as each new word in the sequence “johnlikes uh loves mary” is fed into the language model.
+beam search assuming that the model gives agreater likelihood to better quality text, we are look-ing for a sequence with the highest probability.
+dur-ing the search, a group of stacks is used to holdhypotheses.
+beam size n is used to manage thesearch space by expanding the top n hypothesesin the existing stack.
+we used beam size 10 for allthe models..top-k sampling we deﬁne sampling as ran-domly choosing the next word based on its con-ditional probability distribution as in (3)..xi ∼ p (x|x1:i−1).
+(3).
+in the top-k sampling, the most probable next kwords are extracted and the probability mass isredistributed between only the following k words.
+3697input.
+model.
+words.
+word +timings.
+word +pos.
+words +timings +pos.
+stir (hs’15/ phh’18)rnn (hs’15)lstmlstm-mtl (rh’20)bertlstmlstm-mtl (rh’20)bertstir (hp’14 / phh’18)rnn (hs’15 / phh’18)lstm joint tagset (hs’17)lstm-mtl (sel’18)lstm joint tagset (hs’17)lstmlstm-mtl (rh’20)bert.
+pre-segmented transcripts(per word)frps-/0.827-0.7710.7990.8510.7770.8120.842-/0.833-/0.790-0.816-0.7780.8110.853.frm0.741 / 0.7490.6890.6860.7370.7580.6810.7410.7520.779 / 0.7680.711 / 0.668-0.753-0.6920.7430.757.fe0.880/-0.8730.9280.9380.9600.9210.9290.9580.937/-0.902/--0.919-0.9310.9320.958.transcripts(per word)frps--0.6780.7430.7820.7180.7410.791--0.686-0.7190.7200.7430.802.fe--0.9040.9170.9470.9080.9220.939--0.907-0.9180.9100.9310.944.frm--0.590.6290.6590.6230.6290.678--0.599-0.6010.6010.6330.676.asr(per 10 second window)frpsfrm----0.548-0.573-0.5240.6030.555-0.559-0.5940.502----0.557-0.548-0.555-0.557-0.571-0.6050.522.fe--0.7260.7570.8120.7210.7510.793--0.726-0.7270.7270.7570.809.table 1: final disﬂuency detection accuracy results on switchboard data.
+attention heads, and 1024 hidden-size) for themodel.
+in our analysis, when ﬁne-tuning bert,we followed the hyper-parameters of (devlin et al.,2019).
+since the datasets we use are tokenized,and each token has a matching tag, we adopt thedirections provided by (devlin et al., 2019) to dealwith the sub-tokenization of bert: to determineits label, the scores of the ﬁrst sub-token are used,and further sub-token scores are discarded..data we use standard switchboard training data(all conversation numbers starting sw2*,sw3 * inthe penn treebank iii release: 100k utterances,650k words) and use standard held-out data (ptbiii ﬁles sw4[5-9] *: 6.4k utterances, 49k words)as our validation set.
+we test on the standard testdata (ptb iii ﬁles 4[0-1] *) with partial wordsand punctuation stripped away from all ﬁles.
+weonly choose a subset of the held-out and test datafor the asr results in assessment, whereby bothchannels achieve below 40 percent wer to ensuregood separation- this left us with 18 dialogues invalidation data and 17 dialogues for test data..6.1 evaluation criteria.
+we calculate f1 accuracy for repair onset detec-tion frps and for edit term words fe, which in-cludes interregna and frm for reparandum detec-tion.
+performing the task live, on hypotheses ofspeech recognition that may not be quite equiva-lent to the annotated gold-standard transcriptioninvolves the use of time-based local accuracy met-rics in a time window (i.e., within this time frame,has a disﬂuency been detected, even if not on the.
+identical words?
+)-we, therefore, measure the f1score over 10-second windows of each speaker’schannel..for incremental performance, we measure la-tency and output stability over time.
+we use theﬁrst time to detection (ftd) metric of (zwarts et al.,2010) for latency: the average latency (in numberof words) before the ﬁrst detection of a gold stan-dard repair onset or edit term word.
+for stability,we evaluate the edit overhead (eo) of output labels(baumann et al., 2011), the proportion of the un-necessary edits (insertions and deletions) requiredto achieve the ﬁnal labels produced by the model,with perfect performance being 0%..6.2 competitor baselines.
+we compare our incrementalised bert modelagainst a number of existing baselines, largely fromexisting incremental disﬂuency detection systemstrained and tested on the same data:.
+stir (hp’14/hs’15/phh’18): hough andpurver (2014)’s strongly incremental repair de-tection (stir) non-deep model using n-gram lan-guage model features in a pipeline of randomforest classiﬁers.
+the reparandum is detected bya backward search, showing robustness for longerlengths of repair compared to deep sequence tag-ging models (purver et al., 2018).
+a state-of-the-art incremental model on pre-segmented tran-scripts..rnn (hs’15): (hough and schlangen, 2015)’srnn-based model, the ﬁrst deep learning-based.
+3698trainingscheme.
+chunk.
+add-m.final output f1.
+model.
+lstm .591.631mtlbert.647lstm .598.628mtl.664bert.
+frm frps.674.739.780.683.751.788.fe.901.911.938.909.921.949.incrementalityf t deo0.060.210.070.410.320.610.030.200.100.380.310.60.table 2: final accuracy vs.incremental performancetrade-off in the different models on un-segmented tran-scripts..incremental disﬂuency detection model usingthe same tagset as in our model.
+results frompurver et al.
+(2018) are used, which reproducedthe model with some degradation in the results..lstm: an lstm version of hough andschlangen (2015) on pre-segmented transcripts.
+tagset.
+lstm joint(hs’17) hough andschlangen (2017)’s model, which simultaneouslypredicts utterance segmentation using a joint tagset of utterance segmentation tags and disﬂuencytags, the latter of which is the same as our own.
+this is the only other work to use word timinginformation and to be testable on asr results..lstm-mtl (sel’18) shalyminov et al.
+(2018)’s multi-task learning model, which tagsaccording to our tag set but simultaneously doeslanguage modelling by predicting the probabilityof the current word given the history.
+also addsground-truth pos tags to input..lstm-mtl (rh’20): rohanian and hough(2020)’s multi-task learning model, which simul-taneously predicts utterance segmentation, postags and language model probabilities, exhibitingstate-of-the-art results for a strictly incrementaldeep model.
+the model is used as described bythe authors and also here with the addition oftiming information and gold standard pos infor-mation (as opposed to simultaneously predictedpos tags).
+it is also applied to asr results as it isa suitable model to do so.
+this same model pro-vides the automatic live utterance segmentationin our own model..7 results.
+the results in terms of the ﬁnal output of our bestperforming incremental bert system in the threetesting regimes versus its competitors is shown in.
+model.
+repeats.
+substitution deletes.
+0.940.960.96.with standard traininglstmmtlbertwith add-m traininglstmmtlbert.
+0.950.960.96.f1.
+0.700.720.77.
+0.710.730.79.
+0.480.460.54.
+0.480.470.54.table 3: performance on different types of repair..table 1.1 we found our best model was the add-mtrained model, and the best decoding strategy wasusing top-p sampling for predicting future words..disﬂuency detection on transcripts for repairdetection, our system’s best frps score for detect-ing repair onsets on pre-segmented transcripts at0.853 beats state-of-the-art incremental systems.
+this performance degrades using automatic seg-mentation to 0.802, a state-of-the-art result for thissetting.
+its frm accuracy of 0.757 on reparandumwords on pre-segmented transcripts is only beatenby hp’14/phh’18 model using word and pos in-put, making it a state-of-the-art strictly incrementaldeep model.
+this performance degrades to 0.678on raw transcripts but is a state-of-the-art result forthis setting.
+in terms of edit term detection, state-of-the-art detection results of 0.960 and 0.944 areachieved on the pre-segmented and unsegmentedsettings, improving over the existing benchmarksof hp’14 and rh’20.
+these results suggest wehave achieved the aim of a strictly incrementalmodel achieving high ﬁnal accuracies..disﬂuency detection on asr results using theasr results from hs’17 for comparison, a signiﬁ-cant improvement can be seen over the previouslyreported results on frps and fe per 10-secondwindow, improving from 0.557 to 0.605 and from0.727 to 0.809 respectively.
+given the previouslyreported best system gave strong correlations interms of real repair rates, this is encouraging thatour system could be very useful in a live setting..7.1.incremental performance.
+the purpose of this paper was to adapt a high-performing, non-incremental model for incremen-tal operation.
+as can be seen in table 2 and infig.
+3, while our bert model with top-p sam-ple utterance prediction outperforms the multi-task.
+1experiments are reproducible from https://github..com/mortezaro/tr-disfluency.
+3699(a).
+(b).
+figure 3: incremental results of ﬁrst time to detection (ftd) metric for rps and e and edit overhead (eo) fordisﬂuency detection labels.
+(a) on unsegmented transcripts.
+(b) on asr results..model and vanilla lstm model in terms of ﬁnaloutput accuracy, its incremental output stability isslightly below its competitors, with the best editoverhead of 63% unnecessary edits versus 25%(lstm joint tagset (hs’17)) and 42% (lstm-mtl (rh’20)) on asr results, meaning the outputis slightly, though not severely, more jittery..of the prophecy-based approaches, we foundthe top-p sampling method gave the most stable re-sults (eo=61% with chunk training, eo=60% withadd-m training) and beam search gave the leaststable.
+as shown in fig.
+3, while the constant la-tency approaches offer large advantages in eo overprophecy-based models on transcripts, that advan-tage disappears on asr results, where the prophecymodels generally outperform them.
+as can be seenin table 2, there is a slight improvement in stabilityacross all systems using the add-m training regimefor ﬁnal output and incremental performance..in terms of latency, results are even more encour-aging, with the best ftd for rps of 0.31 words(versus 0.03 and 0.07) on transcripts, which showsa relatively short latency of detecting the repair forthe ﬁrst time– this suggests a responsive, sensitivesystem..7.2 error analysis.
+we conduct an error analysis in terms of perfor-mance on different repair types and in terms ofrepairs with different lengths.
+table 3 shows theperformance in terms of frps score on detecting re-pairs of the three different types: verbatim repeats,substitutions, and deletes (restarts).
+our bertmodel performs best, either jointly or uniquely,across all three types, with a gain of 0.06 over itsnearest competitors for substitutions and deletes.
+through large-scale training, the enhanced linguis-tic knowledge equips it to recognize the syntactic.
+3700model.
+2.
+1with standard training.675lstm .843.683.856mtl.892bert.716with add-m training.675lstm .843.709.851mtl.719.892bert.
+reparandum length.
+reparandum length ofnested disﬂuencies.
+3.
+4.
+5.
+6.
+1.
+2.
+3.
+4.
+5.
+6.
+.405.431.469.
+.434.468.472.
+.311.335.379.
+.334.335.379.
+.134.134.310.
+.134.134.310.
+.131.131.187.
+.131.131.187.
+.747.763.818.
+.741.779.833.
+.586.586.623.
+.586.586.645.
+.382.405.405.
+.382.405.405.
+.320.291.320.
+.320.291.320.
+.110.110.130.
+.110.130.130.
+.104.104.140.
+.104.104.140.table 4: f1 of models on repairs with reparanda of different length.
+and lexical parallelism in more complex repairswhile retaining high accuracy on repeats.
+table 4shows the degradation in performance in detectingrepairs of different lengths.
+with add-m training,the bert model degrades less and performs (joint)best on all lengths and nested disﬂuencies.
+whilethe performance on length ﬁve repairs is consider-ably better than the other deep models, the 0.187accuracy on length six repairs is what gives it aslight disadvantage compared to the hp’14 explicitbacktracking system (reported as high as 0.500 inphh’18), which likely accounts for the lower frmscore despite the superior frps score of our system..8 discussion and conclusion.
+our incremental gpt-2 and bert-driven sys-tem performs well at detecting repair disﬂuencieson pre-segmented and unsegmented transcripts,achieving state-of-the-art results for a strictly incre-mental repair onset detection.
+our system is com-petitive at reparadnum word detection and achievesstate-of-the-art results in edit term detection.
+theresults on asr transcripts are also state-of-the-art.
+the high sequence-ﬁnal performance comes atthe expense of marginally increased jitter in theword-by-word output, but with sensitive and fastrepair detection, on average ﬁrst detecting the re-pair under a third of a second after the end of therepair onset word.
+these results suggest it is begin-ning to enjoy the best of both worlds in leveragingthe right-ward context which bert uses for itshigh performance, while the continuation predic-tions from the gpt-2 model are good enough toallow good incremental performance before thetrue right-ward context is available..the linguistic knowledge in the bert modelallows it to recognize parallelism in reparandumand repair phases and the absence thereof to in-crease performance on detecting substitution anddelete repairs.
+this improvement to existing deep.
+disﬂuency detection models, and, with appropriateuse of open-ended language generation techniqueswith a gpt-2 language model, its good incremen-tal performance, is consistent with a growing bodyof work (heeman and allen, 1999; johnson andcharniak, 2004; zwarts et al., 2010; hough andpurver, 2014; shalyminov et al., 2018; rohanianand hough, 2020), showing good language mod-elling can lead to good disﬂuency detection, as theyare inherently part of the same process..our system still fails to detect longer repairscompared to an explicit backtracking mechanismlike (hough and purver, 2014).
+while the van-ishing gradient problem is partly overcome here,the strictly left-to-right constraint on decoding putsmemory limitations on any repair detection system.
+in future, we will explore efﬁcient ways to navigatethis space whilst not ﬁltering out rarer repair forms.
+the results on asr results show our disﬂuencydetection system is ready for use in a live set-ting with a good degree of accuracy, and work iscurrently underway to use it to help detect a va-riety of different cognitive conditions, includingalzheimer’s disease, in a live diagnostic system..acknowledgments.
+we thank the anonymous acl-ijcnlp reviewersfor their helpful comments and matthew purverfor his continuous support and supervision on thewider project..references.
+timo baumann, okko buß, and david schlangen.
+2011. evaluation and optimisation of incrementalprocessors.
+dialogue & discourse, 2(1):113–141..timo baumann, casey kennington, julian hough, anddavid schlangen.
+2017. recognising conversationalspeech: what an incremental asr should do for a di-alogue system and how to get there.
+in dialogueswith social robots, pages 421–432.
+springer..3701fahim dalvi, nadir durrani, hassan sajjad, andincremental decoding andstephan vogel.
+2018.training methods for simultaneous translation in neu-ral machine translation.
+in proceedings of the 2018conference of the north american chapter of theassociation for computational linguistics: humanlanguage technologies, volume 2 (short papers),pages 493–499..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language under-in proceedings of the 2019 conferencestanding.
+of the north american chapter of the associationfor computational linguistics: human languagetechnologies, volume 1 (long and short papers),pages 4171–4186, minneapolis, minnesota.
+associ-ation for computational linguistics..angela fan, mike lewis, and yann dauphin.
+2018. hi-erarchical neural story generation.
+arxiv preprintarxiv:1805.04833..john j godfrey, edward c holliman, and jane mc-daniel.
+1992. switchboard: telephone speech cor-in acoustics,pus for research and development.
+speech, and signal processing, ieee internationalconference on, volume 1, pages 517–520.
+ieeecomputer society..jonathan gratch, ron artstein, gale m lucas, giotastratou, stefan scherer, angela nazarian, rachelwood, jill boberg, david devault, stacy marsella,et al.
+2014. the distress analysis interview corpusof human and computer interviews.
+in lrec, pages3123–3128..peter a heeman and james allen.
+1999. speech re-pains, intonational phrases, and discourse markers:modeling speakers’ utterances in spoken dialogue.
+computational linguistics, 25(4):527–572..ari holtzman, jan buys, li du, maxwell forbes, andyejin choi.
+2019. the curious case of neural textdegeneration.
+arxiv preprint arxiv:1904.09751..julian hough and matthew purver.
+2014. strongly in-in proceedings of thecremental repair detection.
+2014 conference on empirical methods in naturallanguage processing (emnlp), pages 78–89..nora barroso, miriam ecay-torres, pablo martinez-on the selection of non-lage, et al.
+2013.invasive methods based on speech analysis orientedto automatic alzheimer disease diagnosis.
+sensors,13(5):6730–6745..mark johnson and eugene charniak.
+2004. a tag-based noisy-channel model of speech repairs.
+inacl, pages 33–39..paria jamshid lou and mark johnson.
+2020..im-proving disﬂuency detection by self-training a self-attentive model.
+arxiv preprint arxiv:2004.05323..brielen madureira and david schlangen.
+2020..in-cremental processing in the age of non-incrementalencoders: an empirical assessment of bidirectionalin proceedings ofmodels for incremental nlu.
+the 2020 conference on empirical methods in natu-ral language processing (emnlp), pages 357–374,online.
+association for computational linguistics..m. meteer, a. taylor, r. macintyre, and r. iyer.
+1995.disﬂuency annotation stylebook for the switchboardcorpus.
+ms. technical report, department of com-puter and information science, university of penn-sylvania..tomas mikolov, ilya sutskever, kai chen, greg s cor-rado, and jeff dean.
+2013. distributed representa-tions of words and phrases and their compositional-in advances in neural information processingity.
+systems, pages 3111–3119..shamila nasreen, morteza rohanian, matthew purver,and julian hough.
+2021. alzheimer’s dementiarecognition from spontaneous speech using disﬂu-ency and interactional features.
+frontiers in com-puter science, 3:49..matthew purver, julian hough, and christine howes.
+2018. computational models of miscommunicationphenomena.
+topics in cognitive science, 10(2):425–451..alec radford, jeffrey wu, rewon child, david luan,dario amodei, and ilya sutskever.
+2019. languagemodels are unsupervised multitask learners.
+openaiblog, 1(8):9..julian hough and david schlangen.
+2015. recurrentneural networks for incremental disﬂuency detec-in sixteenth annual conference of the inter-tion.
+national speech communication association..mohammad sadegh rasooli and joel r. tetreault.
+2015. yara parser: a fast and accurate depen-computing research repository,dency parser.
+arxiv:1503.06733. version 2..julian hough and david schlangen.
+2017. joint, incre-mental disﬂuency detection and utterance segmenta-tion from speech.
+in proceedings of the 15th confer-ence of the european chapter of the association forcomputational linguistics: volume 1, long papers,pages 326–336..karmele l´opez-de ipi˜na, jesus-bernardino alonso,carlos manuel travieso, jordi sol´e-casals, harkaitzegiraun, marcos faundez-zanuy, aitzol ezeiza,.
+morteza rohanian and julian hough.
+2020..re-framing incremental deep language models for di-inalogue processing with multi-task learning.
+proceedings ofthe 28th international confer-ence on computational linguistics, pages 497–507,barcelona, spain (online).
+international committeeon computational linguistics..morteza rohanian, julian hough, and matthew purver.
+2020. multi-modal fusion with gating using audio,.
+3702lexical and disﬂuency features for alzheimer’s de-inmentia recognition from spontaneous speech.
+proc.
+interspeech, pages 2187–2191..igor shalyminov, arash eshghi, and oliver lemon.
+2018. multi-task learning for domain-general spo-ken disﬂuency detection in dialogue systems.
+in pro-ceedings of the 22nd semdial workshop on the se-mantics and pragmatics of dialogue (aixdial), aix-en-provence..elizabeth shriberg.
+1994. preliminaries to a theoryof speech disﬂuencies.
+ph.d. thesis, university ofcalifornia, berkeley..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n gomez, lukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+arxiv preprint arxiv:1706.03762..shaolei wang, wangxiang che, qi liu, pengda qin,ting liu, and william yang wang.
+2020. multi-taskself-supervised learning for disﬂuency detection.
+inproceedings of the aaai conference on artiﬁcial in-telligence, volume 34, pages 9193–9200..vicky zayats, mari ostendorf, and hannaneh ha-jishirzi.
+2016. disﬂuency detection using a bidirec-tional lstm.
+arxiv preprint arxiv:1604.03209..simon zwarts, mark johnson, and robert dale.
+2010.detecting speech repairs incrementally using a noisychannel approach.
+in proceedings of the 23rd inter-national conference on computational linguistics(coling 2010), pages 1371–1378..3703

@@ -1,0 +1,1132 @@
+benchmarking scalable methods forstreaming cross document entity coreference.
+robert l. logan iv∗♦sameer singh♦.
+andrew mccallum♠♥daniel bikel♠.
+♦university of california, irvine.
+♠google research.
+♥university of massachusetts, amherst{rlogan, sameer}@uci.edu{mccallum, dbikel}@google.com.
+abstract.
+streaming cross document entity corefer-ence (cdc) systems disambiguate mentionsof named entities in a scalable manner via in-cremental clustering.
+unlike other approachesfor named entity disambiguation (e.g., entitylinking), streaming cdc allows for the disam-biguation of entities that are unknown at in-ference time.
+thus, it is well-suited for pro-cessing streams of data where new entities arefrequently introduced.
+despite these beneﬁts,this task is currently difﬁcult to study, as exist-ing approaches are either evaluated on datasetsthat are no longer available, or omit other cru-cial details needed to ensure fair comparison.
+in this work, we address this issue by compil-ing a large benchmark adapted from existingfree datasets, and performing a comprehensiveevaluation of a number of novel and existingbaseline models.1 we investigate: how to bestencode mentions, which clustering algorithmsare most effective for grouping mentions, howmodels transfer to different domains, and howbounding the number of mentions tracked dur-ing inference impacts performance.
+our re-sults show that the relative performance of neu-ral and feature-based mention encoders variesacross different domains, and in most cases thebest performance is achieved using a combi-nation of both approaches.
+we also ﬁnd thatperformance is minimally impacted by limit-ing the number of tracked mentions..1.introduction.
+the ability to disambiguate mentions of namedentities in text is a central task in the ﬁeld of in-formation extraction, and is crucial to topic track-ing, knowledge base induction and question an-swering.
+recent work on this problem has fo-cused almost solely on entity linking–based ap-.
+∗work done during an internship at google research.
+1code and data available at: https://github.com/.
+rloganiv/streaming-cdc.
+proaches, i.e., models that link mentions to a ﬁxedset of known entities.
+while signiﬁcant strideshave been made on this front—with systems thatcan be trained end-to-end (kolitsas et al., 2018), onmillions of entities (ling et al., 2020), and link toentities using only their textual descriptions (lo-geswaran et al., 2019)—all entity linking systemssuffer from the signiﬁcant limitation that they arerestricted to linking to a curated list of entities thatis ﬁxed at inference time.
+thus they are of limiteduse when processing data streams where new enti-ties regularly appear, such as research publications,social media feeds, and news articles..in contrast, the alternative approach of cross-document entity coreference (cdc) (bagga andbaldwin, 1998; gooi and allan, 2004; singh et al.,2011; dutta and weikum, 2015), which disam-biguates mentions via clustering, does not sufferfrom this shortcoming.
+instead most cdc algo-rithms suffer from a different failure mode: lackof scalability.
+since they run expensive clusteringroutines over the entire set of mentions, they arenot well suited to applications where mentions ar-rive one at a time.
+there are, however, a subset ofstreaming cdc methods that avoid this issue byclustering mentions incrementally (figure 1).
+un-fortunately, despite such methods’ apparent ﬁtnessfor streaming data scenarios, this area of researchhas received little attention from the nlp commu-nity.
+to our knowledge there are only two existingworks on the task (rao et al., 2010; shrimpton et al.,2015), and only the latter evaluates truly streamingsystems, i.e., systems that process new mentions inconstant time with constant memory..one crucial factor limiting research on this topicis a lack of free, publicly accessible benchmarkdatasets; datasets used in existing works are eithersmall and impossible to reproduce (e.g., the datasetcollected by shrimpton et al.
+(2015) only containsa few hundred unique entities, and many of the.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages4717–4731august1–6,2021.©2021associationforcomputationallinguistics4717(a) new mentions arrive over time..(b) mentions are encoded as points in a vector space and incrementally clustered.
+as the space grows some points are removedto ensure that the amount of memory used does not exceed a given threshold..figure 1: streaming cross-document coreference..annotated tweets are no longer available for down-load) or lack the necessary canonical ordering andare expensive to procure (e.g., the ace 2008 andtac-kbp 2009 corpora used by rao et al.
+(2010)).
+to remedy this, we compile a benchmark of threedatasets for evaluating english streaming cdc sys-tems along with a canonical ordering in which eval-uation data should be processed.
+these datasetsare derived from existing datasets that cover di-verse subject matter: biomedical texts (mohan andli, 2019), news articles (hoffart et al., 2011), andwikia fandoms (logeswaran et al., 2019)..we evaluate a number of novel and existingstreaming cdc systems on this benchmark.
+oursystems utilize a two step approach where: 1) eachmention is encoded using a neural or feature-basedmodel, and 2) the mention is then clustered withexisting mentions using an incremental clusteringalgorithm.
+we investigate the performance of dif-ferent mention encoders (existing feature-basedmethods, pretrained lms, and encoders from en-tity linkers such as relic (ling et al., 2020) andblink (wu et al., 2020)), and incremental clus-tering algorithms (greedy nearest-neighbors clus-tering, and a recently introduced online agglomera-tive clustering algorithm, grinch (monath et al.,2019)).
+since grinch does not use boundedmemory, which is required for scalability in thestreaming setting, we introduce a novel boundedmemory variant that prunes nodes from the clus-ter tree when the number of leaves exceeds agiven size, and compare its performance to existingbounded memory approaches..our results show that the relative performanceof different mention encoders and clustering al-gorithms varies across different domains.
+we.
+ﬁnd that existing approaches for streaming cdc(e.g., feature-based mention encoding with greedynearest-neighbors clustering) outperform neural ap-proaches on two of three datasets (+1-3% abs.
+im-provement in conll f1), while a relic-basedencoder with grinch performs better on the lastdataset (+9% abs.
+improvement in conll f1).
+incases where existing approaches perform well, wealso ﬁnd that better performance can be obtainedby using a combination of neural and feature-basedmention encoders.
+lastly, we observe that by us-ing relatively simple memory management policies,e.g.
+removing old and redundant mentions fromthe mention cache, bounded memory models canachieve performance near on-par with unboundedmodels while storing only a fraction of the men-tions (in one case we observe a 2% abs.
+drop inconll f1 caching only 10% of the mentions)..2 streaming cross-document entity.
+coreference (cdc).
+2.1 task overview.
+the key goal of cross-document entity coreference(cdc) is to identify mentions that refer to the same(cid:9) de-entity.
+formally, let m = (cid:8)m1, .
+.
+.
+, m|m|note a corpus of mentions, where each mention con-sists of a surface text m.surface (e.g., the coloredtext in figure 1a), as well as its surrounding con-text m.context (e.g., the text in black).
+providedm as an input, a cdc system produces a disjointclustering over the mentions c = (cid:8)c1, .
+.
+.
+, c|c|(cid:9),|c| ≤ |m|, as the output, where each clusterce = {m ∈ m | m.entity = e} is the set of men-tions that refer to the same entity..in streaming cdc, there are two additional re-quirements: 1) mentions arrive in a ﬁxed order.
+4718sars - cov fusion peptides induce membrane surface ordering and curvature......gather information on the membrane fusion mechanism promoted by two putative sars fps...mild encephalitis/encephalopathy with reversible splenial lesion (mers) associated with......middle east respiratory syndrome (mers) outbreaks have been linked to healthcare facilities...time(m is a list) and are clustered incrementally, and2) memory is constrained so that only a ﬁxed num-ber of mentions can be stored.
+this can be formu-lated in terms of the above notation by adding atime index t, so that mt = {mt ∈ m | t ≤ t } isthe set of all mentions observed at or before timet , (cid:102)mt ⊆ mt is a subset of “active” mentionswhose size does not exceed a ﬁxed memory boundk, e.g., | (cid:102)mt | ≤ k, and ct is comprised of clus-ters that only contain mentions in (cid:102)mt .
+due tothe streaming nature, (cid:102)mt − {mt } ⊂ (cid:102)mt −1, i.e.,a mention cannot be added back to (cid:102)mt if it waspreviously removed.
+when the memory bound isreached, mention are removed from (cid:102)m accordingto a memory management policy φ..an illustrative example is provided in figure 1.mentions arrive in left-to-right order (figure 1a),with the clustering process depicted in figure 1b(memory bound k = 3).
+at time t = 4, the men-tion m1 is removed from (cid:102)m4.
+note that, eventhough m1 is removed, it is still possible to disam-biguate mentions of all previously observed entities,whereas this would not be possible had m3 or m4been removed.
+this illustrates the effect the mem-ory management policy can have on performance..2.2 background and motivation.
+cross document entity coreference as weshow later, we employ a two-stage cdc pipelinewhere mentions are ﬁrst encoded as vectors, andsubsequently clustered.
+this approach is used inmost existing work on cdc (bagga and baldwin,1998; mann and yarowsky, 2003; gooi and al-lan, 2004).
+in the past decade, research on cdchas mainly focused in improving scalability (singhet al., 2011), and jointly learning to perform cdcwith other tasks such as entity linking (dutta andweikum, 2015) and event coreference (discussedin the next paragraph).
+this work similarly investi-gates whether entity linking is beneﬁcial for cdc,however we use entity linkers that are pretrainedseparately and kept ﬁxed during inference..recently, there has been a renewed interest inperforming cdc jointly with cross-document eventcoreference (barhom et al., 2019; meged et al.,2020; cattan et al., 2020; caciularu et al., 2021) onthe ecb+ dataset (cybulska and vossen, 2014).
+al-though we do not evaluate methods from this line ofresearch in this work, we hope that the benchmarkwe compile will be useful for future evaluation ofthese systems..streaming cross document coreference themethods mentioned in the previous paragraphs dis-ambiguate mentions all at once, and are thus un-suitable for applications where a large number ofmentions appear over time.
+rao et al.
+(2010) pro-pose to address this issue using an incremental clus-tering approach where each new mention is eitherplaced into one of a number of candidate clusters,or a new cluster if similarity does not exceed agiven threshold (allaway et al.
+(2021) use a similarapproach for joint entity and event coreference).
+shrimpton et al.
+(2015) note that the this incremen-tal clustering does not process mentions in constanttime/memory, and thus is not “truly streaming”.
+they present the only truly streaming approach forcdc by introducing a number of memory manage-ment policies that limit the size of (cid:102)m, which wedescribe in more detail in section 3.3..one of the key problems inhibiting further re-search on streaming cdc is a lack of suitable eval-uation datasets for measuring system performance.
+the datasets used in rao et al.
+(2010) are eithersmall in size (few hundreds of mentions), containfew annotated entities, or are expensive to procure.
+additionally, they do not include any canonicalordering of the mentions, which precludes consis-tent evaluation of streaming systems.
+meanwhile,tweets annotated by shrimpton et al.
+(2015) onlycover two surface texts (roger and jessica) andare no longer accessible via the twitter api.2 toaddress this we collect a new evaluation bench-mark, comprised of 3 existing publicly availabledatasets, covering a diverse collection of topics(news, biomedical articles, wikias) with naturalorderings (e.g., chronological, categorical).
+thisbenchmark is described in detail in section 4.1..entity linking cdc is similar to the task of en-tity linking (el, mihalcea and csomai (2007)),which also addresses the problem of named entitydisambiguation, with the key distinction that el isformulated as a supervised classiﬁcation problem(list of entities is known at training and test time),while cdc is an unsupervised clustering prob-lem.
+in particular, cdc is similar to time-awareel (agarwal et al., 2018)—where temporal con-text is used to help disambiguate mentions—andzero-shot el (zeshel, logeswaran et al.
+(2019))—where the set of entities linked to during evaluationdoes not overlap with the set of entities observedduring training.
+streaming cdc can also be con-.
+2at this time, only 56 of the ﬁrst 100 tweets were available..4719sidered a method for time/order-aware zero-shotnamed entity disambiguation, however, it is strictlymore challenging as it does not assume access toa curated list of entities at prediction time, or anysupervised training data..although cdc is formulated as a strictly unsu-pervised clustering task, this does not preclude theusage of labeled data for transfer learning.
+oneof the primary goals in this work is to investigatewhether the mention encoders learned by entitylinking systems provide useful representations inthe ﬁrst step of the cdc pipeline.
+speciﬁcally, weconsider mention encoders for two state-of-the-artentity linking architectures: relic (ling et al.,2020) and the blink bi-encoder (wu et al., 2020)..emerging entity detection streaming cdc isalso related to the task of emerging entity detection(eed, f¨arber et al.
+(2016)), which, given a men-tion that cannot be linked, seeks to predict whetherit should produce a new kb entry.
+although bothtasks share similar motivations, they adopt differentapproaches (eed is formulated as a binary classi-ﬁcation task), and cdc does not require decidingwhich entities should and should not be added toa knowledge base.
+however, in many practical ap-plications, it may make sense to apply streamingcdc only to emerging entities..3 building streaming cdc systems.
+following previous work, we adopt a two-step ap-proach to performing streaming cross-documentcoreference.
+in the ﬁrst step, an encoder is usedto produce a vector representation of the incom-ing mention mt = enc(mt).
+in the second step,these vectors are input into an incremental clus-tering algorithm to update the predicted clusteringct = clust(ct−1, mt).
+in the following sectionswe describe in detail the mention encoders andclustering algorithms used in this work..3.1 mention encoders.
+the primary goal of mention encoders enc(mt) isto produce a compact representation of the mention,including both the surface and the context text..feature-based encoders existing models forstreaming cross-document coreference exclusivelymake use of feature-based mention encoders.
+while there are many feature engineering optionsexplored in the literature, in this work we con-sider the mention encoding approach proposed by.
+shrimpton et al.
+(2015), which uses character skipbigram indicator vectors to encode the surface text,and tf-idf vectors to represent contexts.
+when usingthis encoding scheme, similarity scores are com-puted independently for the surface and contextembeddings, and a weighted average is taken toproduce the ﬁnal similarity score.
+we use the samesetup and parameters as shrimpton et al.
+(2015)..masked language model encoders we alsoconsider mention encodings produced by maskedlanguage models, particularly bert (devlin et al.,2019).
+we encode the mention by feeding the con-tiguous text of the mention (containing both thesurrounding and surface text) into bert and con-catenating the contextualized vectors associatedwith the ﬁrst and last word-piece of the surface text.
+that is, let s, e ∈ n denote the start and end of themention surface text within the complete mention,and let m = bert(m) denote the contextualizedword vectors output by bert.
+then the mention en-coding is given by: encmlm(m) = [m [s]; m [e]]..entity linker-based encoders we considerproducing mention encodings using the bi-encoder-based neural entity linkers: relic (ling et al.,the2020) and blink (wu et al., 2020).
+twobi-encoder architecture is comprised ofcomponents—a mention encoder encm, and anentity encoder ence—and is trained to maximizea similarity score (e.g., dot-product) between themention encoding and the encoding of its under-lying entity, while simultaneously minimizing thescore for other entities.
+we use encm from pre-trained entity linkers to encode mentions for cdc..hybrid encoder we also consider a hybrid en-coder which combines feature-based and neuralmention encoders.
+we retain the feature-based char-acter skip bigram surface text encoder, but use oneof the neural encoders from entity linkers in placeof tf-idf context representation.
+similarity scoresare computed by averaging the two without anyweights, unlike by shrimpton et al.
+(2015)..3.2 clustering algorithms.
+here we describe incremental clustering ap-proaches, clust(ct−1, mt), that compute a newclustering when mt is added to the mentions underconsideration ( (cid:102)m)..greedy nearest neighbors clustering shrimp-ton et al.
+(2015) and rao et al.
+(2010) both evaluate.
+4720(a) greedy agglomerative clustering.
+(b) grinch.
+(c) bounded grinch.
+figure 2: bounded grinch.
+(a) greedy agglomerative clustering produces a sub-optimal tree structure dueto the order points are received.
+(b) the grinch (monath et al., 2019) algorithm recovers from this mistakeby reconﬁguring the tree structure (in this case using a rotation operation).
+(c) to ensure the memory used bygrinch remains bounded, we add a new operation—remove—that prunes two leaf nodes when the number ofleaves exceeds a given size.
+nodes are selected for removal using a scoring function φr.
+in this case nodes m1 andm2 are selected, and their parent ˜m1,2 becomes a new leaf..cdc using a single linkage incremental clusteringapproach that clusters each new mention m to itsnearest neighbor m(cid:48) = arg minm(cid:48)∈ (cid:102)m sim(m, m(cid:48)),if the similarity exceeds some threshold τ .
+weuse a similar approach here, however we cluster mwith all m(cid:48) ∈ (cid:102)m such that sim(m, m(cid:48)) > τ thusallowing previously separate clusters to be mergedif m is similar to both of them..grinch gooi and allan (2004) ﬁnd that aver-age link hierarchical agglomerative clustering canoutperform greedy single link approaches.
+how-ever, agglomerative approaches are typically notused for streaming cdc because running the al-gorithm at each time step is too expensive, andincremental variants of the approach are not able torecover from incorrect choices made early on (fig-ure 2a).
+the recently introduced grinch cluster-ing algorithm (monath et al., 2019) uses rotateand graft operations that reconﬁgure the tree,thereby avoiding these issues (figure 2b).
+we de-fer to the original paper for details, however notethat, for our application, each interior node of thecluster tree is computed as a weighted average ofits children’s representations (where the weightsare proportional to the number of leaves).
+thusat each interior node, it is possible to compute thesimilarity score between that node’s children.
+thisallows us to produce a ﬂat clustering from the clus-ter tree by thresholding the similarity score, just asin the greedy clustering case..3.3 memory management policies.
+as described in section 2.1, memory managementpolicies decide which mentions to remove from.
+(cid:102)m to prevent its size from exceeding the memorybound, providing scalable, memory-bound variantsof the clustering algorithms..bounded memory greedy nn clustering forbounded memory greedy nearest neighbors cluster-ing, we consider the following memory manage-ment policies of shrimpton et al.
+(2015):• window: remove the oldest mention in (cid:102)m.• cache: remove the oldest mention in the least.
+recently updated cluster clru..• diversity: remove the most similar mention tomention just added, i.e.
+arg maxm sim(m, mt)• diversity-cache: a combination of the diversityand cache strategies, where the diversity strategyis used if the similarity score exceeds a giventhreshold sim(m, mt) > α, and the cache strat-egy is used otherwise..bounded memory grinch memory manage-ment for grinch is more complicated than forgreedy clustering, as instead of maintaining a ﬂatclustering of mentions, grinch instead maintainsa cluster hierarchy in the form of a binary clus-ter tree.
+every time a mention is inserted into thetree, two new nodes are created: one node for themention itself, and a new parent node linking themention to its sibling (figure 2a).
+accordingly,when the memory bound is reached, the memorymanagement policy for grinch must remove twonodes from the tree.
+furthermore, in order to pre-serve the tree’s binary structure, the removed nodesmust be leaf nodes as well as siblings.
+because theoriginal grinch algorithm only includes routinesfor inserting nodes into the tree, and reconﬁgur-ing the tree’s structure, we modify grinch to.
+4721medmentions.
+|m|.
+|e|.
+% seen mae.
+18.5k 4.1k4.8k 1.6k4.5k 1.6k.
+100% 1.1k29023%26316%.
+121k18k42k 8.8k39k 8.3k.
+100% 4.7k27% 1.8k26% 1.7k.
+81k32k18k 7.5k17k 7.2k.
+100% 9.3k0% 2.9k0% 3.3k.
+aidatraindevtest.
+traindevtest.
+zesheltraindevtest.
+|m|: #mentions, |e|:table 1: dataset statistics.
+#unique entities, % seen: fraction of entities observedduring training, mae: maximum active entities, e.g.,the number of mentions an ideal streaming cdc sys-tem would need to store to perfectly cluster the data..include a new remove operation that prunes twonodes satisfying the these criteria.
+the parent ofthese nodes then becomes a leaf node, whose vec-tor representation is produced by combining thevector representations of its former children usinga weighted average (this is conceptually similar tothe collapse operation described in kobren et al.
+(2017)).
+we consider the following policies here:• window: remove the nodes whose parent was.
+least recently added to the tree..• diversity: remove the pair of nodes that are most.
+similar to each other..4 benchmarking streaming cdc.
+in this section, we describe our proposed bench-mark for evaluating streaming cdc systems..4.1 datasets.
+current research on cdc is inhibited by a lackof large, publicly accessible datasets.
+we addressthis by compiling datasets for streaming cdc byadapting existing entity linking datasets: aidaconll-yago, medmentions, and zeshel..aida aida conll-yago (hoffart et al.,2011) contains news articles from the reuters cor-pus written between august and december 1996with annotations linking mentions to yago andwikipedia.
+we create a canonical ordering for thisdataset by ordering articles by date.
+as the originaltrain, dev, and test splits respect this ordering, weuse the original splits in our benchmark..medmentions the medmentions (mohan andli, 2019) corpus contains abstracts for biomedical.
+articles published to pubmed in 2016, and anno-tated with links to the umls medical ontology.
+we order abstracts by publication date3 to create acanonical ordering.
+since the original dataset is notordered by date, we create new train, dev, and testsplits of comparable size that respect this ordering..zeshel the zeshel (logeswaran et al., 2019)dataset consists of wikia articles for different fan-doms.
+in addition to the original set of annotatedmentions, we use the provided entity descriptionsas an additional source of mentions.
+we impose anordering that groups all mentions belonging to thesame wikia together, and otherwise retains theiroriginal order in the zeshel data.
+this is an interest-ing scenario for streaming cdc as no clusters needbe retained when transitioning to a new wikia..analysis statistics for the benchmark data areprovided in table 1, which list the number of men-tions and unique entities for each dataset.
+we alsolist the percentage overlap between entities in thetraining set, and entities in the dev and test sets(% seen), as well as the maximum active entities(mae).
+mae is a quantity introduced by toshni-wal et al.
+(2020), which measures the maximumnumber of “active entities” (e.g., entities that havebeen previously mentioned, and will be mentionedin the future) for a given dataset, which can alterna-tively be interpreted as the smallest possible mem-ory bound that can be used in order to ensure that acdc system can cluster each mention with at leastone other mention of the same entity.
+importantly,this number is a small fraction of the total numberof mentions in each dataset, indicating that thesedatasets are appropriate for the streaming settingand to compare memory management policies..4.2 evaluation metrics.
+we evaluate cdc performance using the standardevaluation metrics: muc (vilain et al., 1995),b3 (bagga and baldwin, 1998), ceafe (luo,2005), and conll f1 which is an average ofthe previous three.
+in order to perform evaluationwhen memory is bounded, we perform the follow-ing bookkeeping to track nodes which have beenremoved by the memory management policy.
+forbounded memory greedy nn clustering, we keeptrack of the removed node’s predicted cluster (e.g.,if the node was removed from cluster c, then itis considered an element of c during evaluation)..36 abstracts were omitted due to missing metadata.
+4722this is similar to the evaluation used by toshni-wal et al.
+(2020).
+for bounded memory grinch,we keep track of the removed node’s place withinthe tree structure, and produce a ﬂat clustering us-ing the thresholding approach described in sec-tion 3.2 as if the node were never removed.
+be-cause leaf nodes (and accordingly removed nodes)are never updated by insertion or removal opera-tions, nodes belonging to the same cluster beforethey are pruned they will always remain in thesame cluster during evaluation, which is the sameassumption used for the greedy nn evaluation..4.3 hyperparameters.
+vocabulary and inverse document frequency (idf)weights are estimated using each dataset’s train set.
+for masked language model encoders, we use anunmodiﬁed bert-base architecture, with modelweights provided by the huggingface transformerslibrary (wolf et al., 2020).
+for blink, we usethe released bert-large bi-encoder weights.4 ourbounded memory variant of grinch is based onthe ofﬁcial implementation.5 note that grinchdoes not currently support sparse inputs, so wedo not include results for feature-based mentionencoders.
+relic model weights are initializedfrom bert-base, and then ﬁnetuned to performentity linking in the following settings:• relic (wiki): trained on the same wikipedia.
+data used to train the blink bi-encoder..• relic (in-domain): trained on respective bench-mark’s training dataset; a separate model istrained for each benchmark..training is performed using hyperparameters sug-gested by ling et al.
+(2020).6 for each benchmark,the hybrid mention encoder uses the best perform-ing relic variant on that benchmark.
+clusterthresholds τ are chosen so that the number of pre-dicted clusters on the dev dataset approximatelymatches the number of unique entities..5 results.
+in this section, we provide a comprehensive evalu-ation of the design choices that deﬁne the existingand proposed approaches for streaming cdc..4https://github.com/facebookresearch/.
+blink.
+5https://github.com/iesl/grinch6trained on a server w/ 754 gb ram, intel xeon gold.
+5218 cpu and 4x nvidia quadro rtx 8000 gpus..choice of encoder we include the results forcdc systems with unbounded memory on thebenchmark datasets in table 2, as well as resultsfor two baselines: 1) a system that clusters togetherall mentions with the same surface forms (exactmatch), and 2) a system that only considers goldwithin-document clusters and does not merge clus-ters across documents (oracle within-doc).
+weobserve that, in general, neural mention encodersare not sufﬁcient to obtain good cdc performance.
+with the exception of the relic (in-domain) onmedmentions, no neural mention encoders are ableto outperform the feature-based greedy nn ap-proach, and furthermore, the mlm and blinkmention encoders do not even surpass the exactmatch baseline.
+however, note that for aidaand zeshel, best results are obtained using a hy-brid mention encoder.
+thus, in these domains, wecan conclude that while neural mention encodersare useful for encoding contexts, cdc systems re-quire an additional system to model surface textsto achieve good performance.
+the results on med-mentions provide an interesting contrast to thisconclusion.
+here the relic (in-domain) mentionencoder outperforms both the feature-based andhybrid mention encoders.
+in the error analysis be-low, we ﬁnd that this is due mainly to improvedperformance clustering mentions of entities seenwhen training the mention encoder..choice of clustering algorithm comparinggreedy nearest neighbors clustering to grinch,we do not observe a consistent trend across mentionencoders or datasets.
+while the best performanceon aida and zeshel is achieved using greedy near-est neighbor clustering, the best performance onmedmentions is achieved using grinch.
+theseresults highlight the importance of benchmarkingcdc systems on a number of different datasets;patterns observed on a single dataset do not extrap-olate well to other settings.
+it is also interesting toobserve that a much simpler approach often worksbetter than the more complex one..error analysis we characterize the errors ofthese models by investigating: a) the entities whosementions are conﬂated (e.g., are wrongly clusteredtogether) and split (e.g., wrongly grouped into sep-arate clusters) using the approach of kummerfeldand klein (2013), and b) differences in perfor-mance on entities that are seen vs. unseen duringtraining for models that use in-domain data.
+a sub-.
+4723aida.
+medmentions.
+zeshel.
+muc b3.
+ceaf avg.
+muc b3.
+ceaf avg.
+muc b3.
+ceaf avg..exact matchoracle within-doc.
+90.215.2.
+84.146.8.
+78.816.5.
+66.032.8.
+28.3-.
+64.3-.
+greedy nnfeature-basedmlmblink (wiki)relic (wiki)relic (in-domain)hybrid.
+grinchmlmblink (wiki)relic (wiki)relic (in-domain).
+94.275.958.292.493.294.7.
+37.864.391.682.8.
+89.071.156.389.480.790.1.
+59.226.988.384.0.
+81.047.1.
+87.358.156.683.684.588.5.
+41.523.282.569.5.
+85.136.4.
+90.268.457.088.586.191.1.
+46.238.187.578.8.
+83.670.859.473.286.885.6.
+70.883.273.985.4.
+67.052.139.256.169.570.5.
+52.117.157.973.3.
+54.034.8.
+58.042.043.242.462.459.9.
+42.011.942.261.8.
+66.328.0.
+69.555.047.357.272.972.0.
+55.037.458.073.5.
+39.616.236.636.228.244.0.
+49.045.672.627.3.
+60.953.836.958.161.464.5.
+38.024.84.257.5.
+46.4-.
+52.644.840.948.742.553.3.
+33.121.74.340.1.
+46.3-.
+51.038.341.647.744.054.0.
+40.030.727.041.6.table 2: unbounded memory results.
+conll f1 scores for each valid combination of clustering algorithmand mention encoder.
+similiarity threshold clustering + hybrid mention encoder works best on aida and zeshel,whereas grinch clustering + in-domain relic mention encoder works best for medmentions..feature-based + greedy nn.
+fifa world cup1995 rugby world cup.
+rugby world cup.
+.
+.
+.
+’ ’ japan , co-hosts of the world cup in 2002 and ranked 20th in the world by .
+.
+.
+.
+.
+.
+team .
+cuttitta announced his retirement after the 1995 world cup , where he took issue withbeing dropped from .
+.
+.
+.
+.
+.
+australia to defeat with a last-ditch drop-goal in the world cup quarter-ﬁnal in cape town .
+.
+..relic (wiki) + greedy nn.
+fc volendam.
+feyenoordrkc waalwijk.
+.
+.
+.
+leaders psv eindhoven romped to a 6-0 win over volendam on saturday .
+their othermarksmen were brazilian .
+.
+.
+.
+.
+.
+game .
+they boast a nine-point lead over feyenoord , who have two games in hand , and .
+.
+.
+.
+.
+.
+division soccer match played on friday : rkc waalwijk 1 ( starbuck 76 ) willem ii .
+.
+..table 3: most conﬂated entities on aida.
+left: unique entity id.
+right: mention with entity surface form initalics.
+results for remaining models are provided in the appendix..set of our results is provided in table 3, with fullresults available in tables 4–11 in the appendix..in aggregate, these error metrics closely track theresults in table 2, where better models make fewererrors of all types.
+we do, however, observe thatin-domain training improves relic’s performanceconsiderably on medmentions (+15 conll f1 onseen entities, and +18 on unseen entities), and isthe primary reason underlying the improved perfor-mance over feature-based encoders (72.6 vs. 60.7conll f1 on seen entities, while performance onunseen entities is comparable)..comparing mentions of the most conﬂated en-tities provides a qualitative sense of the failuremodes of each method.
+we note that the feature-based method tends to fail at distinguishing entitieswith the same surface form, e.g., world cups ofdifferent sports, while neural entity linkers tendto conﬂate entities with similar contexts, partic-ularly when surface forms are split into multiple.
+word pieces in the model’s vocabulary (each sur-face form in the bottom of table 3 gets broken into3+ word pieces)..effect of bounded memory results for thebounded memory setting are illustrated in figure 3.in these experiments we take the best neural men-tion encoder for each benchmark dataset (relic(wiki) for aida and zeshel, and relic (in-domain) for medmentions), and plot the conllf1 score for each of the memory management poli-cies described in section 3.3. we measure perfor-mance for memory bounds at the maximum num-ber of active entities (mae) and total unique en-tities (|e|) for each dataset (as well as 1/2x, and2x multiples of these numbers).
+in sum, these re-sults provide strong evidence that cdc systemscan reliably cluster mentions in a truly streamingsetting, even when memory is bounded to a smallfraction of the number of entities encountered bythe system.
+most impressively, using the diversity-.
+4724cache memory management policy, a greedy near-est neighbors bounded memory model achieves aconll f1 score within 2% of the best perform-ing unbounded memory model, while only storingapproximately 10% (i.e., e/2) of the mentions..we notice a few fairly consistent trends acrossdatasets.
+the ﬁrst is that increasing the memorybound has diminishing returns; while there is alarge beneﬁt incurred by increasing the bound frommae/2 to mae, the difference in performanceattained from increasing the bound from e to 2e isoften negligible.
+we also ﬁnd that na¨ıve memorymanagement policies that store recent mentions(i.e., window, w, and cache, c) tend to performbetter than the policies that attempt to remove re-dundant mentions (i.e., diversity, d).
+this effect isparticularly pronounced for small memory bounds.
+while this is somewhat surprising—storing men-tions of the same entity is particularly harmfulwhen memory is limited, so encouraging diversityshould be a good thing—one possible explanationis that the diversity policy is actually removingmentions of entities that appear within the samecontext, as we saw earlier that neural mention en-coders appear to focus more on mention contextthan surface text.
+lastly, regarding the comparisonof greedy nearest neighbors clustering to grinchwe again see that inconsistency in performanceacross datasets; grinch appears to perform betterat larger cache sizes for aida and medmentions,while greedy nearest neighbors clustering has muchbetter performance than grinch on zeshel..6 conclusion and future work.
+streaming cross document coreference has a num-ber of compelling applications, especially concern-ing processing streams of data such as researchpublications, social media feeds, and news articleswhere new entities are frequently introduced.
+de-spite being well-motivated, this task has receivedlittle attention from the nlp community.
+in or-der to foster a more welcoming environment forresearch on this task, we compile a diverse bench-mark dataset for evaluating cdc, comprised ofexisting datasets that are free and publicly avail-able.
+we additionally evaluate the performanceof a collection of existing approaches for cdc,as well as introduce new approaches that leveragemodern neural architectures.
+our results highlighta number of challenges for future cdc research,such as how to better incorporate surface level fea-.
+figure 3: effect of bounded memory.
+conll f1scores as we vary the bound.
+mae: max.
+active enti-ties (deﬁned in section 4.1).
+|e|: #unique entities..tures into neural mention encoders, as well as al-ternative policies for memory management that im-prove upon the na¨ıve baselines studied in this work.
+benchmark data and materials needed to reproduceour results are provided at: https://github.
+com/rloganiv/streaming-cdc..acknowledgements.
+the authors would like to thank sanjay subrama-nian, nitish gupta, keith hall, ryan mcdonald,livio baldini soares, nicholas fitzgerald, andtom kwiatkowski for their technical guidance andhelpful comments while conducting this work.
+wewould also like to thank thank the anonymous aclreviewers for their valuable feedback.
+this projectis supported in part by nsf award no.
+1817183,and the darpa mcs program under contract no.
+n660011924033..4725mae|e|2|e|60708090conllf1(%)aidamae|e|2|e|50607080conllf1(%)medmentionsmae|e|2|e|35404550conllf1(%)zeshelgrinch(d)greedynn(w)greedynn(d)grinch(w)greedynn(c)greedynn(d-c)broader impact statement.
+this paper focuses on systems that perform en-tity disambiguation without reliance on an externalknowledge base.
+the potential beneﬁt of such sys-tems is an improved ability to track mentions ofrare and emergent entities (e.g., natural disasters,novel disease variants, etc.
+); however, this is alsorelevant in digital surveillance settings, and mayresult in reduced privacy..references.
+prabal agarwal, jannik str¨otgen, luciano del corro,johannes hoffart, and gerhard weikum.
+2018. di-aned: time-aware named entity disambiguation fordiachronic corpora.
+in proceedings of the 56th an-nual meeting of the association for computationallinguistics (volume 2: short papers), pages 686–693, melbourne, australia.
+association for compu-tational linguistics..emily allaway, shuai wang, and miguel ballesteros.
+2021. sequential cross-document coreference reso-lution.
+arxiv preprint arxiv:2104.08413..amit bagga and breck baldwin.
+1998..entity-based cross-document coreferencing using the vec-in 36th annual meeting of thetor space model.
+association for computational linguistics and 17thinternational conference on computational linguis-tics, volume 1, pages 79–85, montreal, quebec,canada.
+association for computational linguistics..shany barhom, vered shwartz, alon eirew, michaelbugert, nils reimers, and ido dagan.
+2019. re-visiting joint modeling of cross-document entity andevent coreference resolution.
+in proceedings of the57th annual meeting of the association for com-putational linguistics, pages 4179–4189, florence,italy.
+association for computational linguistics..avi caciularu, arman cohan, iz beltagy, matthew epeters, arie cattan, and ido dagan.
+2021. cross-arxiv preprintdocumentarxiv:2101.00406..language modeling..arie cattan, alon eirew, gabriel stanovsky, mandarjoshi, and ido dagan.
+2020. streamlining cross-document coreference resolution: evaluation andmodeling.
+arxiv preprint arxiv:2009.11032..agata cybulska and piek vossen.
+2014. using asledgehammer to crack a nut?
+lexical diversityin proceedingsand event coreference resolution.
+of the ninth international conference on languageresources and evaluation (lrec’14), pages 4545–4552, reykjavik, iceland.
+european language re-sources association (elra)..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training of.
+deep bidirectional transformers for language under-in proceedings of the 2019 conferencestanding.
+of the north american chapter of the associationfor computational linguistics: human languagetechnologies, volume 1 (long and short papers),pages 4171–4186, minneapolis, minnesota.
+associ-ation for computational linguistics..sourav dutta and gerhard weikum.
+2015. cross-document co-reference resolution using sample-based clustering with knowledge enrichment.
+trans-actions of the association for computational lin-guistics, 3:15–28..michael f¨arber, achim rettinger, and boulos el as-mar.
+2016. on emerging entity detection.
+inknowledge engineering and knowledge manage-ment, pages 223–238, cham.
+springer internationalpublishing..chung heong gooi and james allan.
+2004. cross-document coreference on a large scale corpus.
+inproceedings of the human language technologyconference of the north american chapter of theassociation for computational linguistics: hlt-naacl 2004, pages 9–16, boston, massachusetts,usa.
+association for computational linguistics..johannes hoffart, mohamed amir yosef, ilaria bor-dino, hagen f¨urstenau, manfred pinkal, marc span-iol, bilyana taneva, stefan thater, and gerhardweikum.
+2011. robust disambiguation of named en-tities in text.
+in proceedings of the 2011 conferenceon empirical methods in natural language process-ing, pages 782–792, edinburgh, scotland, uk.
+asso-ciation for computational linguistics..ari kobren, nicholas monath, akshay krishnamurthy,and andrew mccallum.
+2017. a hierarchical al-in proceedings ofgorithm for extreme clustering.
+the 23rd acm sigkdd international conference onknowledge discovery and data mining, pages 255–264..nikolaos kolitsas, octavian-eugen ganea,.
+andthomas hofmann.
+2018. end-to-end neural entityin proceedings of the 22nd conferencelinking.
+on computational natural language learning,pages 519–529, brussels, belgium.
+association forcomputational linguistics..jonathan k. kummerfeld and dan klein.
+2013. error-driven analysis of challenges in coreference resolu-in proceedings of the 2013 conference ontion.
+empirical methods in natural language processing,pages 265–277, seattle, washington, usa.
+associa-tion for computational linguistics..jeffrey ling, nicholas fitzgerald, zifei shan,livio baldini soares, thibault f´evry, david weiss,learning cross-and tom kwiatkowski.
+2020.arxivcontext entity representations from text.
+preprint arxiv:2001.03765..4726the 49th annual meeting of the association for com-putational linguistics: human language technolo-gies, pages 793–803, portland, oregon, usa.
+asso-ciation for computational linguistics..shubham toshniwal, sam wiseman, allyson ettinger,karen livescu, and kevin gimpel.
+2020. learn-ing to ignore: long document coreference within proceed-bounded memory neural networks.
+ings of the 2020 conference on empirical methodsin natural language processing (emnlp), pages8519–8526, online.
+association for computationallinguistics..marc vilain, john burger, john aberdeen, dennis con-nolly, and lynette hirschman.
+1995. a model-theoretic coreference scoring scheme.
+in sixth mes-sage understanding conference (muc-6): proceed-ings of a conference held in columbia, maryland,november 6-8, 1995..thomas wolf, lysandre debut, victor sanh, julienchaumond, clement delangue, anthony moi, pier-ric cistac, tim rault, remi louf, morgan funtow-icz, joe davison, sam shleifer, patrick von platen,clara ma, yacine jernite, julien plu, canwen xu,teven le scao, sylvain gugger, mariama drame,quentin lhoest, and alexander rush.
+2020. trans-formers: state-of-the-art natural language process-ing.
+in proceedings of the 2020 conference on em-pirical methods in natural language processing:system demonstrations, pages 38–45, online.
+asso-ciation for computational linguistics..ledell wu, fabio petroni, martin josifoski, sebastianriedel, and luke zettlemoyer.
+2020. scalable zero-shot entity linking with dense entity retrieval.
+inproceedings of the 2020 conference on empiricalmethods in natural language processing (emnlp),pages 6397–6407, online.
+association for computa-tional linguistics..lajanugen logeswaran, ming-wei chang, kenton lee,kristina toutanova, jacob devlin, and honglak lee.
+2019. zero-shot entity linking by reading entity de-scriptions.
+in proceedings of the 57th annual meet-ing of the association for computational linguistics,pages 3449–3460, florence, italy.
+association forcomputational linguistics..xiaoqiang luo.
+2005. on coreference resolution per-in proceedings of human lan-formance metrics.
+guage technology conference and conference onempirical methods in natural language processing,pages 25–32, vancouver, british columbia, canada.
+association for computational linguistics..gideon mann and david yarowsky.
+2003. unsuper-in proceed-vised personal name disambiguation.
+ings of the seventh conference on natural languagelearning at hlt-naacl 2003, pages 33–40..yehudit meged, avi caciularu, vered shwartz, and idodagan.
+2020. paraphrasing vs coreferring: twoin findings of the associ-sides of the same coin.
+ation for computational linguistics: emnlp 2020,pages 4897–4907, online.
+association for computa-tional linguistics..rada mihalcea and andras csomai.
+2007. wikify!
+inlinking documents to encyclopedic knowledge.
+proceedings of the sixteenth acm conference onconference on information and knowledge manage-ment, pages 233–242..sunil mohan and donghui li.
+2019. medmentions: alarge biomedical corpus annotated with {umls} con-cepts.
+in automated knowledge base construction(akbc)..nicholas monath, ari kobren, akshay krishnamurthy,michael r. glass, and andrew mccallum.
+2019.scalable hierarchical clustering with tree grafting.
+in proceedings of the 25th acm sigkdd interna-tional conference on knowledge discovery & datamining, kdd ’19, page 1438–1448, new york, ny,usa.
+association for computing machinery..delip rao, paul mcnamee, and mark dredze.
+2010.streaming cross document entity coreference reso-lution.
+in coling 2010: posters, pages 1050–1058,beijing, china.
+coling 2010 organizing committee..luke shrimpton, victor lavrenko, and miles osborne.
+2015. sampling techniques for streaming cross doc-in proceedings ofument coreference resolution.
+the 2015 conference of the north american chap-ter of the association for computational linguis-tics: human language technologies, pages 1391–1396, denver, colorado.
+association for computa-tional linguistics..sameer singh, amarnag subramanya, fernandopereira, and andrew mccallum.
+2011. large-scalecross-document coreference using distributed infer-in proceedings ofence and hierarchical models..4727a error analysis.
+a.2 clustering mistakes.
+a.1 seen vs. unseen performance.
+we evaluate conll f1 scores for mentions of en-tities that are seen vs. unseen in the aida andmedmentions training datasets (zeshel is excludedsince no test entities are seen in the training data).
+results are provided in table 4, with performanceof models that are trained using the in-domain train-ing datasets reported in bold..aida.
+medmentions.
+seen unseen.
+seen unseen.
+greedy nnfeature-basedmlmblink (wiki)relic (wiki)relic (in-dom.)
+hybrid.
+grinchmlmblink (wiki)relic (wiki)relic (in-dom.).
+91.267.239.089.387.192.8.
+46.239.088.284.2.
+92.271.739.289.986.492.2.
+43.039.289.170.3.
+60.754.545.157.672.671.8.
+30.638.158.473.1.
+80.861.559.062.280.380.5.
+24.933.762.878.1.table 4: conll f1 scores on mentions of entities thatare seen vs. unseen in the aida and medmentionstraining datasets.
+zeshel is excluded since all entitiesin the test data are unseen.
+bolded numbers indicatethat the mention encoder is trained on seen mentions..kummerfeld and klein (2013) deﬁne a system forcategorizing coreference errors into a number of un-derlying error types.
+because gold mention bound-aries are provided in our task setup, the main errortypes of relevance are divided entities, i.e., men-tions of the same entity that occur in different clus-ters, and conﬂated entities, i.e., mentions of differ-ent entities that are grouped into the same clusters.
+we can quantify these error types by counting thenumber of times clusters need to be merged to-gether vs. split, respectively.
+the overall errorcounts are provided in table 5..in addition to providing the overall error counts,we also render a sample of mentions from predictedclusters containing the most conﬂated entities intables 6–11..aida.
+medment..zeshel.
+conﬂ.
+div.
+conﬂ.
+div.
+conﬂ.
+div..greedy nnfeature-based156 5.0k 5.2k 5.4k 6.2k173mlm764676 8.9k 9.1k 6.0k 8.6k1.6k 749 13.1k 12.3k 7.4k 5.9kblink (wiki)209 8.1k 8.4k 5.8k 6.5k243relic (wiki)219 4.1k 4.1k 3.5k 7.8krelic (in-dom.)
+178156 4.4k 4.5k 4.5k 5.9k155hybrid.
+grinch6.9k 5.2k1.2k 829 8.4kmlm1.7k 749 7.9k 3.2k 8.0k 2.8kblink (wiki)214 7.8k 8.2k 6.8k 6.6krelic (wiki)284794 3.3k 5.4k 2.9k 8.7krelic (in-dom.)
+101.
+0.table 5: clustering mistakes.
+conﬂated: number oftimes mentions of different entities are grouped into thesame cluster.
+divided: number of times mentions ofthe same entity are grouped into different clusters..4728fis ski jumping world cupfifa world cup1966 fifa world cup.
+.
+.
+. )
+228.1 ( 129.4 / 98.7 ) leading world cup standings ( after three events ) : 1. .
+.
+.
+.
+.
+.
+his squad to face macedonia next week in a world cup qualiﬁer .
+midﬁelder valentin stefan and striker viorel .
+.
+.
+.
+.
+.
+35 caps and was a key member of the 1966 world cup winning team with his younger brother , bobby .
+.
+.
+..shefﬁeld wednesday f˘002ec˘002easton villa f˘002ec˘002enewcastle united f˘002ec˘002e.
+.
+.
+.
+.
+0-1 .
+19,306 liverpool 0 shefﬁeld wednesday 1 ( whittingham 22 ) .
+0-1 .
+.
+.
+.
+.
+.
+.
+0 leeds 0 .
+30,018 southampton 0 aston villa 1 ( townsend 34 ) .
+0-1 .
+.
+.
+.
+.
+.
+.
+villa 17 9 3 5 22 15 30 newcastle 15 9 2 4 26 17 29 manchester .
+.
+..japan national football teamchina pr national football teamal ain.
+.
+.
+.
+soccer - japan get lucky win , china in surprise defeat .
+.
+.
+.
+.
+.
+.
+soccer - japan get lucky win , china in surprise defeat .
+nadim ladki al-ain .
+.
+.
+.
+.
+.
+china in surprise defeat .
+nadim ladki al-ain , united arab emirates 1996-12-06 japan began the .
+.
+..rkc waalwijkwillem ii (football club)psv eindhoven.
+.
+.
+.
+division soccer match played on friday : rkc waalwijk 1 ( starbuck 76 ) willem ii tilburg 2 .
+.
+.
+.
+.
+.
+: rkc waalwijk 1 ( starbuck 76 ) willem ii tilburg 2 ( konterman 45 , van der vegt .
+.
+.
+.
+.
+.
+soccer - psv hit volendam for six .
+amsterdam 1996-12-07 .
+.
+..japan national football teamchina pr national football teamunited nations.
+.
+.
+.
+soccer - japan get lucky win , china in surprise defeat .
+.
+.
+.
+.
+.
+.
+soccer - japan get lucky win , china in surprise defeat .
+nadim ladki al-ain .
+.
+.
+.
+.
+.
+1975 and annexed the following year .
+the united nations has never recognised jakarta ’s move .
+alatas .
+.
+..feature-based.
+mlm.
+blink (wiki).
+relic (wiki).
+relic (in-domain).
+hybrid.
+fifa world cup1966 fifa world cuprugby world cup.
+.
+.
+.
+’ ’ japan , co-hosts of the world cup in 2002 and ranked 20th in the world by .
+.
+.
+.
+.
+.
+35 caps and was a key member of the 1966 world cup winning team with his younger brother , bobby .
+.
+.
+.
+.
+.
+.
+australia to defeat with a last-ditch drop-goal in the world cup quarter-ﬁnal in cape town .
+” campo has .
+.
+..table 6: most conﬂated entities on aida using greedy nn clustering.
+left: unique entity id.
+right: mentionwith entity surface form in italics..japan national football teamchina pr national football teamjapan national football team.
+.
+.
+.
+soccer - japan get lucky win , china in surprise defeat .
+.
+.
+.
+.
+.
+.
+soccer - japan get lucky win , china in surprise defeat .
+nadim ladki al-ain .
+.
+.
+.
+.
+.
+ladki al-ain , united arab emirates 1996-12-06 japan began the defence of their asian cup title with .
+.
+..japan national football teamchina pr national football teamal ain.
+.
+.
+.
+soccer - japan get lucky win , china in surprise defeat .
+.
+.
+.
+.
+.
+.
+soccer - japan get lucky win , china in surprise defeat .
+nadim ladki al-ain .
+.
+.
+.
+.
+.
+china in surprise defeat .
+nadim ladki al-ain , united arab emirates 1996-12-06 japan began the .
+.
+..rkc waalwijkwillem ii (football club)psv eindhoven.
+.
+.
+.
+division soccer match played on friday : rkc waalwijk 1 ( starbuck 76 ) willem ii tilburg 2 .
+.
+.
+.
+.
+.
+: rkc waalwijk 1 ( starbuck 76 ) willem ii tilburg 2 ( konterman 45 , van der vegt .
+.
+.
+.
+.
+.
+soccer - psv hit volendam for six .
+amsterdam 1996-12-07 .
+.
+..mlm.
+blink (wiki).
+relic (wiki).
+relic (in-domain).
+english people.
+england.
+england.
+.
+.
+.
+mahindra international .
+the australian brushed aside unseeded englishman mark cairns 15-7 15-6 15-8 .
+top-seededeyles .
+.
+.
+.
+.
+.
+16-year-old who attended sale grammar school in the northern england city of manchester died less than a day after.
+.
+.
+.
+.
+.
+a last-minute goal to salvage a 2-2 draw for english premier league leaders arsenal at home to derby on .
+.
+..table 7: most conﬂated entities on aida using grinch clustering.
+left: unique entity id.
+right: mentionwith entity surface form in italics..4729feature-based.
+mlm.
+blink (wiki).
+relic (wiki).
+transcription, genetic.
+transcriptional activation.
+regulation of biological process.
+.
+.
+.
+of eight tissues.
+the mef2c promoter had the higher transcriptional activity in differentiated c2c12 cells than that inproliferating c2c12 .
+.
+.
+.
+.
+.
+in proliferating c2c12 cells, which was accompanied by the up-regulation of mrna expression of mef2c gene.
+function deletion and .
+.
+.
+.
+.
+.
+(gpcrs) is a key event for cell signaling and regulation of receptor function.
+previously, using tandem mass spec-trometry, we .
+.
+..left ventricular function.
+left ventricular ejection fraction.
+endoscopy (procedure).
+.
+.
+.
+computed tomography angiography, we assessed 3 primary outcome measures: left ventricular (lv) systolic function(left ventricular ejection fraction), lv diastolic function (early relaxation .
+.
+.
+.
+.
+.
+3 primary outcome measures: left ventricular (lv) systolic function ( left ventricular ejection fraction ), lv diastolicfunction (early relaxation velocity), and coronary atherosclerosis .
+.
+.
+.
+.
+.
+comprehensive cancer network (nccn) guidelines, which are based on rigid endoscopic measurements.
+the medi-cal records of patients scheduled to receive .
+.
+..medical records.
+lower - spatial qualiﬁer.
+asymptomatic (finding).
+lysome-associated .
+.
+..sialic acid .
+.
+..smad3 gene.
+individual.
+finding.
+pharmicologic substance.
+study.
+evaluation.
+research study.
+.
+.
+.
+guidelines, which are based on rigid endoscopic measurements.
+the medical records of patients scheduled to receivecurative surgery for histologically .
+.
+.
+.
+.
+.
+with rectal cancer located in the upper (ra) or lower (rb) division using double-contrast barium enema.
+the medianvalues .
+.
+.
+.
+.
+.
+two bladder urothelial cancer metastatic to the penis with no relevant clinical symptoms .
+namely, a 69 years-old manwith a warthy lesions .
+.
+...
+.
+.
+herein, we demonstrated that zn(2+) could induce deglycosylation of lysosome-associated membrane protein 1 and 2(lamp-1 and lamp-2), which primarily locate in .
+.
+.
+.
+.
+.
+in this study, we set out to deﬁne how cd169(+) phagocytes contribute to neuroinﬂammation in ms. cd169 - diph-theria .
+.
+.
+.
+.
+.
+epigenome-wide analysis links smad3 methylation at birth to asthma in children of asthmatic .
+.
+...
+.
+.
+cardiovascular toxicity of illicit anabolic-androgenic steroid use millions of individuals have used illicit anabolic-androgenic steroids (aas), but the long-term .
+.
+.
+.
+.
+.
+steroids (aas), but the long-term cardiovascular associations of these drugs remain incompletely understood.
+usinga cross-sectional cohort design, we .
+.
+.
+.
+.
+.
+complications occurred in the studied neonates.
+based on these ﬁndings , ic - ecg -guided tip placement appears tobe .
+.
+..relic (in-domain).
+hybrid.
+.
+.
+.
+marker for activated phagocytes in inﬂammatory disorders.
+in this study , we set out to deﬁne how cd169(+) phago-cytes contribute .
+.
+.
+.
+.
+.
+to provide holistic end-of-life care and assisted in the overall assessment of palliative care patients, identifying areasthat might not .
+.
+.
+.
+.
+.
+which is hardly visible in clinically applied ct-imaging.
+this experimental study investigates ten different psi designsand their effect to .
+.
+..table 8: most conﬂated entities on medmentions using greedy nn clustering.
+left: unique entity id.
+right:mention with entity surface form in italics..cardiovasculartoxic effectsteroids.
+.
+.
+.
+cardiovascular toxicity of illicit anabolic-androgenic steroid use millions of individuals .
+.
+.
+.
+.
+.
+cardiovascular toxicity of illicit anabolic-androgenic steroid use millions of individuals have .
+.
+.
+.
+.
+.
+cardiovascular toxicity of illicit anabolic-androgenic steroid use millions of individuals have used illicit anabolic-androgenicsteroids .
+.
+..cardiovasculartoxic effectsteroids.
+.
+.
+.
+cardiovascular toxicity of illicit anabolic-androgenic steroid use millions of individuals .
+.
+.
+.
+.
+.
+cardiovascular toxicity of illicit anabolic-androgenic steroid use millions of individuals have .
+.
+.
+.
+.
+.
+cardiovascular toxicity of illicit anabolic-androgenic steroid use millions of individuals have used illicit anabolic-androgenicsteroids .
+.
+..sialic acid .
+.
+.
+usp17l2 proteinusp7 protein.
+.
+.
+.
+in this study, we set out to deﬁne how cd169(+) phagocytes contribute to neuroinﬂammation in ms. cd169 - diphtheria .
+.
+.
+.
+.
+.
+dub3 and usp7 de-ubiquitinating enzymes control replication inhibitor geminin: molecular .
+.
+.
+.
+.
+.
+dub3 and usp7 de-ubiquitinating enzymes control replication inhibitor geminin: molecular characterization and .
+.
+..mlm.
+blink (wiki).
+relic (wiki).
+relic (in-domain).
+protein expression.
+genes, homeobox.
+gene expression.
+.
+.
+.
+by vascular endothelial growth factor (vegf) signaling.
+we describe spatiotemporal expression of vegf and vegfr and experimentalmanipulations targeting vegf .
+.
+.
+.
+.
+.
+cell adhesion, and newly identiﬁed processes, including transcription and homeobox genes .
+we identiﬁed mutations in proteinbinding sites correlating with .
+.
+.
+.
+.
+.
+identiﬁed mutations in protein binding sites correlating with differential expression of proximal genes and experimentally validatedeffects of mutations .
+.
+..table 9: most conﬂated entities on medmentions using grinch clustering.
+left: unique entity id.
+right:mention with entity surface form in italics..4730feature-based.
+mlm.
+blink (wiki).
+relic (wiki).
+relic (in-domain).
+hybrid.
+yu - gi - oh !
+- episode 004yu - gi - oh !
+zexal - episode 082yu - gi - oh !
+duelist - duel 168..
+.
+.
+yu - gi - oh !
+- episode 004 ” into the hornet ’ s nest ” , known .
+.
+.
+.
+.
+.
+yu - gi - oh !
+zexal - episode 082 ” sphere cube calamity : part 1 ” , known .
+.
+.
+.
+.
+.
+yu - gi - oh !
+duelist - duel 168 ” the waiting grave ” , also known as ” .
+.
+..yami yugi and rafael ’ s ﬁrst duelyu - gi - oh !
+- episode 004yu - gi - oh !
+zexal - episode 082..
+.
+.
+yami yugi and rafael ’ s ﬁrst duel yami yugi goes to duel against rafael as the message .
+.
+.
+.
+.
+.
+yu - gi - oh !
+- episode 004 ” into the hornet ’ s nest ” , known .
+.
+.
+.
+.
+.
+yu - gi - oh !
+zexal - episode 082 ” sphere cube calamity : part 1 ” , known .
+.
+..robin ( friends )41003 olivia ’ s newborn foal41007 heartlake pet salon.
+.
+.
+.
+, sarah and maya .
+emma has a horse called robin , dog called lady and a cat called jewel .
+.
+.
+.
+.
+.
+.
+a pet bird , goldie .
+olivia also has a new pet foal , which she takes care of frequently .
+she seems .
+.
+.
+.
+.
+.
+its neck .
+background .
+joanna brings her poodle to the pet salon , where emma pampers her up .
+¡ br ¿ .
+.
+..ro galeunnamed shuttlepods ( 22nd century )founders ’ homeworld ( 2372 ).
+.
+.
+.
+, as was maquis leader macias .
+ro recalled that her father made the strongest ” hasperat ” she ’ d ever .
+.
+.
+.
+.
+.
+.
+” ( ) the federation starship carried at least one shuttlepod until the time of its disappearance in the mid - .
+.
+.
+.
+.
+.
+as she is reluctant to reveal the location of the founders ’ new homeworld , but respects sisko ’ s loyalty to odowhen .
+.
+..yu - gi - oh !
+- episode 004yu - gi - oh !
+zexal - episode 082yu - gi - oh !
+duelist - duel 168..
+.
+.
+yu - gi - oh !
+- episode 004 ” into the hornet ’ s nest ” , known .
+.
+.
+.
+.
+.
+yu - gi - oh !
+zexal - episode 082 ” sphere cube calamity : part 1 ” , known .
+.
+.
+.
+.
+.
+yu - gi - oh !
+duelist - duel 168 ” the waiting grave ” , also known as ” .
+.
+..yu - gi - oh !
+- episode 004yu - gi - oh !
+zexal - episode 082yu - gi - oh !
+duelist - duel 168..
+.
+.
+yu - gi - oh !
+- episode 004 ” into the hornet ’ s nest ” , known .
+.
+.
+.
+.
+.
+yu - gi - oh !
+zexal - episode 082 ” sphere cube calamity : part 1 ” , known .
+.
+.
+.
+.
+.
+yu - gi - oh !
+duelist - duel 168 ” the waiting grave ” , also known as ” .
+.
+..table 10: most conﬂated entities on zeshel using greedy nn clustering.
+left: unique entity id.
+right:mention with entity surface form in italics..moondeep sea.
+tabaxi ( tribe ).
+new velar.
+astral projection.
+krakentua ( shinkintin ).
+generic temple guard.
+moondeep sea.
+tabaxi ( tribe ).
+kaedlaw burdun.
+.
+.
+.
+larynda telenna was the high priestess of kiaransalee in the vault of gnashing teeth beneath vaasa .
+she wasalso the leader of kiaransalee .
+.
+.
+.
+.
+.
+the chultan peninsula , consisting primarily of members of the tabaxi tribe .
+description .
+chultans were tall andhad dark , .
+.
+.
+.
+.
+.
+from the moonsea ride , as it would have connected harrowdale town with this major road .
+to avoid ambushesby the .
+.
+...
+.
+.
+also possible to escape with ” teleportation ” spells or astral travel , though the force blocked ethereal travel .
+acaptive .
+.
+.
+.
+.
+.
+and force newly hatched krakentua spawn to ﬁght .
+a krakentua related these events via dreams to adventurers inthe fochu .
+.
+.
+.
+.
+.
+two to attempt a crossing were father sambar and a temple guard .
+sambar died horriﬁcally , but the guardsurvived as .
+.
+..mlm.
+blink (wiki).
+relic (wiki).
+.
+.
+.
+larynda telenna was the high priestess of kiaransalee in the vault of gnashing teeth beneath vaasa .
+she wasalso the leader of kiaransalee .
+.
+.
+.
+.
+.
+the chultan peninsula , consisting primarily of members of the tabaxi tribe .
+description .
+chultans were tall andhad dark , .
+.
+.
+.
+.
+.
+the silver wyrm in 1369 dr , queen brianna , her newborn child , avner , tavis burdun , and basil retreated to.
+.
+..relic (in-domain).
+vetrix familyyu - gi - oh !
+- episode 004yu - gi - oh !
+zexal - episode 082..
+.
+.
+vetrix family the vetrix family , known as the tron family in .
+.
+.
+.
+.
+.
+yu - gi - oh !
+- episode 004 ” into the hornet ’ s nest ” , known .
+.
+.
+.
+.
+.
+yu - gi - oh !
+zexal - episode 082 ” sphere cube calamity : part 1 ” , known .
+.
+..table 11: most conﬂated entities on zeshel using grinch clustering.
+left: unique entity id.
+right: men-tion with entity surface form in italics..4731

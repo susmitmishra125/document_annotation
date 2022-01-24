@@ -1,0 +1,640 @@
+lnn-el: a neuro-symbolic approach to short-text entity linking.
+hang jiang1∗, sairam gurajada2∗, qiuhao lu3, sumit neelam2, lucian popa2,prithviraj sen2, yunyao li2, alexander gray21mit.
+3university of oregon.
+2ibm research.
+hjian42@mit.edu, {sairam.gurajada, alexander.gray}@ibm.com, luqh@cs.uoregon.edu,sumit.neelam@in.ibm.com, {lpopa,senp,yunyaoli}@us.ibm.com.
+abstract.
+entity linking (el), the task of disambiguat-ing mentions in text by linking them to enti-ties in a knowledge graph, is crucial for textunderstanding, question answering or conver-sational systems.
+entity linking on short text(e.g., single sentence or question) poses partic-ular challenges due to limited context.
+whileprior approaches use either heuristics or black-box neural methods, here we propose lnn-el, a neuro-symbolic approach that combinesthe advantages of using interpretable rulesbased on ﬁrst-order logic with the performanceof neural learning.
+even though constrained tousing rules, lnn-el performs competitivelyagainst sota black-box neural approaches,with the added beneﬁts of extensibility andtransferability.
+in particular, we show that wecan easily blend existing rule templates givenby a human expert, with multiple types of fea-tures (priors, bert encodings, box embed-dings, etc), and even scores resulting from pre-vious el methods, thus improving on suchmethods.
+for instance, on the lc-quad-1.0dataset, we show more than 4% increase inf1 score over previous sota.
+finally, we showthat the inductive bias offered by using logicresults in learned rules that transfer well acrossdatasets, even without ﬁne tuning, while main-taining high accuracy..1.introduction.
+entity linking (el) is the task of disambiguat-ing textual mentions by linking them to canoni-cal entities provided by a knowledge graph (kg)such as dbpedia, yago (suchanek et al., 2007)or wikidata (vrandeˇci´c and krötzsch, 2014).
+alarge body of existing work deals with el in thecontext of longer text (i.e., comprising of multiplesentences) (bunescu and pasca, 2006).
+the general.
+approach is: 1) extract features measuring somedegree of similarity between the textual mentionand any one of several candidate entities (mihalceaand csomai, 2007; cucerzan, 2007; ratinov et al.,2011), followed by 2) the disambiguation step, ei-ther heuristics-based (non-learning) (hoffart et al.,2011; sakor et al., 2019; ferragina and scaiella,2012) or learning-based (mihalcea and csomai,2007; cucerzan, 2007; ratinov et al., 2011; hof-fart et al., 2012; ganea and hofmann, 2017), tolink the mention to an actual entity..a particular type of entity linking, focused onshort text (i.e., a single sentence or question), hasattracted recent attention due to its relevance fordownstream applications such as question answer-ing (e.g., (kapanipathi et al., 2021)) and conversa-tional systems.
+short-text el is particularly chal-lenging because the limited context surroundingmentions results in greater ambiguity (sakor et al.,2019).
+to address this challenge, one needs to ex-ploit as many features from as many sources ofevidence as possible..consider the question in figure 1(a), containingmention1 (cameron) and mention2 (titanic).1dbpedia contains several person entities whoselast name matches cameron.
+two such entitiesare shown in figure 3(b), james_cameron androderick_cameron, along with their string simi-larity scores (in this case, character-level jaccardsimilarity) to mention1.
+in this case, the stringsimilarities are quite close.
+in the absence of re-liable discerning information, one can employ aprior such as using the more popular candidate en-tity, as measured by the in-degree of the entityin the kg (see figure 3(b)).
+given the higherin-degree, we can (correctly) link mention1 tojames_cameron.
+however, for mention2, the cor-rect entry is titanic_(1997_film) as opposed to.
+∗ equal contribution; author hang jiang did this work.
+1note that we assume that mention extraction has already.
+while interning at ibm..been applied and we are given the textual mentions..proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages775–787august1–6,2021.©2021associationforcomputationallinguistics775who composed soundtrackof cameron(cid:124) (cid:123)(cid:122) (cid:125)mention1.
+’s titanic(cid:124) (cid:123)(cid:122) (cid:125)mention2.
+?.
+mentionmention1.
+mention2.
+entityjames_cameronroderick_camerontitanictitanic_(1997_ﬁlm).
+similarity0.70.61.00.4.in-degree30104452.aliens_(ﬁlm).
+titanic_(1997_ﬁlm).
+upper_canada.
+director.
+director.
+birthplace.
+james_cameron.
+roderick_cameron.
+director.
+restingplace.
+relative.
+true_lies.
+ontario.
+rory_cameron.
+(a).
+(b).
+(c).
+figure 1: (a) question with 2 mentions that need to be disambiguated against dbpedia.
+(b) for each mention-candidate entity pair, the character-level jaccard similarity is shown along with the in-degree of the entity in theknowledge graph.
+(c) (partial) ego networks for entities james_cameron and roderick_cameron..titanic the ship, but it actually has a lower stringsimilarity.
+to link to the correct entity, one needsto exploit the fact that james_cameron has an edgeconnecting it to titanic_(1997_film) in the kg(see ego network on the left in figure 1(c)).
+link-ing co-occurring mentions from text to connectedentities in the kg is an instance of collective en-tity linking.
+this example provides some intuitionas to how priors, local features (string similarity)and collective entity linking can be exploited toovercome the limited context in short-text el..while the use of priors, local features and non-local features (for collective linking) has been pro-posed before (ratinov et al., 2011), our goal in thispaper is to provide an extensible framework thatcan combine any number of such features and more,including contextual embeddings such as bertencodings (devlin et al., 2019) and query2boxembeddings (ren et al., 2020), and even the re-sults of previously developed neural el models(e.g., blink (wu et al., 2020)).
+additionally,such a framework must not only allow for easyinclusion of new sources of evidence but also forinterpretability of the resulting model (guidottiet al., 2018).
+an approach that combines disparatefeatures should, at the very least, be able to state,post-training, which features are detrimental andwhich features aid el performance and under whatconditions, in order to enable actionable insights inthe next iteration of model improvement.
+our approach.
+we propose to use rules in ﬁrst-order logic (fol), an interpretable fragment oflogic, as a glue to combine el features into a co-herent model.
+each rule in itself is a disambigua-tion model capturing speciﬁc characteristics of theoverall linking.
+while inductive logic program-ming (muggleton, 1996) and statistical relationallearning (getoor and taskar, 2007) have for longfocused on learning fol rules from labeled data,more recent approaches based on neuro-symbolicai have led to impressive advances.
+in this work,we start with an input set of rule templates (givenby an expert or available as a library), and learn the.
+parameters of these rules (namely, the thresholdsof the various similarity predicates as well as theweights of the predicates that appear in the rules),based on a labeled dataset.
+we use logical neuralnetworks (lnn) (riegel et al., 2020), a powerfulneuro-symbolic ai approach based on real-valuedlogic that employs neural networks to learn the pa-rameters of the rules.
+learning of the rule templatesthemselves will be the focus of future work..summary of contributions• we propose, to the best of our knowledge, theﬁrst neuro-symbolic method for entity linking(coined “lnn-el") that provides a principledapproach to learning el rules..• our approach is extensible and can combinedisparate types of local and global features aswell as results of prior black-box neural meth-ods, thus building on top of such approaches.
+• our approach produces interpretable rules thathumans can inspect toward actionable insights.
+• we evaluate our approach on three bench-mark datasets and show competitive (or better)performance with sota black-box neural ap-proaches (e.g., blink (wu et al., 2020)) eventhough we are constrained on using rules.
+• by leveraging rules, the learned model shows adesirable transferability property: it performswell not only on the dataset on which it wastrained, but also on other datasets from thesame domain without further training..2 related work.
+entity linking models.
+entity linking is a well-studied problem in nlp, especially for long text.
+approaches such as (bunescu and pasca, 2006;ratinov et al., 2011; sil et al., 2012; hoffart et al.,2011; shen et al., 2015) use a myriad of classicalml and deep learning models to combine priors,local and global features.
+these techniques, in gen-eral, can be applied to short text, but the lack of suf-ﬁcient context may render them ineffective.
+the re-cently proposed blink (logeswaran et al., 2019;.
+776wu et al., 2020) uses powerful transformer-basedencoder architectures trained on massive amountsof data (such as wikipedia, wikia) to achieve sotaperformance on entity disambiguation tasks, andis shown to be especially effective in zero-shot set-tings.
+blink is quite effective on short text (asobserved in our ﬁndings); in our approach, we useblink both as a baseline and as a component thatis combined in larger rules..for short-text el, some prior works (sakor et al.,2019; ferragina and scaiella, 2012; mendes et al.,2011) address the joint problem of mention detec-tion and linking, with primary focus on identifyingmention spans, while linking is done via heuristicmethods without learning.
+(sakor et al., 2019) alsojointly extracts relation spans which aide in overalllinking performance.
+the recent elq (li et al.,2020) extends blink to jointly learn mention de-tection and linking.
+in contrast, we focus solelyon linking and take a different strategy based oncombining logic rules with learning.
+this facili-tates a principled way combining multiple types ofel features with interpretability and learning usingpromising gradient-based techniques..rule-based learning.
+fol rules and learninghave been successfully applied in some nlp tasksand also other domains.
+of these, the task that isclosest to ours is entity resolution (er), which isthe task of linking two entities across two struc-tured datasets.
+in this context, works like (chaud-huri et al., 2007; arasu et al., 2010; wang et al.,2012; hernández et al., 2013) use fol rules forer.
+approaches such as (singla and domingos,2006; pujara and getoor, 2016) induce probabilis-tic rules using mlns (richardson and domingos,2006) and psl (bach et al., 2017), respectively.
+none of these approaches use any recent advancesin neural-based learning; moreover, they are fo-cused on entity resolution, which is a related taskbut distinct from short-text el..3 preliminaries.
+3.1 entity linking..given text t , a set m = {m1, m2, ...} of mentions,where each mi is contained in t , and a knowledgegraph (kg) comprising of a set e of entities, entitylinking is a many-to-one function that links eachmention mi ∈ m to an entity eij ∈ ci, whereci ⊆ e is a subset of relevant candidates for men-tion mi.
+more generally, we formulate the problemas a ranking of the candidates in ci so that the “cor-.
+rect" entity for mi is ranked highest.
+followingexisting approaches(e.g.
+(sakor et al., 2019; wuet al., 2020), we use off-the-shelf lookup tools suchas dbpedia lookup2 to retrieve top-100 candidatesfor each mention.
+while this service is speciﬁc todbpedia, we assume that similar services exist orcan be implemented on top of other kgs..3.2 logical neural networks.
+fueled by the rise in complexity of deep learn-ing, recently there has been a push towards learn-ing interpretable models (guidotti et al., 2018;danilevsky et al., 2020).
+while linear classiﬁers,decision lists/trees may also be considered inter-pretable, rules expressed in ﬁrst-order logic (fol)form a much more powerful, closed language thatoffer semantics clear enough for human interpre-tation and a larger range of operators facilitatingthe expression of richer models.
+to learn theserules, neuro-symbolic ai typically substitutes con-junctions (disjunctions) with differentiable t-norms(t-conorms) (esteva and godo, 2001).
+however,since these norms do not have any learnable param-eters (more details in appendix a.1), their behav-ior cannot be adjusted, thus limiting their ability tomodel well the data..in contrast,.
+logical neural networks (lnn)(riegel et al., 2020) offer operators that include pa-rameters, thus allowing to better learn from the data.
+to maintain the crisp semantics of fol, lnns en-force constraints when learning operators such asconjunction.
+concretely, lnn-∧ is expressed as:.
+max(0, min(1, β − w1(1 − x) − w2(1 − y)))subject to: β − (1 − α)(w1 + w2) ≥ αβ − αw1 ≤ 1 − αβ − αw2 ≤ 1 − αw1, w2 ≥ 0.
+(1)(2)(3).
+where β, w1, w2 are learnable parameters, x, y ∈[0, 1] are inputs and α ∈ [ 12 , 1] is a hyperparameter.
+note that max(0, min(1, ·)) clamps the output oflnn-∧ between 0 and 1 regardless of β, w1, w2, x,and y. the more interesting aspects are in the con-straints.
+while boolean conjunction only returns1 or true when both inputs are 1, lnns relaxthis condition by using α as a proxy for 1 (andconversely, 1 − α as a proxy for 0).
+in particular,constraint (1) forces the output of lnn-∧ to begreater than α when both inputs are greater thanα. similarly, constraints (2) and (3) constrain the.
+2https://lookup.dbpedia.org/.
+777figure 2: (left) product t-norm.
+(right) lnn-∧ (α =0.7)..behavior of lnn-∧ when one input is low and theother is high.
+for instance, constraint (2) forcesthe output of lnn-∧ to be less than 1−α for y = 1and x ≤ 1 − α. this formulation allows for un-constrained learning when x, y ∈ [1 − α, α].
+bychanging α a user can control how much learningto enable (increase to make region of unconstrainedlearning wider or decrease for the opposite).
+fig-ure 2 depicts product t-norm and lnn-∧ (α = 0.7).
+while the former increases slowly with increasingx, y, lnn-∧ produces a high output when both in-puts are ≥ α and stays high thereafter, thus closelymodeling boolean conjunction semantics..in case the application requires even more de-grees of freedom, the hard constraints (1), (2) and(3) can be relaxed via the inclusion of slacks:.
+lnn-∧(x, y) =max(0, min(1, β − w1(1 − x) − w2(1 − y)))subject to: β − (1 − α)(w1 + w2) + ∆ ≥ αβ − αw1 ≤ 1 − α + δ1β − αw2 ≤ 1 − α + δ2w1, w2, δ1, δ2, ∆ ≥ 0.where δ1, δ2, and ∆ denote slack variables.
+ifany of constraints (1), (2) and (3) in lnn-∧ areunsatisﬁed then slacks help correct the directionof the inequality without putting pressure onparameters w1, w2, and β during training.
+for therest of the paper, by lnn-∧ we refer to the aboveformulation.
+lnn negation is a pass-through oper-ator: lnn-¬(x) = 1 − x, and lnn disjunction isdeﬁned in terms of lnn-∧:.
+lnn-∨(x, y) = 1 − lnn-∧(1 − x, 1 − y).
+while vanilla backpropagation cannot handle lin-ear inequality constraints such as constraint (1),specialized learning algorithms are available withinthe lnn framework.
+for more details, pleasecheck riegel et al.
+(2020).
+4 lnn-el.
+an overview of our neuro-symbolic approach forentity linking is depicted in figure 3. we nextdiscuss the details about feature generation com-ponent that generates features using a catalogue.
+features.
+description.
+name.
+context.
+type.
+t ype(mi, eij).
+sim(mi, eij), where sim is a generalpurpose string similarity function such asjaccard (jacc), jarowinkler (jw),levenshtein (lev), partial ratio (pr), etc..ctx(mi, eij)= (cid:80)mk∈m \{mi} pr(mk, eij.desc)where mk is a mention in the context of mi.
+(cid:40).
+=.
+if mi.type ∈ eij.dom.
+10, otherwise.
+where mi.type is the type of the mentionand eij.dom is the set of domains.
+entityprominence.
+p rom(eij) = indegree(eij),i.e., number of links pointing to entity eij.
+table 1: non-embedding based feature functions..of feature functions (section 4.1) followed by pro-posed model that does neuro-symbolic learningover user provided el algorithm in section 4.2..given the input text t , together with labeleddata in the form (mi, ci, li), where mi ∈ m isa mention in t , ci is a list of candidate entitieseij (drawn from lookup services3) for the mentionmi, and where each lij ∈ li denotes a link/not-link label for the pair (mi, eij).
+the ﬁrst step is togenerate a set fij = {fk(mi, eij)} of features foreach pair (mi, eij), where fk is a feature functiondrawn from a catalog f of user provided functions..4.1 feature functions.
+our collection of feature functions include bothnon-embedding and embedding based functions..non-embedding based.
+we include here a mul-titude of functions (see table 1) that measure thesimilarity between the mention mi and the candi-date entity eij based on multiple types of scores..name: a set of general purpose string similarityfunctions4 such as jaccard, jaro winkler, leven-shtein, partial ratio, etc.
+are used to compute thesimilarity between mi and eij’s name..context: aggregated similarity of mi’s contextto the description of eij.
+here, we consider the listof all other mentions mk ∈ m (k (cid:54)= i) as mi’s con-text, together with eij’s textual description obtainedusing kg resources5.
+the exact formula we useis shown in table 1, where partial ratio(pr) mea-sures the similarity between each context mentionand the description.
+(partial ratio computes the.
+3https://lookup.dbpedia.org4pypi.org/project/py-stringmatching5dbpedia.org/sparql.
+778 0 0.2 0.4 0.6 0.8 1 0 0.2 0.4 0.6 0.8 1 0 0.2 0.4 0.6 0.8 1xy 0 0.2 0.4 0.6 0.8 1 0 0.2 0.4 0.6 0.8 1 0 0.2 0.4 0.6 0.8 1 0 0.2 0.4 0.6 0.8 1xy 0 0.2 0.4 0.6 0.8 1text t.kg resources.
+feature functions f.labeled data mi, [ci, li].
+mi,.
+.
+.
+ei1, li1ei2, li2.....
+.
+featuregeneration.
+labeled data with featuresmi, [ci, fi, li].
+.
+.
+mi,.
+ei1, [f1, f2, .
+.
+.
+]i1, li1ei2, [f1, f2, .
+.
+.
+]i2, li2.....
+.
+user provided el algorithm.
+r1(mi, eij) ← f1(mi, eij) > θ1 ∧ f2(mi, eij) > θ2∧ f3(mi, eij) > θ3∨.
+r2(mi, eij) ← f1(mi, eij) > θ4 ∧ f4(mi, eij) > θ5.
+lnn reformulation of el algorithm.
+f1.
+f2.
+f3.
+f1.
+f4.
+θ1.
+θ2.
+θ3.
+θ4.
+θ5.
+f w1 f w2.
+f w3.
+f w4.
+f w5.
+lnn-∧rw1.
+lnn-∧rw2.
+lnn-∨.
+figure 3: overview of our approach.
+learnable parameters:θi– feature thresholds,.
+f wi– feature weights,rwi– rule weights.
+final scores.
+ei1, s(mi, eij)ei2, s(mi, ei2).....
+.
+mi,.
+.
+maximum similarity between a short input stringand substrings of a second, longer string.)
+fornormalizing the ﬁnal score, we apply a min-maxrescaling over all entities eij ∈ ci..type:.
+the overlap similarity of mentionmi’s type to eij’s domain (class) set, similarto the domain-entity coherence score proposedin (nguyen et al., 2014).
+unlike in (nguyen et al.,2014), instead of using a single type for all men-tions in m , we obtain type information for eachmention mi using a trained bert-based entity typedetection model.
+we use kg resources 5 to obtaineij’s domain set, similar to context similarity..entity prominence: measure the prominenceof entity eij as the number of entities that link toeij in target kg, i.e., indegree(eij).
+similar tocontext score normalization, we apply min-maxrescaling over all entities eij ∈ ci..embedding based.
+we also employ a suite of pre-trained or custom trained neural language modelsto compute the similarity of mi and eij..pre-trained embedding models.
+these includespacy’s semantic similarity6 function that usesglove (pennington et al., 2014) trained on com-in addition to spacy, we also usemon crawl.
+scores from an entity linking system such asblink (wu et al., 2020) (a state-of-the-art entitylinking model) as a feature function in our system..bert embeddings.
+to further explore the se-mantics of the context in t and the inherent struc-ture of the target kg, we incorporate an embedding-based similarity by training a mini entity linkingmodel without any aforementioned prior informa-tion.
+we ﬁrst tag the input text t with a specialtoken [ment] to indicate the position of mentionmi, and then encode t with bert, i.e., mi =bert(mi, t ).
+each candidate eij is encoded with.
+6spacy.io/usage/vectors-similarity.
+boxcameron + boxneighbors.
+neighborhood.
+projection.
+ccameron.
+boxcameron.
+n (ccameron).
+ctitanic.
+boxtitanic.
+figure 4: candidates for linking the ‘titanic’ mentionappear in the intersection of the two boxes..a pre-trained graph embedding wiki2vec (yamadaet al., 2020), i.e., eij = wiki2vec(eij).
+the candi-dates are ranked in order of the cosine similarityto mi, i.e., simcos(mi, eij).
+the mini el modelis optimized with margin ranking loss so that thecorrect candidate is ranked higher..bert with box embeddings.
+while featuressuch as context (see table 1) can exploit other men-tions appearing within the same piece of text, theyonly do so via textual similarity.
+a more powerfulmethod is to jointly disambiguate the mentions intext to the actual entities in the kg, thus exploitingthe structural context in the kg.
+intuitively, thesimultaneous linking of co-occurring mentions intext to related entities in the kg is a way to rein-force the links for each individual mention.
+to thisend, we adapt the recent query2box (ren et al.,2020), whose goal is to answer fol queries overa kg.
+the main idea there is to represent sets ofentities (i.e., queries) as contiguous regions in em-bedded space (e.g., axis-parallel hyper-rectanglesor boxes), thus reducing logical operations to geo-metric operations (e.g., intersection)..since query2box assumes a well-formed queryas input, one complication in directly applying it toour setting is that we lack the information necessaryto form such an fol query.
+for instance, in theexample from section 1, while we may assume thatthe correct entities for our cameron and titanicmentions are connected in the kg, we do not knowhow these are connected, i.e., via which relation.
+tocircumvent this challenge, we introduce a specialneighborhood relation n , such that v ∈ n (u)whenever there is some kg relation from entity u.
+779to entity v. we next deﬁne two box operations:.
+box(ci) = {v| min({eij|eij ∈ ci}).
+(cid:22) v (cid:22) max({eij|eij ∈ ci})}.
+box(n (ci)) = box(ci) + boxn.
+the ﬁrst operation represents mention mi as abox, by taking the smallest box that contains theset ci of candidate entities for mi.
+this can beachieved by computing the dimension-wise mini-mum (maximum) of all entity embeddings in cito obtain the lower-left (upper-right) corner of theresulting box.
+the second operation takes mi’s boxand produces the box containing its neighbors inthe kg.
+query2box achieves this by representingboxn via a center vector ψ and offset vector ω,both of which are learned parameters.
+the box ofneighbors is then obtained by translating the centerof mi’s box by ψ and adding the offset ω to its side.
+figure 4 shows how these operations are usedto disambiguate titanic while exploiting the co-occurring mention cameron and the kg struc-ture.
+we take the box for cameron, compute itsneighborhood box, then intersect with the titanicbox.
+this intersection contains valid entities thatcan disambiguate titanic and are connected tothe entity for cameron.
+for the actual score ofeach such entity, we take its distance to the cen-ter of the intersection box and convert it to asimilarity score simbox(mi, eij).
+we then lin-early combine this with the bert-based similaritymeasure: βboxsimbox(mi, eij) + simcos(mi, eij),where βbox is a hyper-parameter that adjusts the im-portance of the two scores.
+the approach describedcan be easily extended to more than two mentions..4.2 model.
+in this section, we describe how an el algorithmcomposed of a disjunctive set of rules is reformu-lated into lnn representation for learning.
+entity linking rules are a restricted form of folrules comprising of a set of boolean predicatesconnected via logical operators: conjunction (∧)and disjunction (∨).
+a boolean predicate has theform fk > θ, where fk ∈ f is one of the featurefunctions, and θ can be either a user provided ora learned threshold in [0, 1].
+figure 5(a) showstwo example rules r1 and r2, where, for instance,r1(mi, eij) evaluates to true if both the predicatejacc(mi, eij) > θ1 and ctx(mi, eij) > θ2 aretrue.
+rules can be disjuncted together to forma larger el algorithm, as the one shown in fig-ure 5(b), which states that links(mi, eij) evalu-.
+(a)el rulesr1(mi, eij) ← jacc(mi, eij) > θ1 ∧ ctx(mi, eij) > θ2.
+r2(mi, eij) ← lev(mi, eij) > θ3 ∧ p rom(mi, eij) > θ4.
+(b)el algorithm.
+links(mi, eij) ← r1(mi, eij) ∨ r2(mi, eij).
+(c)scoring.
+s(mi, eij) =.
+(cid:18)rw1 × ((f w1 × jacc(mi, eij) × (f w2 × ctx(mi, eij))rw2 × ((f w3 × jacc(mi, eij) × (f w4 × ctx(mi, eij)).
+(cid:19).
++.
+figure 5: example of entity linking rules and scoring..ates to true if any one of its rules evaluates to true.
+the links predicate is meant to store high-qualitylinks between mention and candidate entities thatpass the conditions of at least one rule.
+the elalgorithm also acts as a scoring mechanism.
+ingeneral, there are many ways in which scores cancomputed.
+in a baseline implementation (no learn-ing), we use the scoring function in figure 5(c),where rwi denote manually assigned rule weights,while fwi are manually assigned feature weights.
+an el algorithm is an explicit and extensibledescription of the entity linking logic, which can beeasily understood and manipulated by users.
+how-ever, obtaining competitive performance to thatof deep learning approaches such as blink (wuet al., 2020) requires a signiﬁcant amount of man-ual effort to ﬁne tune the thresholds θi, the featureweights (fwi) and the rule weights (rwi).
+lnn reformulation.
+to facilitate learning of thethresholds and weights in an el algorithm, wemap the boolean-valued logic rules into the lnnformalism, where the lnn constructs – lnn-∨(for logical or) and lnn-∧ (for logical and) –allow for continuous real-valued numbers in [0, 1].
+as described in section 3.2, lnn-∧ and lnn-∨are a weighted real-valued version of the classicallogical operators, where a hyperparameter α is usedas a proxy for 1. each lnn operator produces avalue in [0, 1] based on the values of the inputs,their weights and bias β. both the weights and βare learnable parameters.
+the score of each linkis based on the score that the lnn operators give,with an added complication related to how we scorethe feature functions.
+to illustrate, for the el rulesin figure 5, the score of a link is computed as:.
+s(mi, eij) =.
+.
+.
+lnn- ∨.
+lnn- ∧.
+(cid:18)t l(jacc(mi, eij), θ1),t l(ctx(mi, eij), θ2).
+(cid:19).
+lnn- ∧.
+(cid:18) t l(lev(mi, eij), θ3),t l(p rom(mi, eij), θ4).
+(cid:19).
+,.
+.
+.
+780dataset.
+train.
+test.
+|q|.
+|e|.
+|q|.
+|e|.
+lc-quad 1.0 (trivedi et al., 2017) 4,000 6,823 1000 1,721408qald-9 (usbeck et al., 2018)1742974 3,237 1603 1,798webqspel (li et al., 2020).
+150.
+568.table 2: characteristics of the datasets..here the top-level lnn-∨ represents the disjunc-tion r1 ∨ r2, while the two inner lnn-∧ cap-ture the rules r1 and r2 respectively.
+for the fea-ture functions with thresholds, a natural scoringmechanism would be to use score(f > θ) = fif f > θ else 0, which ﬁlters out the candidatesthat do not satisfy the condition f > θ, and gives anon-zero score for the candidates that pass the con-dition.
+however, since this is a step function whichbreaks the gradient ﬂow through a neural network,we approximate it via a smooth function t l(f, θ)= f · σ(f − θ), where σ is sigmoid function and θis the learnable threshold that is generated using σ,i.e., θ = σ(γ), to ensure that it lies in [0, 1].
+training.
+we train the lnn formulated el rulesover the labeled data and use a margin-ranking lossover all the candidates in ci to perform gradientdescent.
+the loss function l(mi, ci) for mentionmi and candidates set ci is deﬁned as.
+(cid:88).
+ein∈ci\{eip}.
+max(0, −(s(mi, eip) − s(mi, ein)) + µ).
+here, eip ∈ ci is a positive candidate, ci \{eip} isthe set of negative candidates, and µ is a margin hy-per parameter.
+the positive and negative labels areobtained from the given labels li (see figure 3).
+inference.
+given mention mi and candidate setci, similar to training, we generate features foreach mention-candidate pair (mi, eij) in the featuregeneration step.
+we then pass them through thelearned lnn network to obtain ﬁnal scores foreach candidate entity in ci as shown in figure 3..5 evaluation.
+we ﬁrst evaluate our approach w.r.t performance& extensibility, interpretability and transferability.
+we also discuss the training and inference time.
+datasets.
+as shown in table 2, we consider threeshort-text qa datasets.
+lc-quad and qald-9are datasets comprising of questions (q) over db-pedia together with their corresponding sparqlqueries.
+we extract entities (e) from sparqlqueries and manually annotate mention spans.
+webqspel dataset (li et al., 2020) comprises of.
+both mention spans and links to the correct en-tity.
+since the target kg for webqsp is wiki-data, we translate each wikidata entity to its db-pedia counterpart using dbpedia mappings7.
+inaddition, we discard mentions that link to dbpe-dia concepts (e.g., heaviest player linkedto dbo:person) and mentions mi with emptyresult (i.e., ci = φ) or all not-link labels (i.e,∀lij ∈ li, lij = 0)8..baselines.
+we compare our approach to (1)blink (wu et al., 2020), the current state-of-the-art on both short-text and long-text el, (2) threebert-based models - (a) bert: both mentionand candidate entity embeddings are obtained viabertbase pre-trained encoder, similar to (gillicket al., 2019), (b) bertwiki: mention embeddingsare obtained from bertbase, while candidate entityis from pretrained wiki2vec (yamada et al., 2020),(c) box: bertwiki embeddings ﬁnetuned withquery2box embeddings (see section 4.1).
+in addi-tion to the aforementioned black-box neural mod-els, we also compare our approach to (3) two logis-tic regression models that use the same feature setas lnn-el: logisticregression without blinkand logisticregressionblin k with blink..furthermore, we use the following variants ofour approach: (4) ruleel: a baseline rule-basedel approach with manually deﬁned weights andthresholds, (5) logicel: a baseline approach builton ruleel where only the thresholds are learn-able, based on product t-norm (see section 3.2),(6) lnn-el: our core lnn-based method us-ing non-embedding features plus spacy, and (7)lnn-elens: an ensemble combining core lnn-el with additional features from existing el ap-proaches, namely blink and box (we considerbox, as it outperforms bert and bertwiki onall datasets).
+detailed rule templates are providedin appendix a.3..setup.
+all the baselines are trained for 30 epochs,except for blink which we use as a zero-shotapproach.
+for bert approaches, we use bertbaseas pretrained model.
+we used two nvidia v100gpus with 16gb memory each.
+we perform hyper-parameter search for margin µ and learning ratesin the range [0.6, 0.95], [10−5, 10−1] respectively..7http://mappings.dbpedia.org/8please check arxiv version for the datasets..781model.
+blinkbertbertwikibox.
+ruleellogicellnn-ellnn-elens.
+logisticregressionlogisticregressionblink.
+precision.
+lc-quadrecall.
+f1.
+precision.
+f1.
+precision.
+qald-9recall.
+webqspelrecall.
+87.0457.1466.9667.31.
+87.0490.50.
+79.8286.6887.7491.10.
+87.0463.0973.8574.32.
+86.8390.30.
+80.1086.4887.5490.90.
+87.0459.9770.2370.64.
+86.9390.40.
+79.9686.5887.6491.00.
+89.1455.4666.1668.91.
+84.7388.94.
+81.5583.0588.5291.38.
+89.1461.1172.9075.93.
+84.7388.94.
+75.1583.0588.5291.38.
+89.1458.1569.3772.25.
+84.7388.94.
+78.2283.0588.5291.38.
+92.1570.2681.1181.53.
+83.3989.33.
+76.5682.6085.1192.17.f1.
+92.1071.2082.1982.61.
+83.3689.31.
+75.5482.5985.0892.12.
+92.0572.1583.2983.72.
+83.3389.28.
+74.5582.5885.0592.08.table 3: performance comparison of various baselines with our neuro-symbolic variants..5.1 results.
+overall performance.
+as seen in table 3, amonglogic-based approaches, lnn-el outperformslogicel and ruleel, showing that parameterizedreal-valued lnn learning is more effective thanthe non-parameterized version with t-norm (log-icel) and the manually tuned ruleel.
+logisticregression models which also learn weights overfeatures achieve competitive performance to lnn-el models; however they lack the representationpower that lnn-el offer in the form of logicalrules comprising of conjunctions and disjunctions.
+in other words, lnn-el allows learning over aricher space of models that help in achieving betterperformance as observed in table 3..on the other hand, simple bert-based ap-proaches (bert, bertwiki, box) that are trainedon the qa datasets underperform the logic-basedapproaches, which incorporate ﬁner-grained fea-tures.
+blink (also a bert-based approach, buttrained on the entire wikipedia) is used as zero-shotapproach and achieves sota performance (whennot counting the lnn-el variants).
+the core lnn-el version is competitive with blink on lc-quad and qald-9, despite being a rule-basedapproach.
+furthermore, lnn-elens, which com-bines the core lnn-el with both blink and boxfeatures, easily beats blink on lc-quad andqald-9 and slightly on webqspel..table 4 shows the recall@k performance oflnn-el against the blink model.
+both lnn-el and lnn-elens have better recall@k perfor-mance against blink on lc-quad and qald-9datasets, however blink’s recall@k achieves aslightly better performance for webqspel dataset.
+extensibility.
+here, we inspect empirically howa multitude of el features coming from variousblack-box approaches can be combined in a princi-pled way with lnn-el, often leading to an overallbetter performance than the individual approaches.
+a detailed ablation study of the core lnn-el ver-.
+dataset.
+model.
+r@5.r@10.r@64.lc-quad.
+qald-9.
+webqspel.
+blinklnn-ellnn-elens.
+blinklnn-ellnn-elens.
+blinklnn-ellnn-elens.
+94.6993.6697.07.
+93.3992.7294.63.
+97.4093.5496.34.
+96.0194.3997.20.
+93.3995.9494.63.
+97.6495.1296.59.
+96.9297.5697.68.
+94.2998.0495.48.
+98.6196.5996.95.table 4: recall@k performance of lnn-el models.
+dataset.
+lnn-el lnn-el.
+lnn-el.
+lnn-el lnn-elens.
++blink +bertwiki.
++box.
+lc-quad 87.6488.52qald-985.08webqspel.
+90.2490.9692.32.
+88.2386.4191.70.
+89.0588.5291.44.
+91.0091.3892.12.table 5: f1 scores of lnn-el with additional featurescoming from various black-box el approaches..sion can be found in appendix a.2.
+as seen in ta-ble 5, approaches like bertwiki and box which inisolation underperform compared to lnn-el, helpboost the latter’s performance if they are includedas predicates.
+similarly, lnn-el which has com-parable performance to blink, can accommodatethe latter’s score to produce better performance(see lnn-el+blink).
+we also note that adding fea-tures is not a guarantee to improve performance,as lnn-elens (which includes both blink andbox) slightly underperforms lnn-el+blink onwebqspel.
+for such cases, the interpretability oflnn-el (discussed next) can help users select theright features based on their relative importance..interpretability.
+unlike black-box models, rule-based approaches provide the capability to inspectthe model, speciﬁcally on how the features impactperformance.
+this inspection can help in droppingor adjusting features that are detrimental.
+for in-stance, consider our case of lnn-el+blink andlnn-elens trained on webqspel dataset, wherewe observed that lnn-elens’s performance is in-ferior to lnn-el+blink even though the formermodel has more features.
+a human expert can ﬁnd.
+782∨.
+0.89.
+0.26.
+∨.
+1.01.
+0.42.blink.
+∨.
+blink.
+∨.
+ctx.
+0.22 0.72 0.19sim∧0.18 0.81.type.
+p romθ.
+∨.
+.
+.
+..0.16.
+0.69.levθ.
+boxθ.
+0.55 0.35 0.47.ctx.
+sim∧0.94 0.84.type.
+p romθ.
+0.10.
+∨.
+.
+.
+..levθ.
+figure 6: feature weights of two models lnn-elens(left) and lnn-el+blink (right) on webqspel.
+lc-quad.
+qald-9 webqspel.
+train.
+lc-quadqald-9webqspel.
+87.6485.5880.95.test.
+86.4188.5287.25.
+78.9083.0685.08.table 6: f1 scores of lnn-el in transfer settings..insights into this behavior by looking at the fea-ture weights in each model.
+in figure 6 (left), thedisjunction tree with the box feature is given alow weight of 0.26, thus discounting some of theother useful features in the same tree.
+removalof the box feature leads to a re-weighting of thefeatures in the model; the modiﬁed disjunction tree(figure 6 (left)) has now a weight of 0.42. such vi-sualization can help the rule designer to judiciouslyselect features to combine towards building a per-formant model..transferability.
+to study the transferability as-pect, we train lnn-el on one dataset and evaluatethe model on the other two, without any ﬁnetun-ing.
+we use the core lnn-el variant for this,but similar properties hold for the other variants.
+table 6 shows f1 scores on different train-test con-ﬁgurations, with diagonal (underlined numbers)denoting the f1 score when trained and tested onthe same dataset.
+we observe that lnn-el trans-fers reasonably well, even in cases where train-ing is done on a very small dataset.
+for exam-ple, when we transfer from qald-9 (with onlya few hundred questions to train) to webqspel,we obtain an f1-score of 83.06 which is within 2percentage points of the f1-score when trained di-rectly on webqspel.
+we remark that the zero-shotblink by design has very good transferability andachieves f1 scores of 87.04, 89.14, 92.10 on lc-quad, qald-9, webqspel respectively.
+how-ever, blink is trained on the entire wikipedia,while lnn-el needs much less data to achievereasonable transfer performance..candidate & featuregeneration.
+trainingper epoch.
+inferenceper epoch.
+qald-9lc-quadwebqspel.
+26.2133.0519.80.
+0.0100.0100.009.
+0.0090.0130.012.table 7: time per question for candidate & feature gen-eration, along with train and inference time per ques-tion for lnn-elens.
+all numbers are in seconds..runtime analysis.
+we study the efﬁciency oflnn-elens across three aspects: 1) candidate &feature generation, 2) training, and 3) inference.
+candidate & feature generation involve using thedbpedia lookup api to obtain candidates for eachmention, pruning non-entity candidates (i.e., cate-gories, disambiguation links, etc.
+), obtaining anymissing descriptions for candidates using sparqlendpoint, and ﬁnally generating feature vectorsfor each mention-candidate pair using the featurefunctions described in section 4.1. the generatedfeatures for the train and test data are then used,respectively, to train and test the lnn-el models.
+the number of parameters in an lnn-el modelis linearly proportional to the combined number ofdisjunctions and conjunctions, which typically isin the order of few 10s.
+for example, lnn-elenscomprises of 72 parameters, which is several or-ders of magnitude smaller than in neural black boxmodels such as blink.
+table 7 provides the time(in seconds) taken per question for candidate & fea-ture generation, as well as 5-run average trainingand inference time per epoch..6 conclusions.
+we introduced lnn-el, a neuro-symbolic ap-proach for entity linking on short text.
+our ap-proach complements human-given rule templatesthrough neural learning and achieves competitiveperformance against sota black-box neural models,while exhibiting interpretability and transferabilitywithout requiring a large amount of labeled data.
+while lnn-el provides an extensible frameworkwhere one can easily add and test new features inexisting rule templates, currently this is done manu-ally.
+a future direction is to automatically learn therules with the optimal combinations of features..acknowledgements.
+we thank ibrahim abdelaziz, pavan kapanipathi,srinivas ravishankar, berthold reinwald, salimroukos and anonymous reviewers for their valu-able inputs and feedback..783references.
+arvind arasu, michaela götz, and raghav kaushik.
+2010. on active learning of record matching pack-in proceedings of the 2010 acm sigmodages.
+international conference on management of data,sigmod ’10, page 783–794, new york, ny, usa.
+association for computing machinery..stephen h. bach, matthias broecheler, bert huang,and lise getoor.
+2017. hinge-loss markov randomﬁelds and probabilistic soft logic.
+j. mach.
+learn.
+res., 18(1):3846–3912..razvan bunescu and marius pasca.
+2006. using en-cyclopedic knowledge for named entity disambigua-tion.
+in proceesings of the 11th conference of theeuropean chapter of the association for computa-tional linguistics (eacl-06), pages 9–16, trento,italy..s. chaudhuri, bee-chung chen, v. ganti,.
+andr. kaushik.
+2007. example-driven design of efﬁ-cient record matching queries.
+in vldb..silviu cucerzan.
+2007. large-scale named entity dis-ambiguation based on wikipedia data.
+in proceed-ings of the 2007 joint conference on empiricalmethods in natural language processing and com-putational natural language learning (emnlp-conll), pages 708–716, prague, czech republic.
+association for computational linguistics..marina danilevsky, kun qian, ranit aharonov, yan-nis katsis, ban kawas, and prithviraj sen. 2020. asurvey of the state of explainable ai for natural lan-in proceedings of the 1st con-guage processing.
+ference of the asia-paciﬁc chapter of the associa-tion for computational linguistics and the 10th in-ternational joint conference on natural languageprocessing, pages 447–459, suzhou, china.
+associ-ation for computational linguistics..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training of deepbidirectional transformers for language understand-ing..lise getoor and ben taskar.
+2007. introduction to sta-tistical relational learning (adaptive computationand machine learning).
+the mit press..daniel gillick, sayali kulkarni, larry lansing,alessandro presta, jason baldridge, eugene ie, anddiego garcia-olano.
+2019. learning dense repre-sentations for entity retrieval..riccardo guidotti, anna monreale, salvatore ruggieri,franco turini, fosca giannotti, and dino pedreschi.
+2018. a survey of methods for explaining black boxmodels.
+acm computing surveys..mauricio hernández, georgia koutrika, rajasekar kr-ishnamurthy, lucian popa, and ryan wisnesky.
+2013. hil: a high-level scripting language for en-tity integration.
+in proceedings of the 16th interna-tional conference on extending database technol-ogy, edbt ’13, page 549–560, new york, ny, usa.
+association for computing machinery..johannes hoffart, stephan seufert, dat ba nguyen,martin theobald, and gerhard weikum.
+2012. kore:keyphrase overlap relatedness for entity disam-in proceedings of the 21st acm inter-biguation.
+national conference on information and knowledgemanagement, cikm ’12, page 545–554, new york,ny, usa.
+association for computing machinery..johannes hoffart, mohamed amir yosef, ilaria bor-dino, hagen fürstenau, manfred pinkal, marc span-iol, bilyana taneva, stefan thater, and gerhardweikum.
+2011. robust disambiguation of named en-tities in text.
+in proceedings of the 2011 conferenceon empirical methods in natural language process-ing, pages 782–792, edinburgh, scotland, uk.
+asso-ciation for computational linguistics..pavan kapanipathi, ibrahim abdelaziz, srinivas rav-ishankar, salim roukos, alexander gray, ramonastudillo, maria chang, cristina cornelio, saswatidana, achille fokoue, et al.
+2021. leveraging ab-stract meaning representation for knowledge base-question answering.
+findings of the association forcomputational linguistics: acl 2021..f. esteva and l. godo.
+2001. monoidal t-norm basedlogic: towards a logic for left-continuous t-norms.
+fuzzy sets and systems..belinda z. li, sewon min, srinivasan iyer, yasharmehdad, and wen-tau yih.
+2020. efﬁcient one-passend-to-end entity linking for questions.
+in emnlp..richard evans and edward grefenstette.
+2018. learn-.
+ing explanatory rules from noisy data.
+jair..paolo ferragina and ugo scaiella.
+2012. fast and ac-curate annotation of short texts with wikipedia pages.
+ieee softw., 29(1):70–75..octavian-eugen ganea and thomas hofmann.
+2017.deep joint entity disambiguation with local neuralattention.
+in proceedings of the 2017 conference onempirical methods in natural language processing,pages 2619–2629, copenhagen, denmark.
+associa-tion for computational linguistics..lajanugen logeswaran, ming-wei chang, kenton lee,kristina toutanova, jacob devlin, and honglak lee.
+2019. zero-shot entity linking by reading entity de-scriptions.
+in proceedings of the 57th annual meet-ing of the association for computational linguistics,pages 3449–3460, florence, italy.
+association forcomputational linguistics..pablo n mendes, max jakob, andrés garcía-silva, andchristian bizer.
+2011. dbpedia spotlight: sheddingin proceedings oflight on the web of documents.
+the 7th international conference on semantic sys-tems, pages 1–8..784avirup sil, ernest cronin, penghai nie, yinfei yang,ana-maria popescu, and alexander yates.
+2012.in pro-linking named entities to any database.
+ceedings of the 2012 joint conference on empiricalmethods in natural language processing and com-putational natural language learning, pages 116–127, jeju island, korea.
+association for computa-tional linguistics..parag singla and pedro domingos.
+2006. entity resolu-tion with markov logic.
+in proceedings of the sixthinternational conference on data mining, icdm’06, page 572–582, usa.
+ieee computer society..fabian m suchanek, gjergji kasneci, and gerhardweikum.
+2007. yago: a core of semantic knowledge.
+in proceedings of the 16th international conferenceon world wide web, pages 697–706..priyansh trivedi, gaurav maheshwari, mohnishdubey, and jens lehmann.
+2017. lc-quad: a cor-pus for complex question answering over knowledgegraphs.
+in the semantic web – iswc 2017, pages210–218, cham.
+springer international publishing..ricardo usbeck,.
+ria hari gusmita,.
+axel-saleem.
+9th challenge on question answeringin.
+cyrille ngonga ngomo,2018.over linked data (qald-9) (invited paper).
+semdeep/nliwod@iswc..and m..denny vrandeˇci´c and markus krötzsch.
+2014. wiki-data: a free collaborative knowledgebase.
+commun.
+acm, 57(10):78–85..jiannan wang, tim kraska, michael j. franklin,and jianhua feng.
+2012.crowder: crowd-sourcing entity resolution.
+proc.
+vldb endow.,5(11):1483–1494..ledell wu, fabio petroni, martin josifoski, sebastianriedel, and luke zettlemoyer.
+2020. zero-shot en-tity linking with dense entity retrieval.
+in emnlp..ikuya yamada, akari asai, jin sakuma, hiroyukishindo, hideaki takeda, yoshiyasu takefuji, andyuji matsumoto.
+2020. wikipedia2vec: an efﬁ-cient toolkit for learning and visualizing the embed-indings of words and entities from wikipedia.
+proceedings of the 2020 conference on empiricalmethods in natural language processing: systemdemonstrations, pages 23–30.
+association for com-putational linguistics..fan yang, zhilin yang, and william w cohen.
+2017.differentiable learning of logical rules for knowl-edge base reasoning.
+in neurips..rada mihalcea and andras csomai.
+2007. wikify!
+inlinking documents to encyclopedic knowledge.
+proceedings of the sixteenth acm conference onconference on information and knowledge manage-ment, cikm ’07, page 233–242, new york, ny,usa.
+association for computing machinery..stephen muggleton.
+1996. learning from positive data..in worshop on ilp..d. nguyen, johannes hoffart, m. theobald, andg. weikum.
+2014. aida-light: high-throughputnamed-entity disambiguation.
+in ldow..jeffrey pennington, richard socher, and christopher d.manning.
+2014. glove: global vectors for word rep-resentation.
+in empirical methods in natural lan-guage processing (emnlp), pages 1532–1543..j. pujara and l. getoor.
+2016. generic statistical rela-tional entity resolution in knowledge graphs.
+arxiv,abs/1607.00992..lev ratinov, dan roth, doug downey, and mike an-derson.
+2011. local and global algorithms for dis-in proceedings of theambiguation to wikipedia.
+49th annual meeting of the association for com-putational linguistics: human language technolo-gies, pages 1375–1384, portland, oregon, usa.
+as-sociation for computational linguistics..hongyu ren, weihua hu, and jure leskovec.
+2020.query2box: reasoning over knowledge graphs inin 8th inter-vector space using box embeddings.
+national conference on learning representations,iclr 2020, addis ababa, ethiopia, april 26-30,2020. openreview.net..matthew.
+richardson.
+domingos.
+and2006. markov logic networks.
+mach.
+learn.,62(1–2):107–136..pedro.
+ryan riegel, alexander gray, francois luus, naweedkhan, ndivhuwo makondo, ismail yunus akhal-waya, haifeng qian, ronald fagin, francisco bara-hona, udit sharma, shajith ikbal, hima karanam,sumit neelam, ankita likhyani, and santosh srivas-tava.
+2020. logical neural networks.
+arxiv..ahmad sakor, isaiah onando mulang’, kuldeep singh,saeedeh shekarpour, maria esther vidal,jenslehmann, and sören auer.
+2019. old is gold: lin-guistic driven approach for entity and relation link-ing of short text.
+in proceedings of the 2019 con-ference of the north american chapter of the asso-ciation for computational linguistics: human lan-guage technologies, volume 1 (long and short pa-pers), pages 2336–2346, minneapolis, minnesota.
+association for computational linguistics..w. shen, j. wang, and j. han.
+2015. entity linkingwith a knowledge base: issues, techniques, and so-lutions.
+ieee transactions on knowledge and dataengineering, 27(2):443–460..785a appendix.
+a.1 t-norm and t-conorm.
+while linear classiﬁers, decision lists/trees mayalso be considered interpretable, rules expressedin ﬁrst-order logic (fol) form a much more pow-erful, closed language that offer semantics clearenough for human interpretation and a larger rangeof operators facilitating the expression of richermodels.
+to learn these rules, neuro-symbolic aisubstitutes conjunctions (disjunctions) with differ-entiable t-norms (t-conorms) (esteva and godo,2001).
+however, since it does not have any learn-able parameters, this behavior cannot be adjusted,which limits how well it can model the data.
+forexample, while linear classiﬁers such as logisticregression can only express a (weighted) sum offeatures which is similar to logic’s disjunction (∨)operator, logic also contains other operators includ-ing, but not limited to, conjunction (∧), and nega-tion (¬)..as opposed to inductive logic programming(muggleton, 1996) and statistical relational learn-ing (getoor and taskar, 2007), neuro-symbolic aiutilizes neural networks to learn rules.
+towardsachieving this, the ﬁrst challenge to overcome isthat classical boolean logic is non-differentiableand thus, not amenable to gradient-based opti-mization (e.g., backpropagation).
+to address this,neuro-symbolic ai substitutes conjunctions (dis-junctions) with differentiable t-norms (t-conorms)(esteva and godo, 2001).
+for example, prod-uct t-norm, used in multiple neuro-symbolic rule-learners (evans and grefenstette, 2018; yang et al.,2017), is given by x ∧ y ≡ xy, where x, y ∈ [0, 1]denote input features in real-valued logic.
+productt-norm agrees with boolean conjunction at the ex-tremities, i.e., when x, y are set to 0 (false) or1 (true).
+however, when x, y ∈ [0, 1] \ {0, 1},its behavior is governed by the product function.
+more importantly, since it does not have any learn-able parameters, this behavior cannot be adjusted,which limits how well it can model the data..a.2 ablation study.
+to understand the roles of eac rule in lnn-el, wealso conduct ablation study on the largest bench-mark dataset lc-quad (see table 8).
+we observethat context is the most performant rule alone.
+although purename rule is behind the other twoalone, purename + context improves the perfor-mance of context by 1%.
+meanwhile, context.
++ type only improves context’s performance by0.05%.
+interestingly, the combination of three rulesperforms slightly worse than purename + contextby 0.35%.
+these results show that type rule is lessimportant among the three rules.
+to be consistentwith the ruleel system, we apply “purename +context + type” setting for lnn-el in our experi-ments..dataset.
+precision recall.
+f1.
+purename+ context+ type.
++ type.
+context+ type.
+type.
+76.0388.0987.7481.46.
+87.0487.09.
+87.04.
+75.8387.8987.5481.26.
+86.8386.88.
+75.9387.9987.6481.36.
+86.9386.98.
+86.83.
+86.93.table 8: lnn-el ablation analysis on lc-quad.
+additionally, we also show the transferability oflr in table 9. this must be compared with the cor-responding lnn-el results in the earlier table 6.in particular, we observe that lnn-el outperformslr in 4 out of 6 transferability tests, demonstratingthat lnn-el has superior transferability..a.3 lnn-el rules.
+in our experiments, we explore the following mod-ules, implemented in pytorch.
+name rule:.
+rname ← [fjacc(mi, eij) > θ1 ∨ flev(mi, eij) > θ2.
+∨ fjw(mi, eij) > θ3 ∨ fspacy(mi, eij) > θ4]∧ fprom(mi, eij).
+context rule:.
+rctx ← [fjacc(mi, eij) > θ1 ∨ flev(mi, eij) > θ2.
+∨ fjw(mi, eij) > θ3 ∨ fspacy(mi, eij) > θ4]∧ fctx(mi, eij) > θ5∧ fprom(mi, eij).
+type rule:.
+blink rule:.
+rtype ← [fjacc(mi, eij) > θ1 ∨ flev(mi, eij) > θ2.
+∨ fjw(mi, eij) > θ3 ∨ fspacy(mi, eij) > θ4]∧ ftype(mi, eij) > θ5∧ fprom(mi, eij).
+rblink ← [fjacc(mi, eij) > θ1 ∨ flev(mi, eij) > θ2.
+∨ fjw(mi, eij) > θ3 ∨ fspacy(mi, eij) > θ4]∧ fblink(mi, eij).
+786lc-quad.
+qald-9 webqspel.
+train.
+lc-quadqald-9webqspel.
+86.9387.1483.42.test.
+84.7384.7386.83.
+76.7280.0383.59.table 9: f1 scores of lr in transfer settings..box rule:.
+bert rule:.
+rbox ← [fjacc(mi, eij) > θ1 ∨ flev(mi, eij) > θ2.
+∨ fjw(mi, eij) > θ3 ∨ fspacy(mi, eij) > θ4]∨ fbox(mi, eij) > θ5.
+rbert ← [fjacc(mi, eij) > θ1 ∨ flev(mi, eij) > θ2.
+∨ fjw(mi, eij) > θ3 ∨ fspacy(mi, eij) > θ4]∨ fbert(mi, eij) > θ5.
+lnn-el:.
+lnn-el+blink:.
+lnn-elens:.
+rln n −el ←rname ∨ rctx ∨ rtype.
+rln n −el+blink ←rln n −el ∨ rblink.
+rln n −elens ←rln n −el ∨ rblink ∨ rbox.
+787

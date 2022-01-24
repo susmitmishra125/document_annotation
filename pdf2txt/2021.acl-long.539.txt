@@ -1,0 +1,648 @@
+dissecting generation modes for abstractive summarization models viaablation and attribution.
+jiacheng xu and greg durrettdepartment of computer sciencethe university of texas at austin{jcxu,gdurrett}@cs.utexas.edu.
+abstract.
+despite the prominence of neural abstractivesummarization models, we know little abouthow they actually form summaries and how tounderstand where their decisions come from.
+we propose a two-step method to interpretsummarization model decisions.
+we ﬁrst an-alyze the model’s behavior by ablating the fullmodel to categorize each decoder decision intoone of several generation modes: roughly, isthe model behaving like a language model, isit relying heavily on the input, or is it some-where in between?
+after isolating decisionsthat do depend on the input, we explore inter-preting these decisions using several differentattribution methods.
+we compare these tech-niques based on their ability to select contentand reconstruct the model’s predicted tokenfrom perturbations of the input, thus revealingwhether highlighted attributions are truly im-portant for the generation of the next token.
+while this machinery can be broadly usefuleven beyond summarization, we speciﬁcallydemonstrate its capability to identify phrasesthe summarization model has memorized anddetermine where in the training pipeline thismemorization happened, as well as study com-plex generation phenomena like sentence fu-sion on a per-instance basis..1.introduction.
+transformer-based neural summarization models(liu and lapata, 2019; stiennon et al., 2020; xuet al., 2020b; desai et al., 2020), especially pre-trained abstractive models like bart (lewis et al.,2020) and pegasus (zhang et al., 2020), havemade great strides in recent years.
+these modelsdemonstrate exciting new capabilities in terms ofabstraction, but little is known about how thesemodels work.
+in particular, do token generationdecisions leverage the source text, and if so, whichparts?
+or do these decisions arise based primar-ily on knowledge from the language model (jiang.
+et al., 2020; carlini et al., 2020), learned duringpre-training or ﬁne-tuning?
+having tools to ana-lyze these models is crucial to identifying and fore-stalling problems in generation, such as toxicity(gehman et al., 2020) or factual errors (kryscinskiet al., 2020; goyal and durrett, 2020, 2021)..although interpreting classiﬁcation models fornlp has been widely studied from perspectiveslike feature attribution (ribeiro et al., 2016; sun-dararajan et al., 2017) and inﬂuence functions (kohand liang, 2017; han et al., 2020), summarizationspeciﬁcally introduces some additional elementsthat make these techniques hard to apply directly.
+first, summarization models make sequential de-cisions from a very large state space.
+second,encoder-decoder models have a special structure,featuring a complex interaction of decoder-sideand encoder-side computation to select the nextword.
+third, pre-trained lms blur the distinctionbetween relying on implicit prior knowledge orexplicit instance-dependent input..this paper aims to more fully interpret the step-wise prediction decisions of neural abstractive sum-marization models.1 first, we roughly bucket gen-eration decisions into one of several modes of gen-eration.
+after conﬁrming that the models we useare robust to seeing partial inputs, we can probe themodel by predicting next words with various modelablations: a basic language model with no input(lm∅), a summarization model with no input (s∅),with part of the document as input (spart), and withthe full document as input (sfull).
+these ablationstell us when the decision is context-independent(generated in an lm-like way), when it is heav-ily context-dependent (generated from the context),and more.
+we map these regions in figure 2 andcan use these maps to coarsely analyze model be-havior.
+for example, 17.6% of the decisions on.
+1code and visualization are available at https://.
+github.com/jiacheng-xu/sum-interpret.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages6925–6940august1–6,2021.©2021associationforcomputationallinguistics6925figure 1: our two-stage ablation-attribution framework.
+first, we compare a decoder-only language model (notﬁne-tuned on summarization task, and not conditioned on the input article) and a full summarization model.
+theyare colored in gray and orange respectively.
+the the higher the difference, the more heavily model depends on theinput context.
+for those context-dependent decisions, we conduct content attribution to ﬁnd the relevant supportingcontent with methods like integrated gradient or occlusion..xsum are in the lower-left corner (lm-like), whichmeans they do not rely much on the input context..second, we focus on more ﬁne-grained attribu-tion of decisions that arise when the model doesrely heavily on the source document.
+we care-fully examine interpretations based on several priortechniques, including occlusion (zeiler and fergus,2014), attention, integrated gradients (sundarara-jan et al., 2017), and input gradients (hechtlinger,2016).
+in order to evaluate and compare these meth-ods, we propose a comprehensive evaluation basedon presenting counterfactual, partial inputs to quan-titatively assess these models’ performance withdifferent subsets of the input data..our two-stage analysis framework allows us to(1) understand how each individual decision de-pends on context and prior knowledge (sec 3), (2)ﬁnd suspicious cases of memorization and bias(sec 4), (3) locate the source evidence for contextdependent generation (sec 5).
+the framework canbe used to understand more complex decisions likesentence fusion (sec 6)..2 background & setup.
+a seq2seq neural abstractive model ﬁrst encodesan input document with m sentences (s1, · · · , sm)and n tokens (w1, w2, · · · , wn), then generates asequence of tokens (y1, · · · , yt ) as the summary.
+at each time step t in the generation phase, themodel encodes the input document and the decodedsummary preﬁx and predicts the distribution overtokens as p(yt | w1, w2, .
+.
+.
+, wm, y<t)..2.1 target models & datasets.
+we investigate the english-language cnn/dm(hermann et al., 2015) and xsum (narayan et al.,2018) datasets, which are commonly used to ﬁnetune pre-trained language models like bart, pe-gasus and t5.
+as shown in past work (narayanet al., 2018; chen et al., 2020b; xu et al., 2020a),xsum has signiﬁcantly different properties fromcnn/dm, so these datasets will show a range ofmodel behaviors.
+we will primarily use the devel-opment sets for our analysis..we focus on bart (lewis et al., 2020), a state-of-the-art pre-trained model for language modelingand text summarization.
+speciﬁcally, we adopt‘bart-large’ as the language model mlm, ‘bart-large-xsum’ as the summarization model msum forxsum, and ‘bart-large-cnn’ for cnn/dm, madeavailable by wolf et al.
+(2019).
+bart featuresseparate lm and summarization model sharing thesame subword tokenization method.2.
+our approach focuses on teasing apart these dif-ferent modes of decisions.
+we ﬁrst run the fullmodel to get the predicted summary (y1, · · · , yt ).
+we then analyze the distribution placed by the fullmodel sfull to ﬁgure out what contributes towardsthe generation of the next token..2.2 overview of ablation and attribution.
+figure 1 shows our framework with an exampleof our analysis of four generation decisions.
+in.
+2our analysis can generalize to other pre-trained models,but past work has shown bart and pegasus to be roughlysimilar in terms of behavior (xu et al., 2020a), so we do notfocus on this here..6926 conclusion: these doc tokens impacted  prediction the most (according to int.
+grad.
+)conclusion: higher difference means higher dependence on contextablationmayoralcameron0.010.010.560.99diﬀ between lm and full modelforkhan0.960.990.990.99input article speaking at a rally for tory candidate zac goldsmith, the prime minister warned about the dangers of a labour victory for the capital's economy.
+mr goldsmith said his labour rival was “mr corbyn's man” in city hall.
+but mr khan said he was “no patsy” to mr corbyn and  […]predicted summary david cameron has urged londoners to vote for the conservatives in the mayoral election, saying labour's sadiq khan is “jeremy corbyn’s man”.bartcompare decoder-only lm (          ) with full model (          )attributionwhen context matters, use attribution to ﬁnd the content supporting the decisionlm-likecontextual… the prime minister warned …davidcameronencoderdecodernext wordbartconﬁg.
+sfull(cid:51)fullmodel parameters mlm msum msum msum.
+decoder preﬁxinput document.
+spart(cid:51)partial.
+lm∅(cid:51)(cid:55).
+s∅(cid:51)(cid:55).
+table 1: model conﬁgurations with different amountof input document and back-end model.
+mlm andmsum are the bart language model and summariza-tion model respectively.
+s∅ is the summarization modelwithout any source document (encoder) input..the ablation stage, we compare the predictions ofdifferent model and input conﬁgurations.
+the goalof this stage is to coarsely determine the mode ofgeneration.
+here, for and khan are generated in anlm-like way: the model already has a strong priorthat sadiq should be sadiq khan and the source ar-ticle has little impact on this decision.
+cameron, bycontrast, does require the source in order to be gen-erated.
+and mayoral is a complex case, where themodel is not strictly copying this word from any-where in the source, but instead using a nebulouscombination of information to generate it.
+in the at-tribution stage, we interpret such decisions whichrequire more context using a more ﬁne-grained ap-proach.
+given the predicted preﬁx (like david),target prediction (like cameron), and the model,we use attribution techniques like integrated gradi-ents (sundararajan et al., 2017) or lime (ribeiroet al., 2016) to track the input which contributes tothis prediction..2.3 ablation models and assumptions.
+the conﬁgurations we use are listed in table 1 anddeﬁned as follows:.
+lm∅is a pre-trained language model only takingthe decoded summary preﬁx as input.
+we use thismodel to estimate what a pure language model willpredict given the preﬁx.
+we denote the predictiondistribution as plm∅= p (yt | y<t; mlm)..s∅is the same bart summarization model assfull, but without the input document as the input.
+that is, it uses the same parameters as the fullmodel, but with no input document fed in.
+weuse the prediction of this model to estimate howstrong an effect the in-domain training data has, butstill treating the model as a decoder-only languagemodel.
+it is denoted as p∅ = p (yt | y<t; msum).
+figure 1 shows how this can effectively identifycases like khan that surprisingly do not rely on theinput document..spartis a further step closer to the full model: thisis the bart summarization model conditioned onthe decoder preﬁx and part of the input document,denoted as ppart = p (yt | y<t, {si}; msum) where{wi} is a subset of tokens of the input document.
+the selected content could be a continuous span,or a sentence, or a concatenation of several spansor sentences..although msum is designed and trained to condi-tion on input document, we ﬁnd that the model alsoworks well with no input, little input and incom-plete sentences.
+as we will show later, there aremany cases that this scheme successfully explains;we formalize our assumption as follows:.
+if the model executed on partialassumption 1input nearly reproduces the next word distributionof the full model, then we view that partial contextas a sufﬁcient (but perhaps not necessary) input toexplain the model’s behavior..here we deﬁne partial input as either just the de-coded summary so far or the summary and partialcontext.
+in practice, we see two things.
+first, whenconsidering just the decoder context (i.e., behavingas an lm), the partial model may reproduce thefull model’s behavior (e.g., khan in figure 1).
+wedo not focus on explaining these cases in furtherdetail.
+while conceivably the actual conditionalmodel might internally be doing something differ-ent (a risk noted by rudin (2019)), this proves theexistence of a decoder-only proxy model that repro-duces the full model’s results, which is a criterionused in past work (li et al., 2020).
+second, whenconsidering partial inputs, the model frequently re-quires one or two speciﬁc sentences to reproducethe full model’s behavior, suggesting that the givencontexts are both necessary and sufﬁcient..because these analyses involve using the modelon data signiﬁcantly different than that which itis trained on, we want another way to quantifythe importance of a word, span, or sentence.
+thisbrings us to our second assumption:.
+in order to say that a span of theassumption 2input or decoder context is important to the model’sprediction, it should be the case that this span isdemonstrated to be important in counterfactualsettings.
+that is, modiﬁed inputs to the model thatinclude this span should yield closer predictionsthan those that don’t..this criterion depends on the set of counterfac-tuals that we use.
+rather than just word removal(ribeiro et al., 2016), we will use a more compre-.
+6927hensive set of counterfactuals (miller, 2019; jacoviand goldberg, 2020) to quantify the importance ofinput tokens.
+we describe this more in section 5..2.4 distance metric.
+throughout this work, we rely on measuring thedistance between distributions over tokens.
+al-though kl divergence is a popular choice, wefound it to be very unstable given the large vocabu-lary size, and two distributions that are completelydifferent would have very large values of kl.
+weinstead use the l1 distance between the two distri-butions: d(p, q) = (cid:80)i |pi − qj|.
+this is similarto using the earth mover’s distance (rubner et al.,1998) over these two discrete distributions, with anidentity transportation ﬂow since the distributionsare deﬁned over the same set of tokens..3 ablation: mapping model behavior.
+based on assumption 1, we can take a ﬁrst step to-wards understanding these models based on the par-tial models described in section 2.3. previous work(see et al., 2017; song et al., 2020) has studiedmodel behavior based on externally-visible proper-ties of the model’s generation, such as identifyingnovel words, differentiating copy and generation,and prediction conﬁdence, which provides someinsight about model’s behavior (xu et al., 2020a).
+however, these focus more on shallow compari-son of the input document, the generated summary,and the reference summary, and do not focus asstrongly on the model..we propose a new way of mapping the predic-tion space, with maps3 for xsum and cnn/dmshown in figure 2. each point in the map is a sin-gle subword token being generated by the decoderon the development set at inference time; that is,each point corresponds to a single invocation ofthe model.
+this analysis does not depend on thereference summary at all..the x-axis of the map shows the distance be-tween lm∅ and sfull, using the metric deﬁned insection 2.4 which ranges from 0 to 2. the y-axisshows the distance between s∅ and sfull.
+otherchoices of partial models for the axes are possi-ble (or more axes), but we believe these show twoimportant factors.
+the x-axis captures how muchthe generic pre-trained language model agreeswith the full model’s predictions.
+the y-axis cap-.
+3while our axes are very different here, our mapping con-.
+cept loosely follows that of swayamdipta et al.
+(2020)..figure 2: map of model behavior on xsum (top) andcnn/dm (bottom).
+the x-axis and y-axis show thedistance between lm∅ and sfull, and distance betweens∅ and sfull.
+the regions characterize different genera-tion modes, deﬁned in section 3..tures how much the decoder-only summariza-tion model agrees with the full model’s predic-tions.
+the histogram on the sides of the map showcounts along with each vertical or horizontal slice..modes of decisions we break these maps into afew coarse regions based on the axis values.
+welist the coordinates of the bottom left corner andthe upper right corner.
+these values were chosenby inspection and the precise boundaries have littleeffect on our analysis, as many of the decisions fallinto the corners or along sides..lm ([0, 0], [0.5, 0.5]) contains the cases where lm∅and s∅ both agree with sfull.
+these decisions areeasily made using only decoder information, evenwithout training or knowledge of the input docu-ment.
+these are cases that follow from the con-straints of language models, including functionwords, common entities, or idioms..69280.00.51.01.52.0d(lm,sfull)0.000.250.500.751.001.251.501.752.00d(s,sfull)contextptftlmct-hd0.00.51.01.52.0d(lm,sfull)0.000.250.500.751.001.251.501.752.00d(s,sfull)contextptftlmct-hdctx ([0.5, 0.5], [2, 2]) contains the cases where theinput is needed to make the prediction: neitherdecoder-only model can model these decisions..ft ([1.5, 0], [2, 0.5]) captures cases where the ﬁne-tuned decoder-only model is a close match but thepre-trained model is not.
+this happens more oftenon xsum and reﬂects memorization of trainingsummaries, as we discuss later..pt ([0, 1.5], [0.5, 2]) is the least intuitive case, wherelm∅ agrees with sfull but s∅ does not; that is, ﬁne-tuning a decoder-only model causes it to work lesswell.
+this happens more often on cnn/dm andreﬂects memorization of data in the pre-trainingcorpus..3.1 coloring the map with context probing.
+while the map highlights some useful trends, thereare many examples that do rely heavily on the con-text that we would like to further analyze.
+someexamples depend on the context in a sophisticatedway, but other tokens like parts of named entitiesor noun phrases are simply copied from the sourcearticle in a simple way.
+highlighting this contrast,we additionally subdivide the cases by how theydepend on the context..we conduct a sentence-level presence probingexperiment to further characterize the generationdecisions.
+for a document with m sentences, werun the spart model conditioned on each of the sen-tences in isolation.
+we can obtain a sequence ofscalars psent = (ppart(si); i ∈ [1, m]).
+we de-ﬁne ctx-hd (“context-hard”) cases as ones wheremax(psent) is low; that is, where no single sen-tence can yield the token, as in the case of sentencefusion.
+these also reﬂect cases of high entropyfor sfull, where any perturbation to the input maycause a big distribution shift.
+the ﬁrst, second andthird quartile of max(psent) is [0.69, 0.96, 1.0] and[0.95, 1.0, 1.0] on xsum and on cnn/dm..3.2 region count & pos tags.
+to roughly characterize the words generated in dif-ferent regions of the map, in table 2, we show thepercentage of examples falling to each region andthe top 3 pos tags for each region on the xsummap.
+from the frequency of these categories, wecan tell more than two-thirds of the decisions be-long to the context category.
+17.6% of cases are inlm, the second-largest category.
+in the lm region,adp and det account for nearly half of the datapoints, conﬁrming that these are largely function.
+cat.
+freq(%).
+top 3 pos tags w/ freq(%).
+lm.
+17.6%.
+ctx.
+69.6%.
+pt.
+ft.2.5%.
+2.1%.
+all.
+100.0%.
+adp28.6%noun20.3%propn37.0%aux31.6%.
+noun18.9%.
+det21.1%verb15.9%noun13.0%noun23.7%.
+noun13.5%propn15.6%adp13.0%propn15.8%.
+propn14.3%.
+adp13.9%.
+table 2: percentage of examples falling into each re-gion and the top pos tags for each regions in the xsummap..words.
+nouns are still prevalent, accounting for13.5% of the category.
+after observing the data,we found that these points represent commonsenseknowledge or common nouns or entities, like “na-tions” following “united” or “obama” following“barack” where the model generates these with-out relying on the input.
+around 8% of cases fallinto gaps between these categories.
+only 2.5%and 2.1% of the generations fall into the pt andft, respectively.
+these are small but signiﬁcantcases, as they clearly show the biases from the pre-training corpus and the ﬁne-tuning corpus.
+we nowdescribe the effects we observe here..4 bias from training data.
+one beneﬁt of mapping the predictions is to detectpredictions that are suspiciously likely given onelanguage model but not the other, speciﬁcally thosein the pt and ft regions.
+cnn/dm has more casesfalling into pt than xsum so we focus on cnn/dnfor pt and xsum for ft..pt: bias from the pretraining corpus the datapoints falling into the pt area are those where lm∅prediction is similar to sfull prediction but the s∅prediction is very different from sfull.
+we present aset of representative examples from the pt regionof the cnn/dm map in table 3. for the ﬁrst exam-ple, match is assigned high probability by lm∅ andsfull, but not by the no-input summarization mod-els.
+the cases in this table exhibit a suspiciouslyhigh probability assigned to the correct answer inthe base lm: its conﬁdence about kylie jennervs. kyle min(ogue) is uncalibrated with what the“true” probabilities of these seem likely to be to ourhuman eyes..one explanation which we investigate is whetherthe validation and test sets of benchmark datasets.
+6929preﬁx target.
+relevant context.
+danny welbeck was named manof the match.
+gail scott was desperate to emu-late kylie jennersome 1,200 of the reagan’s crewwill be executing what the navy.
+mason was drafted into the eng-land squad following the with-drawal of adam lallana.
+[...] , the booming pa system kicked in and pro-claimed that danny welbeck was england’s manof the match.
+gail scott was desperate to emulate kylie jen-ner’s famous pout but didn’t want to spend [...]some 1,200 of the reagan’s crew will be execut-ing what the navy calls a three-hull swap, [...].
+mason was drafted into the england squad fol-lowing the withdrawal of adam lallana and [...].
+lm∅.
+0.99match.
+0.99jenner0.78navy.
+0.96 l.s∅.
+0.99year.
+0.99min0.96presi-dent0.34 f.s∅x.
+0.99year.
+0.99min0.96presi-dent0.29ant.
+sfull.
+0.99match.
+0.80jenner0.97navy.
+0.99 l.table 3: examples of bias from the pre-trained language model (pt) on cnn/dm.
+the model’s predicted tokenis in bold following the decoder preﬁx, then we list relevant context from the corresponding input document andthe top-1 predicted token along with probability of lm∅ (bart language model), s∅, s∅x (the xsum modelwith no input) and sfull.
+suspiciously, the lm without ﬁne-tuning is very conﬁdent, more so than the no-inputsummarization model.
+we show more examples in table 9..like cnn/dm are contained in the pre-training cor-pus, which could teach the base lm these patterns.
+several web crawls have been used for differentmodels, including c4 (raffel et al., 2020), open-webtext (radford et al., 2019), cc-news (liuet al., 2019).
+due to the availability of the corpus,we only check openwebtext, which, as part of c4,is used for models like gpt-2, pegasus and t5.
+according to hermann et al.
+(2015), the valida-tion and test sets of cnn/dm come from marchand april 2015, respectively.
+we extract the marchto may 2015 dump of openwebtext and ﬁnd that4.46% (512 out of 11,490) test examples and 3.31%(442 out of 13,368) validation examples are in-cluded in openwebtext.4 our matching criteria ismore than three 7-gram word overlaps between thepre-training document and reference summariesfrom the dataset; upon inspection, over 90% ofthe cases ﬂagged by this criterion contained largechunks of the reference summary..our conclusion is that the pre-trained lan-guage model has likely memorized certain arti-cles and their summaries.
+other factors could beat play: other types of knowledge in the languagemodel (petroni et al., 2019; shin et al., 2020; tal-mor et al., 2020) such as key entity cooccurrences,could be contributing to these cases as well andsimply be “forgotten” during ﬁne-tuning.
+however,as an analysis tool, ablation suggested a hypothesis.
+4this is an approximation since we cannot precisely verifythe pre-training datasets for each model, but it is more likelyto be an underestimate than an overestimate.
+we only extractpre-training documents from cnn.com and dailymail.
+co.uk from a limited time range, so we may fail to detectsnippets of reference summaries that show up in other timeranges of the scrape or in other news sources, whether throughplagiarism or re-publishing..group/bigram.
+#(wt−1,wt)#wt−1.
+xs.
+cd.
+of letters.
+0.001letters from 0.4940.0910.4200.0580.586.african journalistsm (£(closebritain’s.
+0.0000.0260.0000.3000.0000.291.all ft cases.
+0.162.
+0.060.table 4: example patterns from ft. wt is in bold.
+we show the relative frequency counts of each bi-gram.
+in aggregate (last row), bigrams in ft cases aremuch more frequent in the xsum training data than incnn/dm..about data overlap which we were able to partiallyconﬁrm, which supports its utility for understand-ing summarization models..ft: bias from fine-tuning data we now exam-ine the data points falling in the bottom right cornerof the map, where the ﬁne-tuned lm matches thefull model more closely than the pre-trained lm..in table 4, we present some model-generated bi-grams found in the ft region of xsum and comparethe frequency of these patterns in the xsum andcnn/dm training data.
+not every generation in-stance of these bigrams falls into the ft region, butmany do.
+table 4 shows the relative probabilitiesof these counts in xsum and cnn/dm, showingthat these cases are all very common in xsum train-ing summaries.
+the aggregate over all decisionsin this region (the last line) shows this pattern aswell.
+these can suggest larger patterns: the ﬁrstthree come from the common phrase in our seriesof letters from african journalists (starts 0.5% of.
+6930target.
+wattr.
+disptokn = 0 → 1.rmtokn = 0 → 1.cameron ministerlabour100khanjeremy.
+formayorals(adiq)khan.
+0.01 → 0.900.96 → 0.940.01 → 0.010.01 → 0.010.99 → 0.99.
+0.99 → 0.990.98 → 0.910.57 → 0.570.97 → 0.380.99 → 0.99.table 5: examples of disptok and rmtok.
+we showthe change of the prediction probability of the target to-ken when displaying or masking the wattr token, whichis the highest rank token from the occlusion method.
+signiﬁcant change is marked in bold..summaries in xsum).
+other stylistic markers, suchas ways of writing currency, are memorized too..5 attribution.
+as shown in table 2, more than two thirds of gener-ation steps actually do rely heavily on the context.
+here, we focus speciﬁcally on identifying whichaspects of the input are important for cases wherethe input does inﬂuence the decision heavily usingattribution methods..each of the methods we explore scores eachword wi in the input document with a score αi.
+the score can be a normalized distribution, or aprobability value ranging from 0 to 1. for eachmethod, we rank the tokens in descending orderby score.
+to conﬁrm that the tokens highlightedare meaningfully used by the model when makingits predictions, we propose an evaluation protocolbased on a range of counterfactual modiﬁcations ofthe input document, taking care to make these com-patible with the nature of subword tokenization..5.1 evaluation by adding and removing.
+our evaluation focuses on the following question:given a budget of tokens or sentences, how welldoes the model reconstruct the target token yt whenshown the important content selected by the attribu-tion method?
+our metric is the cross entropy lossof predicting the model-generated next token givendifferent subsets of the input.5.
+methods based on adding or removing singletokens have been used to evaluate before (nguyen,2018).
+however, for summarization, showing themodel partial or ungrammatical inputs in the source.
+5the full model is not a strict bound on this; restrictingthe model to only see salient content could actually increasethe probability of what was generated.
+however, because wehave limited ourselves to ctx examples and are aggregatingacross a large corpus, we do not observe this in our metrics..may signiﬁcantly alter the model’s behavior.
+toaddress this, we use four methods to evaluate undera range of conditions, where in each case the modelhas a speciﬁc budget.
+our conditions are: 1. disp-tok selects n tokens as the input.
+2. rmtokshows the document with n tokens masked insteadof deleted.6 3. dispsent selects n sentences asthe input, based on cumulative attribution over thesentence.
+4. rmsent removes n sentences fromthe document as the input..table 5 shows examples of these methods ap-plied to the examples from figure 1. these high-light the impact of key tokens in certain generationcases, but not all..we describe the details of how we feed or maskthe tokens in tok in appendix.
+c. the sentence-level methods are guaranteed to return grammati-cal input.
+token-based evaluation is more precisewhich helps locating the exact feature token, butthe trade-off is that the input is not fully natural..5.2 methods.
+we use two baseline methods: random, whichrandomly selects tokens or sentences to display orremove, and lead, which selects tokens or sen-tences according to document position, along withseveral attribution methods from prior work.
+oc-clusion (zeiler and fergus, 2014) involves itera-tively masking every single token or remove eachsentence in the document and measuring how theprediction probability of the target token changes.
+although attention has been questioned (jain andwallace, 2019), it still has some value as an ex-planation technique (wiegreffe and pinter, 2019;serrano and smith, 2019).
+we pool the attentionheads from the last layer of the transformer insideour models, ignoring special tokens like sos..finally, we use two gradient-based techniques(bastings and filippova, 2020).
+input gradientis a saliency based approach taking the gradient ofthe target token with respect to the input and mul-tiplying by the input feature values.
+integratedgradients sundararajan et al.
+(2017) computesgradients of the model input at a number of pointsinterpolated between a reference “baseline” (typi-cally an all-mask input) and the actual input.
+thiscomputes a path integral of the gradient..6note that we do not directly remove the tokens becausethis approach typically makes the sentence ungrammatical.
+token masks are a more natural type of input to models thatare pre-trained with these sorts of masks anyway..6931prob0.00.
+0.09.
+0.01.
+0.16.prob0.71.prob0.01.
+0.00.
+0.01.prob0.63.content1. atherton, 28, has won all seven races this seasonand 13 in a row, a run stretching back to 2015.
+2. the world champion had already sealed the 2016world cup crown in canada last month but won inandorra on saturday to end the world cup seasonunbeaten.
+3. she has now won ﬁve overall world cup titles indownhill.
+[...]5. trek factory racing’s atherton won the ﬁnalrace by 6.5 seconds ahead of australian traceyhannah and myriam nicole of france..comb.
+& predict summary(2, 5) britain’s laura atherton has won the ucimountain bike world cup [...].
+content1. dujardin, 30, and valegro won individual andteam dressage gold for britain at london 2012 andhave since won world and european titles.
+2. but, she says, the olympics in brazil next sum-mer will be the horse’s last.
+3.
+”this will be valegro’s retirement after rio soi want to go out there and want to enjoy every lastminute,” dujardin told bbc points west..comb.
+& predict summary(1, 2) olympic dressage champion charlotte du-jardin says she will retire from the sport after rioolympics..table 6: examples of sentence fusion in the dispsentsetting.
+we list the single sentence probability on theleft side with the document, and the best combinationwith its probability at the bottom.
+we underline the to-kens according to the top attributions of occlusion.
+ar-ticles are truncated..6 case study: sentence fusion.
+we now present a case study of the sort of analysisthat can be undertaken using our two-stage inter-pretation method.
+we conduct an analysis drivenby sentence fusion, a particular class of ctx-hdcases.
+sentence fusion is an exciting capabilityof abstractive models that has been studied previ-ously (barzilay and mckeown, 2005; thadani andmckeown, 2013; lebanoff et al., 2019, 2020)..we broadly identify cases of cross-sentence in-formation fusion by ﬁrst ﬁnding cases in ctx-hdwhere the max(psent) < 0.5, but two sentencescombined enable the model to predict the word.
+wesearch over all (cid:0)m(cid:1) combinations of sentences (m2is the total number of sentences) and run the spartmodel on each pair of sentences.
+we identify 16.7%and 6.0% of cases in cnn/dm and xsum, respec-tively, where conditioning on a pair of sentencesincreases the probability of the model’s generationby at least 0.5 over any sentence in isolation..in table 6, we show two examples of sentence.
+figure 3: four-way evaluation for our content attribu-tion methods.
+the reported value is the nll loss withrespect to the predicted token.
+lower is better for dis-play methods and higher is better for removal methods(we “break” the model more quickly).
+n = 0 means thebaseline when there is no token or sentence displayedin disp or removed or masked in rm..attribution aggregation for sentence-levelevaluation we have described the six methodswe use for token-level evaluation.
+to evaluatethese methods on the sentence level benchmark,we aggreagate the attributions in each sentenceattr(si) = (cid:80)dj=0 attr(wj)/d.
+hence we can ob-tain a ranking of sentences by their aggregated at-tribution score..5.3 results.
+in figure 3, we show the token-level and sentence-level comparison of the attribution methods on thectx examples in xsum.
+intgrad is the best tech-nique overall, with inpgrad achieving similar per-formance.
+interestingly, occlusion underperformsother techniques when more tokens are removed,despite our evaluation being based on occlusion;this indicates that single-token occlusion is not nec-essarily the strongest attribution method.
+we alsofound that all of these give similar results, regard-less of whether they present the model with a re-alistic input (sentence removal) or potentially un-grammatical or unrealistic input (isolated tokensadded/removed)..our evaluation protocol shows better perfor-mance from gradient-based techniques.
+the com-bination of four settings tests a range of counter-factual inputs to the model and increases our conﬁ-dence in these conclusions..693201248161234lossdisptok0124816rmtok01234n1234lossdispsent01234nrmsentmethodrandomleadocclusionattentioninpgradintgradfusion on xsum in this category, additionally ana-lyzed using the dispsent attribution method.
+inthe ﬁrst example, typical in xsum, the model hasto predict the event name uci without actually see-ing it.
+the model’s reasoning appears distributedover the document: it consults entity and eventdescriptions like world champion and france, per-haps to determine this is an international event.
+inthe second example, we see the model again con-nects several pieces of information.
+the generatedtext is factually incorrect: the horse is retiring, andnot dujardin.
+nevertheless, this process tells ussome things that are going wrong (the model dis-regards the horse in the generation process), andcould potentially be useful for ﬁne-grained factual-ity evaluation using recent techniques (tian et al.,2019; kryscinski et al., 2020; goyal and durrett,2020; maynez et al., 2020)..the majority of the “fusion” cases we investi-gated actually reﬂect content selection at the begin-ning of the generation.
+other cases we observe fallmore cleanly into classic sentence fusion or drawon coreference resolution..7 related work.
+model interpretability for nlp has been intensivelystudied in the past few years (ribeiro et al., 2016;alvarez-melis and jaakkola, 2018; jacovi et al.,2018; chen et al., 2020a; jacovi and goldberg,2020; deyoung et al., 2020; pruthi et al., 2020;ye et al., 2021).
+however, many of these tech-niques are tailored to classiﬁcation tasks like sen-timent.
+for post-hoc interpretation of generation,most work has studied machine translation (maet al.
+; li et al., 2020; voita et al., 2020).
+li et al.
+(2020) focus on evaluating explanations by ﬁndingsurrogate models that are similar to the base mtmodel; this is similar to our evaluation approachin section 5, but involves an extra distillation step.
+compared to voita et al.
+(2020), we are more inter-ested in highlighting how and why changes in thesource article will change the summary (counter-factual explanations)..to analyze summarization more broadly, xuet al.
+(2020a) provides a descriptive analysis aboutmodels via uncertainty.
+previous work (kedzieet al., 2018; zhong et al., 2019; kryscinski et al.,2019; zhong et al., 2019) has conducted compre-hensive examination of the limitations of summa-rization models.
+filippova (2020) ablates modelinput to control the degree of hallucination.
+miao.
+et al.
+(2021) improves the training of mt by com-paring the prediction of lm and mt model..finally, this work has focused chieﬂy on abstrac-tive summarization models.
+we believe interpret-ing extractive (liu and lapata, 2019) or compres-sive (xu and durrett, 2019; xu et al., 2020b; de-sai et al., 2020) models would be worthwhile toexplore and could leverage similar attribution tech-niques, although ablation does not apply as dis-cussed here..8 recommendations & conclusion.
+we recommend a few methodological takeawaysthat can generalize to other conditional generationproblems as well..first, use ablation to analyze generation mod-els.
+while removing the source forms inputs notstrictly on the data manifold, ablation was remark-ably easy, robust, and informative in our analysis.
+constructing our maps only requires querying threemodels with no retraining required..second, to understand an individual decision,use feature attribution methods on the sourceonly.
+including the target context often muddiesthe interpretation since recent words are alwaysrelevant, but looking at attributions over the sourceand target together doesn’t accurately convey themodel’s decision-making process..finally, to probe attributions more deeply, con-sider adding or removing various sets of tokens.
+the choice of counterfactuals to explain is an ill-posed problem, but we view the set used here asrealistic for this setting (ye et al., 2021)..taken together, our two-step framework allowsus to identify generation modes and attribute gen-eration decisions to the input document.
+our tech-niques shed light on possible sources of bias andcan be used to explore phenomena such as sentencefusion.
+we believe these pave the way for futurestudies of targeted phenomena, including fusion,robustness, and bias in text generation, through thelens of these interpretation techniques..acknowledgments.
+thanks to the members of the ut taur lab forhelpful discussion, especially tanya goyal, ya-sumasa onoe, and xi ye for constructive sugges-tions.
+this work was partially supported by a giftfrom salesforce research and a gift from amazon.
+thanks as well to the anonymous reviewers fortheir helpful comments..6933references.
+david alvarez-melis and tommi s. jaakkola.
+2018.towards robust interpretability with self-explainingneural networks.
+in proceedings of the 32nd inter-national conference on neural information process-ing systems, nips’18, page 7786–7795, red hook,ny, usa.
+curran associates inc..regina barzilay and kathleen r. mckeown.
+2005.sentence fusion for multidocument news summa-computational linguistics, 31(3):297–rization.
+328..jasmijn bastings and katja filippova.
+2020. the ele-phant in the interpretability room: why use atten-tion as explanation when we have saliency methods?
+in proceedings of the third blackboxnlp workshopon analyzing and interpreting neural networks fornlp, pages 149–155, online.
+association for com-putational linguistics..nicholas carlini, florian tramer, eric wallace,matthew jagielski, ariel herbert-voss, katherinelee, adam roberts, tom brown, dawn song, ul-far erlingsson, et al.
+2020.extracting trainingdata from large language models.
+arxiv preprintarxiv:2012.07805..hanjie chen, guangtao zheng, and yangfeng ji.
+2020a.
+generating hierarchical explanations on text classi-in pro-ﬁcation via feature interaction detection.
+ceedings of the 58th annual meeting of the asso-ciation for computational linguistics, pages 5578–5593, online.
+association for computational lin-guistics..yiran chen, pengfei liu, ming zhong, zi-yi dou,danqing wang, xipeng qiu, and xuanjing huang.
+2020b.
+cdevalsumm: an empirical study of cross-dataset evaluation for neural summarization systems.
+in findings of the association for computationallinguistics: emnlp 2020, pages 3679–3691, on-line.
+association for computational linguistics..shrey desai, jiacheng xu, and greg durrett.
+2020.compressive summarization with plausibility andsalience modeling.
+in proceedings of the 2020 con-ference on empirical methods in natural languageprocessing (emnlp), pages 6259–6274, online.
+as-sociation for computational linguistics..jay deyoung, sarthak jain, nazneen fatema rajani,eric lehman, caiming xiong, richard socher, andbyron c. wallace.
+2020. eraser: a benchmark toevaluate rationalized nlp models.
+in proceedingsof the 58th annual meeting of the association forcomputational linguistics, pages 4443–4458, on-line.
+association for computational linguistics..katja filippova.
+2020..controlled hallucinations:learning to generate faithfully from noisy data.
+infindings of the association for computational lin-guistics: emnlp 2020, pages 864–870, online.
+as-sociation for computational linguistics..samuel gehman, suchin gururangan, maarten sap,yejin choi, and noah a. smith.
+2020. realtoxi-cityprompts: evaluating neural toxic degenerationin language models.
+in findings of the associationfor computational linguistics: emnlp 2020, pages3356–3369, online.
+association for computationallinguistics..tanya goyal and greg durrett.
+2020. evaluating fac-tuality in generation with dependency-level entail-ment.
+in findings of the association for computa-tional linguistics: emnlp 2020, pages 3592–3603,online.
+association for computational linguistics..tanya goyal and greg durrett.
+2021. annotating andmodeling ﬁne-grained factuality in summarization.
+in proceedings of the 2021 conference of the northamerican chapter of the association for computa-tional linguistics: human language technologies.
+association for computational linguistics..xiaochuang han, byron c. wallace, and yuliatsvetkov.
+2020. explaining black box predictionsand unveiling data artifacts through inﬂuence func-in proceedings of the 58th annual meet-tions.
+ing of the association for computational linguistics,pages 5553–5563, online.
+association for computa-tional linguistics..yotam hechtlinger.
+2016. interpretation of predictionarxiv preprint.
+models using the input gradient.
+arxiv:1611.07634..karl moritz hermann, tom´as koˇcisk´y, edward grefen-stette, lasse espeholt, will kay, mustafa suleyman,and phil blunsom.
+2015. teaching machines toread and comprehend.
+in proceedings of the con-ference on neural information processing systems(neurips)..alon jacovi and yoav goldberg.
+2020. towards faith-fully interpretable nlp systems: how should we de-ﬁne and evaluate faithfulness?
+in proceedings of the58th annual meeting of the association for compu-tational linguistics, pages 4198–4205, online.
+as-sociation for computational linguistics..alon jacovi, oren sar shalom, and yoav goldberg.
+2018. understanding convolutional neural networksin proceedings of the 2018for text classiﬁcation.
+emnlp workshop blackboxnlp: analyzing and in-terpreting neural networks for nlp, pages 56–65,brussels, belgium.
+association for computationallinguistics..sarthak jain and byron c. wallace.
+2019. attention isin proceedings of the 2019 con-not explanation.
+ference of the north american chapter of the asso-ciation for computational linguistics: human lan-guage technologies, volume 1 (long and short pa-pers), pages 3543–3556, minneapolis, minnesota.
+association for computational linguistics..zhengbao jiang, frank f. xu, jun araki, and grahamneubig.
+2020. how can we know what language.
+6934models know?
+transactions of the association forcomputational linguistics, 8:423–438..chris kedzie, kathleen mckeown, and hal daum´e iii.
+2018. content selection in deep learning models ofin proceedings of the 2018 con-summarization.
+ference on empirical methods in natural languageprocessing, pages 1818–1828, brussels, belgium.
+association for computational linguistics..pang wei koh and percy liang.
+2017. understandingblack-box predictions via inﬂuence functions.
+in in-ternational conference on machine learning, pages1885–1894.
+pmlr..wojciech kryscinski, nitish shirish keskar, bryan mc-cann, caiming xiong, and richard socher.
+2019.neural text summarization: a critical evaluation.
+inproceedings of the 2019 conference on empiricalmethods in natural language processing and the9th international joint conference on natural lan-guage processing (emnlp-ijcnlp), pages 540–551, hong kong, china.
+association for computa-tional linguistics..wojciech kryscinski, bryan mccann, caiming xiong,and richard socher.
+2020. evaluating the factualconsistency of abstractive text summarization.
+inproceedings of the 2020 conference on empiricalmethods in natural language processing (emnlp),pages 9332–9346, online.
+association for computa-tional linguistics..logan lebanoff, franck dernoncourt, doo soon kim,lidan wang, walter chang, and fei liu.
+2020.learning to fuse sentences with transformers forin proceedings of the 2020 con-summarization.
+ference on empirical methods in natural languageprocessing (emnlp), pages 4136–4142, online.
+as-sociation for computational linguistics..logan lebanoff, john muchovej, franck dernoncourt,doo soon kim, seokhwan kim, walter chang, andfei liu.
+2019. analyzing sentence fusion in abstrac-tive summarization.
+in proceedings of the 2nd work-shop on new frontiers in summarization, pages104–110, hong kong, china.
+association for com-putational linguistics..mike lewis, yinhan liu, naman goyal, mar-jan ghazvininejad, abdelrahman mohamed, omerlevy, veselin stoyanov, and luke zettlemoyer.
+2020. bart: denoising sequence-to-sequence pre-training for natural language generation, translation,and comprehension.
+in proceedings of the 58th an-nual meeting of the association for computationallinguistics, pages 7871–7880, online.
+associationfor computational linguistics..jierui li, lemao liu, huayang li, guanlin li, guop-ing huang, and shuming shi.
+2020. evaluating ex-planation methods for neural machine translation.
+inproceedings of the 58th annual meeting of the as-sociation for computational linguistics, pages 365–375, online.
+association for computational linguis-tics..yang liu and mirella lapata.
+2019. text summariza-in proceedings oftion with pretrained encoders.
+the 2019 conference on empirical methods in nat-ural language processing and the 9th internationaljoint conference on natural language processing(emnlp-ijcnlp), pages 3730–3740, hong kong,china.
+association for computational linguistics..yinhan liu, myle ott, naman goyal, jingfei du, man-dar joshi, danqi chen, omer levy, mike lewis,luke zettlemoyer, and veselin stoyanov.
+2019.roberta: a robustly optimized bert pretraining ap-proach..xutai ma, ke li, and philipp koehn.
+an analysis ofsource context dependency in neural machine trans-lation.
+in 21st annual conference of the europeanassociation for machine translation, page 189..joshua maynez, shashi narayan, bernd bohnet, andryan mcdonald.
+2020. on faithfulness and factu-ality in abstractive summarization.
+in proceedingsof the 58th annual meeting of the association forcomputational linguistics, pages 1906–1919, on-line.
+association for computational linguistics..mengqi miao, fandong meng, yijin liu, xiao-huazhou, and jie zhou.
+2021. prevent the languagemodel from being overconﬁdent in neural machinetranslation..tim miller.
+2019. explanation in artiﬁcial intelligence:insights from the social sciences.
+artiﬁcial intelli-gence, 267:1–38..shashi narayan, shay b. cohen, and mirella lapata.
+2018. don’t give me the details, just the sum-mary!
+topic-aware convolutional neural networksfor extreme summarization.
+in proceedings of theconference on empirical methods in natural lan-guage processing (emnlp)..dong nguyen.
+2018. comparing automatic and hu-man evaluation of local explanations for text clas-in proceedings of the 2018 conferencesiﬁcation.
+of the north american chapter of the associationfor computational linguistics: human languagetechnologies, volume 1 (long papers), pages 1069–1078, new orleans, louisiana.
+association for com-putational linguistics..fabio petroni, tim rockt¨aschel, sebastian riedel,patrick lewis, anton bakhtin, yuxiang wu, andalexander miller.
+2019. language models as knowl-in proceedings of the 2019 confer-edge bases?
+ence on empirical methods in natural languageprocessing and the 9th international joint confer-ence on natural language processing (emnlp-ijcnlp), pages 2463–2473, hong kong, china.
+as-sociation for computational linguistics..danish pruthi, mansi gupta, bhuwan dhingra, gra-ham neubig, and zachary c. lipton.
+2020. learn-ing to deceive with attention-based explanations.
+in.
+6935proceedings of the 58th annual meeting of the asso-ciation for computational linguistics, pages 4782–4793, online.
+association for computational lin-guistics..mukund sundararajan, ankur taly, and qiqi yan.
+2017.in inter-axiomatic attribution for deep networks.
+national conference on machine learning, pages3319–3328..alec radford, jeffrey wu, rewon child, david luan,dario amodei, and ilya sutskever.
+2019. languagemodels are unsupervised multitask learners.
+ope-nai blog..colin raffel, noam shazeer, adam roberts, katherinelee, sharan narang, michael matena, yanqi zhou,wei li, and peter j liu.
+2020. exploring the lim-its of transfer learning with a uniﬁed text-to-texttransformer.
+journal of machine learning research,21(140):1–67..marco tulio ribeiro, sameer singh, and carlosguestrin.
+2016.
+“why should i trust you?”: ex-plaining the predictions of any classiﬁer.
+inproceedings of the acm sigkdd conference onknowledge discovery and data mining (sigkdd)..yossi rubner, carlo tomasi, and leonidas j guibas.
+1998. a metric for distributions with applications toimage databases.
+in sixth international conferenceon computer vision (ieee cat.
+no.
+98ch36271),pages 59–66.
+ieee..cynthia rudin.
+2019. stop explaining black box ma-chine learning models for high stakes decisions anduse interpretable models instead.
+nature machineintelligence, 1(5):206–215..abigail see, peter j. liiu, and christopher d. man-ning.
+2017. get to the point: summarizationin proceedingswith pointer-generator networks.
+of the annual meeting of the association for com-putational linguistics (acl)..soﬁa serrano and noah a. smith.
+2019. is attentionin proceedings of the 57th annualinterpretable?
+meeting of the association for computational lin-guistics, pages 2931–2951, florence, italy.
+associa-tion for computational linguistics..taylor shin, yasaman razeghi, robert l. logan iv,eric wallace, and sameer singh.
+2020. autoprompt:eliciting knowledge from language models within proceed-automatically generated prompts.
+ings of the 2020 conference on empirical methodsin natural language processing (emnlp), pages4222–4235, online.
+association for computationallinguistics..kaiqiang song, bingqing wang, zhe feng, ren liu,and fei liu.
+2020. controlling the amount of ver-batim copying in abstractive summarization.
+in pro-ceedings of the aaai conference on artiﬁcial intel-ligence, volume 34, pages 8902–8909..nisan stiennon, long ouyang, jeff wu, daniel mziegler, ryan lowe, chelsea voss, alec radford,dario amodei, and paul christiano.
+2020. learningto summarize from human feedback.
+in advances inneural information processing systems..swabha swayamdipta, roy schwartz, nicholas lourie,yizhong wang, hannaneh hajishirzi, noah a.smith, and yejin choi.
+2020. dataset cartography:mapping and diagnosing datasets with training dy-namics.
+in proceedings of the 2020 conference onempirical methods in natural language process-ing (emnlp), pages 9275–9293, online.
+associa-tion for computational linguistics..alon talmor, yanai elazar, yoav goldberg, andjonathan berant.
+2020.olmpics-on what lan-guage model pre-training captures.
+transactionsof the association for computational linguistics,8:743–758..kapil thadani and kathleen mckeown.
+2013. super-vised sentence fusion with single-stage inference.
+inproceedings of the sixth international joint confer-ence on natural language processing, pages 1410–1418, nagoya, japan.
+asian federation of naturallanguage processing..ran tian, shashi narayan, thibault sellam, andankur p parikh.
+2019. sticking to the facts: con-ﬁdent decoding for faithful data-to-text generation..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n gomez, ł ukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+in advances in neural information pro-cessing systems, volume 30. curran associates, inc..elena voita, rico sennrich, and ivan titov.
+2020. an-alyzing the source and target contributions to predic-tions in neural machine translation.
+arxiv preprintarxiv:2010.10907..sarah wiegreffe and yuval pinter.
+2019. attention isnot not explanation.
+in proceedings of the 2019 con-ference on empirical methods in natural languageprocessing and the 9th international joint confer-ence on natural language processing (emnlp-ijcnlp), pages 11–20, hong kong, china.
+associ-ation for computational linguistics..thomas wolf, lysandre debut, victor sanh, julienchaumond, clement delangue, anthony moi, pier-ric cistac, tim rault, r´emi louf, morgan funtow-icz, and jamie brew.
+2019. huggingface’s trans-formers: state-of-the-art natural language process-ing.
+arxiv preprint arxiv:1910.03771..jiacheng xu, shrey desai, and greg durrett.
+2020a.
+understanding neural abstractive summarizationmodels via uncertainty.
+in proceedings of the 2020conference on empirical methods in natural lan-guage processing (emnlp), pages 6275–6281, on-line.
+association for computational linguistics..6936jiacheng xu and greg durrett.
+2019. neural extractivetext summarization with syntactic compression.
+inproceedings of the 2019 conference on empiricalmethods in natural language processing and the9th international joint conference on natural lan-guage processing (emnlp-ijcnlp), pages 3292–3303, hong kong, china.
+association for computa-tional linguistics..jiacheng xu, zhe gan, yu cheng, and jingjing liu.
+2020b.
+discourse-aware neural extractive text sum-marization.
+in proceedings of the 58th annual meet-ing of the association for computational linguistics,pages 5021–5031, online.
+association for computa-tional linguistics..xi ye, rohan nair, and greg durrett.
+2021. eval-reading comprehensionarxiv preprint.
+uating explanations forwith realistic counterfactuals.
+arxiv:2104.04515..matthew d zeiler and rob fergus.
+2014. visualizingand understanding convolutional networks.
+in euro-pean conference on computer vision, pages 818–833.
+springer..jingqing zhang, yao zhao, mohammad saleh, and pe-ter j. liu.
+2020. pegasus: pre-training with ex-tracted gap-sentences for abstractive summariza-tion.
+proceedings of machine learning research.
+pmlr..ming zhong, pengfei liu, danqing wang, xipeng qiu,and xuanjing huang.
+2019. searching for effec-tive neural extractive summarization: what worksand what’s next.
+in proceedings of the 57th annualmeeting of the association for computational lin-guistics, pages 1049–1058, florence, italy.
+associa-tion for computational linguistics..6937complexity.
+time memory.
+occlusion.
+o(n3).
+s+occlusion o(s × d2 + d3).
+∼ 33x1x.
+∼ 2.1x1x.
+disptok.
+0.occlusions+occlusion.
+4.61.
+1.
+4.284.27.
+2.
+3.973.93.
+4.
+3.363.31.
+8.
+2.842.71.table 7: (upper) the complexity, actual time and gpumemory comparison of occlusion and s+occlusion.
+we set the same environment for both experiments.
+(bottom) token-level selection evaluation on occlu-sion and s+occlusion.
+the reported number is the nllloss of w.r.t.
+the token predicted by sfull..a validity of decoder-only model in s∅.
+setting.
+we use an off-the-shelf bart summarizationmodel as the decoder-only model for the ablationstudy.
+to guarantee the validity of the usage ofthe off-the-shelf model for ablation study, we alsoﬁne-tuned a bart language model where encod-ing input is empty and the decoding target is thereference summary.
+we compare the model outputwith the s∅ output in the paper.
+for 55% of casesthe top-1 predictions of these two models agreewith each other.
+this is pretty high, and suggeststhat the s∅ is at least doing reasonably.
+note thatﬁne-tuning will probably give rise to different be-havior on the 70% of ctx cases, since the s∅ willhallucinate differently than the newly ﬁne-tunedmodel (which further suggests why our analysisshould focus on s∅)..b examples of pt.
+we present more examples of bias from the pre-trained language model on cnn/dm in table 9. intable 3 we have shown the cases where the mem-orized phrases are proper nouns or nouns.
+herewe provide examples of other types like functionwords.
+the memorization of function words likewith or and can be challenging to spot using othermeans due to their ubiquity..c implementation detail for tok.
+we rank the attribution score of all subword to-kens rather than words.
+however, to provide neces-sary context for disptok and to avoid informationleakage in rmtok, we extend the selection by acontext window to collect neighboring word pieces.
+we illustrate the way of fulﬁlling budget with anexample..labels: lm.
+ctx.
+ctx-hd.
+pt.
+ft.examples from xsum.
+hundreds of people have attended a memorial service inliverpool..two code violations for nicolas almagro and pablo cuevasat the australian open were described as disgraceful..in our series of letters from african journalists ﬁlm makerand columnist farai sevenzo looks at the challenges facingnigeria’s president muhammadu buhari..four people have been arrested after a bbc panorama in-vestigation uncovered shocking abuse at a private hospital..west indies shabnim ishaq has been ruled out of the rest ofthe women’s world cup..examples from cnn/dm.
+in the worst cases, doctors have reported patients showingup because they were hungover, their false nails were hurt-ing or they had paint in their hair.
+more than four millionvisits a year are unnecessary and cost the nhs £290millionannually..elski felson of los angeles, california, decided to applyfor a community support specialist role at snapchat viathe social media app.
+in just over three minutes, the techenthusiast created a video resume..chelsea supporters have been involved in the highest num-ber of reported racist incidents as they travelled to and frommatches on trains.
+the information, gathered from 24 po-lice forces across the country, shows there have been over350 incidents since 2012..kris-deann sharpley was on maternity leave and had justgiven birth to her ﬁrst child.
+her body was found in thebathroom of her father’s home..table 8: more examples of predicted summaries withthe colors following the map.
+for lm and punctuationwe use the default color.
+the majority of cnn/dmpredictions are continuous spans of ctx excludingctx-hd, meaning the model is frequently copying..bur1.
+#berry2.on4.bets.
+new branding.
+3.
+5.in this example “bur” receives the highest scoreand “new” the second.
+we use a context win-dows of size 1 and a budget of n = 4 tokens.
+indisptok, the input will be “〈sos〉burberry, onnew〈eos〉”; in rmtok, the input will be 〈sos〉##bets## branding〈eos〉 where # stands for the masktoken.
+if n = 5, branding will be added or masked..d efﬁcient two-stage selection model.
+for long documents in summarization, attributionmethods can be computationally expensive.
+oc-clusion requires running inference once for eachtoken in the input document.
+gradient-based meth-ods store the gradients and so require a lot of gpu.
+6938preﬁx target.
+relevant context.
+lm∅.
+s∅.
+s∅x.
+sfull.
+labour released ﬁve mugs to co-incide with the launch of edmilibandbritish supermodel, georgiamay.
+peter schmeichel has urgedmanchester united to sign zla-tan ibrahimovic.
+ibrahimovichas been linked withtunisian security forces kill twoattackers as they end the siege atthe bardo museum.
+the deathtoll, which included 17 touristsandthe costume was designed bythree-timeu.s. state department.
+labour released ﬁve mugs to coincide withthe launch of ed miliband’s ﬁve electionpledges.
+british supermodel, georgia may jagger,23, poses next to a ﬂoral plane designed bymasha ma.
+the well travelled sweden international hasbeen linked with a move to old trafford inthe past and, ....but the death toll, which included 17 touristsand at least one tunisian security ofﬁcer,could climb..0.93may.
+0.99with.
+0.99and.
+0.95miliband.
+0.94ible.
+0.68ible.
+0.99miliband.
+0.34 -.
+0.25[space].
+0.99may.
+0.98 to.
+0.99 to.
+0.94 ,.
+0.99 ,.
+0.99with.
+0.99and.
+the costume was designed by three-timeoscar-winner colleen atwood, ...what has u.s. state department subcontrac-tor alan gross been up to since ....0.97year0.96 of.
+0.98time0.99depart-ment.
+0.73and0.34univer-sity.
+0.99time0.99depart-ment.
+table 9: more examples of pt cases from the pre-trained language model..tok.
+0.randomleadocclusionattentioninpgradintgrad.
+4.61.disp ↓4.
+4.113.933.363.153.032.85.
+8.
+3.863.512.842.762.632.50.
+2.
+4.284.223.973.643.543.35.
+1.
+4.434.444.283.843.743.52.
+16.
+3.523.012.232.332.192.08.
+−∆.
+0.570.791.271.471.581.75.
+0.
+0.92.
+1.
+1.060.941.301.441.471.56.
+2.
+1.170.971.541.561.591.69.rm ↑4.
+1.431.022.011.961.972.15.
+8.
+1.941.092.392.492.482.70.
+16.
+2.891.212.983.333.273.46.
+∆.
+0.780.131.121.241.241.39.table 10: token-level evaluation for content attribution methods.
+the reported value is the nll loss w.r.t.
+thepredicted token.
+n = 0 means the baseline when there is no token displayed in disp or masked in rm..memory when the document is long.
+these tech-niques spend time and memory checking wordsthat have little impact on the generation..in order to improve the efﬁciency of these meth-ods, we propose an efﬁcient alternative where weﬁrst run sentence level presence probing on thefull document, and then run attribution methods lo-cally on the top-k sentences.
+we call the proposedmodel s+[method] where method can be arbitraryattribution methods including occlusion, attention,inpgrad and intgrad..we deﬁne our notation as follows: s, n and d arethe number of sentences, the number of tokens inthe document, and the number of tokens in eachsentence, respectively.
+for the occlusion method,we can run inference s times to pre-select importantsentences, each of which costs o(d2) times due toself-attention.
+the attribution is then applied onlyto only one or few sentences so the complexity isnow o(k×d2×d) where k is the number of top sen-tences used for attribution.
+in our experiments, weset k = 2 and n ≤ 500. compared to the complex-.
+ity of the regular model o(n3), the complexity ofthe two-stage model is only o(s × d2 + k × d2 × d)..in table 7 we compare the complexity and ac-tual run time and memory usage.
+we batch theocclusion operation and the batch size is set to 100.we can see a huge reduction in running time and asigniﬁcant drop in memory usage..takeaway a two-stage selection model is muchmore efﬁcient, yielding a 97% running time reduc-tion on the occlusion method.
+the downside ofthis method is that it only produces single-sentenceattributions, and so isn’t appropriate in cases in-volving sentence fusion..following (vaswani et al., 2017), we comparethe complexity for all methods in table 12. n is thenumber of tokens in the document.
+d is the numberof tokens in each sentence.
+s is the number of sen-tences in the document.
+r is the number of steps inthe integral approximation of integrated gradient.
+bp indicates the time consumption of one back-.
+6939sent.
+0.randomleadocclusionattentioninpgradintgrad.
+4.61.disp ↓32.
+2.472.061.421.481.411.33.
+2.161.741.201.321.251.22.
+1.
+2.992.611.971.931.861.68.
+0.
+0.92.
+4.
+1.931.521.091.231.181.17.
+−∆.
+2.222.633.193.123.193.26.rm ↑2.
+3.
+1.201.462.171.962.032.13.
+1.351.632.342.232.282.40.
+1.
+1.041.271.861.591.681.74.
+4.
+1.491.832.442.452.482.60.
+∆.
+0.350.631.281.141.201.30.table 11: sentence-level evaluation for content attribution methods.
+the reported value is the nll loss w.r.t.
+thepredicted token.
+n = 0 means the baseline when there is no sentence displayed in disp or removed in rm..method.
+regular.
+o(n2 × n)o(n2).
+occlusionattentionintgradinpgrad.
+o(n2 × r + r × bp) +o(d2 × r + r × bp).
+o(n2 + bp).
++o(d2 + bp).
+two stage s+base: o(s × d2).
++o(d2 × d)+o(d2 × d).
+table 12: comparison of complexity of regular methods and their two-stage variants.
+the time complexity of backpropagation bp is hard to deﬁne so we just leave it for simplicity..propagation for gradient based methods.
+we listthe complexity of the original methods in the mid-dle column and the sentence based pre-selectionvariant in the right column.
+the base cost for sen-tence pre-selection model is to run the sentenceselection model s times, so it’s o(s × d2).
+then2 and d2 originate from the quadratic operationof self-attentions in transformer models.
+we ig-nore the number of layers in the neural network orother model related hyper-parameters since all ofthe methods here share the same model..e four way evaluation.
+due to the space limit, we only show the plot of thefour way evaluation in figure 3. to enable futurecomparisons on the proposed evaluation protocol,we also include the detailed results in table 10 andtable 11 for tok and sent evaluation.
+the ∆measures how the average performance increaseor drop deviates from the original baseline.
+weabstract the evaluation methods as a function eval.
+the input is the text and the budget n and output isthe predicted loss..∆ = avg(eval(i)) − eval(0).
+for tok series evaluation, i ∈ {1, 2, 4, 8, 16}.
+for sent series evaluation, i ∈ {1, 2, 3, 4} be-cause a sentence carries much more informationthan a token.
+intgrad performs the best across allof the evaluation methods..6940

@@ -1,0 +1,517 @@
+enhancing the generalization for intent classiﬁcationand out-of-domain detection in slu.
+yilin shen, yen-chang hsu, avik ray, hongxia jinsamsung research america{yilin.shen,yenchang.hsu,avik.r,hongxia.jin}@samsung.com.
+abstract.
+intent classiﬁcation is a major task in spokenlanguage understanding (slu).
+since mostmodels are built with pre-collected in-domain(ind) training utterances, their ability to de-tect unsupported out-of-domain (ood) utter-ances has a critical effect in practical use.
+re-cent works have shown that using extra dataand labels can improve the ood detection per-formance, yet it could be costly to collect suchdata.
+this paper proposes to train a modelwith only ind data while supporting both indintent classiﬁcation and ood detection.
+ourmethod designs a novel domain-regularizedmodule (drm) to reduce the overconﬁdentphenomenon of a vanilla classiﬁer, achievinga better generalization in both cases.
+besides,drm can be used as a drop-in replacementfor the last layer in any neural network-basedintent classiﬁer, providing a low-cost strategyfor a signiﬁcant improvement.
+the evalua-tion on four datasets shows that our methodbuilt on bert and roberta models achievesstate-of-the-art performance against existingapproaches and the strong baselines we cre-ated for the comparisons..1.introduction.
+spoken language understanding (slu) systemsplay a crucial role in ubiquitous artiﬁcially intelli-gent voice-enabled personal assistants (pa).
+sluneeds to process a wide variety of user utterancesand carry out user’s intents, a.k.a.
+intent classiﬁca-tion.
+many deep neural network-based slu mod-els have recently been proposed and have demon-strated signiﬁcant progress (guo et al., 2014; liuand lane, 2016; zhang and wang, 2016; wanget al., 2018; goo et al., 2018; chen et al., 2019)in classiﬁcation accuracy.
+these models usuallyapply the closed-world assumption, in which theslu model is trained with predeﬁned domains, andthe model expects to see the same data distribution.
+figure 1: failure examples of unsupported skills inai voice assistants.
+the user’s utterances are out ofthe designed domains of the assistant..during both training and testing.
+however, suchan assumption is not held in the practical use caseof pa systems, where the system is used under adynamic and open environment with personal ex-pressions, new vocabulary, and unknown intentsthat are out of the design scope..to address the challenges in open-world settings,previous works adopt varied strategies.
+shen et al.
+(2018a, 2019c) use a cold-start algorithm to gener-ate additional training data to cover a larger varietyof utterances.
+this strategy relies on the softwaredevelopers to pre-build all possible skills.
+shenet al.
+(2019b,a) introduce a skillbot that allowsusers to build up their own skills.
+recently, rayet al.
+(2018, 2019); shen et al.
+(2018b, 2019d) en-ables an slu model to incorporate user personal-ization over time.
+however, the above approachesdo not explicitly address unsupported user utter-ances/intents, leading to catastrophic failures illus-trated in figure 1. thus, it is critically desirablefor an slu system to classify the supported intents(in-domain (ind)) and reject unsupported ones(out-of-domain (ood)) correctly..a straightforward solution is to collect ooddata and train a supervised binary classiﬁer onboth ind data and ood data (hendrycks et al.,2018).
+however, collecting a representative set ofood data could be impractical due to the inﬁnite.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages2443–2453august1–6,2021.©2021associationforcomputationallinguistics2443i don’t like thriller in playlistplaylist deletedi am too coldoven turned oncompositionality of language.
+arbitrarily select-ing a subset could incur the selection bias, causingthe learned model might not generalize to unseenood data.
+ryu et al.
+(2017, 2018) avoid learningwith ood data by using generative models (e.g.,autoencoder and gan) to capture the ind datadistribution, then judge ind/ood based on thereconstruction error or likelihood.
+recently, tanet al.
+(2019) utilizes a large training data to enablethe meta-learning for ood detection.
+zheng et al.
+(2020) generates pseudo ood data to learn theood detector.
+the above-discussed approaches re-quire additional data or training procedures beyondthe intent classiﬁcation task, introducing signiﬁcantdata collection effort or inference overhead..this paper proposes a strategy based on neuralnetworks to use only ind utterances and their la-bels to learn both the intent classiﬁer and ooddetector.
+our strategy modiﬁes the structure of theclassiﬁer, introducing an extra branch as a regu-larization target.
+we call the structure a domain-regularized module (drm).
+this structure is prob-abilistically motivated and empirically leads to abetter generalization in both intent classiﬁcationand ood detection.
+our analysis focuses moreon the latter task, ﬁnding that drm not only out-puts a class probability that is a better indicator forjudging ind/ood, but also leads to a feature rep-resentation with a less distribution overlap betweenind and ood data.
+more importantly, drm is asimple drop-in replacement of the last linear layer,making it easy to plug into any off-the-shelf pre-trained models (e.g.
+bert (devlin et al., 2019)) toﬁne-tune for a target task.
+the evaluation on fourdatasets shows that drm can consistently improveupon previous state-of-the-art methods..2 problem deﬁnition & background.
+2.1 problem deﬁnition.
+in the application of intent classiﬁcation, a userutterance will be either an in-domain (ind) utter-ance (supported by the system) or an out-of-domain(ood) utterance (not supported by the system).
+the classiﬁer is expected to correctly (1) predictthe intent of supported ind utterances; and (2)detect to reject the unsupported ood utterances.
+the task is formally deﬁned below.
+we are givena closed world ind training set din d = {x, y} ={(xi, yi)}ni=1.
+each sample (xi, yi), an utterancexi and its intent class label yi ∈ {1 .
+.
+.
+c} forc predeﬁned in-domain classes, is drawn from a.ﬁxed but unknown ind distribution pin d(x, y).
+we aim to train an intent classiﬁer model only onind training data din d such that the model canperform: (1) intent classiﬁcation: classify theintent class label y of an utterance x if x is drawnfrom the same distribution pin d as the training setdin d; (2) ood detection: detect an utterancex to be an abnormal/unsupported sample if x isdrawn from a different distribution pood..2.2 related work.
+intent classiﬁcation is one of the major slucomponents (haffner et al., 2003; wang et al.,2005; tur and de mori, 2011).
+various modelshave been proposed to encode the user utterancefor intent classiﬁcation, including rnn (ravuriand stoicke, 2015; zhang and wang, 2016; liu andlane, 2016; kim et al., 2017; wang et al., 2018;goo et al., 2018), recursive autoencoders (katoet al., 2017), or enriched word embeddings (kimet al., 2016).
+recently, the bert model (devlinet al., 2019) was explored by (chen et al., 2019) forslu.
+our work also leverages the representationlearned in bert..ood detection has been studied for manyyears (hellman, 1970).
+tur et al.
+(2014) exploresits combination with intent classiﬁcation by learn-ing an svm classiﬁer on the ind data and ran-domly sampled ood data.
+ryu et al.
+(2017) de-tects ood by using reconstruction criteria with anautoencoder.
+ryu et al.
+(2018) learns an intent clas-siﬁer with gan and uses the discriminator as theclassiﬁer for ood detection.
+zheng et al.
+(2020)leverages extra unlabeled data to generate pseudo-ood samples using gan via auxiliary classiﬁerregularization.
+tan et al.
+(2019) further incorpo-rates the few-shot setting, learning the encodingof sentences with a prototypical network that isregularized with the ood data outside a learn-ing episode.
+other researchers developed meth-ods in computer vision based on the rescaling ofthe predicted class probabilities (odin) (lianget al., 2017) or building the gaussian model withthe features extracted from the hidden layers ofneural networks (mahalanobis) (lee et al., 2018).
+recently, (hsu et al., 2020) proposed generalized-odin with decomposed conﬁdence scores.
+how-ever, both approaches also heavily depend on theimage input perturbation to achieve good perfor-mance.
+unfortunately, such perturbation cannot beapplied to discrete utterance data in slu..24443 our method.
+our method is inspired by the decomposed con-ﬁdence of generalized-odin (hsu et al., 2020),but we leverage the fact that the training data areall from ind to introduce an extra regularization.
+this regularization leads to a better generalization(lower classiﬁcation error) on the intent classiﬁca-tion.
+the improvement is in contrast to the originalgeneralized-odin, which has its classiﬁcation er-ror slightly increased.
+since the improved general-ization is likely due to a more generalizable featurerepresentation, we leverage this observation, pro-viding a modiﬁed mahalanobis (lee et al., 2018),which we called l-mahalanobis, for a transformer-based model to detect ood data.
+in the follow-ing sections, we ﬁrst describe the drm and thenelaborate on using the outputs of a drm-equippedmodel to detect ood data..3.1 domain-regularized module (drm).
+the motivation begins with introducing the domainvariable d (d = 1 means ind, while d = 0 meansood) following the intuition in (hsu et al., 2020),then rewrite the posterior of class y given x withdomain d as follows:.
+(cid:98)p(y|d = 1, x) = (cid:98)p(y, d = 1|x)(cid:98)p(d = 1|x).
+figure 2: the drm involves a domain component anda classiﬁcation components for the ind classes..classiﬁcation logits fc models the probabilityposterior (cid:98)p(y|x) before normalization.
+it followsthe conventional linear projection from hidden stateh to the number of classes:.
+fc = wch + bc.
+(3).
+where wd ∈ r|h|×c with c classes..at the end, we obtain the ﬁnal logits f to repre-sent (cid:98)p(y|d = 1, x) by putting fd and fc togetherfollowing the dividend-divisor structure of equa-tion 1:.
+f = fc/fd.
+(4).
+where each element of fc is divided by the samescalar fd..= (cid:98)p(y|x).
+(cid:98)p(d = 1|x).
+≈ (cid:98)p(y|x).
+(cid:98)p(d = 1|x).
+− (cid:98)p(y, d = 0|x)(cid:98)p(d = 1|x)(1).
+3.1.2 drm training.
+we propose two training loss functions to train amodel with drm.
+the ﬁrst training loss aims tominimize a cross-entropy between the predictedintent class and ground truth ind class labels..where the last step holds since (cid:98)p(y, d = 0|x) isclose to 0 with the intrinsic conﬂict between indclasses y and random variable d = 0 for ood..3.1.1 drm design.
+motivated by the above equation 1, we design thedrm to mitigate overconﬁdence by decomposingthe ﬁnal logits f into two branches.
+figure 2 illus-trates the architecture.
+domain logits fd models (cid:98)p(d = 1|x) before nor-malization.
+it projects from hidden state h to ascalar w.r.t.
+d:.
+fd = wdh + bd.
+(2).
+where wd ∈ r|h|×1.
+since (cid:98)p(d = 1|x) is a proba-bility between 0 and 1, section 3.1.2 will describethe training details of domain loss via the sigmoidfunction..lclassiﬁcation (cid:44) −.
+yi log (cid:98)p(f )i.
+(5).
+c(cid:88).
+i=1.
+where (cid:98)p(f ) is the softmax of logits f :.
+(cid:98)p(f ) = softmax(f ).
+the second training loss aims to ensure that thedomain component fd is close to 1 since all utter-ances in the training set are ind..ldomain (cid:44) (1 − sigmoid(fd))2.
+(6).
+we ﬁrst restrict fd between 0 and 1 by using sig-moid activation function.
+then, this loss functionencourages sigmoid(fd) close to 1 for training onind utterances.
+in order to avoid fd to be verylarge values and affect the training convergence,.
+2445linear!
+"/!logitsclassification logitsdomain logitshidden stateℎlinear!$domain lossclassificationlosssigmoidwe further apply clamp function on fd before itfeeds to equation 4:.
+fd =.
+(cid:40).
+fdδ.if − δ < fd < δif fd <= −δ or fd >= δ.thus, we sum them up to optimize the model:.
+l = lclassiﬁcation + ldomain.
+(7).
+remarks: it is important to note that the de-sign of ldomain is to introduce extra regularizationto mitigate the overconﬁdence in standard poste-rior probability (cid:98)p(f ).
+sigmoid(fd) is not used todirectly predict if an utterance is ind or ood..3.2.ind intent classiﬁcation method.
+following equation 1 and our drm design, itis straightforward to use the conﬁdence score ofsoftmax(f ) to predict the ind intent class..3.3 ood detection methods.
+there are two types of strategies to utilize the out-puts of a classiﬁer to perform ood detection.
+oneis based on the conﬁdence which is computed fromlogits, the other is based on the features.
+in thebelow, we describe how to compute different oodscores with our drm..3.3.1 conﬁdence-based methods.
+recent works (liang et al., 2017) has shown thatthe softmax outputs provide a good scoring for de-tecting ood data.
+in our drm model, we use thedecomposed softmax outputs for the score.
+the log-its fc w.r.t.
+the true posterior distribution in open-world can be combined with varied approaches:.
+drm conﬁdence score:.
+confdrm = softmax(fc).
+(8).
+drm odin conﬁdence score:.
+odindrm = softmax(fc/t ).
+(9).
+with large t = 1000 (liang et al., 2017).
+drm entropy conﬁdence score:.
+entdrm = entropy[softmax(fc)].
+(10).
+the ood utterances have low confdrm ,.
+odindrm scores and high entdrm score..3.3.2 feature-based method.
+while our drm conﬁdence already outperformsmany existing methods (later shown in experi-ments), we further design the feature-based ma-halanobis distance score, inspired by the recentwork (lee et al., 2018) for detecting ood images.
+we ﬁrst recap the approach in (lee et al., 2018)which consists of two parts: mahalanobis distancecalculation and input preprocessing.
+mahalanobisdistance score models the class conditional gaus-sian distributions w.r.t.
+gaussian discriminant anal-ysis based on both low- and upper-level features ofthe deep classiﬁer models.
+the score on layer (cid:96) iscomputed as follows:.
+m aha(x) = maxi −(f (cid:96)(x) − µ(cid:96)s(cid:96).
+c)t σ−1.
+(cid:96) (f (cid:96)(x) − µ(cid:96)c).
+where f (cid:96)(x) represents the output features at the(cid:96)th-layer of neural networks; µi and σ are theclass mean representation and the covariance ma-trix.
+thus, the overall score is their summation:.
+sm aha(x) =.
+sm aha(f (cid:96)(x)).
+(cid:88).
+(cid:96).
+in addition, the input preprocessing adds a smallcontrolled noise to the test samples to enhance theperformance..although mahalanobis distance score can be ap-plied only to the last feature layer without input pre-processing slastm aha(x), the analysis (table 2 in (leeet al., 2018)) shows that either input preprocessingor multi-layer scoring mechanism is required toachieve decent ood detection performance.
+un-fortunately, neither of the above two mechanisms isapplicable in the intent classiﬁer for slu.
+first, un-like image data, noise injection into discrete naturallanguage utterances has been shown not to performwell.
+second, in most cutting-edge intent classi-ﬁer models, low- and upper-level network layersare quite different.
+the direct application of multi-layer mahalanobis distance leads to much worseood detection performance..since bert-based models showed signiﬁcantperformance improvement for intent classiﬁcationin slu (chen et al., 2019), we focus on designingthe multi-layer mahalanobis score for bert-basedclassiﬁer models.
+in existing bert-based text clas-siﬁcation models, such as bert, roberta, distil-bert, albert, etc., there are different designsbetween the last transformer layer and the classiﬁ-cation layer.
+figure 3 shows our generic design of.
+2446table 1: slu benchmark and in-house dataset statistics.
+dataset.
+domain.
+#intents.
+clinc (larson et al., 2019).
+various domains in voice assistantsother out-of-scope domains.
+atis (hemphill et al., 1990).
+airline travel information domain.
+snips (coucke et al., 2018).
+music, book, and weather domains.
+movie (in-house).
+movie qa domain.
+150-.
+18.
+7.
+38.
+#train.
+15,000100.
+4,478.
+13,084.
+39,558.
+#dev.
+3,000100.
+500.
+700.
+4,897.
+#test.
+4,5001,000.
+893.
+700.
+4,926.among all these datasets, the recently releasedclinc dataset serves as a benchmark for ooddetection in slu.
+for the other three datasets, wetreat them mutually ood due to non-overlappingdomains..we crowdsourced the in-house movie datasetcontaining common questions that users may askregarding movies.
+this dataset mainly consists ofqueries a user may ask in the movie domain.
+thedataset consists of 38 different intents (e.g.
+ratinginformation, genre information, award information,show trailer) and 20 slots or entities (e.g., director,award, release year).
+this dataset was collectedusing crowdsourcing as follows.
+at ﬁrst, someexample template queries were generated by lin-guistic experts for each intent, along with intentand slot descriptions.
+next, a generation crowd-sourcing job was launched where a crowd workerwas assigned a random intent, a combination ofentities, and few slots generally associated with theintent.
+to better understand the intent and slots,the worker was asked to review the intent and slotdescriptions, and example template utterances.
+theﬁrst task of the worker was to provide 3 differentqueries corresponding to the given intent, whichalso contains the provided entities.
+the second taskof the worker was to provide additional entitiescorresponding to the same slot type.
+a subsequentvalidation crowdsourcing job was launched wherethese crowdsourced queries were rated by valida-tion workers in terms of their accuracy with theprovided intent and entities.
+each query was ratedby 5 different validation workers, and the ﬁnal val-idated dataset contains a subset of crowdsourcedqueries with high accuracy score and high inter-rater agreement..4.2.implementation and training details.
+we implemented our method using pytorch ontop of the hugging face transformer library (wolfet al., 2019).
+we follow the hyperparameters inthe original models.
+for the only hyperparame-ter δ, we experimented only on clinc dataset.
+figure 3: multi-layer mahalanobis score design forbert-based classiﬁer model.
+mahalanobis score computation (blue) for variousbert-based models..our design is based on our extensive experimentsand understanding of the common insights in differ-ent bert-based models.
+speciﬁcally, we use thefeatures from different layers between the last trans-former layer and the classiﬁcation layer.
+we em-pirically found that the nonlinear tanh layer playsan important role.
+thus, to map the features ofeach transformer layer and last layer into the samesemantic space, we pass the features of each layerthrough tanh function and sum them up to computeour mahalanobis score:.
+sl−m aha(x) = sm aha(f n(x))sm aha(tanh(f (cid:96)(x))).
+(cid:88).
++.
+1≤(cid:96)<n.
+(11).
+where f (cid:96) and f n are the features of each layer (cid:96)and last layer n in a bert-based intent classiﬁermodel.
+we refer to our proposed approach as l-mahalanobis..4 experimental evaluation.
+4.1 datasets.
+we evaluate our proposed approach on three bench-mark slu datasets and one in-house slu dataset.
+table 1 provides an overview of all datasets..2447transformertransformer…transformertanh layerclassification layertanhtanh!"#$#%!"#$#&!"#$#'∑!
+"#$#from 2.2 to 4 with uniform interval 0.2 (we try10 values of δ) based on sigmoid(2.2) ≈ 0.9 andsigmoid(4) ≈ 0.982. we used δ = 3 whichgives the best performance in our experiment forall datasets.
+we train each model with 3 epochsusing 4 nvidia tesla v100 gpus (16gb) foreach training.
+we conducted experiments on twotransformer-based models, bert (devlin et al.,2019) and roberta (liu et al., 2019)..remarks: all experiments only use ind datafor both training and validation.
+we use the samehyperparameters in all datasets and validate thegeneralizability of our method..4.3 baselines.
+ind intent classiﬁcation baselines4.3.1we consider the strongest baseline bert-linear(the last layer is linear) ﬁne-tuned on the pre-trainedbert-based models (chen et al., 2019)..4.3.2 ood detection baselineswe consider the existing ood detection methods:congan (ryu et al., 2018): a gan-basedmodel based on given sentence representationsto generate ood features with additional featurematching loss.
+ood utterances are expected tohave low discriminator conﬁdence scores..autoencoder (ae) (ryu et al., 2017): ﬁrst usesan lstm based classiﬁer model to train sentencerepresentations; then train an autoencoder on theabove sentence embeddings.
+ood utterances areexpected to have high reconstruction error..odin (liang et al., 2017): we only use thetemperature scaling on logits.
+ood utterances areexpected to have a low scaled conﬁdence score..generalized-odin (g-odin) (hsu et al.,2020): we ﬁne-tune on pre-trained bert modelswith replaced last layer and only use the decom-posed conﬁdence.
+we evaluate all three variationsproposed in the paper hi , he and hc and reportthe best one.
+ood utterances are expected to havelow scaled conﬁdence score..mahalanobis (lee et al., 2018): we only usethe feature of bert’s last layer to compute ma-halanobis distance score.
+ood utterances are ex-pected to have a low scaled conﬁdence score..for congan and ae, we evaluate the modelin the original paper as well as customized bert-based backbone models as strong baselines.
+specif-ically, we customize en-congan and en-ae asfollows: en-congan uses bert sentence repre-sentation as input; en-ae applies a bert classi-.
+ﬁer model to train the sentence representation andthen use them to further train an autoencoder.
+thus,en-congan and en-ae are not existing baselines.
+note that eraepog (zheng et al., 2020) ando-proto (tan et al., 2019) are not comparable sincethey require additional unlabeled data and labels.
+we only put the eraepog results on clincdataset (from the original paper) for reference..4.4 evaluation metrics.
+4.4.1.ind intent classiﬁcation metrics.
+we evaluate ind performance using the classiﬁca-tion accuracy metric as in literature (liu and lane,2016; wang et al., 2018; chen et al., 2019)..4.4.2 ood detection metrics.
+we follow the evaluation metrics in literature (ryuet al., 2018) and (liang et al., 2017; lee et al.,2018).
+let tp, tn, fp, and fn denote true positive,true negative, false positive, and false negative.
+weuse the following ood evaluation metrics:.
+eer (lower is better): (equal error rate) mea-sures the error rate when false positive rate (fpr)is equal to the false negative rate (fnr).
+here,fpr=fp/(fp+tn) and fnr=fn/(tp+fn)..fpr95 (lower is better): (false positive rate(fpr) at 95% true positive rate (tpr)) can beinterpreted as the probability that an ood utteranceis misclassiﬁed as ind when the true positive rate(tpr) is as high as 95%.
+here, tpr=tp/(tp+fn).
+detection error (lower is better): measuresthe misclassiﬁcation probability when tpr is 95%.
+detection error is deﬁned as follows:.
+{pin d(s ≤ δ)p(x ∈ pin d).
+minδ+pood(s > δ)p(x ∈ pood)}.
+where s is a conﬁdence score.
+we follow the sameassumption that both ind and ood examples havean equal probability of appearing in the testing set.
+auroc (higher is better): (area under thereceiver operating characteristic curve) theroc curve is a graph plotting tpr against thefpr=fp/(fp+tn) by varying a threshold..aupr (higher is better):.
+(area under theprecision-recall curve (aupr)) the pr curve is agraph plotting the precision against recall by vary-ing a threshold.
+here, precision=tp/(tp+fp) andrecall=tp/(tp+fn).
+aupr-in and aupr-out isaupr where ind and ood distribution samplesare speciﬁed as positive, respectively..2448table 2: comprehensive ood detection results on clinc dataset (clinc train/ood).
+model.
+last layer.
+ood method.
+eer(↓).
+fpr95(↓).
+detection error(↓).
+auroc(↑).
+aupr in(↑).
+aupr out(↑).
+ood evaluation.
+conganaeeraepog.
+---.
+---.
+bert.
+linear.
+78.90§18.13§12.04§.
+75.20§8.70§9.01§8.91§.
+11.31§10.33§8.31§7.21.
+8.508.317.016.70.
+80.26§8.56§9.11§8.85§.
+10.81§9.31§8.40§6.90.
+8.358.296.316.11.
+94.40§58.50§23.70§.
+98.72§13.03§16.52§12.99§.
+21.98§17.99§12.68§10.18.
+12.8512.5310.8810.12.
+99.34§12.38§15.12§12.26§.
+22.35§14.81§11.82§9.53.
+11.7611.517.807.63.en-conganen-aeoding-odin.
+en-conganen-aeoding-odin.
+conﬁdenceentropymahalanobisl-mahalanobis*.
+conﬁdence*entropy*mahalanobis*l-mahalanobis*.
+conﬁdenceentropymahalanobisl-mahalanobis*.
+conﬁdence*entropy*mahalanobis*l-mahalanobis*.
+drm*.
+drm*.
+roberta.
+linear.
+52.04§23.94§11.67§.
+49.95§8.47§8.66§8.40§.
+11.00§10.10§8.02§6.92.
+7.858.146.886.62.
+49.95§8.29§8.68§8.53§.
+10.38§8.93§8.13§6.71.
+8.027.866.135.98.
+52.22§87.78§95.83§.
+22.36§96.12§96.24§95.81§.
+94.96§95.65§96.90§97.52.
+96.3496.6797.4397.77.
+15.20§96.82§96.11§96.74§.
+95.23§95.89§96.92§97.94.
+97.1097.1798.0798.16.
+82.79§96.98§99.05†.
+69.86§98.89§98.73§98.75†.
+98.52§98.73§99.14†99.41.
+98.9599.0199.3799.46.
+66.64§99.08†98.84§99.12†.
+98.58§98.73§99.06§99.50.
+99.2599.2799.5399.56.
+23.54§54.12§83.98§.
+11.27§88.38§87.34§88.81§.
+84.59§87.20§88.19§89.37.
+87.5189.6890.3691.55.
+10.58§90.06§88.72§89.95§.
+86.46§88.70§90.37§92.47.
+90.4690.6992.8692.96.our best method (drm+l-mahalanobis) is signiﬁcantly better than each baseline model (without *) with p-value < 0.01 (marked by §) and p-value < 0.05(marked by †) using t-test.
+all methods with * are our proposed methods..note that eer, detection error, auroc, and.
+aupr are threshold-independent metrics..4.4.3 statistical signiﬁcance.
+we also evaluate the statistical signiﬁcance be-tween all baselines and our best result (drm +l-mahalanobis) on all the above metrics.
+we traineach model 10 times with different pytorch ran-dom seeds.
+we report the average results and t-teststatistical signiﬁcance results..4.5 results.
+4.5.1.ind classiﬁcation results.
+table 3 reports the ind intent classiﬁcation re-sults on each dataset ﬁnetuned using bert androberta pre-trained models.
+it is interesting toobserve that all drm combined models consis-tently achieve better classiﬁcation accuracy withup to 0.8% improvement (reproduced ”no joint”row in table 3 in (chen et al., 2019) on snipsdataset).
+this is because the domain loss forcessigmoid(fd) close to 1 and therefore also slightlymitigates its impact to ind classiﬁcation.
+thus, thetrue posterior distribution of ind data is also mod-eled more precisely.
+for both bert and roberta.
+table 3: ind intent classiﬁcation results.
+model.
+last layer.
+datasets.
+clinc.
+atis.
+snips.
+movie.
+bert.
+roberta.
+lineardrm*.
+lineardrm*.
+96.19†96.66.
+96.82†97.15.
+97.76†98.21.
+97.64†98.31.
+97.97†98.23.
+98.07†98.87.
+97.26†97.87.
+98.07†98.63.our drm methods (marked by *) are signiﬁcantly better than baselinemodel on all datasets with p-value < 0.05 (marked by †) using t-test..backbones, drm models are signiﬁcantly betterthan conventional bert-linear classiﬁcation mod-els with p-value < 0.05..4.5.2 ood detection results.
+results on clinc dataset: table 2 reports theood detection results on clinc dataset.
+thisresult covers all existing work and our enhancedbaselines.
+we focus on analyzing the contributionby each of our proposed techniques, drm andl-mahalanobis.
+the ﬁrst three rows report theperformance of existing approaches based on theoriginal designs in their papers (eraepog in greyuses additional unlabeled data).
+unfortunately, weobserve that their performance is even worse thanthe simple conﬁdence-based approach via bert.
+2449table 4: ood detection results on snips/atis/movie datasets (roberta model finetuning).
+ood method.
+eer(↓).
+fpr95(↓).
+detection error(↓).
+auroc(↑).
+aupr in(↑).
+aupr out(↑).
+ood evaluation.
+ind dataset: snips; ood datasets: clinc ood/atis/movie.
+en-congan 54.50§/63.05§/54.22§ 99.16§/99.87§/99.10§ 42.61§/49.10§/37.32§ 39.03§/30.88§/45.64§ 37.15§/34.47§/30.03§ 51.23§/45.70§/52.59§96.09§/92.03§/87.44§ 94.78§/92.65§/97.67§ 97.21§/92.29§/55.16§conﬁdence96.32§/92.44§/87.12§ 94.90§/92.94§/97.60§ 97.53§/92.99§/52.27§entropy96.46§/93.81§/83.58§ 94.59§/93.99§/96.63§ 97.75§/94.53§/47.36§odin97.21§/94.73§/85.60§ 95.70§/95.04§/97.73§ 98.02§/95.44§/50.38§g-odin98.56§/98.12§/88.96§ 97.41§/98.92†/94.39§ 98.12§/95.34§/86.84§en-ae98.79†/99.74†/95.61§ 97.73§/99.75†/99.22§ 99.21§/99.77†/76.61§maha98.15/99.79/99.76drm+l-maha*.
+9.91§/17.83§/22.22§14.94§/47.43§/51.85§10.21§/18.05§/23.15§ 14.54§/45.04§/52.68§10.01§/16.93§/23.15§ 14.22§/39.04§/58.33§13.31§/37.86§/55.67§9.65§/15.16§/22.02§4.18§/3.59§/3.08†4.40§/4.37§/3.59§2.66§/2.23§/5.58§3.90§/1.81/11.11§1.95/0.00/2.783.00/1.79/2.78.
+9.18§/11.17§/19.34§9.25§/10.77§/19.58§9.43§/9.64§/23.01§8.32§/8.55§/21.82§4.25§/4.00§/3.64†3.47§/1.36†/10.21§2.63/1.16/3.16.
+98.90/99.79/98.53.
+99.24/99.80/87.02.
+ind dataset: atis; ood datasets: clinc ood/snips/movie.
+en-congan 21.60§/19.74§/23.28§ 81.52§/86.33§/93.77§ 15.51§/15.54§/16.03§ 82.34§/81.79§/79.32§ 84.52§/89.35§/58.36§ 72.74§/60.20§/89.14§96.99§/97.84§/96.62§ 97.19§/98.57§/99.56† 97.04§/96.99§/84.27§conﬁdence97.06§/97.93§/96.68§ 97.25§/98.62§/99.57† 97.11§/97.14§/85.02§entropy97.16§/98.00§/96.73§ 97.39§/98.68§/99.58† 97.16§/97.18§/84.88§odin97.27§/98.11§/96.85§ 97.46§/98.76§/99.59† 97.28§/97.32§/85.90§g-odin99.43†/99.74/97.93§99.41†/99.83/99.63§99.43†/99.89/98.72§en-ae99.46/99.49/95.45§99.18§/99.47§/98.72† 98.78§/99.45§/99.71§maha99.47/99.50/98.22drm+l-maha*.
+20.50§/12.92§/17.59§21.67§/13.75§/17.59§21.32§/14.39§/18.52§20.87§/13.44§/17.76§2.20†/0.00/0.35†12.13§/8.06§/11.64§1.30/0.32/0.00.
+10.21§/8.52§/10.19§9.91§/8.84§/10.12§9.11§/8.36§/10.08§8.75§/8.01§/9.97§4.00§/2.09/3.69§4.00§/3.85§/6.48§2.70/2.09/1.85.
+9.28§/8.36§/9.33§9.11§/8.16§/9.38§7.50§/6.15§/9.37§7.31§/6.02§/8.98§3.45†/1.33/1.97†3.76§/2.94§/5.04§2.55/2.01/1.23.
+99.48/99.70/99.78.
+99.51/99.82/99.97.
+ind dataset: movie; ood datasets: clinc ood/atis/snips.
+en-congan 45.90§/15.12§/41.09§ 44.05§/14.35§/39.59§conﬁdenceentropyoding-odinen-aemahadrm+l-maha*.
+43.85§/57.44§/45.78§ 85.21§/88.23§/90.40§ 14.68§/17.56§/10.09§19.22§/16.70§/18.81§ 36.81§/47.94§/47.52§ 18.51§/15.15§/18.53§ 91.65§/91.99§/90.53§ 98.11§/98.50§/98.68§ 76.78§/67.58§/59.63§19.12§/17.26§/19.13§ 34.64§/44.24§/44.80§ 18.25§/16.12§/18.87§ 91.79§/92.14§/90.72§ 98.11§/98.50§/98.69§ 78.66§/70.87§/63.96§19.42§/18.95§/19.94§ 34.43§/39.91§/39.38§ 18.24§/18.38§/19.33§ 91.34§/91.40§/90.03§ 97.96§/98.29§/98.53§ 78.56§/71.62§/65.18§18.61§/18.23§/19.25§ 34.19§/36.42§/37.03§ 18.15§/17.27§/18.91§ 91.86§/91.97§/90.63§ 98.21§/98.34§/98.70§ 78.98§/72.07§/66.79§94.57§/93.56§/92.23§ 98.91§/99.58†/99.01† 77.12§/76.13§/68.75§13.70§/7.28§/16.05§97.82†/97.27§/91.44§99.81†/99.89/99.82†99.37§/99.43§/98.63§3.90§/3.41†/6.11§97.90/97.38/93.8599.89/99.92/99.8899.48/99.53/99.063.70/3.36/4.66.
+43.42§/16.05§/32.29§6.02§/2.35§/15.40§2.56/1.01/4.34.
+11.00§/4.46§/11.87§3.72§/3.02§/6.02§3.61/2.85/4.58.
+22.95§/7.56§/20.55§.
+in each ood method for an ind dataset, ”/” separates the results for different ood datasets.
+our method (*) is signiﬁcantly better than baseline models with p-value < 0.01 (marked by §) and p-value < 0.05 (marked by †) using t-test in most cases..ﬁnetuning baseline (row 5).
+thus, we mainly focuson comparing our method with strong baselineswith bert and roberta models..ablation study on clinc dataset: we analyzehow our two novel components, drm model andl-mahalanobis, impact the performance..for a given ood detection method, we ﬁnd thattheir combinations with drm consistently performbetter than those with standard models.
+the im-provement is at least 1-2% for all metrics againstour enhanced baselines.
+among all ood detectionapproaches, our proposed l-mahalanobis ood de-tection approach achieves the best performancefor both linear and drm combined bert androberta models.
+it is not surprising to observethat our drm method combined with a better pre-trained roberta model achieves larger ood de-tection performance improvement.
+note that ourcustomized en-ae performs much better than mostother methods since we incorporated the enhancedreconstruction capability with pre-trained bertmodels.
+however, en-ae cannot utilize all bertlayers as our proposed l-mahalanobis method, re-sulting in worse performance..in addition, drm+l-mahalanobis models aresigniﬁcantly better than existing methods and en-hanced baselines with p-value < 0.01 on mostmetrics for both bert and roberta backbones..the rows with “drm” in “last layer” columnof table 2 show the performance of drm model.
+as one can see, for all ood methods, drm consis-tently performs better than the conventional “lin-ear” last layer.
+speciﬁcally, the drm and conﬁ-dence combo also outperforms its closest baselineg-odin.
+this validates the effectiveness of ourdisentangled logits design in drm based on themathematical analysis of overconﬁdence.
+it alsoshows that our new domain loss can indeed en-hance the model awareness that all training data isind..the rows with “l-mahalanobis” in “oodmethod” column of table 2 outperform other oodmethods with the same model and last layer.
+com-pared with its closest baseline mahalanobis, thebetter performance of l-mahalanobis validates theusefulness of all layers’ features in various models.
+results on atis/snips/movie datasets: sinceour strong baselines on pre-trained robertamodel showed better results on clinc, we nextevaluate other results ﬁnetuned on roberta.
+2450(a) conventional conﬁdence score.
+(b) drm conﬁdence score.
+(c) drm l-mahalanobis score.
+figure 4: histogram of detection scores using various methods (snips ind, atis ood) (we choose thisind/ood combination to provide the best visualization for analysis).
+model.
+when taking each dataset as ind, weuse the other two mutually exclusive datasets andclinc ood as ood datasets for evaluating ooddetection performance.
+as one can see in table 4,our method outperforms other approaches on bothsnips and movie ind datasets.
+for atis inddataset, en-ae for snips ood dataset achievesalmost perfect performance.
+this is because atisand snips are almost completely non-overlappingand atis is well designed with carefully selectedvarieties and entities in the airline travel domain.
+when taking snip as ind and atis as ood, itis interesting to see that our method achieves bet-ter performance than en-ae.
+this is because thatsnips contains a large number of entities such thatthe reconstruction error will be lower and becomeless separable than that in atis ood utterances..for both snips and movie ind datasets,drm+l-mahalanobis are signiﬁcantly better thanbaseline methods with p-value < 0.01 in mostcases for all ood datasets.
+for atis ind dataset,drm+l-mahalanobis shows similar behavior ex-cept en-ae since it is easier to train an autoencodermodel for atis ind dataset due to its carefully col-lected clean training utterances..4.6 qualitative analysis.
+we provide a quantitative analysis by visualizingour two methods, drm and l-mahalanobis..4.6.1 detection score distributionfigure 4 plots the histograms of detection scores forood and ind data.
+compared with figure 4(a),drm signiﬁcantly reduces the overlap betweenood and ind in figure 4(b).
+l-mahalanobis uti-lizes features from all layers to further reduce theoverlap in figure 4(c).
+moreover, the score distri-butions from left to right in figure 4, imply that alarger entropy of all score reﬂects a better uncer-tainty modeling..4.6.2 feature distribution visualization.
+figure 5 visualizes the utterance representationslearned with or without drm.
+the red ind data aretightly clustered within classes (totally 150 clincind classes), while the blue ood data spread arbi-trarily.
+as one can see, the blue dots in figure 5(b)have less overlap with red dots, indicating the drmhelps to learn the utterance representation to betterdisentangle ind and ood data..(a) conventional roberta.
+(b) drm roberta.
+figure 5: t-sne visualization of utterance representa-tions on clinc dataset (red: ind, blue: ood).
+5 conclusion.
+this paper proposes using only ind utterances toconduct intent classiﬁcation and ood detection forslu in an open-world setting.
+the proposed drmhas a structure of two branches to avoid overcon-ﬁdence and achieves a better generalization.
+theevaluation shows that our method can achieve state-of-the-art performance on various slu benchmarkand in-house datasets for both ind intent classi-ﬁcation and ood detection.
+in addition, thanksto the generic of our drm design and with therecent extensive use of bert on different datamodalities, our work can contribute to improvingboth in-domain classiﬁcation robustness and out-of-domain detection robustness for various classiﬁ-cation models such as image classiﬁcation, soundclassiﬁcation, vision-language classiﬁcations..2451impact statement.
+our proposed method in this paper has been de-ployed in the domain classiﬁcation slu model forsamsung bixby voice assistant.
+in addition to slu,our work could have a broader impact on other ap-plications, which can be beneﬁted from having amore robust classiﬁcation system.
+for example, ourmethod can help the robot to detect objects moreaccurately or stop safely by correctly identifyingunknown objects, classify environmental sounds ordetect anomaly sounds, and so on.
+moreover, bybetter detecting the ood samples that are differ-ent from the training data distribution, our methodcan facilitate to handle distributional shifts betweentraining data and practical usage data..references.
+qian chen, zhu zhuo, and wen wang.
+2019. bertfor joint intent classiﬁcation and slot ﬁlling.
+corr,abs/1902.10909..alice coucke, alaa saade, adrien ball, th´eodorebluche, alexandre caulier, david leroy, cl´ementdoumouro, thibault gisselbrecht, francesco calt-agirone, thibaut lavril, ma¨el primet, and josephdureau.
+2018. snips voice platform: an embeddedspoken language understanding system for private-by-design voice interfaces.
+corr, abs/1805.10190..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language under-standing.
+in naacl-hlt, pages 4171–4186..chih-wen goo, guang gao, yun-kai hsu, chih-lihuo, tsung-chieh chen, keng-wei hsu, and yun-nung chen.
+2018. slot-gated modeling for joint slotﬁlling and intent prediction.
+in naacl-hlt, pages753–757..daniel guo, gokhan tur, wen-tau yih, and geoffreyzweig.
+2014. joint semantic utterance classiﬁcationand slot ﬁlling with recursive neural networks.
+inslt, pages 554–559..patrick haffner, gokhan tur, and jerry h wright.
+2003.optimizing svms for complex call classiﬁcation.
+inicassp, volume 1..martin e hellman.
+1970. the nearest neighbor classiﬁ-cation rule with a reject option.
+ieee transactionson systems science and cybernetics, 6(3):179–185..charles t hemphill, john j godfrey, george r dod-dington, et al.
+1990. the atis spoken language sys-in proceedings of the darpatems pilot corpus.
+speech and natural language workshop, pages 96–101..dan hendrycks, mantas mazeika, and thomas g di-etterich.
+2018. deep anomaly detection with outlierexposure.
+in iclr..yen-chang hsu, yilin shen, hongxia jin, and zsoltkira.
+2020. generalized odin: detecting out-of-learning from out-of-distribution image withoutdistribution data.
+in cvpr, pages 10948–10957..tsuneo kato, atsushi nagai, naoki noda, ryosukesumitomo, jianming wu, and seiichi yamamoto.
+2017. utterance intent classiﬁcation of a spoken di-alogue system with efﬁciently untied recursive au-toencoders.
+in sigdial, pages 60–64..joo-kyung kim, gokhan tur, asli celikyilmaz, bincao, and ye-yi wang.
+2016.intent detection us-ing semantically enriched word embeddings.
+in slt,pages 414–419..young-bum kim, sungjin lee, and karl stratos.
+2017.onenet: joint domain, intent, slot prediction forspoken language understanding.
+in 2017 ieee auto-matic speech recognition and understanding work-shop, pages 547–553..stefan larson, anish mahendran, joseph j. peper,christopher clarke, andrew lee, parker hill,jonathan k. kummerfeld, kevin leach, michael a.laurenzano, lingjia tang, and jason mars.
+2019.an evaluation dataset for intent classiﬁcation andout-of-scope prediction.
+in emnlp-ijcnlp, pages1311–1316..kimin lee, kibok lee, honglak lee, and jinwoo shin.
+2018. a simple uniﬁed framework for detecting out-of-distribution samples and adversarial attacks.
+inneurips, pages 7167–7177..shiyu liang, yixuan li, and r srikant.
+2017. enhanc-ing the reliability of out-of-distribution image detec-tion in neural networks.
+in iclr..bing liu and ian lane.
+2016. attention-based recur-rent neural network models for joint intent detectionand slot ﬁlling.
+in interspeech, pages 685–689..yinhan liu, myle ott, naman goyal, jingfei du, man-dar joshi, danqi chen, omer levy, mike lewis,luke zettlemoyer, and veselin stoyanov.
+2019.roberta: a robustly optimized bert pretraining ap-proach.
+corr, abs/1907.11692..suman ravuri and andreas stoicke.
+2015. a compara-tive study of neural network models for lexical intentclassiﬁcation.
+in asru, pages 368–374..avik ray, yilin shen, and hongxia jin.
+2018. learn-ing out-of-vocabulary words in intelligent personalagents.
+in ijcai, pages 4309–4315..avik ray, yilin shen, and hongxia jin.
+2019. fast do-main adaptation of semantic parsers via paraphraseattention.
+in deeplo@emnlp-ijcnlp, pages 94–103..2452thomas wolf, lysandre debut, victor sanh, julienchaumond, clement delangue, anthony moi, pier-ric cistac, tim rault, r´emi louf, morgan funtow-icz, and jamie brew.
+2019. huggingface’s trans-formers: state-of-the-art natural language process-ing.
+corr, abs/1910.03771..xiaodong zhang and houfeng wang.
+2016. a jointmodel of intent determination and slot ﬁlling for spo-ken language understanding.
+in ijcai, pages 2993–2999..yinhe zheng, guanyi chen, and minlie huang.
+2020.out-of-domain detection for natural language under-standing in dialog systems.
+ieee acm trans.
+audiospeech lang.
+process., 28:1198–1209..seonghan ryu, seokhwan kim, junhwi choi, hwanjoyu, and gary geunbae lee.
+2017. neural sentenceembedding using only in-domain sentences for out-of-domain sentence detection in dialog systems.
+pat-tern recogn.
+lett., 88(c):26–32..seonghan ryu, sangjun koo, hwanjo yu, andgary geunbae lee.
+2018. out-of-domain detec-tion based on generative adversarial network.
+inemnlp, pages 714–718..yilin shen, sandeep nama, and hongxia jin.
+2019a.
+teach once and use everywhere – building ai assis-tant eco-skills via user instruction and demonstration(poster).
+in mobisys, pages 606–607..yilin shen, avik ray, hongxia jin, and sandeep nama.
+2019b.
+skillbot: towards automatic skill develop-ment via user demonstration.
+in naacl-hlt, sys-tem demonstrations, pages 105–109..yilin shen, avik ray, abhishek patel, and hongxia jin.
+2018a.
+cruise: cold-start new skill developmentin acl, systemvia iterative utterance generation.
+demonstrations, pages 105–110..yilin shen, yu wang, abhishek patel, and hongxia jin.
+2019c.
+sliqa-i: towards cold-start development ofend-to-end spoken language interface for questionanswering.
+in icassp, pages 7195–7199..yilin shen, xiangyu zeng, and hongxia jin.
+2019d.
+a progressive model to enable continual learningfor semantic slot ﬁlling.
+in emnlp-ijcnlp, pages1279–1284..yilin shen, xiangyu zeng, yu wang, and hongxia jin.
+2018b.
+user information augmented semantic framein in-parsing using progressive neural networks.
+terspeech, pages 3464–3468..ming tan, yang yu, haoyu wang, dakuo wang, sa-loni potdar, shiyu chang, and mo yu.
+2019. out-of-domain detection for low-resource text classiﬁcationtasks.
+in emnlp-ijcnlp, pages 3564–3570..g. tur and r. de mori.
+2011. spoken language un-derstanding: systems for extracting semantic infor-mation from speech.
+wiley..gokhan tur, anoop deoras, and dilek hakkani-t¨ur.
+2014. detecting out-of-domain utterances ad-dressed to a virtual personal assistant.
+in fifteenthannual conference of the international speech com-munication association..ye-yi wang, li deng, and alex acero.
+2005. spo-ken language understanding.
+ieee signal process-ing magazine, 22(5):16–31..yu wang, yilin shen, and hongxia jin.
+2018. a bi-model based rnn semantic frame parsing model forin naacl-hlt,intent detection and slot ﬁlling.
+pages 309–314..2453

@@ -1,0 +1,713 @@
+joint veriﬁcation and reranking for open fact checking over tables.
+michael schlichtkrull1∗, vladimir karpukhin2, barlas o˘guz2,mike lewis2, wen-tau yih2, sebastian riedel2,31university of cambridge, 2facebook ai research, 3university college londonmichael.schlichtkrull@cst.cam.ac.uk,{vladk, barlaso, mikelewis, scottyih, sriedel}@fb.com.
+abstract.
+structured information is an important knowl-edge source for automatic veriﬁcation ofthe majorityfactual claims.
+nevertheless,of existing research into this task has fo-cused on textual data, and the few recent in-quiries into structured data have been for theclosed-domain setting where appropriate evi-dence for each claim is assumed to have al-ready been retrieved.
+in this paper, we in-vestigate veriﬁcation over structured data inthe open-domain setting, introducing a jointreranking-and-veriﬁcation model which fusesevidence documents in the veriﬁcation compo-nent.
+our open-domain model achieves perfor-mance comparable to the closed-domain state-of-the-art on the tabfact dataset, and demon-strates performance gains from the inclusionof multiple tables as well as a signiﬁcant im-provement over a heuristic retrieval baseline..1.introduction.
+verifying whether a given fact coheres with atrusted body of knowledge is a fundamental prob-lem in nlp, with important applications to auto-mated fact checking (vlachos and riedel, 2014)and other tasks in computational journalism (cohenet al., 2011; flew et al., 2012).
+despite extensiveinvestigation of the problem under different con-ditions including entailment and natural languageinference (dagan et al., 2005; bowman et al., 2015)as well as claim veriﬁcation (vlachos and riedel,2014; alhindi et al., 2018; thorne and vlachos,2018), relatively little attention has been devotedto the setting where the trusted body of evidence isstructured in nature — that is, where it consists oftabular or graph-structured data..recently, two datasets were introduced for claimveriﬁcation over tables (chen et al., 2020b; guptaet al., 2020).
+in both datasets, claims can be veriﬁed.
+∗work done while interning with facebook ai research..figure 1: example query to be evaluated against two re-trieved tables.
+named entities represent a strong base-line for retrieval, but ultimately a more complex modelis required to distinguish highly similar tables..given a single associated table.
+while highly usefulfor the development of models, this closed settingis not reﬂective of real-world fact checking taskswhere it is usually not known which table to consultfor evidence.
+realistic systems must ﬁrst retrieveevidence from a large data source.
+that is, realisticsystems must operate in an open setting..here, we investigate fact veriﬁcation over tablesin the open setting.
+we take inspiration from sim-ilar work on unstructured data (chen et al., 2017;nie et al., 2019; karpukhin et al., 2020; lewiset al., 2020), proposing a two-step model whichcombines ad-hoc retrieval with a neural reader.
+drawing on preliminary work in open questionanswering over tables (sun et al., 2016), we per-form retrieval based on simple heuristic model-ing of individual table cells.
+we combine this re-triever with a roberta-based (liu et al., 2019)joint reranking-and-veriﬁcation model, performing.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages6787–6799august1–6,2021.©2021associationforcomputationallinguistics6787the daily express and the sunday mirror areowned by the same company.truetitleestablishedparent companydaily mail1896dmgtmail on sunday1982dmgt.........daily express1900reachsunday mirror1915reachsunday people1881reachtitle2019 election party supportdaily mailconservative partymail on sundayconservative party......the sunconservative partydaily mirrorlabour partysunday mirrorlabour partyfigure 2: a diagram of our model, using the joint reranking- and veriﬁcation approach described in section 4.1.linearised tables are encoded separately with roberta.
+then, cross-attention is used to contextualize each indi-vidual table with respect to the others.
+finally, the model jointly predicts truth value and table selection..fusion of evidence documents in the veriﬁcationcomponent.
+this corresponds to the approach sug-gested for question answering by e.g.
+izacard andgrave (2020)..we evaluate our models using the recently in-troduced tabfact dataset (chen et al., 2020b).
+while initially developed for the closed domain,the majority of claims are sufﬁciently context-independent that they can be understood with-out knowing which table they were constructedwith reference to.
+as such, the dataset is suitablefor the open domain as well.
+our models repre-sent a ﬁrst step into the open domain, achievingopen-domain performance exceeding the previousclosed-domain state of the art—outside of eisen-schlos et al.
+(2020), which includes pretraining onadditional synthetic data.
+we demonstrate signiﬁ-cant gains from including multiple tables, and thesegains are increasing as more tables are used.
+wefurthermore present results using a more realisticsetting where tables are retrieved not just from the16,573 tabfact tables, but from the full wikipediadump.
+our contributions can be summarized asfollows:.
+1. we introduce the ﬁrst model for open-domaintable fact veriﬁcation, demonstrating strongperformance exceeding the previous closed-setting state of the art..2. we propose two strategies with correspondingloss functions for modeling table fact veriﬁca-tion in the open setting, suitable respectivelyfor high veriﬁcation accuracy or identifying ifappropriate information has been retrieved forveriﬁcation..3. in addition to our open-domain performance,our model achieves a new closed-domain state-of-the-art result..4. we report the ﬁrst results on wikipedia-scaleopen-domain table fact veriﬁcation, using alltables from a wikipedia dump as the backend..we release the source code for our experimentsathttps://github.com/facebookresearch/opentablefactchecking..2 open-domain table fact veriﬁcation.
+formally, the open table fact veriﬁcation problemcan be described as follows.
+given a claim q anda collection of tables t , the task is to determinewhether q is true or false.
+as such, we approachthe task by modeling a binary verdict variable vas p(v|q, t ).
+this is in contrast to the closed set-ting, where a single table tq ∈ t is given, and thetask is to model p(v|q, tq).
+since there are largeavailable datasets for the closed setting (chen et al.,2020b; gupta et al., 2020), it is reasonable to ex-pect to exploit tq during training; however, at testtime, this information may not be available.
+we fol-low a two-step methodology that is often adoptedin open-domain setting for unstructed data (chenet al., 2017; nie et al., 2019; karpukhin et al., 2020;lewis et al., 2020) to our setting.
+namely, givena claim query q, we retrieve a set of evidence ta-bles dq ⊂ t (section 3), and subsequently modelp(v|q, dq) in place of p(v|q, t ) (section 4)..3 entity-based retrieval.
+we ﬁrst design a strategy for retrieving an appropri-ate subset of evidence tables for a given query.
+for.
+6788<s>thedailyexpress.</s>row1is</s><s>thedailyexpress.</s>row1is<s>thedailyexpress.</s>row1is:title</s>:established</s>:nameroberta-largeroberta-largeroberta-large<s> embedding<s> embedding<s> embeddingcross attentioncross attentioncross attentionclaimtruthtablechoiceclaimtruthclaimtruthquestion answering over tables, sun et al.
+(2016)demonstrated strong performance on retrieving rel-evant tables using entity linking information, fol-lowing the intuition that many table cells containentities.
+we take inspiration from these results.
+intheir setting, claim entities are linked to freebaseentities, and string matching on the alias list is usedto map entities to cells.
+to avoid reliance on aknowledge graph, we instead use only the textualstring from the claim to represent entities, and per-form approximate matching through dot productsof bi- and tri-gram tf-idf vectors..t ), ..., z(cm.
+t , ..., cmq, ..., en.
+we pre-compute bi- and trigram tf-idf vec-tors z(c1t ) for every table t ∈ t withcells c1t .
+then, we identify the named enti-ties e1q within the query q. for our experi-ments, we use the named entity spans for tabfact,provided by chen et al.
+(2020b) as part of theirlpa-model.1 we compute bi- and trigram tf-idfvectors z(e1q ) for the surface forms ofthose entities.
+to retrieve dq given q, we thenscore every t ∈ t .
+since we are approximatingentity linking between claim entities and cells, welet the score between an entity and a table be thebest match between that entity and any cell in thetable.
+that is:.
+q), ..., z(en.
+score(q, t) =.
+z(ei.
+q)(cid:124) · z(cjt ).
+(1).
+n(cid:88).
+i=1.
+mmaxj=1.
+in other words, we compute for every entity thebest match in the table, and score the table as thesum over the best matches.
+to construct the setof evidence tables dq, we then retrieve the top-khighest scoring tables.
+our choice to use bi- andtri-gram tf-idf as the retrieval strategy was deter-mined empirically — see section 5.1 and table 1for experimental comparisons..4 neural veriﬁcation.
+to model p(v|q, dq), we employ a roberta-based (liu et al., 2019) late fusion strategy (seefigure 2 for a diagram of our model).
+given aquery q with a ranked list of k retrieved tablesdq = (d1q ), we begin by linearising eachtable.
+our linearisation scheme follows chen et al.
+(2020b).
+we ﬁrst perform sub-table selection by ex-cluding columns not linked to entities in the query.
+here, we reuse the entity linking obtained during.
+q, ..., dk.
+1in the absence of named entity tags, named entity spanswould ﬁrst need to be found though an off-the-shelf namedentity recognizer, such as spacy (honnibal et al., 2020)..the retrieval step (see section 3), and retain onlythe three columns in which cells received the high-est retrieval scores.
+we linearise each row sepa-rately, encoding entries and table headers.
+supposer is a row with cell entries c1, c2, ..., cm in a ta-ble, where the corresponding column headers areh1, h2, ..., hm.
+row number r is mapped to “rowr is : h1 is c1 ; h2 is c2; ... ; hm is cm .”.
+we construct a ﬁnal linearisation lq,t for eachquery-table pair q, t by prepending the query to theﬁltered table linearisation.
+we then encode eachlq,t with roberta, and obtain a contextualisedq ) ∈ rn for every table by using theembedding f (dkﬁnal-layer embedding of the cls-token.
+we con-struct the sequence of embeddings f (d1q), ...f (dkq )for all k tables..when the model attempts to judge whether torely on a given table for veriﬁcation, other highly-scored tables represent useful contextual informa-tion (e.g., in the example in figure 1, newspapersbelonging to the same owner may be likely to alsoshare political leanings).
+nevertheless, each tableembedding f (dkq ) is functionally independent fromthe embeddings of the other tables.
+as such, con-textual clues from other tables cannot be taken intoaccount.
+to remedy this, we introduce a cross-attention layer between all tables corresponding tothe same query.
+we collect the embeddings f (dkq )of each table into a tensor f (dq).
+we then applya single multi-head self-attention transformationas deﬁned by vaswani et al.
+(2017) to this tensor,and concatenate the result.
+that is, we compute anattention score for head h from table i to table jwith query q as:.
+αh.
+ij = σ.
+(cid:32) w h.qf (di.
+kf (dj.
+q)(w h(cid:112)dim(k).
+(cid:33).
+q))t.(2).
+where σ is the softmax function, and wq andwk represent linear transformations to queries andkeys, respectively.
+we then compute an attentionvector for that head as:(cid:88).
+ah.
+i =.
+αijw h.v f (djq).
+(3).
+j∈dq.
+and ﬁnally construct contextualized table represen-tations through concatenation as:.
+f ∗(dk.
+q ) = [f (dk.
+q ), a1.
+i , ..., ahi ].
+(4).
+we subsequently use f ∗(dq), i.e.
+the tensor con-taining f ∗(d1q ), for downstream predic-tions.
+we note that our approach can be viewed.
+q), ..., f ∗(dk.
+6789as an extension of the table-bert algorithm in-troduced by chen et al.
+(2020b) to the multi-tablesetting, using an attention function to fuse togetherthe information from different tables..over v:.
+4.1 training & testing.
+relying on a closed-domain dataset provides a ta-ble with appropriate information for answeringeach query; namely, the table against which theclaim is to be checked in the closed setting.
+al-though this information is not available at test time,we can construct a training regime that allows usto exploit it to improve model performance.
+we ex-periment with two different strategies: jointly mod-eling reranking of tables along with veriﬁcation ofthe claim, and modeling for each table a ternarychoice between indicating truth, falsehood, or giv-ing no relevant information.
+later, we demonstratehow the former leads to increased performance onveriﬁcation, while the latter gives access to a strongpredictor for cases where no appropriate table hasbeen retrieved..joint reranking and veriﬁcation for the jointreranking and veriﬁcation approach, we assumethat a best table for answering each query is givenand can be used to learn a ranking function.
+wemodel this as selecting the right table from dq,e.g., through a categorical variable s that indicateswhich table should be selected.
+we then learn ajoint probability of s and the truth value of theclaim v over the tables for a given query.
+assumingthat s and v are independent, p(s, v|q, dq) is alsoa categorical distribution with one correct outcomethat can be optimized for (that is, one correct pairof table and truth value).
+as such, we let:.
+p(s, v|q, dq) = σ(w (f ∗(dq)s)v).
+(5).
+where w : r2n → r2 is an mlp and σ is thesoftmax function.
+at train time, we obtain onecross-entropy term corresponding to p(s, v|q, dq)per query.
+at test time, we marginalize over s toobtain a ﬁnal truth value:.
+pv(v|q, dq) =.
+p(v, s = t|q, dq).
+(6).
+(cid:88).
+t∈dq.
+this formulation has the additional beneﬁt of alsoallowing us to make a prediction on which tablematches the query.
+we can do so by marginalizing.
+ps(s|q, dq) =.
+p(s, v = vq|q, dq).
+(cid:88).
+vq∈{true,f alse}.
+(7)with this loss, we train the model by substitutingfor dq a set d∗q containing wherein the gold table isguaranteed to appear.
+we ensure this by replacingthe lowest-scored retrieved table in dq with thegold table whenever it has not been retrieved..ternary veriﬁcation at test time, there may becases where a table refuting or verifying the factis not contained in dq.
+for some applications, itcould be useful to identify these cases.
+we there-fore design an alternative variant of our systembetter suited for this scenario.
+intuitively, each ta-ble can represent three outcomes – the query is true,the query is false, or the table is irrelevant.
+we canmodel this through a ternary variable i such thatfor table t:.
+p(i|q, t, dq) = σ(w (cid:48)(f ∗(dq)t)i).
+(8).
+where w (cid:48) : r2n → r3 is an mlp and σ is thesoftmax function.
+during training, we assign trueor false to the gold table depending on the truthof the query, and irrelevant to every other table.
+we then use the mean cross-entropy over the tablesassociated with each query as the loss for eachexample.
+at test time, we compute the truth valuev of each query as:.
+p(i = true|q, t) >.
+p(i = f alse|q, t).
+(cid:88).
+t∈dq.
+(cid:88).
+t∈dq.
+(9).
+5 experiments.
+we apply our model to the tabfact dataset (chenet al., 2020b), which consists of 92,283 training,12,792 validation and 12,792 test queries over16,573 tables.
+the task is binary classiﬁcation ofclaims as true or false, with an even proportion ofthe two classes in each split.
+to benchmark ouropen-domain models and construct performancebounds, we begin by evaluating in the closed do-main.
+as an upper bound, we can then compareagainst the performance of the closed-domain sys-tem scored using a single table retrieved throughan oracle.
+as a lower bound, we can again usethe closed-domain system, but using the highest-ranked table according to our tf-idf retriever.
+theevaluation metric is simply prediction accuracy..6790dataset.
+query-matching word-level tf-idfquery-matching character-level (2,3)-gram tf-idf.
+entity-matching word-level exact matchentity-matching word-level tf-idfentity-matching character-level (2,3)-gram tf-idfentity-matching character-level (1,2,3)-gram tf-idf.
+h@1 h@3 h@5 h@10.
+41.734.7.
+48.256.069.662.3.
+54.245.5.
+57.965.678.875.2.
+59.050.2.
+64.274.182.380.1.
+65.356.8.
+67.381.286.686.1.table 1: retrieval accuracy for our entity-based tf-idf retrieval along with several baselines for the tabfactvalidation set, computed using all 16,573 tabfact tables.
+we experiment with matching the entire query againsttable cells (above), and matching individual entities in the query against table cells using equation 1 (below).
+forall subsequent experiments we rely on character-level (2,3)-grams with entity-matching for retrieval..model.
+dev test simple test complex test small test.
+table-bert (chen et al., 2020b)logicalfactchecker (zhong et al., 2020)progvgat (yang et al., 2020)tapas (eisenschlos et al., 2020)*ours (oracle retrieval).
+ours (1 retrieved table)ours (ternary loss, 3 tables)ours (ternary loss, 5 tables)ours (ternary loss, 10 tables)ours (joint loss, 3 tables)ours (joint loss, 5 tables)ours (joint loss, 10 tables).
+66.171.874.981.078.2.
+74.173.874.173.974.675.973.9.
+65.171.774.481.077.6.
+73.273.573.773.173.875.173.8.
+79.185.488.392.388.9.
+86.786.987.186.587.087.886.9.
+58.265.167.675.672.1.
+67.868.167.967.968.369.568.1.
+68.174.376.283.979.4.
+76.676.976.577.378.177.876.9.table 2: prediction accuracy of our roberta-based model on the ofﬁcial splits from the tabfact dataset.
+weinclude closed-domain performance of several models from the literature, as well as the performance of our modelin both the closed and the open domain, using both proposed loss functions.
+the ﬁrst section of the table containsclosed-domain results, the second open-domain.
+* employs intermediary pretraining on additional synthetic data..5.1 retrieval.
+we choose bi- and tri-gram tf-idf as the retrievalstrategy empirically.
+to address the comparativeperformance of this choice, we compute and rankin table 1 the retrieval scores obtained throughour strategy on the tabfact test set.
+we compareagainst several alternative strategies: bi- and tri-gram tf-idf vectors for all words in the query(rather than just the entities), word-level tf-idfvectors for entities, and entity-level exact match-ing.
+our bi- and tri-gram tf-idf strategy yieldsby far the strongest performance.
+we furthermoredemonstrate how the exclusion of unigrams fromthe tf-idf vectors slightly increases performance..5.2 veriﬁcation.
+(2020b), as well as to several recent models fromthe literature (zhong et al., 2020; yang et al., 2020;eisenschlos et al., 2020).
+we include results withboth losses as discussed in section 4, using varyingnumbers of tables..with an accuracy of 75.1%, we obtain the bestopen-domain results with our model using the jointreranking-and-veriﬁcation loss and ﬁve tables.
+wesee performance improvements when increasingthe number of tables, both from 1 to 3 and from3 to 5. in the closed domain, the 77.6% accuracyour model achieves is a signiﬁcant improvementover the 74.4% the strongest comparable baselinereached.
+this may be due to our use of roberta,which has previously been found to perform wellfor linearised tables (gupta et al., 2020)..in table 2, we compare our best-performing mod-els to the closed-setting system from chen et al..relying purely on tf-idf for retrieval — thatis, using our system with only one retrieved table.
+6791model.
+r@1 r@2-3 r@4-5.model.
+accuracy.
+oracle retrieval.
+1 table3 tables5 tables.
+80.6.
+80.678.879.4.
+74.1.
+55.666.773.1.
+75.0.
+53.958.271.7.full model- attention- joint objective- both.
+75.173.672.971.2.table 3: peformance of our roberta-based model onthe parts of the tabfact test set where our tf-idf re-triever assigns the gold table rank respectively 1, 2-3,or 4-5..table 4: ablation study for our model, performing ver-iﬁcation with the ﬁve-table version on the tabfact testset.
+we remove respectively our cross-attention func-tion, the reranking component in the loss, and both..— yields a performance of 73.2%.
+this is a sur-prisingly small decrease compared to the closeddomain, given that an incorrect table is provided inapproximately a third of all cases (see table 1).
+wesuspect that many cases for which the retriever failsare also cases for which the closed-domain modelfails.
+to make sure we are not seeing the effect offalse negatives (e.g., tables which are not the goldtable, but which nevertheless have the informationto verify the claim), we run the model in a settingwhere one retrieved table is used, but the gold ta-ble is removed from the retrieval results; here, themodel achieves an accuracy of only 56.2%.
+we fur-thermore test a system relying on a random tablerather than a retrieved table; with a performancedrop to 53.1, we ﬁnd that the information in theretrieved table is indeed crucial to obtain high per-formance (rather than the performance being purelya consequence of, say, roberta weights)..to understand how our model derives improve-ment from the addition of more tables, we computein table 3 the performance of our reranking-and-veriﬁcation model when tf-idf returns the correcttable at rank 1, rank 2-3, or rank 4-5. immediately,we notice a much stronger improvement from us-ing multiple tables when tf-idf fails to correctlyidentify the gold table.
+this is natural, as those areexactly the cases where our model (as opposed tothe baseline) has access to the appropriate informa-tion to verify or refute the claim..interestingly, using three tables improves on us-ing one table even when the gold table is not in-cluded among the top three (from 53.9% to 58.2%),and using ﬁve tables improves on using three ta-bles also when the gold table is included amongthe top three (from 66.7% to 73.1%).
+manual in-spection reveals that our model in some cases relieson correlations between tables — if a sports teamloses games in three tables, then that may give a.higher probability of that team also losing in anunretrieved, hypothetical fourth table.
+to test this,we apply the model in a setting where we retrievethe top ﬁve tables excluding the gold table, and asetting where we use ﬁve random tables.
+usinghighly scored (but wrong) tables, we achieve a per-formance of 59.4%, a signiﬁcant improvement onthe 53.1% we achieve using random tables.
+thissupports our hypothesis that other good tables canprovide useful background context for veriﬁcation.
+it should be noted that such inferences, whileincreasing model performance, may also increasethe degree to which the model exhibits biases.
+de-pending on the application, this may as such notbe a desirable basis for veriﬁcation.
+returning tothe example in figure 1, inferring ownership onthe basis of political afﬁliation when no other in-formation is available may increase accuracy onaverage, but it can also lead to erroneous or biaseddecisions (indeed, for the claim in the example, theprediction would be wrong)..5.3 ablation tests.
+our best-performing model from table 2 relieson two innovations: the cross-attention functionwhich contextualizes retrieved tables in relation toeach other, and the joint reranking-and-veriﬁcationloss.
+in table 4, we evaluate the model withouteither of these.
+leaving the attention function outis simple — we use f (dkq ) for each table directlyfor predictions.
+we model performance withoutthe reranking component of our loss function byassuming a uniform distribution over the tables..as can be seen, the combination of both isstrictly necessary to obtain strong performance— indeed, without our joint objective, the modelperforms worse than simply applying the baselinemodel to the top table returned by tf-idf as intable 2. the ability for the model to express therelative relatedness of tables to the query is crucial..67925.4 predicting insufﬁcient information.
+model.
+accuracy.
+1.
+0.95.
+0.9.
+0.85.noisicerp.0.8.
+0.
+0.2.
+0.4.
+0.6.
+0.8.
+1.recall.
+precision-recall curve for determiningfigure 3:whether a set of ﬁve retrieved tables in the tabfact vali-dation set contains the gold table, using respectively en-)tropy of the reranking scores with our joint loss (or the maximum probability of some table being the).
+we also includegold table with our ternary loss, ().
+a most frequent class baseline (.
+we include further investigation of the role ourcross-attention mechanism plays in appendix e..in realistic settings, some claims will not be directlyanswerable from any retrieved table.
+in such cases,it can be valuable to explicitly inform the user —giving false veriﬁcations or refutations when suf-ﬁcient information is not available is misleading,and can decrease user trust.
+to model a scenariowhere the lack of relevant information must be de-tected, we create a classiﬁcation task wherein themodel must predict for all examples, whether thegold table is among the k documents in dq..t.using the ternary loss, our model directly givesthe probability of each table containing appropri-ate information as (1 − p(it = irrelevant|q, t)).
+we can estimate the suitability of the best retrievedtable for verifying the claim as max(1 − p(it =irrelevant|q, t)), and apply a threshold τ1 to clas-sify dq as suitable or unsuitable.
+for the jointloss, a more indirect approach is necessary.
+intu-itively, if our model is too uncertain about whichtable answers the query, there is a high likelihoodthat no suitable table has been retrieved.
+this cor-responds to the entropy of the reranking compo-nent hs(s|q, dq) after marginalizing over the truthvalue of the claim exceeding some threshold τ2..we compare these strategies in figure 3, obtain-ing precision-recall curves by measuring at vary-ing τ1 and τ2.
+we ﬁnd that while both approaches.
+outperform a most frequent class baseline by a sig-niﬁcant margin, the ternary loss performs betterthan the joint loss.
+as such, the choice betweenthe two losses represents a tradeoff between rawperformance (see tables 2 and 5) and the ability toidentify missing or incomplete information..5.5 wikipedia-scale table veriﬁcation.
+in our experiments so far, we have relied on the16,573 tabfact tables as the knowledge source.
+the tables selected for tabfact were taken fromwikitables (bhagavatula et al., 2013), and ﬁlteredso as to exclude “overly complicated and huge ta-bles” (chen et al., 2020b).
+moving beyond thescope of that dataset, a fully open fact veriﬁcationsystem should be able to verify claims over evenlarger collections of tables — for example, the fullset of tables available on wikipedia.
+to make apreliminary exploration of that larger-scale setting,we include in table 5 the performance of our ap-proach evaluated using roughly 3 million tablesautomatically extracted from wikipedia..roberta onlyours (1 table)ternary loss, 3 tablesternary loss, 5 tablesjoint loss, 3 tablesjoint loss, 5 tables.
+52.153.655.857.556.158.1.table 5: performance of our roberta-based model onthe tabfact test set, using all wikipedia tables ratherthan just the tabfact tables as a backend..as can be seen, our approach improves on thenaive strategy of using a single table and a closed-domain veriﬁcation component also in this morecomplex setting.
+to verify that the inference hap-pens on the basis of the retrieved tables and notsimply the roberta-weights, we include also theperformance of a model which simply uses clas-siﬁcation on top of a roberta-encoding of theclaim.
+similar to our previous experiments, thejoint-loss model with ﬁve retrieved tables performsthe strongest.
+we note that it is unclear whetherthe performance we observe here originates fromcorrelations obtained through background informa-tion (as we see in section 5.2 when the retrieverfails to ﬁnd the appropriate table), or due to veri-ﬁcation against a single entirely appropriate tablehappening at a lower rate than when using tabfact..67936 related work.
+semantic querying against large collections of ta-bles has previously been studied for question an-swering.
+sun et al.
+(2016) used string matchingbetween aliases of linked entities to search mil-lions of tables crawled from the web, with re-trieved table cells providing evidence for a ques-tion answering task.
+jauhar et al.
+(2016) demon-strated strong results with a lucene index and amarkov logic network-based model for answer-ing scientiﬁc questions.
+recently, chakrabarti et al.
+(2020a,b) developed an improved model for tableretrieval combining neural representations of thetable and the query with a bm25 index..cafarella et al..(2008, 2009) employedkeyphrase-based table retrieval by reranking a listof tables returned by a search engine.
+pimplikarand sarawagi (2012) used a graphical model toperform retrieval on the basis of co-occurencestatistics, table metadata, and column headers.
+in(ghasemi-gol and szekely, 2018), non-parametricclustering was employed as a strong heuristic fortable retrieval.
+zhang and balog (2018) introduceda ranking method based on mapping availablefeatures into several semantic spaces.
+recently,zhang et al.
+(2019) introduced a neural methodfor table retrieval and completion using word- andentity-embeddings of table elements..neural modeling of tables has been the subjectof several recent papers.
+aside from the originalbert-based model in (chen et al., 2020b), the clos-est to our work is (yin et al., 2020).
+in these paper,a pretrained bert-based encoder for tables is in-troduced and demonstrated to yield strong improve-ments on several semantic parsing tasks.
+chen et al.
+(2019) introduced a model to automatically predictand compare column headers for tables in order toﬁnd semantically synonymous schema attributes.
+similarly, zhang and balog (2019) introduced anautoencoder for predicting table relatedness..closed-domain semantic parsing over tables hasbeen studied extensively in the context of ques-tion answering (e.g., pasupat and liang (2015);khashabi et al.
+(2016); yu et al.
+(2018)).
+in zhonget al.
+(2020), a logic-based fact veriﬁcation systemwas introduced to improve on the model presentedin the initial tabfact paper (chen et al., 2020b).
+yang et al.
+(2020) builds on the program induc-tion model also introduced in chen et al.
+(2020b),using a graph neural network to verify generatedprograms.
+orthogonally, a similar dataset for table-.
+based natural language inference was introducedby gupta et al.
+(2020) — interestingly, like in ourexperiments, they found roberta-large to workextremely well for linearised tables.
+finally, herziget al.
+(2020); eisenschlos et al.
+(2020) introducedbert-based models for various table semantictasks, extending bert with additional positionembeddings denoting columns and rows..open-domain fact veriﬁcation and question an-swering over unstructured, textual data has beenstudied in a series of recent papers.
+early work re-sulted in several highly sophisticated full pipelinesystems (brill et al., 2002; ferrucci et al., 2010;sun et al., 2015).
+these provided inspiration forthe inﬂuential drqa model (chen et al., 2017),which like ours relies on a tf-idf-based heuristicretrieval model, and a complex reading model.
+re-cent work (karpukhin et al., 2020; lewis et al.,2020) has built on this approach, developinglearned dense retrieval models with dot-productindexing (johnson et al., 2017), and increasinglyadvanced pretrained transformer-models for read-ing.
+the development of similarly fast, reliable andlearnable indexing techniques for tables as well astext is an important direction for future work..concurrently with our work, chen et al.
+(2020a)have introduced a bert-based model to performquestion answering over open collections of dataincluding tables.
+like ours, their model consistsof separate retriever- and reader-steps.
+their best-performing reader employs a long-range sparse at-tention transformer (ainslie et al., 2020) to jointlysummarize all retrieved data.
+as in our case, theirmodel demonstrates signiﬁcant improvements fromusing multiple retrieved tables..7 conclusion.
+we have introduced a novel model for fact veriﬁca-tion over large collections of tables, along with twostrategies for exploiting closed-domain datasets toincrease performance.
+our approach performs onpar with the current closed-domain state of the art,with larger gains the more tables we include.
+whenusing an oracle to retrieve a reference table, our ap-proach also represents a new closed-domain stateof the art.
+finally, we have made an initial forayinto wikipedia-scale open-domain table fact veriﬁ-cation, demonstrating improvements from multipletables also when using a full set of wikipedia ta-bles as the knowledge source.
+our results indicatethat the use of multiple tables can provide contex-.
+6794tual clues to the model even when those tables donot explicitly verify or refute the claim, becausethey can provide evidence for the probability of theclaim.
+this is a double-edged sword, as relianceon such clues can increase performance while alsoinducing biased claims of truthfulness.
+care willbe needed in future work to disentangle the positiveand negative aspects of this phenomenon..acknowledgments.
+we would like to thank fabio petroni and nicolade cao for helpful discussions and comments..references.
+joshua ainslie, santiago ontanon, chris alberti, va-clav cvicek, zachary fisher, philip pham, anirudhravula, sumit sanghai, qifan wang, and li yang.
+2020. etc: encoding long and structured inputsin proceedings of the 2020 con-in transformers.
+ference on empirical methods in natural languageprocessing (emnlp), pages 268–284, online.
+asso-ciation for computational linguistics..tariq alhindi, savvas petridis, and smaranda mure-san.
+2018. where is your evidence: improving fact-checking by justiﬁcation modeling.
+in proceedingsof the first workshop on fact extraction and ver-iﬁcation (fever), pages 85–90, brussels, belgium.
+association for computational linguistics..chandra sekhar bhagavatula, thanapon noraset, anddoug downey.
+2013. methods for exploring andmining tables on wikipedia.
+in proceedings of theacm sigkdd workshop on interactive data explo-ration and analytics, pages 18–26..samuel r. bowman, gabor angeli, christopher potts,and christopher d. manning.
+2015. a large anno-tated corpus for learning natural language inference.
+in proceedings of the 2015 conference on empiri-cal methods in natural language processing, pages632–642, lisbon, portugal.
+association for compu-tational linguistics..eric brill, susan dumais, and michele banko.
+2002.an analysis of the askmsr question-answering sys-in proceedings of the 2002 conference ontem.
+empirical methods in natural language process-ing (emnlp 2002), pages 257–264.
+association forcomputational linguistics..kaushik chakrabarti, zhimin chen, siamak shakeri,and guihong cao.
+2020a.
+open domain ques-arxiv preprinttion answering using web tables.
+arxiv:2001.03272..kaushik chakrabarti, zhimin chen, siamak shakeri,guihong cao, and surajit chaudhuri.
+2020b.
+table-qna: answering list intent queries with web tables.
+arxiv preprint arxiv:2001.04828..danqi chen, adam fisch, jason weston, and antoinebordes.
+2017. reading wikipedia to answer open-in proceedings of the 55th an-domain questions.
+nual meeting of the association for computationallinguistics (volume 1: long papers), pages 1870–1879, vancouver, canada.
+association for computa-tional linguistics..jiaoyan chen, ernesto jim´enez-ruiz, ian horrocks,and charles sutton.
+2019. colnet: embedding thesemantics of web tables for column type prediction.
+in the thirty-third aaai conference on artiﬁcialintelligence, aaai 2019, the thirty-first innova-tive applications of artiﬁcial intelligence confer-ence, iaai 2019, the ninth aaai symposium on ed-ucational advances in artiﬁcial intelligence, eaai2019, honolulu, hawaii, usa, january 27 - febru-ary 1, 2019, pages 29–36.
+aaai press..wenhu chen, ming-wei chang, eva schlinger,william wang, and william w cohen.
+2020a.
+openarxivquestion answering over tables and text.
+preprint arxiv:2010.10439..wenhu chen, hongmin wang, jianshu chen, yunkaizhang, hong wang, shiyang li, xiyou zhou, andwilliam yang wang.
+2020b.
+tabfact: a large-scaledataset for table-based fact veriﬁcation.
+in 8th inter-national conference on learning representations,iclr 2020, addis ababa, ethiopia, april 26-30,2020. openreview.net..sarah cohen, chengkai li, jun yang, and cong yu.
+2011. computational journalism: a call to arms todatabase researchers.
+in cidr 2011, fifth biennialconference on innovative data systems research,asilomar, ca, usa, january 9-12, 2011, online pro-ceedings, pages 148–151.
+www.cidrdb.org..ido dagan, oren glickman, and bernardo magnini.
+2005. the pascal recognising textual entailmentchallenge.
+in machine learning challenges work-shop, pages 177–190.
+springer..michael j cafarella, alon halevy, and nodira khous-the rela-sainova.
+2009.tional web.
+proceedings of the vldb endowment,2(1):1090–1101..data integration for.
+michael j cafarella, alon halevy, daisy zhe wang, eu-gene wu, and yang zhang.
+2008. webtables: ex-ploring the power of tables on the web.
+proceedingsof the vldb endowment, 1(1):538–549..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language under-in proceedings of the 2019 conferencestanding.
+of the north american chapter of the associationfor computational linguistics: human languagetechnologies, volume 1 (long and short papers),pages 4171–4186, minneapolis, minnesota.
+associ-ation for computational linguistics..6795julian eisenschlos, syrine krichene, and thomasm¨uller.
+2020. understanding tables with interme-in findings of the associationdiate pre-training.
+for computational linguistics: emnlp 2020, pages281–296, online.
+association for computationallinguistics..david ferrucci, eric brown, jennifer chu-carroll,james fan, david gondek, aditya a kalyanpur,adam lally, j william murdock, eric nyberg, johnprager, et al.
+2010. building watson: an overviewof the deepqa project.
+ai magazine, 31(3):59–79..terry flew, christina spurgeon, anna daniel, andadam swift.
+2012. the promise of computationaljournalism.
+journalism practice, 6(2):157–171..majid ghasemi-gol and pedro szekely.
+2018. tabvec:table vectors for classiﬁcation of web tables.
+arxivpreprint arxiv:1802.06290..vivek gupta, maitrey mehta, pegah nokhiz, and viveksrikumar.
+2020. infotabs: inference on tables assemi-structured data.
+in proceedings of the 58th an-nual meeting of the association for computationallinguistics, pages 2309–2324, online.
+associationfor computational linguistics..jonathan herzig, pawel krzysztof nowak, thomasm¨uller, francesco piccinno, and julian eisenschlos.
+2020. tapas: weakly supervised table parsing viain proceedings of the 58th annualpre-training.
+meeting of the association for computational lin-guistics, pages 4320–4333, online.
+association forcomputational linguistics..matthew honnibal,.
+ines montani, soﬁe van lan-deghem,spacy:and adriane boyd.
+2020.industrial-strength natural language processing inpython..gautier izacard and edouard grave.
+2020. lever-aging passage retrieval with generative models foropen domain question answering.
+arxiv preprintarxiv:2007.01282..sujay kumar jauhar, peter turney, and eduard hovy.
+2016. tables as semi-structured knowledge for ques-in proceedings of the 54th an-tion answering.
+nual meeting of the association for computationallinguistics (volume 1: long papers), pages 474–483, berlin, germany.
+association for computa-tional linguistics..jeff johnson, matthijs douze, and herv´e j´egou.
+2017.billion-scale similarity search with gpus.
+arxivpreprint arxiv:1702.08734..vladimir karpukhin, barlas oguz, sewon min, patricklewis, ledell wu, sergey edunov, danqi chen, andwen-tau yih.
+2020. dense passage retrieval foropen-domain question answering.
+in proceedings ofthe 2020 conference on empirical methods in nat-ural language processing (emnlp), pages 6769–6781, online.
+association for computational lin-guistics..daniel khashabi, tushar khot, ashish sabharwal, pe-ter clark, oren etzioni, and dan roth.
+2016. ques-tion answering via integer programming over semi-structured knowledge.
+in proceedings of the twenty-fifth international joint conference on artiﬁcial in-telligence, ijcai 2016, new york, ny, usa, 9-15july 2016, pages 1145–1152.
+ijcai/aaai press..diederik p. kingma and jimmy ba.
+2015. adam: ain 3rd inter-method for stochastic optimization.
+national conference on learning representations,iclr 2015, san diego, ca, usa, may 7-9, 2015,conference track proceedings..patrick s. h. lewis, ethan perez, aleksandra pik-tus, fabio petroni, vladimir karpukhin, namangoyal, heinrich k¨uttler, mike lewis, wen-tau yih,tim rockt¨aschel, sebastian riedel, and douwekiela.
+2020. retrieval-augmented generation forin advances inknowledge-intensive nlp tasks.
+neural information processing systems 33: annualconference on neural information processing sys-tems 2020, neurips 2020, december 6-12, 2020,virtual..yinhan liu, myle ott, naman goyal, jingfei du, man-dar joshi, danqi chen, omer levy, mike lewis,luke zettlemoyer, and veselin stoyanov.
+2019.roberta: a robustly optimized bert pretraining ap-proach.
+arxiv preprint arxiv:1907.11692..yixin nie, haonan chen, and mohit bansal.
+2019.combining fact extraction and veriﬁcation with neu-in the thirty-ral semantic matching networks.
+third aaai conference on artiﬁcial intelligence,aaai 2019, the thirty-first innovative applicationsof artiﬁcial intelligence conference, iaai 2019,the ninth aaai symposium on educational ad-vances in artiﬁcial intelligence, eaai 2019, hon-olulu, hawaii, usa, january 27 - february 1, 2019,pages 6859–6866.
+aaai press..panupong pasupat and percy liang.
+2015. compo-sitional semantic parsing on semi-structured tables.
+in proceedings of the 53rd annual meeting of theassociation for computational linguistics and the7th international joint conference on natural lan-guage processing (volume 1: long papers), pages1470–1480, beijing, china.
+association for compu-tational linguistics..rakesh pimplikar and sunita sarawagi.
+2012. answer-ing table queries on the web using column keywords.
+proceedings of the vldb endowment, 5(10):908–919..huan sun, hao ma, xiaodong he, wen-tau yih, yu su,and xifeng yan.
+2016. table cell search for questionanswering.
+in proceedings of the 25th internationalconference on world wide web, www 2016, mon-treal, canada, april 11 - 15, 2016, pages 771–782.
+acm..huan sun, hao ma, wen-tau yih, chen-tse tsai,jingjing liu, and ming-wei chang.
+2015. open do-main question answering via semantic enrichment..6796in proceedings of the 24th international conferenceon world wide web, www 2015, florence, italy,may 18-22, 2015, pages 1045–1055.
+acm..james thorne and andreas vlachos.
+2018. automatedfact checking: task formulations, methods and fu-in proceedings of the 27th inter-ture directions.
+national conference on computational linguistics,pages 3346–3359, santa fe, new mexico, usa.
+as-sociation for computational linguistics..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n. gomez, lukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+in advances in neural information pro-cessing systems 30: annual conference on neuralinformation processing systems 2017, december 4-9, 2017, long beach, ca, usa, pages 5998–6008..andreas vlachos and sebastian riedel.
+2014. factchecking: task deﬁnition and dataset construction.
+in proceedings of the acl 2014 workshop on lan-guage technologies and computational social sci-ence, pages 18–22, baltimore, md, usa.
+associa-tion for computational linguistics..xiaoyu yang, feng nie, yufei feng, quan liu, zhi-gang chen, and xiaodan zhu.
+2020. program en-hanced fact veriﬁcation with verbalization and graphattention network.
+in proceedings of the 2020 con-ference on empirical methods in natural languageprocessing (emnlp), pages 7810–7825, online.
+as-sociation for computational linguistics..pengcheng yin, graham neubig, wen-tau yih, and se-bastian riedel.
+2020. tabert: pretraining for jointin pro-understanding of textual and tabular data.
+ceedings of the 58th annual meeting of the asso-ciation for computational linguistics, pages 8413–8426, online.
+association for computational lin-guistics..tao yu, rui zhang, kai yang, michihiro yasunaga,dongxu wang, zifan li, james ma,irene li,qingning yao, shanelle roman, zilin zhang,and dragomir radev.
+2018.spider: a large-scale human-labeled dataset for complex and cross-domain semantic parsing and text-to-sql task.
+inproceedings of the 2018 conference on empiricalmethods in natural language processing, pages3911–3921, brussels, belgium.
+association forcomputational linguistics..li zhang, shuo zhang, and krisztian balog.
+2019. ta-ble2vec: neural word and entity embeddings for ta-ble population and retrieval.
+in proceedings of the42nd international acm sigir conference on re-search and development in information retrieval,sigir 2019, paris, france, july 21-25, 2019, pages1029–1032.
+acm..shuo zhang and krisztian balog.
+2018. ad hoc tableretrieval using semantic similarity.
+in proceedingsof the 2018 world wide web conference on worldwide web, www 2018, lyon, france, april 23-27,2018, pages 1553–1562.
+acm..shuo zhang and krisztian balog.
+2019..auto-completion for data cells in relational tables.
+in pro-ceedings of the 28th acm international conferenceon information and knowledge management, cikm2019, beijing, china, november 3-7, 2019, pages761–770.
+acm..wanjun zhong, duyu tang, zhangyin feng, nanduan, ming zhou, ming gong, linjun shou, daxinjiang, jiahai wang, and jian yin.
+2020. logical-factchecker: leveraging logical operations for factchecking with graph module network.
+in proceed-ings of the 58th annual meeting of the associationfor computational linguistics, pages 6053–6065,online.
+association for computational linguistics..a performance using roberta-base.
+in our paper, we have reported results using thelarger version of roberta with additional hiddenlayers and greater dimensionality.
+liu et al.
+(2019)also include a smaller version, roberta-base, cor-responding to the bert-base model of devlin et al.
+(2019).
+in table 6, we report results correspond-ing to those of table 2 for our joint model usingroberta-base instead of roberta-large..interestingly, the performance gain from usingmultiple tables is even larger for roberta-base(an increase of 4.1 rather than 1.9 point accuracyfrom using ﬁve tables, for example).
+one ex-planation could be that some information neces-sary to verify certain facts may be encoded in theweights of the larger roberta.
+we attempt to in-vestigate this using random tables; however, withﬁve random tables, roberta-large and roberta-base reach an almost equivalent respective perfor-mance of 52.1 and 52.0. as such, we believe thatroberta-large exploits the correlations betweentables which we discuss in section 5.2 better thanroberta-base..b hyperparameters.
+our model uses roberta (liu et al., 2019) toencode each table into vectors.
+on top of robertawe employ key-value self-attention (vaswani et al.,2017) with two attention heads.
+we then use anmlp consisting of a linear transformation to h =3072 hidden units, followed by tanh-activationand linear projection to the output space.
+duringtraining, we employ dropouts with probability 0.1before each linear transformation in the mlp.
+thehyperparameters for all experiments were selectedusing the tabfact development set (with tabfacttables as the backend)..6797model.
+dev test simple.
+table-bert (chen et al., 2020b)logicalfactchecker (zhong et al., 2020)progvgat (yang et al., 2020)tapas (eisenschlos et al., 2020)*ours (roberta-base, oracle retrieval)ours (roberta-large, oracle retrieval).
+ours (roberta-base, 1 table)ours (roberta-base, 3 tables)ours (roberta-base, 5 tables)ours (roberta-base, 10 tables).
+ours (roberta-large, 1 tables)ours (roberta-large, 3 table)ours (roberta-large, 5 tables)ours (roberta-large, 10 tables).
+66.171.874.981.072.378.2.
+64.767.868.167.5.
+74.174.675.973.9.
+65.171.774.481.069.977.6.
+64.267.068.367.1.
+73.273.875.173.8.
+79.185.488.392.385.788.9.
+78.481.583.482.3.
+86.787.087.886.9.
+58.265.167.675.662.172.1.
+57.860.561.259.9.
+67.868.369.568.1.
+68.174.376.283.971.479.4.
+67.369.470.270.1.
+76.678.177.876.9.table 6: prediction accuracy of our roberta-based model on the ofﬁcial splits from the tabfact dataset, usingroberta-base in addition to roberta-large.
+the ﬁrst section of the table contains closed-domain results, thesecond and third open-domain.
+all results use the joint objective described in section 4.1.
+* employs intermediarypretraining on additional synthetic data..we train the model using adam (kingma andba, 2015) with a learning rate of 5e − 6. we usea linear learning rate schedule, warming up overthe ﬁrst 30000 batches.
+we use a batch size of 32.training was done on 8 nvidia tesla v100 voltagpus (with 32gb of memory), and completed inapproximately 36 hours..c retrieval accuracy for tabfact splits.
+the tabfact dataset comes with several differentdata splits.
+we include here the performance of ourretrieval component for each split:.
+dataset.
+h@1 h@3 h@5 h@10.traindevtestsimple testcomplex testsmall test.
+59.569.669.792.764.782.1.
+71.278.878.797.175.289.6.
+74.882.381.998.179.591.4.
+79.286.686.399.084.894.7.table 7: retrieval accuracy with our entity-based tf-idf heuristic on the different tabfact splits..d reranking performance.
+in section 4, we introduced our model as a jointsystem for fact veriﬁcation and evidence rerank-ing.
+a beneﬁt of our formulation is the ability to.
+reason about the ability of our model to rerank bymarginalizing over the truth value of the claim, fol-lowing equation 7. in table 8, we compare thetable retrieval ranking performance of our jointmodel to a model only trained for reranking, aswell as to the tf-idf baseline..model.
+h@1 h@3 h@5.tf-idfreranking onlyours (no attention)ours (attention).
+69.669.967.470.9.
+78.878.978.379.4.
+82.382.382.382.3.table 8: ranking performance on the tabfact vali-dation set, using either our tf-idf retriever alone orreranking with our model.
+we test a version of ourmodel using only a reranking loss, as well as joint-lossmodel with and without attention..as can be seen, our joint loss provides a slightperformance improvement when the attention com-ponent is included.
+interestingly, the joint-lossmodel performs better than a system trained purelyfor reranking — this highlights the complementarynature of the reranking and veriﬁcation tasks..e the role of attention.
+an interesting question is the role attention plays inour model.
+as can be seen from tables 2 and 8, our.
+67981.
+2.
+3.
+4.
+5.
+1.
+2.
+3.
+4.
+5.morfnoitnett.a.morfnoitnett.a.
+0.73.
+0.05.
+0.04.
+0.04.
+0.03.
+0.30.
+0.20.
+0.19.
+0.15.
+0.17.
+0.29.
+0.18.
+0.19.
+0.17.
+0.17.
+0.07.
+0.27.
+0.19.
+0.18.
+0.18.
+0.18.
+0.36.
+0.17.
+0.16.
+0.13.
+0.19.
+0.26.
+0.17.
+0.16.
+0.17.
+0.07.
+0.19.
+0.32.
+0.18.
+0.19.
+0.20.
+0.19.
+0.34.
+0.17.
+0.14.
+0.2.
+0.18.
+0.29.
+0.19.
+0.16.
+0.08.
+0.21.
+0.19.
+0.31.
+0.18.
+0.15.
+0.15.
+0.17.
+0.36.
+0.14.
+0.15.
+0.13.
+0.14.
+0.42.
+0.16.
+0.08.
+0.20.
+0.18.
+0.19.
+0.32.
+0.13.
+0.17.
+0.16.
+0.14.
+0.33.
+0.13.
+0.15.
+0.15.
+0.19.
+0.37.
+1.
+2.
+3attention to.
+4.
+5.
+1.
+2.
+3attention to.
+4.
+5.
+1.
+2.
+3attention to.
+4.
+5.
+(a) head 1, r@1.
+(b) head 1, r@2-3.
+(c) head 1, r@4-5.
+0.67.
+0.09.
+0.08.
+0.08.
+0.08.
+0.30.
+0.21.
+0.19.
+0.15.
+0.16.
+0.25.
+0.19.
+0.20.
+0.19.
+0.18.
+0.07.
+0.22.
+0.22.
+0.19.
+0.19.
+0.19.
+0.22.
+0.19.
+0.18.
+0.18.
+0.18.
+0.21.
+0.18.
+0.17.
+0.19.
+0.06.
+0.23.
+0.27.
+0.22.
+0.24.
+0.22.
+0.23.
+0.24.
+0.18.
+0.16.
+0.22.
+0.19.
+0.23.
+0.19.
+0.17.
+0.09.
+0.25.
+0.22.
+0.26.
+0.22.
+0.17.
+0.18.
+0.18.
+0.29.
+0.17.
+0.15.
+0.19.
+0.18.
+0.28.
+0.20.
+0.10.
+0.23.
+0.23.
+0.23.
+0.25.
+0.16.
+0.18.
+0.17.
+0.17.
+0.26.
+0.14.
+0.18.
+0.19.
+0.23.
+0.26.
+1.
+2.
+3attention to.
+4.
+5.
+1.
+2.
+3attention to.
+4.
+5.
+1.
+2.
+3attention to.
+4.
+5.
+(d) head 2, r@1.
+(e) head 2, r@2-3.
+(f) head 2, r@4-5.
+1.
+2.
+3.
+4.
+5.
+1.
+2.
+3.
+4.
+5.morfnoitnett.a.morfnoitnett.a.
+1.
+2.
+3.
+4.
+5.
+1.
+2.
+3.
+4.
+5.morfnoitnett.a.morfnoitnett.a.figure 4: confusion matrices for the cross-attention between each pair of tables for the ﬁve-table version of ourmodel.
+each head is represented separately, and individual ﬁgures are included for the parts of the dataset whereour tf-idf retriever assigns the gold table rank respectively 1, 2-3, or 4-5..random tables, the attention is evenly distributedover all tables except the gold table..to distinguish the two heads, we in general seethe ﬁrst head exhibit a pattern of behaviour whereeach table assigns the majority of attention to itself— especially when that table is the gold table.
+thesecond head seemingly encodes a more even spreadover the retrieved tables, perhaps representing gen-eral context more than an attempt to identify thegold table..cross-attention module is necessary to achieve highperformance – without it, the model struggles toidentify which table should be used for veriﬁcation.
+to investigate the function of attention, we plot infigure 4 the strength of the cross-attention betweeneach table for our ﬁve-table model.
+we produceseparate plot for the two attention heads, as well asfor each of the splits used in table 3 representingthe parts of the dataset where our tf-idf retrieverassigns the gold table rank respectively 1, 2-3, or4-5..for both attention heads, the attention functionhas clearly distinct behaviour when the gold tableis retrieved as top 1; the degree to which that tableattends to itself is much greater.
+we suspect thatthis is because of “easy” cases, where the attentionfunction is used to separate a clearly identiﬁable“appropriate” table from the other tables.
+in hardercases, the model uses the attention focus to com-pare information across tables.
+to test this, we runthe model in a setting where four random tables areused along with the gold table.
+in that setting, thedivision is even clearer.
+for the gold table, respec-tively 86 and 82 percent of the attention for the twoheads is on average focused on itself; for the four.
+6799

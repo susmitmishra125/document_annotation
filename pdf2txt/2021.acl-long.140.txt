@@ -1,0 +1,533 @@
+named entity recognition with small strongly labeled and largeweakly labeled data.
+haoming jiang∗ 1 , danqing zhang2, tianyu cao2, bing yin2, tuo zhao11georgia institute of technology, atlanta, ga, usa2amazon.com inc, palo alto, ca, usa{jianghm, tourzhao}@gatech.edu{danqinz, caoty, alexbyin}@amazon.com.
+abstract.
+weak supervision has shown promising resultsin many natural language processing tasks,such as named entity recognition (ner).
+ex-isting work mainly focuses on learning deepner models only with weak supervision, i.e.,without any human annotation, and shows thatby merely using weakly labeled data, one canachieve good performance, though still under-performs fully supervised ner with manu-ally/strongly labeled data.
+in this paper, weconsider a more practical scenario, where wehave both a small amount of strongly labeleddata and a large amount of weakly labeleddata.
+unfortunately, we observe that weaklylabeled data does not necessarily improve, oreven deteriorate the model performance (dueto the extensive noise in the weak labels) whenwe train deep ner models over a simple orweighted combination of the strongly labeledand weakly labeled data.
+to address this is-sue, we propose a new multi-stage computa-tional framework – needle with three essen-tial ingredients: (1) weak label completion, (2)noise-aware loss function, and (3) ﬁnal ﬁne-tuning over the strongly labeled data.
+throughexperiments on e-commerce query ner andbiomedical ner, we demonstrate that nee-dle can effectively suppress the noise of theweak labels and outperforms existing methods.
+in particular, we achieve new sota f1-scoreson 3 biomedical ner datasets: bc5cdr-chem 93.74, bc5cdr-disease 90.69, ncbi-disease 92.28..1.introduction.
+named entity recognition (ner) is the task ofdetecting mentions of real-world entities from textand classifying them into predeﬁned types.
+forexample, the task of e-commerce query ner isto identify the product types, brands, product at-tributes of a given query.
+traditional deep learning.
+∗ work was done during internship at amazon..approaches mainly train the model from scratch(ma and hovy, 2016; huang et al., 2015), andrely on large amounts of labeled training data.
+asner tasks require token-level labels, annotating alarge number of documents can be expensive, time-consuming, and prone to human errors.
+therefore,the labeled ner data is often limited in many do-mains (leaman and gonzalez, 2008).
+this hasbecome one of the biggest bottlenecks that pre-vent deep learning models from being adopted indomain-speciﬁc ner tasks..to achieve better performance with limited la-beled data, researchers resort to large unlabeleddata.
+for example, devlin et al.
+(2019) propose topre-train the model using masked language mod-eling on large unlabeled open-domain data, whichis usually hundreds/thousands of times larger thanthe manually/strongly labeled data.
+however, open-domain pre-trained models can only provide lim-ited semantic and syntax information for domain-speciﬁc tasks.
+to further capture domain-speciﬁcinformation, lee et al.
+(2020); gururangan et al.
+(2020) propose to continually pre-train the modelon large in-domain unlabeled data..when there is no labeled data, one approach isto use weak supervision to generate labels automat-ically from domain knowledge bases (shang et al.,2018; liang et al., 2020).
+for example, shanget al.
+(2018) match spans of unlabeled biomedicaldocuments to a biomedical dictionary to generateweakly labeled data.
+shang et al.
+(2018) furthershow that by merely using weakly labeled data, onecan achieve good performance in biomedical nertasks, though still underperforms supervised nermodels with manually labeled data.
+throughoutthe rest of the paper, we refer to the manually la-beled data as strongly labeled data for notationalconvenience..while in practice, we often can access both asmall amount of strongly labeled data and a large.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages1775–1789august1–6,2021.©2021associationforcomputationallinguistics1775amount of weakly labeled data, generated fromlarge scale unlabeled data and domain knowledgebases.
+a natural question arises here:.
+“can we simultaneously leverage small stronglyand large weakly labeled data to improve themodel performance?”.
+the answer is yes, but the prerequisite is that youcan properly suppress the extensive labeling noisein the weak labels.
+the weak labels have threefeatures: 1) “incompleteness”: some entity men-tions may not be assigned with weak labels dueto the limited coverage of the knowledge base; 2)“labeling bias”: some entity mentions may not belabeled with the correct types, and thus weak labelsare often noisy; 3) “ultra-large scale”: the weaklylabeled data can be hundreds/thousands of timeslarger than the strongly labeled data..an ultra-large volume of weakly labeled datacontains useful domain knowledge.
+but it alsocomes with enormous noise due to the “incom-pleteness” and “labeling bias” of weak labels.
+theenormous noise can dominate the signal in thestrongly and weakly labeled data, especially whencombined with the unsupervised pre-training tech-niques.
+such noise can be easily overﬁtted by thehuge neural language models, and may even de-teriorate the model performance.
+this is furthercorroborated by our empirical observation (see sec-tion 4) that when we train deep ner models overa simple or weighted combination of the stronglylabeled and weakly labeled data, the model perfor-mance almost always becomes worse..to address such an issue, we propose a three-stage computational framework named needle(noise-aware weakly supervised continual pre-training).
+at stage i, we adapt an open-domainpre-trained language model to the target domainby in-domain continual pre-training on the largein-domain unlabeled data.
+at stage ii, we use theknowledge bases to convert the in-domain unla-beled data to the weakly labeled data.
+we thenconduct another continual pre-training over boththe weakly and strongly labeled data, in conjunc-tion with our proposed weak label completion pro-cedure and noise-aware loss functions, which caneffectively handle the“incompleteness” and “noisylabeling” of the weak labels.
+at stage iii, we ﬁne-tune the model on the strongly labeled data again.
+the last ﬁne-tuning stage is essential to the modelﬁtting to the strongly labeled data..we summarize our key contributions as follows:.
+• we identify an important research question onweak supervision: while training deep ner mod-els using a simple or weighted combination ofthe strongly labeled and weakly labeled data, theultra-large scale of the weakly labeled data aggra-vates the extensive noise in the weakly labeled dataand can signiﬁcantly deteriorate the model perfor-mance.
+• we propose a three-stage computational frame-work named needle to better harness the ultra-large weakly labeled data’s power.
+our experi-mental results show that needle signiﬁcantly im-proves the model performance on the e-commercequery ner tasks and biomedical ner tasks.
+inparticular, we achieve new sota f1-scores on 3biomedical ner datasets: bc5cdr-chem 93.74,bc5cdr-disease 90.69, ncbi-disease 92.28. wealso extend the proposed framework to the multi-lingual setting..2 preliminaries.
+we brieﬂy introduce the ner problem and theunsupervised language model pre-training..2.1 named entity recognition.
+ner is the process of locating and classifyingnamed entities in text into predeﬁned entity cat-egories, such as products, brands, diseases, chem-icals.
+formally, given a sentence with n tokensx = [x1, ..., xn ], an entity is a span of tokenss = [xi, ..., xj] (0 ≤ i ≤ j ≤ n ) associatedwith an entity type.
+based on the bio schema (liet al., 2012), ner is typically formulated as a se-quence labeling task of assigning a sequence oflabels y = [y1, ..., yn ] to the sentence x. speciﬁ-cally, the ﬁrst token of an entity mention with typex is labeled as b-x; the other tokens inside that en-tity mention are labeled as i-x; and the non-entitytokens are labeled as o.supervised ner.
+we are given m sentences thatare already annotated at token level, denoted as{(xm, ym)}mm=1.
+let f (x; θ) denote an nermodel, which can compute the probability for pre-dicting the entity labels of any new sentence x,where θ is the parameter of the ner model.
+wetrain such a model by minimizing the followingloss over {(xm, ym)}mm=1:.
+(cid:98)θ = argmin.
+θ.
+1m.m(cid:88).
+m=1.
+(cid:96)(ym, f (xm; θ)),.
+(1).
+1776where (cid:96)(·, ·) is the cross-entropy loss for token-wise classiﬁcation model or negative likelihood forcrf model (lafferty et al., 2001).
+weakly supervised ner.
+previousstudies(shang et al., 2018; liang et al., 2020) of weaklysupervised ner consider the setting that no stronglabel is available for training, but only weak la-bels generated by matching unlabeled sentenceswith external gazetteers or knowledge bases.
+thematching can be achieved by string matching (gian-nakopoulos et al., 2017), regular expressions (frieset al., 2017) or heuristic rules (e.g., pos tag con-straints).
+accordingly, they learn an ner modelby minimizing eq.
+(1) with {ym}mm=1 replaced bytheir weakly labeled counterparts..2.2 unsupervised pre-training.
+one of the most popular approaches to leveragelarge unlabeled data is unsupervised pre-trainingvia masked language modeling.
+pre-trained lan-guage models, such as bert and its variants(e.g., roberta liu et al.
+(2019), albert lanet al.
+(2020b) and t5 raffel et al.
+(2019)), haveachieved state-of-the-art performance in many nat-ural language understanding tasks.
+these modelsare essentially massive neural networks based onbi-directional transformer architectures, and aretrained using a tremendous amount of open-domaindata.
+for example, the popular bert-base modelcontains 110 million parameters, and is trainedusing the bookscorpus (zhu et al., 2015) (800million words) and english wikipedia (2500 mil-lion words).
+however, these open-domain datacan only provide limited semantic and syntax infor-mation for domain-speciﬁc tasks.
+to further cap-ture domain-speciﬁc knowledge, lee et al.
+(2020);gururangan et al.
+(2020) propose to continuallypre-train the model over large in-domain unlabeleddata..3 method.
+to harness the power of weakly labeled data, wepropose a new framework — needle, which con-tain stages as illustrated in figure 1:1) we ﬁrst adapt an open-domain pre-trained lan-guage model to the downstream domain via mlmcontinual pre-training on the unlabeled in-domaindata.
+2) we use the knowledge bases to convert the unla-beled data to the weakly labeled data through weaksupervision.
+then we apply noise-aware continual.
+pre-training for learning task-speciﬁc knowledgefrom both strongly and weakly labeled data;3) lastly, we ﬁne-tune the model on the stronglylabeled data again..3.1 stage i: domain continual pre-training.
+over unlabeled data.
+following previous work on domain-speciﬁc bert(gururangan et al., 2020; lee et al., 2020), weﬁrst conduct domain continual masked languagemodel pre-training on the large in-domain unla-beled data { (cid:102)xm} (cid:102)mm=1.
+note that the masked lan-guage model flm(·; θenc, θlm) contains encoderparameters θenc and classiﬁcation head parametersθlm, which are initialized from open-domain pre-trained masked language models (e.g., bert androberta)..3.2 stage ii: noise-aware continual.
+pre-training over both strongly andweakly labeled data.
+m )} (cid:102)m.in the second stage, we use the knowledge basesto convert the unlabeled data to weakly labeleddata to generate weak labels for the unlabeled data:{( (cid:102)xm, (cid:101)y wm=1.
+we then continually pre-trainthe model with both weakly labeled in-domain dataand strongly labeled data.
+speciﬁcally, we ﬁrst re-place the mlm head by a crf classiﬁcation head(lafferty et al., 2001) and conduct noise-awareweakly supervised learning, which contains twoingredients: weak label completion procedure andnoise-aware loss function.
+• weak label completion.
+as the weakly la-beled data suffer from severe missing entity is-sue, we propose a weak label completion proce-dure.
+speciﬁcally, we ﬁrst train an initial nermodel f (; θinit) by optimizing eq (1) with θinit =(θenc, θcrf), where the encoder θenc is initializedfrom stage i and ner crf head θcrf is ran-domly initialized.
+then, for a given sentence(cid:102)x = [x1, ..., xn ] with the original weak labels(cid:101)y w = [ywn ] and the predictions from the ini-tial model (cid:101)y p = argminy (cid:96)(y , f ( (cid:102)x; θinit)) =[yw1 , ..., ywn ], we generate the corrected weak labels1, ..., yc(cid:101)y c = [yc.
+1 , ..., yw.
+n ] by:.
+yci =.
+(cid:40).
+ypiywi.i = o (non-entity).
+if ywotherwise.
+(2).
+such a weak label completion procedure can.
+remedy the incompleteness of weak labels..1777figure 1: three-stage needle framework..• noise-aware loss function.
+the model tendsto overﬁt the noise of weak labels when using neg-ative log-likelihood loss over the weakly labeleddata, eq (1).
+to alleviate this issue, we propose anoise-aware loss function based on the estimatedconﬁdence of the corrected weak labels (cid:101)yc, whichis deﬁned as the estimated probability of (cid:101)yc beingthe true labels (cid:101)y: (cid:98)p ( (cid:101)yc = (cid:101)y| (cid:101)x).
+the conﬁ-dence can be estimated by the model predictionscore f ( (cid:101)x; θ) and histogram binning (zadroznyand elkan, 2001).
+see more details in appendix a..we design the noise-aware loss function tomake the ﬁtting to the weak labels more con-servative/aggressive, when the conﬁdence islower/higher.
+speciﬁcally, when (cid:101)y c = (cid:101)y , welet loss function l be the negative log-likelihood,i.e., l(·, ·| (cid:101)y c = (cid:101)y ) = (cid:96)(·, ·); when (cid:101)y c (cid:54)= (cid:101)y ,we let l be the negative log-unlikelihood, i.e.,l(·, ·| (cid:101)y c (cid:54)= (cid:101)y ) = (cid:96)−(·, ·) 1. accordingly, thenoise-aware loss function is designed as.
+(cid:96)na( (cid:101)y c, f ( (cid:102)x; θ))= e.m| (cid:102)xm.
+(cid:101)ym= (cid:101)y c.l( (cid:101)y c= (cid:98)p ( (cid:101)y c = (cid:101)y | (cid:102)x)(cid:96)( (cid:101)y c, f ( (cid:102)x; θ))+(cid:98)p ( (cid:101)y c (cid:54)= (cid:101)y | (cid:102)x)(cid:96)−( (cid:101)y c, f ( (cid:102)x; θ)),.
+m, f ( (cid:102)xm; θ), 1( (cid:101)ym = (cid:101)y c.m)).
+(3).
+where the log-unlikelihood loss can be viewed asregularization and the conﬁdence of weak labelscan be viewed as an adaptive weight.
+the trainingobjective on both the strongly labeled data and.
+1 (cid:96)(y , f (x; θ)) = − log pf (x;θ)(y ).
+(cid:96)−(y , f (x; θ)) = − log [1 − pf (x;θ)(y )].
+weakly labeled data is:.
+minθ.
+1m + (cid:102)m.m(cid:88).
+[m=1.
+(cid:96)(ym, f (xm; θ)).
++.
+(cid:102)m(cid:88).
+m=1.
+(cid:96)na( (cid:101)y c.m, f ( (cid:102)xm; θ))],.
+(4).
+3.3 stage iii: final fine-tuning.
+stages i and ii of our proposed framework mainlyfocus on preventing the model from the overﬁttingto the noise of weak labels.
+meanwhile, they alsosuppress the model ﬁtting to the strongly labeleddata.
+to address this issue, we propose to ﬁne-tunethe model on the strongly labeled data again.
+ourexperiments show that such additional ﬁne-tuningis essential..4 experiments.
+we use transformer-based open-domain pretrainedmodels, e.g., bert, mbert, roberta-large,(devlin et al., 2019; liu et al., 2019) with a crflayer as our base ner models.
+throughout theexperiments, we use the bio tagging scheme (car-penter, 2009).
+for stages i and ii, we train the mod-els for one epoch with batch size 144. for stageiii, we use the grid search to ﬁnd optimal hyper-parameters: we search the number of epochs in[1, 2, 3, 4, 5, 10, 15, 20, 25, 30, 50] and batch sizein [64, 144, 192].
+we use adam optimizer witha learning rate of 5 × 10−5 on the e-commercequery ner dataset.
+in the biomedical ner ex-periments, we search the optimal learning rate in[1 × 10−5, 2 × 10−5, 5 × 10−5].
+all implementa-tions are based on transformers (wolf et al., 2019).
+we use an amazon ec2 virtual machine with 8nvidia v100 gpus..1778dataset.
+weak label.
+number of samplestrain dev test weak precision recalle-commerce query domainen187k 23k 23k 22m 84.62e-commerce query domain (multilingual).
+49.52.mul-enmul-frmul-itmul-demul-es.
+257k 14k 14k79k 4k 4k52k 3k 3k 17m 84.6299k 5k 5k64k 4k 4k.
+biomedical domain.
+bc5cdrchembc5cdrdiseasencbidisease.
+5k 5k 5k 11m 92.08.
+77.40.
+5k 5k 5k.
+5k 1k 1k.
+15m 94.46.
+81.34.table 1: data statistics.
+4.1 datasets.
+we evaluate the proposed framework on two dif-ferent domains: e-commerce query domain andbiomedical domain.
+the data statistics are summa-rized in table 1..for e-commerce query ner, we consider twosettings: english queries and multilingual queries.
+for english ner, there are 10 different entity types,while the multilingual ner has 12 different types.
+the queries are collected from search queries to ashopping website.
+the unlabeled in-domain dataand the weak annotation is obtained by aggregat-ing user behavior data collected from the shoppingwebsite.
+we give more details about the weaklylabeled data in appendix e..for biomedical ner, we use three popularbenchmark datasets: bc5cdr-chem, bc5cdr-disease (wei et al., 2015), and ncbi-disease(do˘gan et al., 2014).
+these datasets only contain asingle entity type.
+we use the pre-processed datain bio format from crichton et al.
+(2017) follow-ing biobert (lee et al., 2020) and pubmedbert(gu et al., 2020).
+we collect unlabeled data frompubmed 2019 baseline 2, and use the dictionarylookup and exact string match to generate weaklabels 3. we only include sentences with at leastone weak entity label..• weak labels performance.
+table 1 alsopresents the precision and recall of weak labelsperformance on a evaluation golden set.
+as canbe seen, the weak labels suffer from severe in-completeness issue.
+in particular, the recall of e-commerce query ner is lower than 50. on theother hand, the weak labels also suffer from label-ing bias..49.52.
+4.2 baselines.
+we compare needle with the following base-lines (all pre-trained models used in the baselinemethods have been continually pre-trained on thein-domain unlabeled data (i.e., stage i of needle)for fair comparison):• supervised learning baseline: we directlyﬁne-tune the pre-trained model on the strongly la-beled data.
+for e-commerce query ner, we usequery-roberta-crf, which is adapted from theroberta large model.
+for e-commerce multi-lingual query ner, we use query-mbert-crf,which is adapted from the mbert.
+for biomedi-cal ner, we use biobert-crf (lee et al., 2020),which is adapted from bert-base.
+• semi-supervised self-training (sst): sst usethe model obtained by supervised learning to gen-erate pseudo labels for the unlabeled data andthen conduct semi-supervised leaning (wang et al.,2020; du et al., 2021).
+• weakly supervised learning (wsl): simplycombining strongly labeled data with weakly la-beled data (mann and mccallum, 2010).
+• weighted wsl: wsl with weighted loss, whereweakly labeled samples have a ﬁxed differentweight γ:.
+(cid:80)m.m (cid:96)(ym, f (xm; θ))+γ (cid:80) (cid:102)m.m (cid:96)( (cid:101)y w.m , f ( (cid:102)xm; θ)).
+..m + (cid:102)m.we tune the weight γ and present the best result.
+• robust wsl: wsl with mean squared errorloss function, which is robust to label noise (ghoshet al., 2017).
+as the robust loss is not compati-ble with crf, we use the token-wise classiﬁcationmodel for the stage ii training.
+• partial wsl: wsl with non-entity weak labelsexcluded from the training loss (shang et al., 2018)..4.3 e-commerce ner.
+2titles and abstract of biomedical articles:https://.
+ftp.ncbi.nlm.nih.gov/pubmed/baseline/.
+3we collect a dictionary containing 3016 chemical entities.
+and 5827 disease entities..we use span-level precision/recall/f1-score as theevaluation metrics.
+we present the main results onenglish query ner in table 2..1779method.
+needle.
+p80.71.r80.55.f180.63.supervised baseline.
+query-roberta-crf.
+79.27.
+79.24.
+79.25.semi-supervised baseline.
+sst.
+79.61.
+79.37.
+79.75.weakly supervised baselines.
+wslweighted wsl †partial wslweighted partial wsl †robust wsl.
+73.9578.0771.9576.2866.71.
+50.2064.4168.5676.3442.78.
+59.8170.5970.2176.3152.13.table 2: main results on e-commerce english queryner: span-level precision/recall/f1.
+†: we presentedthe results of the best weight, see results for all weightsin appendix b..4.3.1 main results.
+• needle: needle outperforms the fully su-pervised baseline and achieves the best perfor-mance among all baseline methods;• weakly supervised baselines: all weaklysupervised baseline methods,including wsl,weighted wsl, partial wsl and robust wsl,lead to worse performance than the supervised base-line.
+this is consistent with our claim in section1. the weakly labeled data can hurt the modelperformance if they are not properly handled;• sst: semi-supervised self-training outperformsthe supervised baseline and weakly supervisedbaselines.
+this indicates that if not properly han-dled, the weak labels are even worse than thepseudo label generated by model prediction.
+in con-trast, needle outperforms sst, which indicatesthat the weak labels can indeed provide additionalknowledge and improve the model performancewhen their noise can be suppressed..4.3.2 ablation.
+we study the effectiveness of each component ofneedle.
+speciﬁcally, we use the following abbre-viation to denote each component of needle:• wlc: weak label completion.
+• nal: noise-aware loss function, i.e., eq.(4).
+since nal is built on top of wlc, the two compo-nents need to be used together.
+• ft: final ﬁne-tuning on strongly labeled data(stage iii)..as can be seen from table 3, all components.
+are effective, and they are complementary to eachother..methodneedle w/o ft/wlc/nalneedle w/o ft/nalneedle w/o ftneedle w/o wlc/nalneedle w/o nalneedle.
+p73.9575.5375.8680.0380.0780.71.r50.2076.4576.5679.7280.3680.55.f159.8175.9976.2179.8780.2180.63.table 3: ablation study on e-commerce english queryner..4.3.3 extension to multilingual nerthe proposed framework can be naturally extendedto improve multilingual ner.
+see details aboutthe algorithm in appendix d. the results of e-commerce multilingual ner is presented in ta-ble 4. as can be seen, the proposed needleoutperforms other baseline methods in all 5 lan-guages..methodneedle.
+w/o nalw/o wlc/nalw/o ftw/o ft/nal.
+fr.
+es.
+en.
+de.
+it78.17 75.98 79.68 78.83 79.4978.00 76.02 79.19 78.58 79.2377.68 75.31 78.22 77.99 78.2273.88 72.96 75.44 76.51 76.8773.87 72.56 75.26 76.11 76.62.supervised baselinequery-mbert-crf 77.19 74.82 78.11 77.77 78.11semi-supervised baseline.
+sst.
+wsl.
+77.42 75.21 77.82 78.10 78.65.weakly supervised baseline.
+58.35 59.90 60.98 61.66 63.14.table 4: e-commerce multilingual query ner: spanlevel f1.
+see other metrics in appendix d..4.4 biomedical ner.
+we present the main results on biomedical ner intable 5. needle achieves the best performanceamong all comparison methods.
+we outperformprevious sota (lee et al., 2020; gu et al., 2020)by 0.41%, 5.07%, 3.15%, on bc5cdr-chemical,bc5cdr-disease and ncbi-disease respectively,in terms of the f1-score.
+we achieve very signiﬁ-cant improvement on bc5cdr-disease.
+we con-jecture that the weak labels for disease entities arerelatively accurate, since wsl can also improvethe model performance..4.5 analysis.
+size of weakly labeled data.
+to demonstratethat needle can better exploit the weakly labeled.
+1780method.
+needle.
+w/o nalw/o wlc/nalw/o ftw/o ft/nal.
+biobert-crf.
+bc5cdr bc5cdrchemical93.7493.6093.0882.0381.75.disease90.6990.0789.8387.8687.85supervised baseline85.23.
+92.96.ncbidisease92.2892.1191.7389.1488.86.
+89.22.sst.
+wsl.
+semi-supervised baseline.
+93.06.
+85.56.
+89.42.weakly-supervised baseline.
+85.41.
+88.96.
+78.84.reported f1-scores in gu et al.
+(2020)..bertbiobertscibertpubmedbert.
+89.9992.8592.5193.33.
+79.9284.7084.7085.62.reported f1-scores in nooralahzadeh et al.
+(2019)..ner-pa-rl†.
+89.93.
+85.8789.1388.2587.82.
+-.
+table 5: main results on biomedical ner: span levelf1-score.
+we also provide previous sota perfor-mance reported in gu et al.
+(2020) and nooralahzadeh†: ner-pa-rl is a wsl variant us-et al.
+(2019)..ing instance selection.
+nooralahzadeh et al.
+(2019)only report the averaged f1 of bc5cdr-chemical andbc5cdr-disease.
+see other metrics in appendix c..data, we test the model performance with randomlysub-sampled weakly labeled data.
+we plot the f1-score curve for e-commerce english query ner infigure 2a and bc5cdr data in figure 2b.
+we ﬁndthat needle gains more beneﬁts from increas-ing the size of weakly labeled data compared withother methods (sst and wsl).
+we also present theperformance of needle w/o ft in figure 2c.
+ascan be seen, although the performance of needlew/o ft decreases with more weakly labeled data,the model can still learn more useful informationand achieves better performance after ﬁne-tuning.
+two rounds of stage ii training.
+since themodel after the ﬁnal ﬁne-tuning is better than theinitial model in stage ii, we study whether usingthe ﬁne-tuned model for an addition round of stageii can further improve the performance of nee-dle.
+speciﬁcally, after stage iii, we 1) use thenew model to complete the original weak labels;2) conduct noise-aware continual pre-training overboth strongly and weakly labeled data; 3) ﬁne-tunethe model on strongly labeled data.
+the results arepresented in figure 2 (last point of each curve).
+ascan be seen, needle can obtain slight improve-ment using the two rounds of stage ii training.
+onthe other hand, we also show that sst and nee-.
+dle w/o nal achieve little improvement usingthe second round of training.
+size of strongly labeled data.
+to demonstratethat needle is sample efﬁcient, we test needleon randomly sub-sampled strongly labeled dataon e-commerce ner.
+as we show in figure 3,needle only requires 30% ∼ 50% strongly la-beled data to achieve the same performance as the(fully) supervised baseline.
+we also observe thatneedle achieves more signiﬁcant improvementwith fewer labeled data: +2.28/3.64 f1-score with1%/10% labeled data..4.6 weak label errors in e-commerce ner.
+here we study several possible errors of the weaklabels to better understand the weak labels and howthe proposed techniques reduce these errors.
+label distribution mismatch.
+first, we show thedistribution difference between the weak labels andthe strong labels, and demonstrate how the weaklabel completion reduces the gap.
+speciﬁcally, wecompare the entity distribution of the true labels,weak labels, corrected weak labels and self-trainingpseudo labels in figure 4. as can be seen, the orig-inal weak labels suffer from severe missing entityissue (i.e., too many non-entity labels) and dis-tribution shift (e.g., nearly no misc labels).
+onthe other hand, the corrected weak labels sufferless from the missing entities and distribution shift.
+sst pseudo labels are the most similar to the stronglabels, which explains why sst can directly im-proves the performance.
+systematical errors.
+we observe that many er-rors from the weakly labeled data are systemati-cal errors, which can be easily ﬁxed by the ﬁnalﬁne-tuning stage.
+for example, “amiibo” is oneproduct line of “nintendo”.
+the amiibo char-acters should be deﬁned as misc type, while theweak labels are all wrongly annotated as color.
+we list 4 queries and their strong labels and weaklabels in table 6. although these errors lead toworse performance in stage ii, they can be easilyﬁxed in the ﬁnal ﬁne-tuning stage.
+speciﬁcally,the pre-training ﬁrst encourages the model to learnthat “xxx amiibo” is a combination of color +productline with a large amount of weakly la-beled data, and then the ﬁne-tuning step correctssuch a pattern to misc + productline witha limited amount of data.
+it is easier than directlylearning the misc + productline with thelimited strongly labeled data..1781(a) e-commerce en query ner.
+(b) bc5cdr-disease.
+(c) w/ vs. w/o ﬁnal ﬁne-tuning.
+figure 2: size of weakly labeled data vs. performance.
+we present the performance after the ﬁnal round ofﬁne-tuning in (a) and (b).
+we also compare the performance with and without ﬁne-tuning in (c) using e-commerceenglish query ner data.
+the baselines are query-roberta-crf for (a,c) and biobert-crf for (b).
+“baseline”:the baseline here is the fully supervised baseline.
+we also present the performance after two rounds of stage iitraining at the rightmost point of each curve (“stage ii x2”)..label typeshuman labelsoriginal weak labelscorrected weak labelsself-training labels.
+querys and labels.
+zelda amiibo wario amiibozelda amiibo wario amiibozelda amiibo wario amiibozelda amiibo wario amiibo.
+yarn yoshi amiiboyarn yoshi amiiboyarn yoshi amiiboyarn yoshi amiibo.
+amiibo donkey kongamiibo donkey kongamiibo donkey kongamiibo donkey kong.
+table 6: query examples of “amiibo”.
+entity labels: red: misc, blue: product line, green: color, black: nonentity, orange: media title..figure 3: performance vs. size of strongly labeleddata.
+see detailed numbers in appendix b..entity bio sequence mismatch in weak labelcompletion.
+another error of the weakly labels isthe mismatched entity bio sequence in the weaklabel completion step, e.g., b-producttype fol-lowed by i-color 4. for english query ner,the proportion of these broken queries is 1.39%.
+removing these samples makes the stage ii per-form better (f1 score +1.07), while it does not im-prove the ﬁnal stage performance (f1 score -0.18).
+this experiment indicates that the ﬁnal ﬁne-tuning.
+4e.g., original weak labels: b-producttype, o,o; model prediction: b-color,i-color,o; correctedweak labels: b-producttype, i-color, o..figure 4: entity distribution.
+sufﬁces to correct these errors, and we do not needto strongly exclude these samples from stage ii..quantify the impact of weak labels.
+here weexamine the impact of weak labels via the lensof prediction error.
+we check the errors made bythe model on the validation set.
+there are 2384entities are wrongly classiﬁed by the initial nermodel.
+after conducting needle, 454 of 2384entities are correctly classiﬁed.
+on the other hand,the model makes 311 more wrong predictions.
+no-tice that not all of them are directly affected by theweakly labeled data, i.e., some entities are not ob-.
+17822.9m5.8m8.6m11.5m14.4m17.3m20.1m21.6mstage ii x2data size0.79250.79500.79750.80000.80250.8050span f1 scoresstneedle w/o nalneedle baseline2.9m5.8m8.6m11.5m14.4m15.47mstage ii x2data size0.850.860.870.880.890.90span f1 scoresstneedle w/o nalneedlebaseline2.9m5.8m8.6m11.5m14.4m17.3m20.1m21.6mstage ii x2data size0.760.770.780.790.80span f1 scoreneedle w/o nal/ftneedle w/o nal needle w/o ftneedle  baseline0.00.20.40.60.81.0size of strongly labeled data70.072.575.077.580.0span f1 scorebaseline needle3x efficiencyentity label0.00.10.20.30.40.50.6densitystrong labelsst pseudo label corrected weak label original weak labeloproducttype          miscproductline   mediatitlebrandaudiencesizeartistcolormediatypeserved in the weakly labeled data.
+some changesmay be only due to the data randomness.
+if weexclude the entities which are not observed in theweakly annotated entities, there are 171 new cor-rectly classiﬁed entities and 93 new wrongly classi-ﬁed entities, which are affected by the weak labels.
+such a ratio 171/93 = 1.84 >> 1 justiﬁes thatthe advantage of nal signiﬁcantly out-weights thedisadvantage of the noise of weak labels..and weakly supervised ner, and harnesses thepower of weak supervision in a principled man-ner.
+note that, needle is complementary tofully weakly supervised / semi-supervised learning.
+one potential future direction is to combine nee-dle with other fully weakly supervised / semi-supervised learning techniques to further improvethe performance, e.g., contrastive regularization(yu et al., 2021)..5 discussion and conclusion.
+broader impact.
+our work is closely related to fully weakly super-vised ner.
+most of the previous works only focuson weak supervision without strongly labeled data(shang et al., 2018; lan et al., 2020a; liang et al.,2020).
+however, the gap between a fully weakly su-pervised model and a fully supervised model is usu-ally huge.
+for example, a fully supervised modelcan outperform a weakly supervised model (au-toner, shang et al.
+(2018)) with only 300 articles.
+such a huge gap makes fully weakly supervisedner not practical in real-world applications..our work is also relevant to semi-supervisedlearning, where the training data is only par-tially labeled.
+there have been many semi-supervised learning methods, including the pop-ular self-training methods used in our experimentsfor comparison (yarowsky, 1995; rosenberg et al.,2005; tarvainen and valpola, 2017; miyato et al.,2018; meng et al., 2018; clark et al., 2018; yuet al., 2021).
+different from weak supervision,these semi-supervised learning methods usuallyhas a partial set of labeled data.
+they rely on thelabeled data to train a sufﬁciently accurate model.
+the unlabeled data are usually used for inducingcertain regularization to further improve the gen-eralization performance.
+existing semi-supervisedlearning methods such as self-training doesn’t lever-age the knowledge from weak supervision and canonly marginally improve the performance..different from previous studies on fully weaklysupervised ner, we identify an important researchquestion on weak supervision: the weakly labeleddata, when simply combined with the strongly la-beled data during training, can degrade the modelperformance.
+to address this issue, we propose anew computational framework named needle,which effectively suppresses the extensive noisein the weak labeled data, and learns from bothstrongly labeled data and weakly labeled data.
+ourproposed framework bridges the supervised ner.
+this paper studies ner with small strongly labeledand large weakly labeled data.
+our investigationneither introduces any social/ethical bias to themodel nor ampliﬁes any bias in the data.
+we do notforesee any direct social consequences or ethicalissues..references.
+b carpenter.
+2009. coding chunkers as taggers: io,bio, bmewo, and bmewo+.
+lingpipe blog, page 14..kevin clark, minh-thang luong, christopher d. man-semi-supervised se-ning, and quoc le.
+2018.quence modeling with cross-view training.
+in pro-ceedings of the 2018 conference on empirical meth-ods in natural language processing, pages 1914–1925, brussels, belgium.
+association for computa-tional linguistics..gamal crichton, sampo pyysalo, billy chiu, and annakorhonen.
+2017. a neural network multi-task learn-ing approach to biomedical named entity recogni-tion.
+bmc bioinformatics, 18(1):368..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language under-in proceedings of the 2019 conferencestanding.
+of the north american chapter of the associationfor computational linguistics: human languagetechnologies, volume 1 (long and short papers),pages 4171–4186, minneapolis, minnesota.
+associ-ation for computational linguistics..rezarta islamaj do˘gan, robert leaman, and zhiyonglu.
+2014. ncbi disease corpus: a resource for dis-ease name recognition and concept normalization.
+journal of biomedical informatics, 47:1–10..jingfei du, edouard grave, beliz gunel, vishravchaudhary, onur celebi, michael auli, veselinstoyanov, and alexis conneau.
+2021. self-trainingimproves pre-training for natural language under-standing.
+in proceedings of the 2021 conference ofthe north american chapter of the association forcomputational linguistics: human language tech-nologies, pages 5408–5418, online.
+association forcomputational linguistics..1783jason fries, sen wu, alex ratner, and christopher r´e.
+2017. swellshark: a generative model for biomed-ical named entity recognition without labeled data.
+arxiv preprint arxiv:1704.06360..robert leaman and graciela gonzalez.
+2008. ban-ner: an executable survey of advances in biomedi-cal named entity recognition.
+in biocomputing 2008,pages 652–663.
+world scientiﬁc..aritra ghosh, himanshu kumar, and p. s. sastry.
+2017.robust loss functions under label noise for deep neu-in proceedings of the thirty-firstral networks.
+aaai conference on artiﬁcial intelligence, febru-ary 4-9, 2017, san francisco, california, usa,pages 1919–1925.
+aaai press..athanasios giannakopoulos, claudiu musat, andreeahossmann, and michael baeriswyl.
+2017. unsu-pervised aspect term extraction with b-lstm &crf using automatically labelled datasets.
+in pro-ceedings of the 8th workshop on computational ap-proaches to subjectivity, sentiment and social me-dia analysis, pages 180–188, copenhagen, den-mark.
+association for computational linguistics..yu gu, robert tinn, hao cheng, michael lucas,naoto usuyama, xiaodong liu, tristan naumann,jianfeng gao, and hoifung poon.
+2020. domain-speciﬁc language model pretraining for biomedi-arxiv preprintcal natural language processing.
+arxiv:2007.15779..suchin gururangan, ana marasovi´c,.
+swabhaswayamdipta, kyle lo, iz beltagy, doug downey,and noah a. smith.
+2020. don’t stop pretraining:inadapt language models to domains and tasks.
+proceedings ofthethe 58th annual meeting ofassociation for computational linguistics, pages8342–8360, online.
+association for computationallinguistics..zhiheng huang, wei xu, and kai yu.
+2015. bidirec-tional lstm-crf models for sequence tagging.
+arxivpreprint arxiv:1508.01991..john d. lafferty, andrew mccallum, and fernandoc. n. pereira.
+2001. conditional random ﬁelds:probabilistic models for segmenting and labeling se-quence data.
+in proceedings of the eighteenth inter-national conference on machine learning (icml2001), williams college, williamstown, ma, usa,june 28 - july 1, 2001, pages 282–289.
+morgankaufmann..ouyu lan, xiao huang, bill yuchen lin, he jiang,liyuan liu, and xiang ren.
+2020a.
+learning to con-textually aggregate multi-source supervision for se-quence labeling.
+in proceedings of the 58th annualmeeting of the association for computational lin-guistics, pages 2134–2146, online.
+association forcomputational linguistics..jinhyuk lee, wonjin yoon,.
+sungdong kim,donghyeon kim, sunkyu kim, chan ho so, andjaewoo kang.
+2020. biobert: a pre-trained biomed-ical language representation model for biomedicaltext mining.
+bioinformatics, 36(4):1234–1240..qi li, haibo li, heng ji, wen wang, jing zheng, andfei huang.
+2012. joint bilingual name tagging forparallel corpora.
+in 21st acm international confer-ence on information and knowledge management,cikm’12, maui, hi, usa, october 29 - november02, 2012, pages 1727–1731.
+acm..chen liang, yue yu, haoming jiang, siawpeng er,ruijia wang, tuo zhao, and chao zhang.
+2020.bond: bert-assisted open-domain named entityin kdd ’20:recognition with distant supervision.
+the 26th acm sigkdd conference on knowledgediscovery and data mining, virtual event, ca, usa,august 23-27, 2020, pages 1054–1064.
+acm..yinhan liu, myle ott, naman goyal, jingfei du, man-dar joshi, danqi chen, omer levy, mike lewis,luke zettlemoyer, and veselin stoyanov.
+2019.roberta: a robustly optimized bert pretraining ap-proach.
+arxiv preprint arxiv:1907.11692..xuezhe ma and eduard hovy.
+2016..end-to-endsequence labeling via bi-directional lstm-cnns-crf.
+in proceedings of the 54th annual meeting ofthe association for computational linguistics (vol-ume 1: long papers), pages 1064–1074, berlin, ger-many.
+association for computational linguistics..gideon s mann and andrew mccallum.
+2010. gener-alized expectation criteria for semi-supervised learn-ing with weakly labeled data.
+journal of machinelearning research, 11(2)..yu meng, jiaming shen, chao zhang, and jiaweihan.
+2018. weakly-supervised neural text classiﬁ-in proceedings of the 27th acm interna-cation.
+tional conference on information and knowledgemanagement, cikm 2018, torino, italy, october 22-26, 2018, pages 983–992.
+acm..takeru miyato, shin-ichi maeda, masanori koyama,and shin ishii.
+2018. virtual adversarial training:a regularization method for supervised and semi-ieee t-pami, 41(8):1979–supervised learning.
+1993..zhenzhong lan, mingda chen, sebastian goodman,kevin gimpel, piyush sharma, and radu soricut.
+2020b.
+albert: a lite bert for self-supervisedin 8th inter-learning of language representations.
+national conference on learning representations,iclr 2020, addis ababa, ethiopia, april 26-30,2020. openreview.net..farhad nooralahzadeh, jan tore lønning, and liljaøvrelid.
+2019. reinforcement-based denoising ofdistantly supervised ner with partial annotation.
+inproceedings of the 2nd workshop on deep learningapproaches for low-resource nlp (deeplo 2019),pages 225–233, hong kong, china.
+association forcomputational linguistics..1784colin raffel, noam shazeer, adam roberts, katherinelee, sharan narang, michael matena, yanqi zhou,wei li, and peter j liu.
+2019. exploring the limitsof transfer learning with a uniﬁed text-to-text trans-former.
+arxiv preprint arxiv:1910.10683..in proceed-trees and naive bayesian classiﬁers.
+ings of the eighteenth international conference onmachine learning (icml 2001), williams college,williamstown, ma, usa, june 28 - july 1, 2001,pages 609–616.
+morgan kaufmann..yukun zhu, ryan kiros, richard s. zemel, ruslansalakhutdinov, raquel urtasun, antonio torralba,and sanja fidler.
+2015. aligning books and movies:towards story-like visual explanations by watchingin 2015 ieee interna-movies and reading books.
+tional conference on computer vision, iccv 2015,santiago, chile, december 7-13, 2015, pages 19–27.
+ieee computer society..chuck rosenberg, martial hebert, and henry schnei-derman.
+2005. semi-supervised self-training of ob-ject detection models.
+in wacv, pages 29–36..jingbo shang, liyuan liu, xiaotao gu, xiang ren,teng ren, and jiawei han.
+2018. learning namedentity tagger using domain-speciﬁc dictionary.
+inproceedings of the 2018 conference on empiricalmethods in natural language processing, pages2054–2064, brussels, belgium.
+association forcomputational linguistics..antti tarvainen and harri valpola.
+2017. mean teach-ers are better role models: weight-averaged consis-tency targets improve semi-supervised deep learningresults.
+in advances in neural information process-ing systems 30: annual conference on neural in-formation processing systems 2017, december 4-9,2017, long beach, ca, usa, pages 1195–1204..yaqing wang, subhabrata mukherjee, haoda chu,yuancheng tu, ming wu, jing gao, and ahmed has-san awadallah.
+2020. adaptive self-training forfew-shot neural sequence labeling.
+arxiv preprintarxiv:2010.03680..chih-hsuan wei, yifan peng, robert leaman, al-lan peter davis, carolyn j mattingly, jiao li,and zhiyong lu.
+2015.thomas c wiegers,overview of the biocreative v chemical disease re-lation (cdr) task.
+in proceedings of the ﬁfth biocre-ative challenge evaluation workshop, volume 14..thomas wolf, lysandre debut, victor sanh, julienchaumond, clement delangue, anthony moi, pier-ric cistac, tim rault, r´emi louf, morgan funtow-icz, et al.
+2019. huggingface’s transformers: state-of-the-art natural language processing.
+arxiv, pagesarxiv–1910..david yarowsky.
+1995. unsupervised word sense dis-in 33rdambiguation rivaling supervised methods.
+annual meeting of the association for computa-tional linguistics, pages 189–196, cambridge, mas-sachusetts, usa.
+association for computationallinguistics..yue yu, simiao zuo, haoming jiang, wendi ren, tuozhao, and chao zhang.
+2021.fine-tuning pre-trained language model with weak supervision: acontrastive-regularized self-training approach.
+inproceedings of the 2021 conference of the northamerican chapter of the association for computa-tional linguistics: human language technologies,pages 1063–1077, online.
+association for compu-tational linguistics..bianca zadrozny and charles elkan.
+2001. obtain-ing calibrated probability estimates from decision.
+1785a estimation of weak label conﬁdence.
+here we describe how do we estimate the conﬁdence of weak labels — (cid:98)p ( (cid:101)yc = (cid:101)y| (cid:101)x).
+notice that,the corrected weak labels (cid:101)yc in needle consists of two parts: original weak labels (cid:101)yw and modelprediction (cid:101)yp.
+so we estimate the conﬁdence of corrected weak labels by the conﬁdence of these twoparts using a simple linear combination:.
+(cid:98)p ( (cid:101)yc = (cid:101)y| (cid:101)x)=.
+#{matched tokens}#{total tokens}.
+(cid:98)p ( (cid:101)yw = (cid:101)y| (cid:101)x)+(1 −.
+#{matched tokens}#{total tokens}.)
+(cid:98)p ( (cid:101)yp = (cid:101)y| (cid:101)x).
+the weight of such linear combination comes from the rule of the weak label completion procedure.
+recall that, we use the original weak labels for all matched tokens in original weakly-supervised data,while we use the model prediction for other tokens..we ﬁrst assume the conﬁdence of weak labels are high, i.e.
+(cid:98)p ( (cid:101)yw = (cid:101)y| (cid:101)x) = 1, as there is less.
+ambiguity in the domain-speciﬁc dictionary and matching process..the label prediction (cid:101)yp of crf model is based on viterbi decoding score.
+(cid:101)yp = arg maxy.s(y) = decode(y, f ( (cid:101)x; θ)).
+the conﬁdence of (cid:101)yp , i.e., (cid:98)p ( (cid:101)yp = (cid:101)y| (cid:101)x) can be estimated via histogram binning (zadrozny and elkan,2001).
+speciﬁcally, we categorize samples into bins based on the decoding score s( (cid:101)yp).
+for each bin weestimate the conﬁdence using a validation set (independent of the ﬁnal evaluation set).
+for a new sample,we ﬁrst calculate the decoding score, and estimate the prediction conﬁdence by the conﬁdence of thecorresponding bin in the histogram.
+figure 5 illustrates an example of histogram binning.
+as can be seen,the decoding score has a strong correlation with the prediction conﬁdence..figure 5: decoding score vs. accuracy/conﬁdence.
+finally, we enforce a smoothing when estimating the conﬁdence.
+speciﬁcally, we always make a.conservative estimation by a post-processing:.
+p ( (cid:101)yc = (cid:101)y| (cid:101)x) = min(0.95, p ( (cid:101)yc = (cid:101)y| (cid:101)x)).
+we enforce such a smoothing to count any potential errors (e.g., inaccurate original weak labels) and.
+prevent model from overﬁtting.
+the smoothing parameter is ﬁxed as 0.95 throughout the experiments..17863.16-5.317.64-7.778.66-8.749.38-9.4610.1-10.1811.09-11.97crf score0.00.20.40.60.81.0confidenceb additional experimental results for e-commerce nerwe also present token/span/query level accuracy, as they are commonly used in e-commerce ner tasks..methodroberta (supervised baseline)weighted wslweight = 0.5weight = 0.1weight = 0.01weighted partial wslweight = 0.5weight = 0.1weight = 0.01.span p/r/f178.51/78.54/78.54.
+t/s/q accu.
+85.51/79.14/66.90.
+75.38/52.94/62.2077.31/57.85/66.1878.07/64.41/70.59.
+61.07/52.61/37.3265.65/57.70/43.8371.75/64.43/52.52.
+72.94/71.77/72.3575.24/74.68/74.9676.28/76.34/76.31.
+81.10/72.53/59.1483.08/75.36/62.5084.14/76.94/63.91.
+table 7: performance of bert (supervised baseline), weighted wsl & weighted partial wsl on e-commerceenglish query nerb.1 performance vs. strongly labeled data.
+method(1%) query-roberta-crf (30 epochs)(10%) query-roberta-crf (3 epochs)(20%) query-roberta-crf (3 epochs)(50%) query-roberta-crf (3 epochs)(1%) needle(10%) needle(20%) needle(50%) needle.
+span p/r/f168.69/70.59/69.6371.69/73.72/72.6975.16/75.90/75.5376.95/77.90/77.4271.20/72.64/71.9176.25/76.15/76.2077.93/77.75/77.8479.12/79.23/79.18.
+t/s/q accu.
+79.03/71.25/54.3681.90/74.26/58.3683.65/76.43/62.4284.88/78.41/64.9680.74/73.26/57.4084.09/76.67/63.7985.06/78.28/65.8885.92/79.73/67.77.
+table 8: performance vs. size of strongly labeled data on e-commerce english query ner.
+c additional experimental results for biomedical ner.
+method.
+bc5cdr-chem.
+bc5cdr-disease.
+ncbi-disease.
+-/-/89.99-/-/92.85-/-/92.51-/-/93.33.
+-/-/85.87-/-/89.13-/-/88.25-/-/87.82.
+-/-/79.92-/-/84.70-/-/84.70-/-/85.62.
+reported f1-scores of baselines (gu et al., 2020).
+previous sota: pubmedbert/biobert.
+bertbiobertscibertpubmedbertre-implemented baselinesbertbert-crfbiobertbiobert-crfbased on biobert and crf layersstwslneedle w/o wlc/nalneedle w/o ft/nalneedle w/o nalneedle w/o ftneedle.
+92.40/93.74/93.0682.17/88.91/85.4192.85/93.31/93.0879.29/84.38/81.7592.93/94.28/93.6079.87/84.31/82.0392.89/94.60/93.74.
+84.01/87.18/85.5690.72/87.27/88.9691.37/88.34/89.8382.44/94.03/87.8586.73/93.69/90.0782.39/94.12/87.8687.99/93.56/90.69.
+87.00/91.98/89.4287.14/71.98/78.8491.68/91.77/91.7387.17/90.62/88.8691.82/92.40/92.1187.31/91.04/89.1491.76/92.81/92.28.
+77.54/81.87/79.6478.70/81.53/80.0982.36/86.66/84.4583.73/86.80/85.23.
+83.50/88.54/85.9485.33/86.67/85.9986.75/90.83/88.7487.18/91.35/89.22.
+88.55/90.49/89.5188.59/91.44/89.9992.59/93.11/92.8592.64/93.28/92.96.
+table 9: main results on biomedical ner: span precision/recall/f1.
+the best performance is bold, and theresults that are close to best performance (≤ 0.2%) are also bold.
+c.1 additional baseline resultswe compare needle with other popular semi-supervised (mean-teacher, tarvainen and valpola (2017),and vat, miyato et al.
+(2018)) and weakly supervised baselines (bond, liang et al.
+(2020)) 5..methodf1-score.
+needle mean-teacher.
+93.74.
+92.88.vat93.10.bond bond + ft (stage iii)86.93.
+92.82.table 10: f1-score on bc5cdr-chem..5https://github.com/cliang1453/bond/pull/12.
+1787d extension: multilingual ner.
+the proposed framework can be extended to improve multilingual ner.
+for stage i and stage ii, we usedata from other languages to learn domain-speciﬁc knowledge and task-related knowledge.
+in the ﬁnalﬁne-tuning stage, we use the data from the target language, which allows us to adapt the model to thetarget language and obtain a better performance on the target language.
+the framework is summarized infigure 6. the results of multilingual query ner are presented in table 11. as can be seen, needleoutperforms baseline methods..figure 6: three-stage needle for multilingual ner.
+method (span p/r/f1).
+en.
+fr.
+it.
+de.
+es.
+mbert-crf (single)mbert-crfquery-mbert-crf.
+76.14/76.04/76.09 72.87/73.00/72.93 76.95/77.67/77.31 74.74/78.08/76.37 76.34/76.75/76.5476.38/76.25/76.31 74.69/75.06/74.87 77.82/77.60/77.71 75.93/78.52/77.20 78.18/77.57/77.8777.21/77.18/77.19 74.59/75.05/74.82 78.22/78.01/78.11 76.46/79.12/77.77 78.50/77.73/78.11.
+based on query-mbert and crf layer77.52/77.33/77.42 75.15/75.28/75.21 78.00/77.64/77.82 76.82/79.43/78.10 79.14/78.17/78.65sstwsl74.20/48.09/58.35 71.17/51.71/59.90 74.72/51.51/60.98 74.34/52.68/61.66 76.32/53.85/63.14needle w/o wlc/nal 77.89/77.47/77.68 75.28/75.35/75.31 78.17/78.28/78.22 76.68/79.33/77.99 78.29/78.14/78.2272.73/75.06/73.87 72.00/73.12/72.56 75.19/75.34/75.26 74.65/77.63/76.11 77.07/76.18/76.62needle w/o ft/nal78.27/77.74/78.00 76.09/75.95/76.02 79.14/79.25/79.19 77.55/79.63/78.58 79.60/78.86/79.23needle w/o nal72.79/75.01/73.88 72.46/73.46/72.96 75.39/75.50/75.44 75.09/77.98/76.51 77.46/76.29/76.87needle w/o ft78.40/77.95/78.17 76.05/75.91/75.98 79.61/79.76/79.68 77.79/79.90/78.83 79.85/79.13/79.49needle.
+method (t/s/q accu.).
+mbert-crf (single)mbert-crfquery-mbert-crf.
+en.
+fr.
+it.
+de.
+es.
+83.26/76.80/61.68 80.27/72.91/57.48 83.70/78.13/60.75 79.53/76.38/60.72 83.58/77.56/59.6483.37/76.97/62.21 81.43/74.92/60.35 84.31/78.06/60.65 80.48/76.82/62.47 84.94/78.23/61.4484.15/77.85/63.44 81.36/74.91/60.17 84.83/78.46/61.26 80.93/77.40/62.81 85.20/78.27/62.12.
+based on query-mbert and crf layer84.18/78.02/63.57 81.66/75.12/60.92 84.45/78.13/60.89 81.26/77.72/63.61 85.35/78.56/62.90sstwsl54.40/47.43/28.97 59.11/51.08/32.85 59.79/50.59/30.75 56.16/51.16/33.59 61.36/53.29/32.48needle w/o wlc/nal 84.42/78.12/64.43 81.65/75.24/60.74 84.76/78.65/61.77 81.32/77.59/63.37 84.82/78.84/61.95needle w/o nal/ft83.46/75.80/57.93 81.20/73.04/56.90 83.48/75.97/57.22 80.31/76.00/60.79 83.90/76.80/59.3084.63/78.42/64.76 82.34/75.83/61.91 85.34/79.63/63.17 81.68/77.90/64.34 85.64/79.48/63.41needle w/o nal83.50/75.76/58.01 80.92/73.38/57.34 83.45/76.03/57.39 80.48/76.31/61.22 84.10/76.97/60.12needle w/o ft84.74/78.59/64.86 82.14/75.80/61.96 85.65/80.12/63.71 81.79/78.15/64.84 86.00/79.80/64.03needle.
+table 11: e-commerce multilingual query ner: span precision/recall/f1 and token/span/query level accu-racy.
+the best performance is bold, and the results that are close to best performance (≤ 0.2%) are also bold.
+‘mbert-crf (single)’: ﬁne-tune mbert with strongly labeled data from the target language.
+‘w/ fine-tune’: theadditional ﬁne-tuning stage only use strongly labeled data from the target language.
+for other methods, we usemultilingual human-annotated data..1788e detailed of weakly labeled datasets.
+e.1 weak labels for biomedical ner data.
+unlabeled data.
+weak label generation.
+the large-scale unlabeled data is obtained from titles and abstracts of biomedical articles..the weak annotation is generated by dictionary lookup and exact string match..figure 7: illustration of weak label generation process for biomedical ner..e.2 weak labels for e-commerce query ner data.
+unlabeled data.
+the shopping website.
+weak label generation.
+the unlabeled in-domain data is obtained by aggregated anonymized user behavior data collected from.
+the weak annotation is obtained by aggregated anonymized user behavior data collected from the.
+shopping website.
+step 1. for each query, we aggregate the user click behavior data and ﬁnd the most clicked product.
+step 2. identify product attributes in the product knowledge base by product id.
+step 3. we match spans of the query with product attribute.
+if a match is found, we can annotate the spanby the attribute type..example:.
+• query: sketchers women memory foam trainers• most clicked product: product id b014gnjnbi• product manufacturer: sketchers• string match results: sketchers (brand) women memory foam trainers.
+figure 8: illustration of weak label generation process for e-commerce ner..1789

@@ -1,0 +1,557 @@
+a conditional splitting framework for efﬁcient constituency parsing.
+thanh-tung nguyen†¶, xuan-phi nguyen†¶, shaﬁq joty¶§, xiaoli li†¶¶nanyang technological university§salesforce research asia†institute for infocomm research, a-starsingapore{ng0155ng@e.;nguyenxu002@e.;srjoty@}ntu.edu.sgxlli@i2r.a-star.edu.sg.
+abstract.
+we introduce a generic seq2seq parsing frame-work that casts constituency parsing problems(syntactic and discourse parsing) into a seriesof conditional splitting decisions.
+our pars-ing model estimates the conditional probabil-ity distribution of possible splitting points ina given text span and supports efﬁcient top-down decoding, which is linear in number ofnodes.
+the conditional splitting formulationtogether with efﬁcient beam search inferencefacilitate structural consistency without rely-ing on expensive structured inference.
+cru-cially, for discourse analysis we show that inour formulation, discourse segmentation canbe framed as a special case of parsing whichallows us to perform discourse parsing withoutrequiring segmentation as a pre-requisite.
+ex-periments show that our model achieves goodresults on the standard syntactic parsing tasksunder settings with/without pre-trained repre-sentations and rivals state-of-the-art (sota)methods that are more computationally ex-pensive than ours.
+in discourse parsing, ourmethod outperforms sota by a good margin..1.introduction.
+a number of formalisms have been introduced toanalyze natural language at different linguistic lev-els.
+this includes syntactic structures in the formof phrasal and dependency trees, semantic struc-tures in the form of meaning representations (ba-narescu et al., 2013; artzi et al., 2013), and dis-course structures with rhetorical structure theory(rst) (mann and thompson, 1988) or discourse-ltag (webber, 2004).
+many of these formalismshave a constituency structure, where textual units(e.g., phrases, sentences) are organized into nestedconstituents.
+for example, figure 1 shows exam-ples of a phrase structure tree and a sentence-leveldiscourse tree (rst) that respectively representhow the phrases and clauses are hierarchically or-.
+ganized into a constituency structure.
+developingefﬁcient and effective parsing solutions has alwaysbeen a key focus in nlp.
+in this work, we considerboth phrasal (syntactic) and discourse parsing..in recent years, neural end-to-end parsing meth-ods have outperformed traditional methods thatuse grammar, lexicon and hand-crafted features.
+these methods can be broadly categorized basedon whether they employ a greedy transition-based,a globally optimized chart parsing or a greedy top-down algorithm.
+transition-based parsers (dyeret al., 2016; cross and huang, 2016; liu andzhang, 2017; wang et al., 2017) generate treesauto-regressively as a form of shift-reduce deci-sions.
+though computationally attractive, the localdecisions made at each step may propagate errorsto subsequent steps due to exposure bias (bengioet al., 2015).
+moreover, there may be mismatchesin shift and reduce steps, resulting in invalid trees.
+chart based methods, on the other hand, trainneural scoring functions to model the tree structureglobally (durrett and klein, 2015; gaddy et al.,2018; kitaev and klein, 2018; zhang et al., 2020b;joty et al., 2012, 2013).
+by utilizing dynamic pro-gramming, these methods can perform exact in-ference to combine these constituent scores intoﬁnding the highest probable tree.
+however, theyare generally slow with at least o(n3) time com-plexity.
+greedy top-down parsers ﬁnd the splitpoints recursively and have received much atten-tion lately due to their efﬁciency, which is usuallyo(n2) (stern et al., 2017a; shen et al., 2018; linet al., 2019; nguyen et al., 2020).
+however, theystill suffer from exposure bias, where one incorrectsplitting step may affect subsequent steps..discourse parsing in rst requires an addi-tional step – discourse segmentation which in-volves breaking the text into contiguous clause-likeunits called elementary discourse units or edus(figure 1).
+traditionally, segmentation has been.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages5795–5807august1–6,2021.©2021associationforcomputationallinguistics5795considered separately and as a prerequisite step forthe parsing task which links the edus (and largerspans) into a discourse tree (soricut and marcu,2003; joty et al., 2012; wang et al., 2017).
+in thisway, the errors in discourse segmentation can prop-agate to discourse parsing (lin et al., 2019)..in this paper, we propose a generic top-downneural framework for constituency parsing that wevalidate on both syntactic and sentence-level dis-course parsing.
+our main contributions are:.
+• we cast the constituency parsing task into a se-ries of conditional splitting decisions and usea seq2seq architecture to model the splittingdecision at each decoding step.
+our parsingmodel, which is an instance of a pointer network(vinyals et al., 2015a), estimates the pointingscore from a span to a splitting boundary point,representing the likelihood that the span will besplit at that point and create two child spans..• the conditional probabilities of the splitting deci-sions are optimized using a cross entropy loss andstructural consistency is maintained through aglobal pointing mechanism.
+the training processcan be fully parallelized without requiring struc-tured inference as in (shen et al., 2018; gómezand vilares, 2018; nguyen et al., 2020)..• our model enables efﬁcient top-down decodingwith o(n) running time like transition-basedparsers, while also supporting a customized beamsearch to get the best tree by searching througha reasonable search space of high scoring trees.
+the beam-search inference along with the struc-tural consistency from the modeling makes ourapproach competitive with existing structuredchart methods for syntactic (kitaev and klein,2018) and discourse parsing (zhang et al., 2020b).
+moreover, our parser does not rely on any hand-crafted features (not even part-of-speech tags),which makes it more efﬁcient and be ﬂexible todifferent domains or languages..• for discourse analysis, we demonstrate that ourmethod can effectively ﬁnd the segments (edus)by simply performing one additional step in thetop-down parsing process.
+in other words, ourmethod can parse a text into the discourse treewithout needing discourse segmentation as a pre-requisite; instead, it produces the segments as aby-product.
+to the best of our knowledge, thisis the ﬁrst model that can perform segmentationand parsing in a single embedded framework..in the experiments with english penn tree-bank, our model without pre-trained representa-tions achieves 93.8 f1, outperforming all exist-ing methods with similar time complexity.
+withpre-training, our model pushes the f1 score to95.7, which is on par with the sota while sup-porting faster decoding with a speed of over 1,100sentences per second (fastest so far).
+our modelalso performs competitively with sota methodson the multilingual parsing tasks in the spmrl2013/2014 shared tasks.
+in discourse parsing,our method establishes a new sota in end-to-endsentence-level parsing performance on the rstdiscourse treebank with an f1 score of 78.82..we make.
+availablehttps://ntunlpsg.github.io/project/condition-constituency-style-parser/.
+code.
+our.
+at.
+2 parsing as a splitting problem.
+constituency parsing (both syntactic and discourse)can be considered as the problem of ﬁnding a setof labeled spans over the input text (stern et al.,2017a).
+let s(t ) denote the set of labeled spansfor a parse tree t , which can formally be expressedas (excluding the trivial singleton span layer):.
+s(t ) := {((it, jt), lt)}|s(t )|.
+t=1.
+for it < jt.
+(1).
+where lt is the label of the text span (it, jt) encom-passing tokens from index it to index jt..previous approaches to syntactic parsing (sternet al., 2017a; kitaev and klein, 2018; nguyen et al.,2020) train a neural model to score each possiblespan and then apply a greedy or dynamic program-in otherming algorithm to ﬁnd the parse tree.
+words, these methods are span-based formulation.
+in contrary, we formulate constituency parsingas the problem of ﬁnding the splitting points in arecursive, top-down manner.
+for each parent nodein a tree that spans over (i, j), our parsing model istrained to point to the boundary between the tokensat k and k + 1 positions to split the parent span intotwo child spans (i, k) and (k + 1, j).
+this is donethrough the pointing mechanism (vinyals et al.,2015a), where each splitting decision is modeled asa multinomial distribution over the input elements,which in our case are the token boundaries..the correspondence between token- andboundary-based representations of a tree is straight-forward.
+after including the start (<sos>) andend (<eos>) tokens, the token-based span (i, j)is equivalent to the boundary-based span (i − 1, j).
+5796labeled span representation.
+s(t ) = {((1, 5), s), ((2, 5), ∅), ((2, 4), vp), ((3, 4), s-vp)}.
+boundary-based splitting representation.
+c(t ) = {(0, 5) (cid:41) 1, (1, 5) (cid:41) 4, (1, 4) (cid:41) 2, (2, 4) (cid:41) 3}.
+labeled span representation.
+s(dt ) = {((1, 8, 11), same-unitnn), ((1, 5, 8), elaborationns)}.
+boundary-based splitting representation.
+c(dt ) = {(0, 11) (cid:41) 8, (0, 8) (cid:41) 5, (0, 5) (cid:41) 5, (5, 8) (cid:41) 8, (8, 11) (cid:41) 11}.
+figure 1: a syntactic tree at the left and a discourse tree (dt) at the right; both have a constituency structure.
+the internal nodesin the discourse tree (elaboration, same-unit) represent coherence relations and the edge labels indicate the nuclearity statuses(‘n’ for nucleus and ‘s’ for satellite) of the child spans.
+below the tree, we show the labeled span and splitting representations.
+the bold splits in the dt representation (c(dt )) indicate the end of further splitting into smaller spans (i.e., they are edus)..and the boundary between i-th and (i+1)-th tokensis indexed as i. for example, the (boundary-based)span “enjoys playing tennis” in figure 1 is deﬁnedas (1, 4).
+similarly, the boundary between the to-kens “enjoys” and “playing” is indexed with 2.1.following the common practice in syntactic pars-ing, we binarize the n-ary tree by introducing adummy label ∅.
+we also collapsed the nested la-beled spans in the unary chains into unique atomiclabels, such as s-vp in figure 1. every span repre-sents an internal node in the tree, which has a leftand a right child.
+therefore, we can represent eachinternal node by its split into left and right chil-dren.
+based on this, we deﬁne the set of splittingdecisions c(t ) for a syntactic tree t as follows..proposition 1 a binary syntactic tree t of a sen-tence containing n tokens can be transformed intoa set of splitting decisions c(t ) = {(i, j) (cid:41) k : i <k < j} such that the parent span (i, j) is split intotwo child spans (i, k) and (k, j)..an example of the splitting representation of a treeis shown in figure 1 (without the node labels).
+notethat our transformed representation has a one-to-one mapping with the tree since each splitting de-cision corresponds to one and only one internalnode in the tree.
+we follow a depth-ﬁrst order ofthe decision sequence, which in our preliminaryexperiments showed more consistent performancethan other alternatives like breadth-ﬁrst order..extension to end-to-end discourse parsingnote that in syntactic parsing, the split position.
+1we use the same example from (stern et al., 2017a; shenet al., 2018; nguyen et al., 2020) to distinguish the differencesbetween the methods..must be within the span but not at its edge, thatis, k must satisfy i < k < j for each boundaryspan (i, j).
+otherwise, it will not produce validsub-trees.
+in this case, we keep splitting until eachspan contains a single leaf token.
+however, fordiscourse trees, each leaf is an edu – a clause-likeunit that can contain one or multiple tokens..unlike previous studies which assume discoursesegmentation as a pre-processing step, we proposea uniﬁed formulation that treats segmentation asone additional step in the top-down parsing process.
+to accommodate this, we relax proposition 1 as:proposition 2 a binary discourse tree dt of atext containing n tokens can be transformed into aset of splitting decisions c(dt ) = {(i, j) (cid:41) k : i <k ≤ j} such that the parent span (i, j) gets splitinto two child spans (i, k) and (k, j) for k < j ora terminal span or edu for k = j (end of splittingthe span further)..we illustrate it with the dt example in figure1. each splitting decision in c(dt ) represents ei-ther the splitting of the parent span into two childspans (when the splitting point is strictly withinthe span) or the end of any further splitting (whenthe splitting point is the right endpoint of the span).
+by making this simple relaxation, our formulationcan not only generate the discourse tree (in the for-mer case) but can also ﬁnd the discourse segments(edus) as a by-product (in the latter case)..3 seq2seq parsing framework.
+let c(t ) and l(t ) respectively denote the struc-ture (in split representation) and labels of a tree t(syntactic or discourse) for a given text x. we canexpress the probability of the tree as:.
+5797figure 2: our syntatic parser along with the decoding process for a given sentence.
+the input to the decoder at each step is therepresentation of the span to be split.
+we predict the splitting point using a biafﬁne function between the corresponding decoder.
+state and the boundary-based encoder representations.
+a label classiﬁer is used to assign labels to the left and right spans..pθ(t |x) = pθ(l(t ), c(t )|x).
+= pθ(l(t )|c(t ), x)pθ(c(t )|x).
+(2).
+this factorization allows us to ﬁrst infer the treestructure from the input text, and then ﬁnd the cor-responding labels.
+as discussed in the previoussection, we consider the structure prediction as asequence of splitting decisions to generate the treein a top-down manner.
+speciﬁcally, at each de-coding step t, the output yt represents the splittingdecision (it, jt) (cid:41) kt and y<t represents the previ-ous splitting decisions.
+thus, we can express theprobability of the tree structure as follows:.
+pθ(c(t )|x) =.
+(cid:89).
+pθ(yt|y<t, x).
+yt∈c(t ).
+|c(t )|(cid:89).
+=.
+t=1.
+pθ((it, jt) (cid:41) kt|((i, j) (cid:41) k)<t, x).
+(3).
+this can effectively be modeled within a seq2seqpointing framework as shown in figure 2. at eachstep t, the decoder autoregressively predicts thesplit point kt in the input by conditioning on thecurrent input span (it, jt) and previous splittingdecisions (i, j) (cid:41) k)<t.
+this conditional splittingformulation (decision at step t depends on previoussteps) can help our model to ﬁnd better trees com-pared to non-conditional top-down parsers (sternet al., 2017a; shen et al., 2018; nguyen et al., 2020),thus bridging the gap between the global (but ex-pensive) and the local (but efﬁcient) models.
+thelabels l(t ) can be modeled by using a label clas-siﬁer, as described later in the next section..3.1 model architecture.
+we now describe the components of our parsingmodel: the sentence encoder, the span representa-tion, the pointing model and the labeling model..sentence encoder given an input sequence of ntokens x = (x1, .
+.
+.
+, xn), we ﬁrst add <sos> and<eos> markers to the sequence.
+after that, eachtoken t in the sequence is mapped into its densevector representation et as.
+et = [echar.
+t., ewordt.].
+(4).
+t., ewordt.where echarare respectively the characterand word embeddings of token t. similar to (ki-taev and klein, 2018; nguyen et al., 2020), we usea character lstm to compute the character embed-ding of a token.
+we experiment with both randomlyinitialized and pretrained token embeddings.
+whenpretrained embedding is used, the character embed-ding is replaced by the pretrained token embedding.
+the token representations are then passed to a 3-layer bi-lstm encoder to obtain their contextualrepresentations.
+in the experiments, we ﬁnd thateven without the pos-tags, our model performscompetitively with other baselines that use them..boundary and span representations to repre-sent each boundary between positions k and k + 1,we use the fencepost representation (cross andhuang, 2016; stern et al., 2017a):.
+hk = [fk, bk+1].
+(5).
+where fk and bk+1 are the forward and backwardlstm hidden vectors at positions k and k + 1, re-.
+5798hli = mlpl(hi); hrpθ(l|i, j) = softmax((hl.
++(hl.
+i)t wl + (hrli,j = arg max.
+j = mlpr(hj)i)t wlrhrjj )t wr + b)pθ(l|i, j).
+l∈l.
+(10).
+(11)(12).
+where each of mlpl and mlpr includes a lin-ear transformation with leakyrelu activations totransform the left and right spans into equal-sizedvectors, and wlr ∈ ird×l×d, wl ∈ ird×l, wr ∈ird×l are the weights and b is a bias vector withl being the number of phrasal labels..for discourse parsing, we perform label assign-ment after every split decision since the label hererepresents the relation between the child spans.
+speciﬁcally, as we split a span (i, j) into two childspans (i, k) and (k, j), we determine the relationlabel as the following..hl.
+ik = mlpl([hi, hk]); hr.
+pθ(l|(i, k), (k, j)) = softmax((hl+(hlik)t wl + (hrl(i,k),(k,j) = arg max.
+kj = mlpr([hk, hj])ik)t wlrhrkjkj)t wr + b)pθ(l|(i, k), (k, j)).
+(13).
+(14)(15).
+l∈l.
+where mlpl, mlpr, wlr, wl, wr, b are similarlydeﬁned..training objective the total loss is simply thesum of the cross entropy losses for predicting thestructure (split decisions) and the labels:.
+ltotal(θ) = lsplit(θe, θd) + llabel(θe, θlabel).
+(16).
+where θ = {θe, θd, θlabel} denotes the overallmodel parameters, which includes the encoder pa-rameters θe shared by all components, parametersfor splitting θd and parameters for labeling θlabel..3.2 top-down beam-search inference.
+as mentioned, existing top-down syntactic parsersdo not consider the decoding history.
+they also per-form greedy inference.
+with our conditional split-ting formulation, our method can not only modelthe splitting history but also enhance the searchspace of high scoring trees through beam search..at each step, our decoder points to all the en-coded boundary representations which ensures thatthe pointing scores are in the same scale, allow-ing a fair comparison between the total scores ofall candidate subtrees.
+with these uniform scores,we could apply a beam search to infer the most.
+figure 3: illustration of our boundary-based span encoder.
+here we have shown the representation for the boundary at 1and the representation of the boundary-based span (0, 5) thatcorresponds to the sentence “she enjoys playing tennis .”..spectively.
+to represent the span (i, j), we computea linear combination of the two endpoints.
+hi,j = w1hi + w2hj.
+(6).
+this span representation will be used as input tothe decoder.
+figure 3 shows the boundary-basedspan representations for our example..the decoder our model uses a unidirectionallstm as the decoder.
+at each decoding step t,the decoder takes as input the corresponding span(i, j) (speciﬁcally, hi,j) and its previous state dt−1to generate the current state dt and then apply abiafﬁne function (dozat and manning, 2017) be-tween dt and all of the encoded boundary represen-tations (h0, h1, .
+.
+.
+, hn) as follows:.
+t = mlpd(dt) h(cid:48)d(cid:48)st,i = d(cid:48)t.t wdhh(cid:48).
+i = mlph(hi)t whi + h(cid:48)iexp(st,i)i=1 exp(st,i).
+(cid:80)n.at,i =.
+(7).
+(8).
+(9).
+where each mlp operation includes a linear trans-formation with leakyrelu activation to transformd and h into equal-sized vectors, and wdh ∈ird×d and wh ∈ ird are respectively the weightmatrix and weight vector for the biafﬁne func-tion.
+the biafﬁne scores are then passed through asoftmax layer to acquire the pointing distributionat ∈ [0, 1]n for the splitting decision..when decoding the tree during inference, at eachstep we only examine the ‘valid’ splitting pointsbetween i and j – for syntactic parsing, it is i <k < j and for discourse parsing, it is i < k ≤ j..label classiﬁer for syntactic parsing, we per-form the label assignments for a span (i, j) as:.
+5799probable tree using our model.
+speciﬁcally, themethod generates the tree in depth-ﬁrst order whilemaintaining top-b (beam size) partial trees at eachstep.
+it terminates exactly after n − 1 steps, whichmatches the number of internal nodes in the tree.
+because beam size b is constant with regards tothe sequence length, we can omit it in the big onotation.
+therefore, each decoding step with beamsearch can be parallelized (o(1) complexity) usinggpus.
+this makes our algorithm run at o(n) timecomplexity, which is faster than most top-downmethods.
+if we strictly use cpu, our method runsat o(n2), while chart-based parsers run at o(n3).
+algorithm 1 illustrate the syntactic tree inferenceprocedure.
+we also propose a similar version ofthe inference algorithm for discourse parsing in theappendix..algorithm 1 syntactic tree inference with beamsearchinput: sentence length n; beam width b; boundary-basedencoder states: (h0, h1, .
+.
+.
+, hn); label scores: pθ(l|i, j),0 ≤ i < j ≤ n, l ∈ {1, .
+.
+.
+, l}, initial decoder state s..output: parse tree t1: ld = n − 12: beam = array of ld items3: init_tree= [(0, n), (0, 0), .
+.
+.
+, (0, 0)].
+// decoding length// list of empty beam items// n − 2 paddings.
+(0,0).
+4: beam[0] = (0, s, init_tree)item(log-prob,state,tree).
+// init 1st.
+5: for t = 1 to ld do6:7:8:.
+for (logp, s, tree) ∈ beam[t − 1] do.
+(i, j) = tree[t − 1]// current span to splita, s(cid:48) = decoder-step(s, hi,j) // a: split prob.
+dist..for (k, pk) ∈ top-b(a) and i < k < j do.
+curr-tree[t + j − k − 1] = (k, j).
+end ifpush (logp + log(pk), s(cid:48), curr-tree) to beam[t].
+curr-tree[t] = (i, k).
+curr-tree = treeif k > i + 1 then.
+end ifif j > k + 1 then.
+9:10:11:12:13:14:15:16:17:18:19:20:21: end for22: logp*, s∗, s ∗ = arg maxlogp beam[ld].
+end forprune beam[t].
+end for.
+// keep top-b highest score trees.
+// s ∗: best.
+structure.
+s ∗].
+23: labeled-spans = [(i, j, arg maxl pθ(l|i, j)) ∀(i, j) ∈.
+24: labeled-singletons = [(i, i + 1, arg maxl pθ(l|i, i +.
+1)) for i = {0, .
+.
+.
+, n − 1}].
+25: t = labeled-spans ∪ labeled-singletons.
+like cky and/or larger models (kitaev and klein,2018; zhang et al., 2020b)..4 experiment.
+datasets and metrics to show the effectivenessof our approach, we conduct experiments on bothsyntactic and sentence-level rst parsing tasks.2we use the standard wall street journal (wsj) partof the penn treebank (ptb) (marcus et al., 1993)for syntactic parsing and rst discourse treebank(rst-dt) (lynn et al., 2002) for discourse parsing.
+for syntactic parsing, we also experiment with themultilingual parsing tasks on seven different lan-guages from the spmrl 2013-2014 shared task(seddah et al., 2013): basque, french, german,hungarian, korean, polish and swedish..for evaluation on syntactic parsing, we reportthe standard labeled precision (lp), labeled recall(lr), and labelled f1 computed by evalb3.
+forevaluation on rst-dt, we report the standard span,nuclearity label, relation label f1 scores, computedusing the implementation of (lin et al., 2019).4.
+4.1 english (ptb) syntactic parsing.
+setup we follow the standard train/valid/testsplit, which uses sections 2-21 for training, section22 for development and section 23 for evaluation.
+this results in 39,832 sentences for training, 1,700for development, and 2,416 for testing.
+for ourmodel, we use an lstm encoder-decoder frame-work with a 3-layer bidirectional encoder and 3-layer unidirectional decoder.
+the word embeddingsize is 100 while the character embedding size is50; the lstm hidden size is 400. the hidden di-mension in mlp modules and biafﬁne function forsplit point prediction is 500. the beam width b isset to 20. we use the adam optimizer (kingma andba, 2015) with a batch size of 5000 tokens, and aninitial learning rate of 0.002 which decays at therate 0.75 exponentially at every 5k steps.
+modelselection for ﬁnal evaluation is performed based onthe labeled f1 score on the development set..results without pre-training from the resultsshown in table 1, we see that our model achievesan f1 of 93.77, the highest among models that use.
+by enabling beam search, our method can ﬁndthe best tree by comparing high scoring trees withina reasonable search space, making our model com-petitive with existing structured (globally) infer-ence methods that use more expensive algorithms.
+2extending the discourse parser to the document level mayrequire handling of intra- and multi-sentential constituentsdifferently, which we leave for future work..3http://nlp.cs.nyu.edu/evalb/4https://github.com/ntunlpsg/.
+unifiedparser_rst.
+5800model.
+lr.
+lp.
+f1.
+top-down inference.
+stern et al.
+(2017a)shen et al.
+(2018)nguyen et al.
+(2020)our model.
+93.20 90.30 91.8092.00 91.70 91.8092.91 92.75 92.7893.90 93.63 93.77.cky/chart inference.
+gaddy et al.
+(2018)kitaev and klein (2018)wei et al.
+(2020)zhang et al.
+(2020b).
+91.76 92.41 92.0893.20 93.90 93.5593.393.794.193.84 93.58 93.71.gómez and vilares (2018)liu and zhang (2017)stern et al.
+(2017b)zhou and zhao (2019).
+--.
+90.7-91.8-92.57 92.56 92.5693.64 93.92 93.78.uate our parser with bert embeddings (devlinet al., 2019).
+they ﬁne-tuned bert-large-cased onthe task, while in our work keeping it frozen wasalready good enough (gives training efﬁciency).
+asshown in table 2, our model achieves an f1 of 95.7,which is on par with sota models.
+however, ourparser runs faster than other methods.
+speciﬁcally,our model runs at o(n) time complexity, whilecky needs o(n3).
+comprehensive comparisonson parsing speed are presented later..we use the identical hyper-parameters and opti-mizer setups as in english ptb.
+we follow the stan-dard train/valid/test split provided in the spmrldatasets; details are reported in the table 3..other approaches.
+4.2 spmrl multilingual syntactic parsing.
+table 1: results for single models (no pre-training) onthe ptb wsj test set, section 23..model.
+nguyen et al.
+(2020)our model.
+kitaev et al.
+(2019)zhang et al.
+(2020b)wei et al.
+(2020)zhou and zhao (2019).
+f1.
+95.595.7.
+95.695.795.895.8.table 2: results on ptb wsj test set with pretraining..top-down methods.
+speciﬁcally, our parser outper-forms stern et al.
+(2017a); shen et al.
+(2018) byabout 2 points in f1-score and nguyen et al.
+(2020)by ∼1 point.
+notably, without beam search (beamwidth 1 or greedy decoding), our model achievesan f1 of 93.40, which is still better than other top-down methods.
+our model also performs compet-itively with cky-based methods like (kitaev andklein, 2018; zhang et al., 2020b; wei et al., 2020;zhou and zhao, 2019), while these methods runslower than ours..plus, zhou and zhao (2019) uses external su-pervision (head information) from the dependencyparsing task.
+dependency parsing models, in fact,have a strong resemblance to the pointing mecha-nism that our model employs (ma et al., 2018).
+assuch, integrating dependency parsing informationinto our model may also be beneﬁcial.
+we leavethis for future work..language.
+train.
+valid.
+test.
+basquefrenchgermanhungariankoreanpolishswedish.
+7,57714,75940,4728,14623,0106,5785,000.
+9481,2355,0001,0512,066821494.
+9462,5415,0001,0092,287822666.table 3: spmrl multilingual dataset split..from the results in table 4, we see that ourmodel achieves the highest f1 in french, hungar-ian and korean and higher than the best baselineby 0.06, 0.15 and 0.13, respectively.
+our methodalso rivals existing sota methods on other lan-guages even though some of them use predictedpos tags (nguyen et al., 2020) or bigger models(75m parameters) (kitaev and klein, 2018).
+mean-while, our model is smaller (31m), uses no extrainformation and runs 40% faster..4.3 discourse parsing.
+setup for discourse parsing, we follow the stan-dard split from (lin et al., 2019), which has 7321sentence-level discourse trees for training and 951for testing.
+we also randomly select 10% of thetraining for validation.
+model selection for test-ing is performed based on the f1 of relation labelson the validation set.
+we use the same model set-tings as the constituency parsing experiments, withbert as pretrained embeddings.5.
+results with pre-training similar to (kitaevand klein, 2018; kitaev et al., 2019), we also eval-.
+5lin et al.
+(2019) used elmo (peters et al., 2018) as pre-trained embeddings.
+with bert, their model performs worsewhich we have conﬁrmed with the authors..5801modelbjorkelund et al.
+(2014)+coavoux and crabbé (2017)+kitaev and klein (2018)nguyen et al.
+(2020)+our model.
+basque french german hungarian korean polish swedish.
+88.2488.8189.7190.2389.74.
+82.5382.4984.0682.2084.12.
+81.6685.3487.6984.9185.21.
+91.7292.3492.6991.0792.84.
+83.8186.0486.5985.3686.72.
+90.5093.6493.6993.9992.10.
+85.5084.084.4586.8785.81.table 4: results on spmrl test sets without pre-training.
+the sign + denotes that systems use predicted pos tags..approach.
+span nuclearity relation.
+xeon w-2133) and gpu (nvidia gtx 1080 ti)..parsing with gold edu segmentation.
+human agreement.
+95.7.
+90.4.
+83.0.baselineswang et al.
+(2017)lin et al.
+(2019) (single)lin et al.
+(2019) (joint)our model.
+baselinessoricut and marcu (2003)joty et al.
+(2012)lin et al.
+(2019) (pipeline)lin et al.
+(2019) (joint)our model.
+95.696.9497.4497.37.
+76.782.491.1491.7592.02.end-to-end parsing.
+87.890.8991.3491.95.
+70.276.685.8086.3887.05.
+77.681.2881.7082.10.
+58.067.576.9477.5278.82.table 5: results on discourse parsing tasks on the rst-dt test set with and without gold segmentation..results table 5 compares the results on the dis-course parsing tasks in two settings: (i) when theedus are given (gold segmentation) and (ii) end-to-end parsing.
+we see that our model outperformsthe baselines in both parsing conditions achievingsota.
+when gold segmentation is provided, ourmodel outperforms the single-task training modelof (lin et al., 2019) by 0.43%, 1.06% and 0.82%absolute in span, nuclearity and relation, respec-tively.
+our parser also surpasses their joint trainingmodel, which uses multi-task training (segmenta-tion and parsing), with 0.61% and 0.4% absoluteimprovements in nuclearity and relation, respec-tively.
+for end-to-end parsing, compared to thebest baseline (lin et al., 2019), our model yields0.27%, 0.67%, and 1.30% absolute improvementsin span, nuclearity, relation, respectively.
+thisdemonstrates the effectiveness of our conditionalsplitting approach and end-to-end formulation ofthe discourse analysis task.
+the fact that our modelimproves on span identiﬁcation indicates that ourmethod also yields better edu segmentation..4.4 parsing speed comparison.
+we compare parsing speed of different models intable 6. we ran our models on both cpu (intel.
+syntactic parsing the berkeley parser and zparare two representative non-neural parsers withoutaccess to gpus.
+stern et al.
+(2017a) employ max-margin training and perform top-down greedy de-coding on cpus.
+meanwhile, kitaev and klein(2018); zhou and zhao (2019); wei et al.
+(2020)use a self-attention encoder and perform decodingusing cython for acceleration.
+zhang et al.
+(2020b)perform cky decoding on gpu.
+the parser pro-posed by gómez and vilares (2018) is also efﬁ-cient as it treats parsing as a sequence labelingtask.
+however, its parsing accuracy is much lowercompared to others (90.7 f1 in table 1)..we see that our parser is much more efﬁcientthan existing ones.
+it utilizes neural modules toperform splitting, which is optimized and paral-lelized with efﬁcient gpu implementation.
+it canparse 1, 127 sentences/second, which is faster thanexisting parsers.
+in fact, there is still room to im-prove our speed by choosing better architectures,like the transformer which has o(1) running timein encoding a sentence compared to o(n) of thebi-lstm encoder.
+moreover, allowing tree gener-ation by splitting the spans/nodes at the same treelevel in parallel at each step can boost the speedfurther.
+we leave these extensions to future work..discourse parsing for measuring discourseparsing speed, we follow the same set up as linet al.
+(2019), and evaluate the models with thesame 100 sentences randomly selected from thetest set.
+we include the model loading time forall the systems.
+since spade and codra needto extract a handful of features, they are typicallyslower than the neural models which use pretrainedembeddings.
+in addition, codra’s dcrf parserhas a o(n3) inference time complexity.
+as shown,our parser is 4.7x faster than the fastest end-to-endparser of lin et al.
+(2019), making it not only ef-fective but also highly efﬁcient.
+even when testedonly on the cpu, our model is faster than all theother models which run on gpu or cpu, thanks.
+5802system.
+speed (sents/s) speedup.
+syntactic parserpetrov and klein (2007) (berkeley)zhu et al.
+(2013)(zpar)stern et al.
+(2017a)shen et al.
+(2018)nguyen et al.
+(2020)zhou and zhao (2019)wei et al.
+(2020)gómez and vilares (2018)kitaev and klein (2018) (gpu)zhang et al.
+(2020b)our model (gpu).
+690761111301592207808309241127.end-to-end discourse parsing (segmenter + parser)codra (joty et al., 2015)spade (soricut and marcu, 2003)(lin et al., 2019)our end-to-end parser (cpu)our end-to-end parser (gpu).
+3.054.9028.9659.03135.85.
+1.0x15.0x12.7x18.5x21.7x26.5x36.7x130x138.3x154x187.3x.
+1.0x1.6x9.5x19.4x44.5x.
+table 6: speed comparison of our parser with existingsyntactic and discourse parsers..to the end-to-end formulation that does not neededu segmentation beforehand..5 related work.
+with the recent popularity of neural architectures,such as lstms (hochreiter and schmidhuber,1997) and transformers (vaswani et al., 2017), var-ious neural models have been proposed to encodethe input sentences and infer their constituencytrees.
+to enforce structural consistency, such meth-ods employ either a greedy transition-based (dyeret al., 2016; liu and zhang, 2017), a globally op-timized chart parsing (gaddy et al., 2018; kitaevand klein, 2018), or a greedy top-down algorithm(stern et al., 2017a; shen et al., 2018).
+meanwhile,researchers also tried to cast the parsing probleminto tasks that can be solved differently.
+for exam-ple, gómez and vilares (2018); shen et al.
+(2018)proposed to map the syntactic tree of a sentencecontaining n tokens into a sequence of n − 1 la-bels or scalars.
+however, parsers of this type sufferfrom the exposure bias during inference.
+besidethese methods, seq2seq models have been usedto generate a linearized form of the tree (vinyalset al., 2015b; kamigaito et al., 2017; suzuki et al.,2018; fernández-gonzález and gómez-rodríguez,2020a).
+however, these methods may generate in-valid trees when the open and end brackets do notmatch..in discourse parsing, existing parsers receive theedus from a segmenter to build the discourse tree,which makes them susceptible to errors when thesegmenter produces incorrect edus (joty et al.,.
+2012, 2015; lin et al., 2019; zhang et al., 2020a;liu et al., 2020).
+there are also attempts whichmodel constituency and discourse parsing jointly(zhao and huang, 2017) and do not need to performedu preprocessing.
+it is based on the ﬁnding thateach edu generally corresponds to a constituent inconstituency tree, i.e., discourse structure usuallyaligns with constituency structure.
+however, it hasthe drawback that it needs to build joint syntacto-discourse data set for training which is not easilyadaptable to new languages and domains..our approach differs from previous methods inthat it represents the constituency structure as a se-ries of splitting representations, and uses a seq2seqframework to model the splitting decision at eachstep.
+by enabling beam search, our model canﬁnd the best trees without the need to perform anexpensive global search.
+we also unify discoursesegmentation and parsing into one system by gen-eralizing our model, which has been done for theﬁrst time to the best of our knowledge..our splitting mechanism shares some similari-ties with pointer network (vinyals et al., 2015a;ma et al., 2018; fernández-gonzález and gómez-rodríguez, 2019, 2020b) or head-selection ap-proaches (zhang et al., 2017; kurita and søgaard,2019), but is distinct from them that in each decod-ing step, our method identiﬁes the splitting pointof a span and generates a new input for future stepsinstead of pointing to generate the next decoderinput..6 conclusion.
+we have presented a novel, generic parsing methodfor constituency parsing based on a seq2seq frame-work.
+our method supports an efﬁcient top-downdecoding algorithm that uses a pointing functionfor scoring possible splitting points.
+the pointingmechanism captures global structural propertiesof a tree and allows efﬁcient training with a crossentropy loss.
+our formulation, when applied todiscourse parsing, can bypass discourse segmenta-tion as a pre-requisite step.
+through experimentswe have shown that our method outperforms allexisting top-down methods on english penn tree-bank and rst discourse treebank sentence-levelparsing tasks.
+with pre-trained representations, ourmethod rivals state-of-the-art methods, while beingfaster.
+our model also establishes a new state-of-the-art for sentence-level rst parsing..5803references.
+yoav artzi, nicholas fitzgerald, and luke zettle-moyer.
+2013. semantic parsing with combinatoryin proceedings of the 51stcategorial grammars.
+annual meeting of the association for computa-tional linguistics (tutorials), page 2, soﬁa, bul-garia.
+association for computational linguistics..laura banarescu, claire bonial, shu cai, madalinageorgescu, kira grifﬁtt, ulf hermjakob, kevinknight, philipp koehn, martha palmer, and nathanschneider.
+2013. abstract meaning representationfor sembanking.
+in proceedings of the 7th linguis-tic annotation workshop and interoperability withdiscourse, pages 178–186, soﬁa, bulgaria.
+associa-tion for computational linguistics..samy bengio, oriol vinyals, navdeep jaitly, andnoam shazeer.
+2015. scheduled sampling for se-quence prediction with recurrent neural networks.
+in advances in neural information processing sys-tems, volume 28, pages 1171–1179.
+curran asso-ciates, inc..anders bjorkelund, ozlem cetinoglu, agnieszkafalenska, richard farkas, thomas mueller, wolf-gang seeker, and zsolt szanto.
+2014. the ims-wrocław-szeged-cis entry at the spmrl 2014 sharedtask: reranking and morphosyntax meet unlabeledin proceedings of the first joint workshopdata.
+on statistical parsing of morphologically rich lan-guages and syntactic analysis of noncanonicallanguages, pages 97–102..maximin coavoux and benoît crabbé.
+2017. multi-lingual lexicalized constituency parsing with word-level auxiliary tasks.
+in proceedings of the 15th con-ference of the european chapter of the associationfor computational linguistics: volume 2, short pa-pers, pages 331–336, valencia, spain.
+associationfor computational linguistics..james cross and liang huang.
+2016. span-based con-stituency parsing with a structure-label system andprovably optimal dynamic oracles.
+in proceedingsof the 2016 conference on empirical methods innatural language processing, pages 1–11, austin,texas.
+association for computational linguistics..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language under-in proceedings of the 2019 conferencestanding.
+of the north american chapter of the associationfor computational linguistics: human languagetechnologies, volume 1 (long and short papers),pages 4171–4186, minneapolis, minnesota.
+associ-ation for computational linguistics..timothy dozat and christopher d. manning.
+2017.deep biafﬁne attention for neural dependency pars-in 5th international conference on learninging.
+representations, iclr 2017, toulon, france, april24-26, 2017, conference track proceedings..greg durrett and dan klein.
+2015. neural crf pars-in proceedings of the 53rd annual meet-ing.
+ing of the association for computational linguis-tics and the 7th international joint conference onnatural language processing (volume 1: long pa-pers), pages 302–312, beijing, china.
+associationfor computational linguistics..chris dyer, adhiguna kuncoro, miguel ballesteros,and noah a. smith.
+2016. recurrent neural networkgrammars.
+in proceedings of the 2016 conferenceof the north american chapter of the associationfor computational linguistics: human languagetechnologies, pages 199–209, san diego, california.
+association for computational linguistics..daniel fernández-gonzález.
+and carlos gómez-rodríguez.
+2019. left-to-right dependency parsingwith pointer networks.
+in proceedings of the 2019conference of the north american chapter of theassociation for computational linguistics: humanlanguage technologies, volume 1 (long and shortpapers), pages 710–716, minneapolis, minnesota.
+association for computational linguistics..daniel fernández-gonzález.
+and carlos gómez-rodríguez.
+2020a.
+enriched in-order linearizationfor faster sequence-to-sequence constituent parsing.
+in proceedings of the 58th annual meeting of theassociation for computational linguistics, pages4092–4099, online.
+association for computationallinguistics..daniel fernández-gonzález.
+and carlos gómez-transition-based semanticrodríguez.
+2020b.
+independency parsing with pointer networks.
+proceedings ofthethe 58th annual meeting ofassociation for computational linguistics, pages7035–7046, online.
+association for computationallinguistics..david gaddy, mitchell stern, and dan klein.
+2018.what’s going on in neural constituency parsers?
+ananalysis.
+in proceedings of the 2018 conference ofthe north american chapter of the association forcomputational linguistics: human language tech-nologies, volume 1 (long papers), pages 999–1010,new orleans, louisiana.
+association for computa-tional linguistics..carlos gómez, rodríguez and david vilares.
+2018.in pro-constituent parsing as sequence labeling.
+ceedings of the 2018 conference on empirical meth-ods in natural language processing, pages 1314–1324, brussels, belgium.
+association for computa-tional linguistics..sepp hochreiter and jürgen schmidhuber.
+1997.neural computation,.
+long short-term memory.
+9(8):1735–1780..shaﬁq joty, giuseppe carenini, and raymond ng.
+a novel discriminative framework for2012.in proceedingssentence-level discourse analysis.
+of the 2012 joint conference on empirical methods.
+5804in natural language processing and computationalnatural language learning, pages 904–915, jeju is-land, korea.
+association for computational linguis-tics..shaﬁq joty, giuseppe carenini, raymond ng, andyashar mehdad.
+2013. combining intra- and multi-sentential rhetorical parsing for document-level dis-course analysis.
+in proceedings of the 51st annualmeeting of the association for computational lin-guistics (volume 1: long papers), pages 486–496,soﬁa, bulgaria.
+association for computational lin-guistics..shaﬁq joty, giuseppe carenini, and raymond t. ng.
+2015. codra: a novel discriminative frameworkfor rhetorical analysis.
+computational linguistics,41(3):385–435..hidetaka kamigaito, katsuhiko hayashi, tsutomuhirao, hiroya takamura, manabu okumura, andmasaaki nagata.
+2017. supervised attention forsequence-to-sequence constituency parsing.
+in pro-ceedings of the eighth international joint confer-ence on natural language processing (volume 2:short papers), pages 7–12, taipei, taiwan.
+asianfederation of natural language processing..diederik p. kingma and jimmy ba.
+2015. adam: ain 3rd inter-method for stochastic optimization.
+national conference on learning representations,iclr 2015, san diego, ca, usa, may 7-9, 2015,conference track proceedings..nikita kitaev, steven cao, and dan klein.
+2019. multi-lingual constituency parsing with self-attention andin proceedings of the 57th annualpre-training.
+meeting of the association for computational lin-guistics, pages 3499–3505, florence, italy.
+associa-tion for computational linguistics..nikita kitaev and dan klein.
+2018. constituency pars-in proceedingsing with a self-attentive encoder.
+of the 56th annual meeting of the association forcomputational linguistics (volume 1: long papers),pages 2676–2686, melbourne, australia.
+associa-tion for computational linguistics..shuhei kurita and anders søgaard.
+2019. multi-tasksemantic dependency parsing with policy gradientfor learning easy-ﬁrst strategies.
+in proceedings ofthe 57th annual meeting of the association for com-putational linguistics, pages 2420–2430, florence,italy.
+association for computational linguistics..xiang lin, shaﬁq joty, prathyusha jwalapuram, andm saiful bari.
+2019. a uniﬁed linear-time frame-in pro-work for sentence-level discourse parsing.
+ceedings of the 57th annual meeting of the asso-ciation for computational linguistics, pages 4190–4200, florence, italy.
+association for computationallinguistics..jiangming liu and yue zhang.
+2017. shift-reduceconstituent parsing with neural lookahead features..transactions of the association for computationallinguistics, 5:45–58..zhengyuan liu, ke shi, and nancy chen.
+2020. mul-tilingual neural rst discourse parsing.
+in proceed-ings of the 28th international conference on com-putational linguistics, pages 6730–6738, barcelona,spain (online).
+international committee on compu-tational linguistics..carlson lynn, daniel marcu,.
+and mary ellenokurowski.
+2002. rst discourse treebank (rst–dt)ldc2002t07.
+linguistic data consortium..xuezhe ma, zecong hu, jingzhou liu, nanyun peng,graham neubig, and eduard hovy.
+2018. stack-in pro-pointer networks for dependency parsing.
+ceedings of the 56th annual meeting of the associa-tion for computational linguistics (volume 1: longpapers), pages 1403–1414, melbourne, australia.
+association for computational linguistics..william mann and sandra thompson.
+1988. rhetori-cal structure theory: toward a functional theoryof text organization.
+text, 8(3):243–281..mitchell p. marcus, mary ann marcinkiewicz, andbeatrice santorini.
+1993. building a large annotatedcorpus of english: the penn treebank.
+comput.
+lin-guist., 19(2):313–330..thanh-tung nguyen, xuan-phi nguyen, shaﬁq joty,and xiaoli li.
+2020. efﬁcient constituency pars-ing by pointing.
+in proceedings of the 58th annualmeeting of the association for computational lin-guistics, pages 3284–3294, online.
+association forcomputational linguistics..matthew e. peters, mark neumann, mohit iyyer, mattgardner, christopher clark, kenton lee, and lukezettlemoyer.
+2018. deep contextualized word repre-sentations.
+in proc.
+of naacl..slav petrov and dan klein.
+2007. improved inferencefor unlexicalized parsing.
+in human language tech-nologies 2007: the conference of the north amer-ican chapter of the association for computationallinguistics; proceedings of the main conference,pages 404–411, rochester, new york.
+associationfor computational linguistics..jinho d. choi, richárd farkas,.
+djamé seddah, reut tsarfaty, sandra kübler, mariecandito,jen-nifer foster, iakes goenaga, koldo gojenola gal-letebeitia, yoav goldberg, spence green, nizarhabash, marco kuhlmann, wolfgang maier, joakimnivre, adam przepiórkowski, ryan roth, wolfgangseeker, yannick versley, veronika vincze, marcinwoli´nski, alina wróblewska, and eric villemontede la clergerie.
+2013. overview of the spmrl2013 shared task: a cross-framework evaluation ofparsing morphologically rich languages.
+in proceed-ings of the fourth workshop on statistical parsing ofmorphologically-rich languages, pages 146–182,seattle, washington, usa.
+association for compu-tational linguistics..5805yikang shen, zhouhan lin, athul paul jacob, alessan-dro sordoni, aaron courville, and yoshua bengio.
+2018. straight to the tree: constituency parsingwith neural syntactic distance.
+in proceedings of the56th annual meeting of the association for compu-tational linguistics (volume 1: long papers), pages1171–1180, melbourne, australia.
+association forcomputational linguistics..radu soricut and daniel marcu.
+2003. sentence leveldiscourse parsing using syntactic and lexical infor-in proceedings of the 2003 human lan-mation.
+guage technology conference of the north ameri-can chapter of the association for computationallinguistics, pages 228–235..mitchell stern, jacob andreas, and dan klein.
+2017a.
+a minimal span-based neural constituency parser.
+inproceedings of the 55th annual meeting of the as-sociation for computational linguistics, acl 2017,vancouver, canada, july 30 - august 4, volume 1:long papers, pages 818–827..mitchell stern, daniel fried, and dan klein.
+2017b.
+effective inference for generative neural parsing.
+inproceedings of the 2017 conference on empiricalmethods in natural language processing, pages1695–1700, copenhagen, denmark.
+association forcomputational linguistics..jun suzuki, sho takase, hidetaka kamigaito, makotomorishita, and masaaki nagata.
+2018. an empiricalstudy of building a strong baseline for constituencyin proceedings of the 56th annual meet-parsing.
+ing of the association for computational linguis-tics (volume 2: short papers), pages 612–618, mel-bourne, australia.
+association for computationallinguistics..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n gomez, ł ukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+in i. guyon, u. v. luxburg, s. bengio,h. wallach, r. fergus, s. vishwanathan, and r. gar-nett, editors, advances in neural information pro-cessing systems 30, pages 5998–6008.
+curran asso-ciates, inc..pointer networks..oriol vinyals, meire fortunato, and navdeep jaitly.
+2015a.
+in c. cortes, n. d.lawrence, d. d. lee, m. sugiyama, and r. gar-nett, editors, advances in neural information pro-cessing systems 28, pages 2692–2700.
+curran asso-ciates, inc..oriol vinyals, ł ukasz kaiser, terry koo, slav petrov,ilya sutskever, and geoffrey hinton.
+2015b.
+gram-mar as a foreign language.
+in advances in neuralinformation processing systems, volume 28, pages2773–2781.
+curran associates, inc..(volume 2: short papers), pages 184–188.
+associa-tion for computational linguistics..b. webber.
+2004. d-ltag: extending lexicalizedtag to discourse.
+cognitive science, 28(5):751–779..yang wei, yuanbin wu, and man lan.
+2020. a span-in pro-based linearization for constituent trees.
+ceedings of the 58th annual meeting of the asso-ciation for computational linguistics, pages 3267–3277, online.
+association for computational lin-guistics..longyin zhang, yuqing xing, fang kong, peifeng li,and guodong zhou.
+2020a.
+a top-down neuralarchitecture towards text-level parsing of discourserhetorical structure.
+in proceedings of the 58th an-nual meeting of the association for computationallinguistics, pages 6386–6395, online.
+associationfor computational linguistics..xingxing zhang, jianpeng cheng, and mirella lapata.
+2017. dependency parsing as head selection.
+inproceedings of the 15th conference of the europeanchapter of the association for computational lin-guistics: volume 1, long papers, pages 665–676,valencia, spain.
+association for computational lin-guistics..yu zhang, houquan zhou, and zhenghua li.
+2020b.
+fast and accurate neural crf constituency parsing.
+in proceedings of the twenty-ninth internationaljoint conference on artiﬁcial intelligence, ijcai-20, pages 4046–4053.
+international joint confer-ences on artiﬁcial intelligence organization.
+maintrack..kai zhao and liang huang.
+2017..joint syntacto-discourse parsing and the syntacto-discourse tree-in proceedings of the 2017 conference onbank.
+empirical methods in natural language processing,pages 2117–2123, copenhagen, denmark.
+associa-tion for computational linguistics..junru zhou and hai zhao.
+2019. head-driven phrasestructure grammar parsing on penn treebank.
+in pro-ceedings of the 57th conference of the associationfor computational linguistics, acl 2019, florence,italy, july 28- august 2, 2019, volume 1: long pa-pers, pages 2396–2408..muhua zhu, yue zhang, wenliang chen, min zhang,fast and accurate shift-and jingbo zhu.
+2013.in proceedings of thereduce constituent parsing.
+51st annual meeting of the association for compu-tational linguistics (volume 1: long papers), pages434–443, soﬁa, bulgaria.
+association for computa-tional linguistics..appendix.
+yizhong wang, sujian li, and houfeng wang.
+2017.a two-stage parsing method for text-level discourseanalysis.
+in proceedings of the 55th annual meet-ing of the association for computational linguistics.
+6.1 discourse parsing architecture.
+figure 4 illustrates our end-to-end model architec-ture for discourse parsing..5806figure 4: our discourse parser a long with the decoding process for a given sentence.
+the input to the decoder ateach step is the representation of the span to be split.
+we predict splitting point using the biafﬁne function betweenthe corresponding decoder state and the boundary representations.
+the relationship between left and right spansare assigned with the label using the label classiﬁer..6.2 discourse parsing inference algorithms.
+algorithm 2 shows the end-to-end discourse pars-ing inference process..algorithm 2 discourse inference]input: sentence length n;.
+states:(h0, h1, .
+.
+.
+, hn); label scores: p (l|(i, k), (k, j)), 0 ≤ i <k ≤ j ≤ n, l ∈ l, initial decoder state st..boundary encoder.
+// stack of spans.
+output: parse tree tst = [(1, n)]s = []while st (cid:54)= ∅ do.
+(i, j) = pop(st )prob, st = dec(st, (i, j))k = arg maxi<k≤j probcurr_partial_tree = partial_treeif j − 1 > k > i + 1 then.
+push(st , (k, j))push(st , (i, k)).
+else if j − 1 > k = i + 1 then.
+push(st , (k, j)).
+else if k = j − 1 > i + 1 then.
+push(st , (i, k)).
+end ifif k (cid:54)= j then.
+push(s((i, k, j)).
+end ifend whilet = [((i, k, j), argmaxlp (l|(i, k)(k, j))∀(i, k, j) ∈ s].
+5807

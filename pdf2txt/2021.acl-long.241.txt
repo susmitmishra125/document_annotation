@@ -1,0 +1,440 @@
+database reasoning over text.
+james thorneuniversity of cambridgejt719@cam.ac.uk.
+majid yazdanifacebook aimyazdani@fb.com.
+marzieh saeidifacebook aimarzieh@fb.com.
+fabrizio silvestrisapienza university, romefsilvestri@diag.uniroma1.it.
+sebastian riedelfacebook aiuniversity college londonsriedel@fb.com.
+alon halevyfacebook aiayh@fb.com.
+abstract.
+neural models have shown impressive perfor-mance gains in answering queries from natu-ral language text.
+however, existing worksare unable to support database queries, suchas “list/count all female athletes who wereborn in 20th century”, which require reason-ing over sets of relevant facts with operationssuch as join, ﬁltering and aggregation.
+weshow that while state-of-the-art transformermodels perform very well for small databases,they exhibit limitations in processing noisydata, numerical operations, and queries thataggregate facts.
+we propose a modular archi-tecture to answer these database-style queriesover multiple spans from text and aggregatingthese at scale.
+we evaluate the architectureusing wikinldb,1 a novel dataset for ex-ploring such queries.
+our architecture scalesto databases containing thousands of factswhereas contemporary models are limited byhow many facts can be encoded.
+in direct com-parison on small databases, our approach in-creases overall answer accuracy from 85% to90%.
+on larger databases, our approach re-tains its accuracy whereas transformer base-lines could not encode the context..figure 1: examples of set and aggregation queries overa natural language database: a database where facts arestored in free-form text without the need for a schema..1.introduction.
+question answering (qa) over text has made sig-niﬁcant strides in recent years owing to the avail-ability of new datasets and models.
+machines havesurpassed human performance on the well-knownsquad task (rajpurkar et al., 2016) where mod-els extract answer spans from a short passage oftext.
+the subsequent body of work has further con-sidered incorporating retrieval from large corporasuch as wikipedia (dhingra et al., 2017; joshi et al.,2017; kwiatkowski et al., 2019) to identify relevantinformation, conditioning answer generation (chen.
+1https://github.com/facebookresearch/.
+neuraldb.
+et al., 2017; lewis et al., 2020b; izacard and grave,2020).
+more sophisticated architectures have beenproposed with incremental retrieval for multi-hopqa (xiong et al., 2020; das et al., 2019), whereseveral passages are required, which may have lowlexical or semantic similarity with the question..this paper considers the problem of answeringquestions similar to database queries, such as thoseshown in figure 1. for example, the query “listall the female athletes in wikipedia who were bornin the 20th century”, requires reasoning over hun-dreds or thousands of facts, retrieved from multiplewikipedia pages, and applying set-based ﬁlters tothem (e.g., gender, birth date).
+if our query fur-ther asked how many such athletes exist, we would.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages3091–3104august1–6,2021.©2021associationforcomputationallinguistics3091facts: (8 of 500 shown)queries:- nicholas lives in washington d.c. with his wife.- sheryl is nicholas’s wife.- teuvo was born in 1912 in ruskala.- sheryl’s mother gave birth to her in 1978.- nicholas is a doctor.- sarah was born in chicago in 1982.- sarah married john in 2010.- sarah works in a hospital in ny as a doctor.whose spouse is a doctor?
+(join) → sheryl, john, .
+.
+.list everyone born before 1980.
+(set) → sheryl, teuvo, .
+.
+.who is the oldest person?
+(max) → teuvowho is sheryl’s mother?
+(set) → nullhave to perform an aggregation function to countthe result set.
+the ability to answer the aforemen-tioned queries would enable a new kind of database(thorne et al., 2021) where facts can be describedin natural language and would therefore obviate theneed for a pre-deﬁned schema, which is a majorlimitation of current database systems.
+an exampleapplication for such ﬂexible text databases existsin the area of storing knowledge for personal assis-tants where users store data about their habits andexperiences, their friends and their preferences, forwhich designing a schema is impractical..we introduce wikinldb, a benchmark datasetfor exploring database reasoning over facts ex-pressed in natural language.
+wikinldb con-tains a number of query types that require systemsto return large set-based answers and aggregateover these (with operators such as count, min,and max).
+our dataset is generated using publiclyavailable knowledge graph data, enabling large vol-umes of instances to be generated with minimaleffort.
+most queries in wikinldb require rea-soning over hundreds of facts to generate answers,exposing limitations in current neural models.
+incontrast to drop (dua et al., 2019) where queriesare answered over single passages, and babi (we-ston et al., 2015), where each query is based ona context of less than 20 facts, our dataset scalesfrom databases of 25 instances to 1000, and couldbe extended further..we also introduce a modular architecture to sup-port database reasoning over text and characterizeits behavior on our reference dataset.
+we ﬁnd thateven on small databases of 25 facts, naive applica-tion of transformers is insufﬁcient.
+when providedwith only the relevant facts, the baseline yields ananswer accuracy of 85%, whereas applying our pro-posed architecture yields 90% by better answeringqueries, such as count, that require computation.
+it is well known that transformer models do notscale well to large inputs due to the use of self-attention.
+we found that mechanisms such as fu-sion in decoder (izacard and grave, 2020, fid) andlongformer (beltagy et al., 2020), which mitigatethe scaling issue, harm the model: combining morethan 2 facts with fid resulted in answer accuraciesof 76% and 39%, respectively.
+these issues weremitigated by our approach which generates inter-mediate query-based derivations of small numbersof facts in the database, before using conventionalcomputation to aggregate the results..2 answering database queries over text.
+2.1 problem deﬁnition.
+we refer to corpora that consist of unordered col-lections of facts expressed as short natural lan-guage sentences as natural language databases(nldbs).
+for example, a corpus may include allthe utterances given to a personal assistant by itsuser, or all the claims uttered by a political ﬁgure.
+the texts in our corpora are similar to databasesas they are sets of stand-alone facts.
+but unlike adatabase, they are not expressed as rows or triplesin a pre-deﬁned schema.
+for example, a sentencecontaining a single fact, “gustavo likes espresso”or multiple facts, such as “robertson howard, whoattended the university of virginia, is buried in thecongressional cemetery”..a query q over a database, d, produces a setof answers: q(d) = {a1, .
+.
+.
+, al}.
+we considerthe following four query types (see examples intable 5): (1) set queries are extractive queries thatreturn a list of spans, such as entities, from the facts.
+(2) boolean queries return a true/false answer.
+(3) aggregation queries require computation overanswer sets with an operator, such as count, minand max.
+for example: “how many people workfor yale law school?”).
+(4) join queries requirethe combination of two (or more) facts to produceeach answer.
+we combine join operations with set,boolean and aggregation queries.
+for example,the query “who works in a company in france?”considers both the relationship between people andemployer as well as company locations..2.2 challenges.
+the nlp treatment of question answering, wheresystems encode the query and context (containingthe background knowledge), forms a good startingpoint for nldbs.
+common model architecturesare based on the transformer (vaswani et al., 2017)in an encoder-decoder conﬁguration.
+the encoderuses self-attention to conditionally encode the con-text with the query and the decoder allows condi-tional generation of outputs that are not necessarilypresent in the input.
+to scale question answeringto reason over large knowledge-sources such aswikipedia, task formulations typically retrieve text-spans from a corpus to condition answer generation(chen et al., 2017; dhingra et al., 2017).
+however,several challenges encountered in nldbs precludedirect application of these techniques:.
+3092figure 2: overview of the proposed architecture.
+consisting of a support set generator, spj and aggregation.
+scale to scale neural reasoning to databases ofnon-trivial size, it would not be feasible to en-code the entire database as input to the transformer.
+question answering systems combine a retrievalmechanism to select relevant spans from knowl-edge sources as context.
+this task is usually re-ferred to as open-domain qa (lewis et al., 2020a;izacard and grave, 2020).
+it is common to use amaximum input size of 512 or 1024 tokens for con-text.
+while extensions such as linformer (wanget al., 2020), longformer (beltagy et al., 2020) andfusion in decoder (izacard and grave, 2020) en-able larger contexts to be encoded, their applicationof self-attention varies and the number of tokensthat may be encoded is limited by gpu memory..multiple answer spans the nlp formulation ofquestion answering typically requires extracting aspan from a single document or generating a shortanswer.
+answering queries in a nldb may requireprocessing a large number of facts, generating alarge number of items as answer, hundreds or thou-sands, and performing aggregations over large sets..locality and document structure nldbs donot enjoy the locality properties that usually holdin open-domain qa.
+in nldbs, a query may bedependent on multiple facts that can be anywherein the database.
+in fact, by deﬁnition, the currentfacts in a database can be reordered and the queryanswers should not change.
+in contrast, in open-domain qa, the fact needed to answer a given ques-tion is typically located in a paragraph or documentwith multiple sentences about the same subject,in combination with a document title, where thisadditional context may help information recall..conditional retrieval similar to open-domainquestion answering, nldbs mandate an informa-tion retrieval component.
+when determining which.
+facts to input to the model, nldbs may requireconditional retrieval from the database.
+for ex-ample, to answer the query “whose spouse is adoctor?” we’d ﬁrst need to fetch spouses and thentheir professions.
+recent work on multi-hop queryanswering (e.g., asai et al.
+(2019)), has started con-sidering this issue but is restricted to the case wherewe’re looking for a single answer.
+in nldbs, wemay need to perform multi-hops for sets of facts..3 architecture for querying nldbs.
+to address the aforementioned challenges, we pro-pose an instance of a neural database architecture(thorne et al., 2021) that operates over textual factswith parallelizable non-blocking operators beforeaggregating the results.
+the three core componentsof the architecture, shown in figure 2, are a sup-port set generator (ssg) which retrieves small setsof relevant facts called support sets, a paralleliz-able non-blocking select-project-join (spj) opera-tor which generates intermediate answers that canbe unioned to produce the ﬁnal answer, and an op-tional aggregation stage which uses conventionalcomputation to perform numerical reasoning.
+thekey insight underlying our architecture is to lever-age neural models for what they excel at, namely,reasoning over a small set of facts..neural spj operator given a single supportset and a query, the spj (select-project-join) op-erator outputs a machine readable intermediaterepresentation of the answer that can be gener-ated from the support set.
+for example, given thequery “who was born in montevideo?” and thesupport set {“mario sagario was born in montev-ideo, uruguay, ...”}, the neural spj would outputthe entity literal mario sagario.
+examples ofoutputs are provided in figure 3..the spj operator is performing three functions:.
+3093john works at shellsarah is a doctorsarah married johnjohn works at shellsarah is a doctorsarah married johnsarah married johnfactssupport setsnulljohnquery-basedderivationneural spjsupport setgeneratorquery: how many peoples'spouses are doctors?neural spjresult setaggregation1(1) for support sets that are insufﬁcient to answer aquestion, the operator should return no output; (2)for queries that require short chains of reasoningover multiple facts, the spj operator joins the factswhen generating the output; and (3) the spj gen-erates a projection of the support set to a machinereadable format dependent on the given query, andwhether computation or aggregation is required..because the spj operator is run in parallel, it canscale independently of the limitations on the sizeof the input of a single transformer.
+in contrast, theuse of self-attention when encoding all facts as oneinput precludes parallelization, has high latency,and is limited by the memory required to computethe self-attention.
+by using the spj operator toperform query-dependent information extraction,aggregations can be performed over the generatedoutputs using conventional computation, whichtrivially scales to thousands of operands.
+further-more, this allows large result sets to be generatedby the model, whereas accurately decoding longsequences using an encoder-decoder architectureremains an open challenge (hupkes et al., 2020)..support set generator (ssg) a support setcontains the minimal subset of sentences from thedatabase needed to generate one single operand forthe aggregation module by the spj operator.
+forexample, for queries that are answered by a singlesentence, e.g., “who is sheryl’s husband?”, thesupport set containing a single fact should be re-turned, e.g., {“sheryl is nicholas’s spouse”}.
+theoutput of the support set generator is a set of sup-port sets, each of which is fed independently toa downstream spj module.
+support sets may notbe pairwise disjoint because some facts may berequired for multiple answers..the ssg output should satisfy the followingtwo properties: (1) if multiple facts are needed toproduce an intermediate answer, they should allbe in the support set.
+for example, if we queried“when was sheryl’s husband born?”, the supportset should include a fact stating who the spouseis and a fact describing when they were born.
+(2)when performing aggregation, or outputting a setof answers, multiple support sets must be generated,each containing enough information to generate theintermediate results that are aggregated.
+for exam-ple, for the query “who is the oldest person?”, eachof the support sets would independently contain afact that includes a person and indicates their age..aggregation the outputs of the spj modulesare intermediate answers to the query.
+for somequeries, e.g., “who lives in london?”, the ﬁnalanswer is simply the union of the intermediate an-swers.
+in other cases, e.g., “how many countriesgrow coffee?”, an aggregation operator needs tobe applied to the union of intermediate answers.
+because output of the spj operators are machinereadable, we can hence guarantee accuracy andscalability by performing aggregation using con-ventional computation.
+in this paper, we considerthe aggregation functions min, max and count..4 the wikinldb dataset.
+in this section we introduce wikinldb, anovel dataset for training nldbs which is gener-ated by transforming structured data from wiki-data (vrandeˇci´c and kr¨otzsch, 2014) into natu-ral language facts and queries.
+wikidata storestriples of the form (s,r,o), where r is a relation-ship between the subject s and the object o, e.g.,(tim cook, employedby, apple).
+thescale and breadth of wikidata enables us to gener-ate databases of many sizes and variety..facts to automate generation of questions andanswers, sentences must be grounded in wiki-data identiﬁers.
+one approach to generate factswould be to use templates or collect them throughgrounded information extraction datasets such ast-rex (elsahar et al., 2018).
+however, to en-sure wider linguistic variety as well as accuracyof the mapping, we use verbalizations of knowl-edge graph triples that are synthesized through asequence to sequence model.
+concretely, we usegenerated sentences from kelm (agarwal et al.,2020), which are not grounded with wikidata ids,and generate a post-hoc mapping back to wiki-data.for example, given the sentence: “the sliceof life manga series the film lives on was writ-ten by osamu tezuka.” we map it to the wiki-data triple (q11332517,p50,q193300).
+ourmapping is a two-step process: ﬁrstly, we look upentity names from wikipedia, returning multiplematches for osamu tezuka, and secondly ﬁl-ter these based on which have an author relationsto the slice of life in the wikidata graph.
+while out of scope for this paper, this techniquecould be applied to generate training datasets fornovel domains.
+wikinldb uses both atomic factsin kelm (about a single relation of an entity) orcomposite facts (about multiple relations)..3094queries following previous work on large-scalequestion answering (hartmann et al., 2018; tal-mor and berant, 2018), queries are generated usingtemplates.
+for each relation and operator, multi-ple templates were written by the authors whereplaceholders can be replaced with the subject andobjects for each relation.
+while multiple templatesare used to ensure variety, these are limited in di-versity in comparison to the facts.
+templates weregenerated for the ﬁrst 25 relations on wikidatawith mapped data in kelm.
+to generate queriesthat require joins we apply the same technique,combining to combine two or more connected re-lations, chaining the entities.
+we further selectthe 15 most popular relations and generate ad-ditional templates which chain the two relations.
+for example, we chain (y,locatedin,z) and(x,employedby,y) to create a template for thequery “does $x work at a company based in $z?”..data quality we manually inspect randomly se-lected queries and facts and score them using thecategories introduced in this section.
+for queries,we sample 70 instances, 10 for each query type.
+we score each query for ﬂuency and intelligibility.
+out of 70 queries, only one question was markedas non-ﬂuent due to a typo which was correctedfor the ﬁnal dataset.
+all 70 queries were intelligi-ble.
+we observed that the clarity of some queriesdepended on the facts in the database to providecontext (e.g.
+“who is male?”), but otherwise metthe task requirements..to assess the quality of mapped facts fromkelm, a sample of 50 was evaluated based on 6categories: intelligibility, ﬂuency, inclusivity (con-veying information from all the mapped relations),faithfulness to these relations, and whether extra-neous information (not in the mapped relations) ispresent.
+49/50 facts were intelligible and 45/50facts were ﬂuent.
+the remaining 5 had redundantinformation or missing conjunctions.
+50/50 factscontained all mapped relations and 48/50 werefaithful to these relations.
+8/50 facts had extra-neous information for relations that could not bemapped.
+the relations that could not be mappedare not used for query generation and did not affecthow answers were automatically generated..wikinldb statistics we create databasesover 25 common relationships from wikidata,and create 643 templates from which queries arephrased.
+for join-type queries, we chain a fur-.
+db size.
+(up to).
+25501002505001000.avg #q/db.
+#dbs.
+train valid.
+test.
+4000498625001000500250.
+6314982501005025.
+6214992501005025.
+8713536670.table 1: the statistics for datasets with varying size ofdbs (i.e.
+number of facts).
+average number of queriesper each db instance and also the number of db in-stances per split is displayed..figure 3: example input and output of the neural spjoperator (blue: query, brown: support set sentences).
+ther 15 relations with a further 86 template frag-ments.
+the relations we chose were selected from aweighted sample of the most common entity typesin kelm.
+in total, we generate ﬁve variants ofthe dataset containing databases of size 25 to 1000facts where each fact has between 30-50 tokens.
+dataset statistics are reported in table 1..5 models.
+5.1 neural select-project-join.
+the spj operator is trained as a sequence-to-sequence model to generate intermediate resultsfrom a support set and a given query.
+all factsin the support set are concatenated with the querybefore being input to a transformer model..the model is trained to output different deriva-for thetions depending on the query type.
+min, max operators, the projection is a machine-readable key-value pair, illustrated in figure 3. forexample “which place has the highest yearly num-ber of visitors?” has the projection of the form:(place, number of visitors) allowingan argmax operation by the downstream aggrega-tion module.
+for queries with boolean answers,the output is a token indicating whether the answeris true or false.
+and for all other queries where aset of results is returned or counted, the output is.
+3095example inputwhich place has the highest yearly number ofvisitors?
+[sep] the ibaraki prefectural museum ofhistory has a visitor count of 93976 per year.example output[argmax] ibaraki prefectural museum of history [sep] +93976simply a span, such as an entity or numerical value,extracted from the support set..even though we use intermediary annotation forthe spj operator, we believe that collecting suchannotation is a simpler labeling task compare tocollecting the answers to the queries.
+for exam-ple, given the fact “serena jameka williams (bornseptember 26, 1981) is an american professionaltennis player and former world no.” and the query“list all the female athletes who were born in 20thcenture.”, it seems relatively simple to providethe label “serena jameka williams”.
+however, itis non-trivial to produce a list of potentially hun-dreds of entities as answer (e.g.
+[“serena jamekawilliams, simona halep, mary lou retton, meganrapinoe, kim simmone, mary abichi, .
+.
+.”]).
+thetraining of the components in our proposed archi-tecture does not depend on the ﬁnal answer andinstead, on the simpler intermediary labels..predicting aggregation operator rather thanusing a separate classiﬁer to predict the questiontype, we encode the choice of operator as a spe-cial token that is predicted by the spj operatorprepended to the model output (figure 3).
+the ag-gregation operator is chosen using a majority voteover all generated derivations from all support sets..negative example generation it is importantfor the spj to be resilient to extraneous facts thatmight be returned by a low-precision high-recallssg.
+negative instances for training are generatedin two ways: (1) queries are paired with randomlysampled facts and the model is trained to generatea null projection (indicating the support set doesnot contribute to the answer).
+for example, a factabout someone’s date of birth isn’t useful whenanswering a query about the visitor count of anattraction.
+(2) for a portion of the training instances,we additionally sample extraneous unrelated factsand append these to the support sets simulatingfalse-positive facts from the ssg..5.2 support set generator.
+for simple queries over single facts, conventionalinformation retrieval, such as tf·idf could be con-sidered a primitive ssg.
+however, this would notscale for joins, aggregation queries or for queriesoutputting a set of answers as generating relevantsets requires incremental decoding, conditioningon already retrieved facts..naively generating the set of all relevant supportsets, ssgq(d) ⊂ p(d), would be intractable as.
+algorithm 1: ssg modeled as multi-labelclassiﬁcation: using maximum inner prod-uct search (mips) over vector encodings offacts u and state vinput: bi-encoders c: cu (for actions), cv (forstate), database d, query q, threshold τ.output: set of support sets ( ˆd1, .
+.
+.
+, ˆdb) ⊂ p(d)open := {{}} closed := {};u := [cu (u1); .
+.
+.
+; cu (un); cu (stop)] for ui ∈ d;while open (cid:54)= {} donext := {};for ˆdk in open do.
+v := [cv (q, u1 .
+.
+.
+um)], for ui ∈ ˆdk;a := mips(u ,v ,τ );for aj in a do.
+if aj == stop then.
+closed := closed ∪{ ˆdk};.
+else.
+next := next ∪{{aj ∪ ˆdk}};.
+open := next;.
+return closed;.
+it is akin to enumerating the powerset.
+we con-struct support sets efﬁciently by taking an incre-mental approach, starting from the empty set (seealgorithm 1).
+at each step, the classiﬁer considersthe partially generated support set ˆdk and the queryand predicts which candidate facts ui ∈ d from thedatabase should be added, or whether to stop theiteration, these choices being modeled as a multi-label classiﬁcation task.
+if stop is predicted, thepartial result set ˆdk is closed (i.e., it forms part ofthe output); otherwise, for each fact added, a newintermediate (open) support set is generated whichis explored in the next iteration.
+for efﬁciency, weuse a bi-encoder architecture that independently en-codes the facts in the database and the state (queryand a partial support set) and computes the innerproduct between the encoded representations togenerate a score: cu (ui)t cv (q, ˆdk).
+the en-coders are pre-trained transformers ﬁne-tuned toyield a high inner product between the state’s en-codings and relevant facts to be added.
+at predic-tion time, the vectors encoding the facts are staticand are pre-computed ofﬂine.
+at each step, t, weencode the state using a transformer by concatenat-ing the query tokens and the facts in the partiallygenerated support set dk.
+the ssg is trained withfull supervision of all partial support sets from thedataset and trained to predict which facts to add tothe support set using a contrastive loss..3096complexity of ssg the inner loop of algo-rithm 1 involves a maximum inner product search(mips) between the encoded state and the encod-ings of the facts, which is linear in the number offacts.
+approximate search, such as faiss (john-son et al., 2019), accelerate retrieval to o(log2 n).
+if we assume a query needs a maximum of b sup-port sets, and the average size of a support set ism, then the complexity of the ssg algorithm iso(bm log2 n).
+both b and m are bounded by thenumber of facts in the database n, but in practicewe’d expect only one of b or m factors to be large.
+however, there is fertile ground for developingmethods for indexing (and/or clustering) the factsin the database so that only few facts need to beconsidered in each iteration of the inner loop of thealgorithm, leading to signiﬁcant speedups..5.3 baselines.
+we compare our proposed architecture totransformer-based models that explore the effectof three attention mechanisms representative ofthe state-of-the-art.
+self-attention in transformerscaptures both inter-fact as well as intra-fact in-teractions between tokens.
+however, computingself-attention is quadratic with respect to memoryand scaling beyond 1024 tokens is non-trivial.
+inour baselines, the task formulation is a sequenceto sequence model, similar to that used in ques-tion answering.
+all (relevant) facts are encodedwith the query and the transformer is trained topredict the answer without using any intermedi-ate representations.
+we compare full self-attentionagainst independently encoding the facts (in thecontext of the query) and fusing the embeddingsin the decoder (izacard and grave, 2020, fusionin decoder (fid)).
+because fid independently en-codes contexts, run-time complexity is reduced tobe linear with respect to the number of facts at theexpense of not having inter-fact attention.
+we addi-tionally compare to using windowed attention overfacts with global attention to the query using long-former (beltagy et al., 2020).
+inter-fact attention iscaptured only within the window..6.implementation.
+we use the huggingface (wolf et al., 2020) trans-formers library and its implementations of t5 andlongformer.
+for ssg, we use bert to generateencodings, which has a comparable architecture tot5.
+the learning-rate for ﬁne-tuning and number.
+model.
+answer accuracy (%).
+perfectir wholedb.
+neuralspj + aggr (ours)t5longformerfusion in decoder.
+90.10 ± 0.385.59 ± 0.276.43 ± 339.61 ± 0.2.
+-65.96 ± 0.558.58 ± 0.423.18 ± 0.6.table 2: t5 and longformer both capture inter-fact at-tention whereas fusion in decoder does not.
+regard-less of how attention is used, using all facts in thedatabase harms the model..of epochs were selected through maximizing theexact-match (em) accuracy on a held-out valida-tion set for the tasks.
+for each experiment, we train3 separate models with different seeds and reportmean accuracy.
+the spj models are only trainedon the small database of 25 facts and applied tolarger databases at test time..for most queries, we measure correctness usingexact match (em), which is 1 if the answer stringgenerated by the model is exactly equal to the ref-erence answer and 0 otherwise.
+this metric is usedto score outputs where either a boolean, null an-swer, string or numeric answer is expected.
+when aset of results is returned, we compute the f1 scoreconsidering exact matches of set elements.
+whencomparing models and reporting results, we reportmacro-averages over all instances in the test set.
+we collectively refer to this as answer accuracy..7 experiments & results.
+we ﬁrst consider the suitability of transformer mod-els over small databases of 25 facts comparingtwo information retrieval settings: perfectir, whichis representative of other question answering ap-proaches that combine an information retrieval sys-tem to select only the facts needed to answer aquery, and wholedb, where the entire databaseis encoded by the model, assessing resilience tounrelated information and noise..the overall scores, in table 2, indicate that with-out a retrieval mechanism (i.e., wholedb), all mod-els were susceptible to distractor facts.
+further-more, encoding all facts in a single model is not aviable solution to answer queries posed to nldbsas this approach does not accurately answer queriesthat combine multiple support sets, illustrated infigure 4, and cannot easily scale to thousands offacts.
+using a transformer yields errors when thequery requires computation, such as counting, high-lighted when comparing rows 1 and 3 of table 3..3097method.
+answer accuracy (%).
+min/max.
+bool.
+count.
+set.
+spj perfectirssg + spj.
+t5 perfectir.
+89.7274.03.
+78.23.
+99.1077.79.
+94.6850.75.
+85.2565.32.
+99.34.
+87.33.
+89.19.table 3: using retrieved evidence achieves results com-petitive to the perfectir on a db of 25 facts..querytype.
+booleansetcountmin/max.
+average.
+exact match (%).
+soft match (%).
+precision recall.
+precision recall.
+64.0063.2860.2170.88.
+65.96.
+80.2880.7783.1193.25.
+86.51.
+66.1565.2361.5871.80.
+67.36.
+80.6881.3083.4193.41.
+86.82.table 4: precision and recall of supervised ssg w.r.t.
+the reference set.
+note that errors in retrieval do notnecessarily translate to wrong query answers becausethe spj operator is trained to be robust to noise..special token decoded by the spj.
+for 1.4% of in-stances, an incorrect choice of aggregation functionwas made or the machine-readable outputs fromthe spj could not be parsed..7.2 scaling to larger databases.
+we scale the baseline transformers to largerdatabases using tf-idf and dpr to retrieve ap-propriate facts.
+however, these models are stilllimited by the encoder size of the transformer.
+incontrast, the spj operates over support sets of 1-2facts and, in combination with the ssg, can scaleto arbitrarily large databases, illustrated in figure 5.for boolean queries, the combination of t5 andtf-idf scored 89%, exceeding the accuracy of thessg+spj.
+this is because tf-idf exploits tokenmatching between the query and facts.
+for largerdatabases, the retrieval errors resulted in lower an-swer accuracy.
+while, with a perfect ssg, thethe spj accurately answers most query types, asdatabase size increases, the propagation of errorsfrom the ssg resulted in erroneous answers..8 related work.
+database queries require reasoning over a large setof relevant and non-redundant facts and perform-ing aggregation.
+while in-roads have been made toperform discrete reasoning and computation overpassages (dua et al., 2019), with explicit computa-tion (andor et al., 2019) or differentiable modules.
+figure 4: (perfectir) even when provided with the cor-rect contexts, baseline scores decrease for queries re-quiring the combination of multiple support sets..inter-fact attention applying fid, which doesnot capture inter-fact attention, to scale to largerdatabases would not be successful because answeraccuracy further decreases with with support setsize.
+applying longformer, which captures inter-fact attention within a window could yield out-comes similar to the t5 transformer baseline whererelevant facts are encoded with similar locality.
+however, in the limit, where context falls betweendifferent attention windows, the model could de-grade to be similar to fid..7.1 evaluating the ssg+spj architecture.
+our architecture consists of a support set generator(ssg), a select-project-join (spj) operator that gen-erates derivations over the support sets and an ag-gregation function over the results of the spj oper-ators.
+assuming a perfect ssg, the spj accuratelyanswers more queries than the t5 transformer base-line (table 2) because of the computation withinthe aggregation function that yields higher scoresfor min/max and count queries, displayed in ta-ble 3. in combination with ssg, the overall scoredecreases to 67% due to retrieval errors.
+however,ssg+spj still exceeds the wholedb baselines..it is tricky to evaluate the ssg in isolation be-cause errors here not necessarily translate into er-rors in query answers.
+for example, the ssg mayreturn a superset of a support set, but the spj maystill generate the correct answer.
+table 4 showsthe performance of the ssg for a database of 25facts.
+an output is considered an exact match if itis exactly the same as a support set in the referencedata and soft match if it is a superset thereof..decoding machine-readable outputs the ag-gregation operator was selected by predicting a.
+3098012-45-910-19number of support sets0.20.40.60.81.0answer accuracyneural spjt5longformerfidbreak (wolfson et al., 2020) and sharc (saeidiet al., 2018) have trained models to translate a nat-ural language query into a sequence of relationaloperators (or variants thereof)..9 conclusions.
+database systems are the workhorse of data anal-ysis but they require a pre-deﬁned schema.
+partof their power stems from the fact that a data ana-lyst can explore the data by easily posing a widevariety of queries.
+given the rise in the amountof data that is becoming available in text, imagesand other modalities, we would like to build sys-tems that enable the ﬂexibility of posing complexqueries against such data, but without the need fora pre-deﬁned schema..this paper proposed an architecture for neuraldatabases and the associated wikinldb dataset,as ﬁrst steps towards realizing a system for query-ing multi-modal data.
+our architecture is capableof overcoming the limitations of transformer mod-els because it runs multiple transformers in parallel,each taking a small set of facts.
+consequently,nldbs can scale to large databases..additional research is required in order to scalenldbs to larger datasets, more complex queries,and to multi-modal data.
+in particular, one of thekey components of the architecture is the ssg mod-ule that retrieves the relevant facts to feed to eachinstance of the neural spj.
+we believe that in prac-tice, the semantics of the application will providea strong hint on which facts may be relevant.
+forexample, when querying a large corpus of social-media posts, each post is a candidate support setas long as the query does not require joining datafrom multiple posts.
+in addition, we assumed thatour databases describe a snapshot of the world.
+inpractice, we may have facts that override previousones (e.g., ‘samantha works for apple’, followedby ‘samantha works for twitter’) and we wouldneed to reason about which facts should be ignored..acknowledgments.
+we would like to thank yann lecun and antoinebordes for the initial discussion that sparked theidea of neural databases.
+this work was performedwhile james thorne and fabrizio silvestri were atfacebook..figure 5: scaling to larger databases with a modeltrained using 25 facts and tested on larger databases..(gupta et al., 2020), these use only a single pas-sage rather than requiring aggregation over largenumbers of facts from different texts..multi-hop question answering requires ﬁndingsupporting evidence in multiple documents (see(welbl et al., 2018; talmor and berant, 2018; wolf-son et al., 2020) for datasets facilitating this re-search).
+in answering multi-hop questions, theworks decompose the question into simpler subquestions (min et al., 2019; wolfson et al., 2020),or condition each hop on the previously retrieveddocuments (asai et al., 2019; xiong et al., 2020).
+while tasks such as complexwebquestions (tal-mor and berant, 2018) and break (wolfson et al.,2020) focus on complex queries that can be bro-ken down into simpler ones, our focus is on set-based and aggregation queries where the complex-ity comes from the need to retrieve and process alarge number of non-redundant relevant facts.
+incontrast to the set and count tasks in babi (westonet al., 2015), where each query is based on a smallcontext (less than 20 facts), our dataset scales fromdatabases of 25 facts to 1000..bridging the gap between unstructured naturallanguage data and database-style querying has beena long-standing theme in database research (halevyet al., 2003).
+the work on information extractionhas developed techniques for translating segmentsof natural language text into triples that can befurther processed by a database system.
+therehas been signiﬁcant work on translating queriesposed in natural language into sql queries on adatabase whose schema is known (androutsopou-los et al., 1995; li and jagadish, 2014; zeng et al.,2020), with extensions to semi-structured data andknowledge bases (pasupat and liang, 2015; be-rant et al., 2013).
+more recently, systems such as.
+309925501002505001000number of facts in db0.20.40.60.8answer accuracyspj perfectirssg+spjt5 + tf-idft5 + dprbroader impact statement.
+ethical concerns a nl database is very similarto a traditional database in terms of applicationswith a difference that it extends the use of databaseson unstructured text.
+for example, nl databasescan be used to produce analytics on data expressedin natural language.
+for an nl database to beapplicable in the context of a virtual assistance,they will likely need to be trained on real-worldconversations.
+privacy preserving ml methodsshould be considered for such applications..environmental concerns large transformer-based models take a lot of computational resourcesand energy for pre-training and ﬁne-tuning.
+as aresult such models raise environmental concerns.
+in our proposed architecture, we only ﬁne-tunetransformer models on small support sets.
+we thenuse several instances of such models in parallel forinference, instead of a single large model, even onlarge datasets.
+therefore, the model is relativelyefﬁcient, both during the ﬁne-tuning and during theinference..references.
+oshin agarwal, heming ge, siamak shakeri, andrami al-rfou.
+2020. large scale knowledge graphbased synthetic corpus generation for knowledge-enhanced language model pre-training..daniel andor, luheng he, kenton lee, and emilypitler.
+2019. giving bert a calculator: findingoperations and arguments with reading comprehen-in proceedings of the 2019 conference onsion.
+empirical methods in natural language processingand the 9th international joint conference on nat-ural language processing (emnlp-ijcnlp), vol-ume 2, pages 5947–5952.
+association for computa-tional linguistics..i androutsopoulos, g d ritchie, and p thanisch.
+1995.natural language interfaces to databases - an intro-duction.
+natural language engineering, 1(1):29–81..akari asai, kazuma hashimoto, hannaneh hajishirzi,richard socher, and caiming xiong.
+2019. learn-ing to retrieve reasoning paths over wikipediaarxiv preprintgraph for question answering.
+arxiv:1911.10470..iz beltagy, matthew e. peters, and arman cohan.
+2020..longformer: the long-document transformer..conference on empirical methods in natural lan-guage processing, october, pages 1533–1544.
+asso-ciation for computational linguistics..danqi chen, adam fisch, jason weston, and antoinebordes.
+2017. reading wikipedia to answer open-in proceedings of the 55th an-domain questions.
+nual meeting of the association for computationallinguistics (volume 1: long papers), pages 1870–1879. association for computational linguistics..rajarshi das, shehzaad dhuliawala, manzil zaheer,and andrew mccallum.
+2019. multi-step retriever-reader interaction for scalable open-domain questionanswering.
+arxiv preprint arxiv:1905.05733..bhuwan dhingra, kathryn mazaitis, and william wcohen.
+2017. quasar: datasets for question an-arxiv preprintswering by search and reading.
+arxiv:1707.03904..dheeru dua, yizhong wang, pradeep dasigi, gabrielstanovsky, sameer singh, and matt gardner.
+2019.drop: a reading comprehension benchmark requir-ing discrete reasoning over paragraphs.
+in proceed-ings of the 2019 conference of the north americanchapter of the association for computational lin-guistics: human language technologies, volume 1(long and short papers), pages 2368–2378, min-neapolis, minnesota.
+association for computationallinguistics..hady elsahar, pavlos vougiouklis, arslen remaci,christophe gravier,jonathon hare, frederiquelaforest, and elena simperl.
+2018. t-rex: a largescale alignment of natural language with knowledgebase triples.
+in proceedings of the eleventh interna-tional conference on language resources and eval-uation (lrec 2018), miyazaki, japan.
+europeanlanguage resources association (elra)..nitish gupta, kevin lin, dan roth, sameer singh, andmatt gardner.
+2020. neural module networks forreasoning over text.
+in international conference onlearning representations (iclr)..alon y. halevy, oren etzioni, anhai doan, zachary g.ives, jayant madhavan, luke k. mcdowell, andigor tatarinov.
+2003.crossing the structurein cidr 2003, first biennial conferencechasm.
+on innovative data systems research, asilomar,ca, usa, january 5-8, 2003, online proceedings.
+www.cidrdb.org..ann-kathrin hartmann, edgard marx, and tommasosoru.
+2018. generating a large dataset for neu-ral question answering over the dbpedia knowledgebase..dieuwke hupkes, verna dankers, mathijs mul, andelia bruni.
+2020. compositionality decomposed:journal ofhow do neural networks generalise?
+artiﬁcial intelligence research, 67:757–795..jonathan berant, andrew chou, roy frostig, and percyliang.
+2013. semantic parsing on freebase fromquestion-answer pairs.
+in proceedings of the 2013.gautier izacard and edouard grave.
+2020. leveragingpassage retrieval with generative models for opendomain question answering..3100jeff johnson, matthijs douze, and herve jegou.
+2019.ieee.
+billion-scale similarity search with gpus.
+transactions on big data, pages 1–1..mandar joshi, eunsol choi, daniel weld, and lukezettlemoyer.
+2017. triviaqa: a large scale dis-tantly supervised challenge dataset for reading com-prehension.
+in proceedings of the 55th annual meet-ing of the association for computational linguistics(volume 1: long papers), pages 1601–1611.
+associ-ation for computational linguistics..tom kwiatkowski, jennimaria palomaki, olivia red-ﬁeld, michael collins, ankur parikh, chris al-berti, danielle epstein, illia polosukhin, jacob de-vlin, kenton lee, kristina toutanova, llion jones,matthew kelcey, ming-wei chang, andrew m. dai,jakob uszkoreit, quoc le, and slav petrov.
+2019.natural questions: a benchmark for question an-swering research.
+transactions of the associationfor computational linguistics, 7:452–466..patrick lewis, ethan perez, aleksandara piktus, fabiopetroni, vladimir karpukhin, naman goyal, hein-rich k¨uttler, mike lewis, wen-tau yih, timrockt¨aschel, sebastian riedel, and douwe kiela.
+2020a.
+retrieval-augmented generation forknowledge-intensive nlp tasks..patrick lewis, ethan perez, aleksandara piktus, fabiopetroni, vladimir karpukhin, naman goyal, hein-rich k¨uttler, mike lewis, wen-tau yih, timrockt¨aschel, et al.
+2020b.
+retrieval-augmented gen-arxiveration for knowledge-intensive nlp tasks.
+preprint arxiv:2005.11401..fei li and h v jagadish.
+2014. constructing an in-teractive natural language interface for relationaldatabases.
+proceedings of the vldb endowment2,8(1):73–84..sewon min, victor zhong, luke zettlemoyer, and han-naneh hajishirzi.
+2019. multi-hop reading compre-hension through question decomposition and rescor-in proceedings of the 57th annual meetinging.
+of the association for computational linguistics,pages 6097–6109.
+association for computationallinguistics..panupong pasupat and percy liang.
+2015. composi-tional semantic parsing on semi-structured tables.
+inproceedings of the 53rd annual meeting of the asso-ciation for computational linguistics and the 7th in-ternational joint conference on natural languageprocessing (volume 1: long papers), pages 1470–1480. association for computational linguistics..pranav rajpurkar, jian zhang, konstantin lopyrev, andpercy liang.
+2016. squad: 100,000+ questions formachine comprehension of text.
+in proceedings ofthe 2016 conference on empirical methods in nat-ural language processing, pages 2383–2392.
+asso-ciation for computational linguistics..marzieh saeidi, max bartolo, patrick lewis, sameersingh, tim rockt¨aschel, mike sheldon, guillaumebouchard, and sebastian riedel.
+2018.interpreta-tion of natural language rules in conversational ma-chine reading.
+in proceedings of the 2018 confer-ence on empirical methods in natural languageprocessing, pages 2087–2097.
+association for com-putational linguistics..alon talmor and jonathan berant.
+2018. the web asa knowledge-base for answering complex questions.
+in proceedings of the 2018 conference of the northamerican chapter of the association for computa-tional linguistics: human language technologies,volume 1 (long papers), pages 641–651.
+associa-tion for computational linguistics..james thorne, majid yazdani, marzieh saeidi, fab-rizio silvestri, sebastian riedel, and alon y. halevy.
+2021. from natural language processing to neuraldatabases.
+proc.
+vldb endow., 14..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, lilon jones, aidan gomez, łukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+in 31st conference on neural informationprocessing systems (nips 2017), long beach, ca,usa..denny vrandeˇci´c and markus kr¨otzsch.
+2014. wiki-data: a free collaborative knowledgebase.
+commu-nications of the acm, 57(10):78–85..sinong wang, belinda z. li, madian khabsa, hanfang, and hao ma.
+2020. linformer: self-attentionwith linear complexity.
+2048(2019)..johannes welbl, pontus stenetorp, and sebastianriedel.
+2018. constructing datasets for multi-hopreading comprehension across documents.
+transac-tions of the association for computational linguis-tics, 6:287–302..jason weston, antoine bordes, sumit chopra, alexan-der m rush, bart van merri¨enboer, armand joulin,and tomas mikolov.
+2015. towards ai-completequestion answering: a set of prerequisite toy tasks.
+arxiv preprint arxiv:1502.05698..thomas wolf, lysandre debut, victor sanh, julienchaumond, clement delangue, anthony moi, pier-ric cistac, tim rault, r´emi louf, morgan funtow-icz, joe davison, sam shleifer, patrick von platen,clara ma, yacine jernite, julien plu, canwen xu,teven le scao, sylvain gugger, mariama drame,quentin lhoest, and alexander m. rush.
+2020.huggingface’s transformers: state-of-the-art naturallanguage processing..tomer wolfson, mor geva, ankit gupta, matt gard-ner, yoav goldberg, daniel deutch, and jonathanberant.
+2020. break it down: a question under-standing benchmark.
+transactions of the associa-tion for computational linguistics, 8:183–198..3101wenhan xiong, xiang lorraine li, srini iyer, jingfeidu, patrick lewis, william yang wang, yasharmehdad, wen-tau yih, sebastian riedel, douwekiela, et al.
+2020. answering complex open-domainarxivquestions with multi-hop dense retrieval.
+preprint arxiv:2009.12756..jichuan zeng, xi victoria lin, steven c.h.
+hoi,richard socher, caiming xiong, michael lyu, andirwin king.
+2020. photon: a robust cross-domainin proceedings of the 58thtext-to-sql system.
+annual meeting of the association for computa-tional linguistics: system demonstrations, volumeabs/2007.15280, pages 204–214.
+association forcomputational linguistics..3102a.1 sample data and dataset statistics.
+a appendix.
+example: setquestion.
+supporting facts.
+who studied at university of minnesota?.
+1.
+[john b totushek was born on 7 september 1944 in minneapolis.
+he attended the universityof minnesota and became a us naval aviator.
+mr. totushek was also a human being.]
+2.
+[melvin maas graduated from the university of minnesota and is buried at arlington nationalcemetery.
+he is a native of minnesota and his language is english.]
+3.national academy of engineering.]
+4.
+[ted mann, who is the surname of ted mann, attended duke university and the universityof minnesota.
+he is a human being.].
+[clarence larson graduated from the university of minnesota and is a member of the.
+answerexample: countquestion.
+supporting facts.
+[john b. totushek, ted mann, clarence larson, melvin maas].
+how many people work for yale law school?.
+1.
+[michael ponsor, born in oxford, graduated from pembroke college in oxford.
+he wasawarded the rhodes scholarship and is an employee at yale law school.
+he is an expert in theﬁeld of human rights.]
+2.
+[stephen wizner is an american legal scholar who graduated from dartmouth college and isa graduate of the university of chicago law school.
+he works at yale law school.].
+answerexample: min/maxquestion.
+2.supporting facts.
+5839197.true.
+answerexample: boolquestion.
+supporting facts.
+answerexample: joinquestion.
+supporting facts.
+what is the largest yearly attendance?.
+1.
+[the musee en herbe has a visitor per year of] 70000.
+2.
+[the total number of visitors to the hirschsprung collection is 71779 per year.]
+...24.
+[the tate modern has a visitor count of 5839197 visitors per year.]
+25.
+[catoctin mountain park attracts 221750 visitors per year.].
+is north carolina state university the employer of wes moore?.
+[wes moore is a human being who is employed at francis marion university and is a.
+1.basketball player for north carolina state university.].
+who plays for a team in ligue 1?.
+1.
+[thomas allofs started his career in 1989 with rc strasbourg alsace.
+he ﬁnished his careerin 1990.,rc strasbourg alsace is an association football club in the ligue 1 league.
+it was founded in1906 and is located in strasbourg, france.].
+answer.
+[thomas allofs].
+table 5: examples of different types of queries, their supporting facts and answers.
+these examples are based ondatabases of size 25..3103figure 6: dataset statistics for dbs of varying sizes provided with wikinldb.
+3104

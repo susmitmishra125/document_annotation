@@ -1,0 +1,723 @@
+reservoir transformers.
+sheng shen†, alexei baevski‡, ari s. morcos‡, kurt keutzer†,michael auli‡, douwe kiela‡†uc berkeley; ‡facebook ai researchsheng.s@berkeley.edu, dkiela@fb.com.
+abstract.
+we demonstrate that transformers obtain im-pressive performance even when some of thelayers are randomly initialized and never up-dated.
+inspired by old and well-establishedideas in machine learning, we explore a varietyof non-linear “reservoir” layers interspersedwith regular transformer layers, and show im-provements in wall-clock compute time untilconvergence, as well as overall performance,on various machine translation and (masked)language modelling tasks..1.introduction.
+transformers (vaswani et al., 2017) have dom-inated natural language processing (nlp) in re-cent years,from large scale machine transla-tion (ott et al., 2018) to pre-trained (masked)language modeling (devlin et al., 2018; rad-ford et al., 2018), and are becoming more pop-ular in other ﬁelds as well, from reinforcementlearning (vinyals et al., 2019) to speech recog-nition (baevski et al., 2019) and computer vi-sion (carion et al., 2020).
+their success is enabledin part by ever increasing computational demands,which has naturally led to an increased interestin improving their efﬁciency.
+scalability gains intransformers could facilitate bigger, deeper net-works with longer contexts (kitaev et al., 2020;wang et al., 2020; beltagy et al., 2020; kaplanet al., 2020; tay et al., 2020b).
+conversely,improved efﬁciency could reduce environmentalcosts (strubell et al., 2019) and hopefully help de-mocratize the technology..in this work, we explore a simple question: ifsome layers of the transformer are kept frozen—i.e., never updated after random initialization—can we match the performance of fully learnedtransformers, while being more efﬁcient?
+surpris-ingly, the answer is resoundingly yes; and what.
+is more, we ﬁnd that freezing layers may actuallyimprove performance..beyond desirable efﬁciency gains, random lay-ers are interesting for several additional reasons.
+fixed randomly initialized networks (gallicchioand scardapane, 2020) converge to gaussian pro-cesses in the limit of inﬁnite width (daniely et al.,2016), have intriguing interpretations in metriclearning (rosenfeld and tsotsos, 2019; giryeset al., 2016), and have been shown to provideexcellent “priors” either for subsequentlearn-ing (ulyanov et al., 2018) or pruning (frankle andcarbin, 2018).
+fixed layers allow for efﬁcientlow-cost hardware implementations (schrauwenet al., 2007) and can be characterized using only arandom number generator and its seed.
+this couldfacilitate distributed training and enables highlyefﬁcient deployment to edge devices, since it onlyrequires transmission of a single number.
+thestrong performance of networks with ﬁxed lay-ers also sheds new light on the inner workingsof bert (devlin et al., 2018), and layer-wise in-terpretations of such models (rogers et al., 2020;tenney et al., 2019).
+it appears that “not all layersare created equal” (zhang et al., 2019) is true tosuch an extent that some layers can simply remainrandom and ﬁxed..random projections have a long history inmachine learning.
+by cover’s theorem (cover,1965), any high-dimensional non-linear transfor-mation is more likely to be linearly separablethan its lower-or-equal-dimensional input space.
+by johnson-lindenstrauss (johnson and linden-strauss, 1984), random projections distort eu-clidean distances very little under mild assump-tions, which is useful e.g.
+for dimensionality re-duction and random indexing (sahlgren, 2005).
+fixed random layers in neural networks pre-datedeep learning by far (gamba et al., 1961; baum,1988).
+indeed, random kernel methods have long.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages4294–4309august1–6,2021.©2021associationforcomputationallinguistics4294been inﬂuential in machine learning (rahimi andrecht, 2008, 2009)..one way to think of such layers is as “reser-voirs” (lukoˇseviˇcius and jaeger, 2009), where ahighly non-linear high-dimensional black box rep-resentation is provided to a lightweight “readout”network, as in echo state networks (jaeger, 2003)and liquid state machines (maass et al., 2002).
+thebeneﬁt of such an approach is that the reservoir hasﬁxed parameters and is computationally efﬁcient,as it can be pre-computed and does not (necessar-ily) require backpropagation..in nlp, wieting and kiela (2019) showed thatrandom sentence encoders present a strong base-line for text classiﬁcation, with subsequent workshowing applications in a variety of tasks fromsummarization to machine translation (enguehardet al., 2019; garg et al., 2020; pilault et al., 2020).
+to our knowledge, this work is the ﬁrst to exam-ine this phenomenon in transformers, and the ﬁrstto recursively alternate reservoirs with subsequenttransformer layers acting as readout functions.
+weintroduce “reservoir transformers”, wherein ﬁxedrandom reservoir layers are interspersed with reg-ular updateable transformer layers.
+the goal ofthis work is to put our understanding of trans-former models on a more solid footing by provid-ing empirical evidence of their capabilities evenwhen some of their parameters are ﬁxed.
+our con-tributions are as follows:.
+• we introduce a area under the convergencecurve metric for measuring performance-efﬁciency trade-offs, and show that replacingregular transformer layers with reservoir lay-ers leads to improvements..• we show that the addition of reservoir layersleads to improved test set generalization on avariety of tasks in a variety of settings..• we show that pre-trained masked lan-guage modelling architectures like bert androberta (liu et al., 2019) can beneﬁt fromhaving some of their layers frozen, both dur-ing pre-training as well as when ﬁne-tuningon downstream tasks..• we experiment with different types of reser-voir layers, including convolutional and re-current neural network-based ones..• we show empirical evidence that the back-ward pass can be skipped in its entirety by.
+approximating upstream gradients using anapproach we call backskipping, which canreduce the training compute further withoutsacriﬁcing performance..2 approach.
+this paper is based on a very simple idea.
+neuralnetworks are trained via backpropagation, whichinvolves consecutive steps of matrix addition andmultiplication, i.e.,.
+θt+1 ← θt − η.
+∂j∂θt.
+;.
+∂j∂θt.
+=.
+∂j∂ln.
+∂ln∂ln−1.
+· · ·.
+∂l0∂x.
+for some objective j, parameterization θ andlearning rate η, with the gradient computed viathe chain rule, where li is the i-th layer of theneural network and x is the input.
+let l =transformer(x) be a single layer in a transformernetwork (vaswani et al., 2017), i.e.,.
+h = multiheadselfattn(layernorm(x)) + xl = ffn(layernorm(h)) + h.now, during every “backward pass”, we com-pute the jacobian for parameters θl at layer l,which are used to update the parameters of l, θlt ,as well as to compute the next layer’s jacobian,thus back-propagating the gradients.
+in this workhowever, for some of the layers, we still backprop-agate through them to compute gradients for ear-lier layers, but we never apply the parameter up-date.
+as a result, these layers stay ﬁxed at theirinitialization, saving computational resources..2.1 background.
+naturally, never updating some of the parametersis computationally more efﬁcient, as some matrixaddition operations can be skipped in the back-ward pass, but why is this not detrimental to theperformance of the network?.
+in the early days of neural networks, the bot-tom layers were often kept ﬁxed as “associa-tors” (block, 1962), or what (minsky and papert,2017) called the gamba perceptron (gamba et al.,1961; borsellino and gamba, 1961).
+fixed ran-dom networks (baum, 1988; schmidt et al., 1992;pao et al., 1994) have been explored from manyangles, including as “random kitchen sink” kernelmachines (rahimi and recht, 2008, 2009), “ex-treme learning machines” (huang et al., 2006) and.
+4295reservoir computing (jaeger, 2003; maass et al.,2002; lukoˇseviˇcius and jaeger, 2009).
+in reser-voir computing, input data are represented throughﬁxed random high-dimensional non-linear rep-resentations, called “reservoirs”, which are fol-lowed by a regular (often but not necessarily lin-ear) “readout” network to make the ﬁnal classiﬁ-cation decision..the theoretical.
+justiﬁcation for.
+these ap-proaches lies in two well-known results in ma-chine learning: cover’s theorem (cover, 1965)on the separability of patterns states that high-dimensional non-linear transformations are morelikely to be linearly separable; and the johnson-lindenstrauss lemma (johnson and lindenstrauss,1984) shows that (most) random projections dis-tort euclidean distances very little..practically, random layers can be seen as acheap way to increase network depth.
+there areinteresting advantages to this approach.
+fixed lay-ers are known to have particularly low-cost hard-ware requirements and can be easily implementedon high-bandwidth fpgas with low power con-sumption (hadaeghi et al., 2017; tanaka et al.,2019), or on optical devices (hicke et al.,2013).
+this might yield interesting possibilitiesfor training in a distributed fashion across mul-tiple devices, as well as for neuromorphic hard-ware (neftci et al., 2017).
+this approach also fa-cilitates lower-latency deployment of neural net-works to edge devices, since weights can be sharedsimply by sending the seed number, assuming therandom number generator is known on both ends..2.2 reservoir transformers.
+this work explores inserting random non-lineartransformations, or what we call reservoir layers,into transformer networks.
+speciﬁcally, we exper-iment with a variety of reservoir layers:.
+• transformer reservoir: the standard trans-former layer as described above, but with allparameters ﬁxed after initialization, includ-ing the self-attention module..• ffn reservoir: a transformer-style ﬁxedfeed-forward layer without any self-attention,ffn(layernorm(previous layer)) +i.e.,previous layer..• bigru reservoir: a ﬁxed bidirectionalgated recurrent unit (cho et al., 2014) layer,which is closer in spirit to previous work on.
+reservoir computing, most of which builds onrecurrent neural network architectures..• cnn reservoir: a ﬁxed convolutional neu-ral network (lecun et al., 1998) layer,speciﬁcally light dynamical convolution lay-ers (wu et al., 2019), which are known to becompetitive with transformers in sequence-to-sequence tasks..we ﬁnd that all these approaches work well, toa certain extent.
+for clarity, we focus primarily onthe ﬁrst two reservoir layers, but include a broadercomparison in appendix a..in each case, contrary to traditional reservoircomputing, our reservoir layers are interspersedthroughout a regular transformer network, or whatwe call a reservoir transformer.
+since random pro-jections are not learned and might introduce noise,subsequent normal transformer “readout” layersmight be able to beneﬁt from additional depthwhile allowing us to recover from any adverse ef-fects of randomness.
+for example, previous workhas shown that resnets, with all of their parame-ters ﬁxed except for the scale and shift parametersof batch normalization, can still achieve high per-formance, simply by scaling and shifting randomfeatures (frankle et al., 2020).
+adding some formof noise to the parameters is also known to helpconvergence and generalization (jim et al., 1995,1996; gulcehre et al., 2016; noh et al., 2017)..3 evaluation.
+we evaluate the proposed approach on a variety ofwell-known tasks in natural language processing,namely: machine translation, language modellingand masked language model pre-training..i.e..we set out.
+to do this work with the mainobjective of examining any potential efﬁciencygains,the relationship between computetime and task performance.
+this is closely re-lated to efforts in green ai, which are concernedwith the trade-offs between compute, data, andperformance (schwartz et al., 2019).
+we pro-pose to measure this trade-off via the area underthe convergence curve (aucc): similarly to howthe area under the receiver operating characteris-tic (bradley, 1997, auc-roc) measures a clas-siﬁer’s performance independent of the classiﬁca-tion threshold, aucc measures a model’s perfor-mance independent of the speciﬁc compute bud-.
+4296get.
+speciﬁcally, aucc is computed as follows:.
+(cid:90) ˆt.
+(cid:88).
+t=0.
+x,y∈d.
+gt(f (x), y).
+(1).
+where f is the network and g is the evalua-tion metric, measured until convergence time ˆt ,which is the maximum convergence time of allmodels included in the comparison.
+note that timehere is wall-clock time, not iterations.
+by con-vergence, we mean that validation performancehas stopped improving, and hence the convergencecurve whose area we measure plots the desiredmetric over time.
+runs are averaged over multipleseeds and reported with standard deviation.
+wenormalize raw aucc scores by their maximum toensure a more interpretable [0 − 1] range..one potential downside of this approach is thatthe aucc metric could lead to higher scores fora model that converges quickly but to ultimatelyworse performance, if measured in a small win-dow.
+this can be solved by making sure that ˆt isset sufﬁciently high.
+we include the raw valida-tion curves in the appendix to demonstrate that thechosen window sizes are sufﬁcient and the resultsare not a inﬂuenced by this limitation.
+in addition,we report the number of trainable parameters andthe wall-clock training time until maximum per-formance (plus 95% and 99% convergence resultsin the appendix).
+finally, we show test set gener-alization in each experiment.
+overall, this gives usa wide set of axes along which to examine models..3.1 experimental settings.
+we evaluate on iwslt de-en (cettolo et al., 2015)and wmt en-de (bojar et al., 2014) for ma-chine translation; enwiki8 (llc, 2009) for lan-guage modelling; and experiment with roberta(liu et al., 2019) in our pretraining experiments.
+for iwslt, we follow the pre-processing stepsin edunov et al.
+(2018).
+the train/val/test splitis 129k/10k/6.8k sentences.
+for wmt, we fol-low pre-process as in ott et al.
+(2018), with4.5m/16.5k/3k sentences in train/val/test.
+for en-wiki8, we follow the pre-processing steps in daiet al.
+(2019).
+the train/val/test split is 1m/54k/56ksentences.
+for roberta pretraining, we followthe pre-processing steps in liu et al.
+(2019)..we use 8 volta v100 gpus for wmt and en-wik8, 32 v100 gpus for roberta and a sin-gle v100 for iwslt.
+the hyperparameters for.
+iwslt14 and wmt16 were setto the best-performing values from ott et al.
+(2018) and kasaiet al.
+(2020) respectively.
+the enwik8 experimentsettings followed bachlechner et al.
+(2020) and theroberta experiments followed liu et al.
+(2019).
+all the experiments in this paper were run with3 random seeds and the mean and standard devia-tion are reported.
+for the relatively small iwslt,the ˆt value in the aucc metric was set to 4 hours.
+for the larger wmt, we set it to 20 hours.
+forenwiki8, it was 30 hours; and for the robertapre-training experiments, it was set to 60 hours..the projection weights in random layers wereinitialized using orthogonal initialization (saxeet al., 2013), since random orthogonal projec-tions should ideally be maximally information-preserving, and which was found to work well em-pirically for initializing ﬁxed random representa-tions in previous work (wieting and kiela, 2019).
+biases and layer norm parameters were initializedusing their respective pytorch defaults (based onxavier init; glorot and bengio, 2010)..we intersperse reservoir layers in alternatingfashion starting from the middle.
+speciﬁcally, wealternate one reservoir layer with one transformerlayer, and place the alternating block in the mid-dle.
+for example: a 7-layer encoder lllllllin which we replace three layers with reser-voirs becomes lrlrlrl, and with two becomesllrlrll.
+see appendix c for a study com-paring this strategy to alternative approaches (e.g.,freezing in the bottom, middle or top)..4 experiments.
+in what follows, we ﬁrst show our main result, ona variety of tasks: reservoir transformers mostlyhave better aucc metrics; less training time perepoch; less convergence time until the best valida-tion performance is achieved; and even improvedtest set generalization metrics.
+as a strong base-line method, we compare to layerdrop (fan et al.,2019).
+layerdrop can also be seen as a methodthat dynamically bypasses parts of the computa-tion during transformer training in an attempt toimprove efﬁciency, and making it a strong compar-ison to examine our methods.
+then, we examinewhether we can minimize the expectation over thegradients of upstream layers in the network suchthat we do not at all have to pass gradients throughthe reservoir layers, skipping their backward pass..4297figure 1: validation (top) and test (bottom) results for iwslt (left), wmt (middle) and enwiki8 language mod-elling (right).
+iwslt and wmt are bleu (high is good); enwiki8 is bpc (low is good).
+comparison of regulartransformer (blue) and reservoir transformer with ffn (green) or transformer reservoir (orange) layers added..4.1 machine translation.
+machine translation (mt) is one of the coretasks of nlp.
+we demonstrate on two well-knowniwslt’14 german-english andmt datasets,wmt’16 english-german,that reservoir trans-formers obtain a better aucc.
+for the raw vali-dation plots over time that were used to calculatethe aucc, please refer to appendix f..following kasai et al.
+(2020), the architectureof the network is an n-layer reservoir transformerencoder, followed by a regular shallow one- ortwo-layer decoder.
+this design choice has beenshown to lead to very good speed and efﬁciencytrade-offs, and serves as a good baseline for ourexperiments.
+moreover, shallow decoders make iteasier to decide where to place reservoir layers (inthe encoder) and makes it more straightforward toidentify where performance gains come from..figure 1 shows the results for iwslt (left) andwmt (middle).
+on the y-axis we show valida-tion aucc for the bleu metric; on the x-axiswe show the number of updatable layers in the en-coder.
+the performance of a regular transformerencoder with 6 layers and a reservoir transformerencoder with 6 layers plus n additional reservoirlayers are plotted for the same x-axis value toshow the total number of updated layers.
+plotsfor the total number of layers (updatable plus not-updatable, so essentially shifted versions of theplots) are shown in appendix e..wmt is much larger and requires a muchdeeper encoder, as illustrated by the fact that acertain minimum depth is required for reservoirtransformers to achieve a comparable validationaucc.
+at test time, reservoir transformers outper-form regular transformers for almost all encoderdepths.
+the ffn reservoir seems to work bestin both cases, which is surprising because it doesnot have any self-attention component at all.
+thisﬁnding shows that self-attention, or the mecha-nism to summarize context information, should belearned if present.
+once the context features havebeen gathered, a random projection via a ﬁxedffn module appears to be beneﬁcial..table 1 and 2 show the time it took to achievethe maximum validation bleu score and how thatrelates to the regular transformer, demonstratingthat reservoir transformers consistently convergefaster in terms of wall-clock time.
+we save upto 22% convergence wall-clock time using reser-voir transformers as much with the same numberof updateable layers.
+we save as much as 27%time until convergence a 24 layer model on wmt,as shown in table 2. one other noticeable pointis that we can see that the t reservoir achievessimilar performance to layerdrop on iwslt andwmt in terms of wall-clock per epoch and wall-clock time to the best performance.
+however, onboth tasks, ffn reservoir performs much betterthan layerdrop in terms of efﬁciency per epoch.
+429824681012# updatable encoder layers0.960.970.980.991.00valid bleu aucctransformert reservoirffn reservoir1015202530# updatable encoder layers0.940.950.960.970.980.991.00valid bleu aucctransformert reservoirffn reservoir3040506070# updatable decoder layers0.60.70.80.91.0valid bpc aucctransformert reservoirffn reservoir24681012# updatable encoder layers32.533.033.534.0test bleu transformert reservoirffn reservoir1015202530# updatable encoder layers26.2526.5026.7527.0027.2527.5027.7528.00test bleu transformert reservoirffn reservoir3040506070# updatable decoder layers1.21.41.61.82.02.22.4test bpc transformert reservoirffn reservoirmodel.
+# layers.
+frozen max bleu.
+train timeuntil max (in hours).
+ratio.
+# paramstrainable (total).
+train time eachepoch (in seconds).
+34.52 ± 0.0734.59 ± 0.1134.56 ± 0.0534.29 ± 0.12.
+34.37 ± 0.1234.80 ± 0.0734.70 ± 0.0334.78 ± 0.04.
+34.43 ± 0.1534.56 ± 0.1634.66 ± 0.0234.76 ± 0.03.
+34.59 ± 0.1534.58 ± 0.1634.57 ± 0.0733.65 ± 0.24.
+2.548 ± 0.062.557 ± 0.053.173 ± 0.043.521 ± 0.09.
+2.422 ± 0.032.450 ± 0.062.831 ± 0.053.476 ± 0.04.
+2.120 ± 0.042.203 ± 0.062.493 ± 0.053.241 ± 0.04.
+2.364 ± 0.082.554 ± 0.053.404 ± 0.063.251 ± 0.04.
+1111.
+0.950.960.890.98.
+0.830.860.790.92.
+0.920.991.070.92.
+26.8m31.1m35.3m39.5m.
+22.6m (26.8m)26.8m (31.1m)31.1m (35.3m)35.3m (39.5m).
+22.6m (25.8m)26.8m (29.1m)31.1m (33.3m)35.3m (37.5m).
+22.6m (26.8m)26.8m (31.1m)31.1m (35.3m)35.3m (39.5m).
+122.73 ± 1.16142.28 ± 1.87161.66 ± 1.54172.45 ± 1.98.
+120.59 ± 1.32134.49 ± 1.76144.42 ± 1.98159.43 ± 1.67.
+107.71 ± 1.73120.07 ± 1.65130.11 ± 1.43156.32 ± 1.87.
+119.30 ± 1.36138.62 ± 1.44140.88 ± 1.62160.85 ± 1.49.table 1: wall-clock time (averaged over multiple runs) saved for iwslt for different model types and encoderdepths.
+max bleu is for validation.
+number of layers is for encoder, decoder depth is kept ﬁxed at 2. the ratiois computed compared to the corresponding number of layers in the regular transformer case..model.
+# layers.
+frozen max bleu.
+train timeuntil max (in hours).
+ratio.
+# paramstrainable (total).
+train time eachepoch (in hours).
+transformer.
+t reservoir.
+ffn reservoir.
+layerdrop.
+transformer.
+t reservoir.
+ffn reservoir.
+layerdrop.
+681012.
+681012.
+681012.
+681012.
+12162432.
+12162432.
+12162432.
+12162432.
+0000.
+2222.
+2222.
+2222.
+0000.
+4444.
+4444.
+4444.
+24.46 ± 0.0424.52 ± 0.0324.69 ± 0.0524.83 ± 0.04.
+24.26 ± 0.0824.50 ± 0.0525.11 ± 0.0724.66 ± 0.04.
+24.42 ± 0.0524.65 ± 0.0724.93 ± 0.0424.98 ± 0.03.
+24.27 ± 0.0324.15 ± 0.0624.37 ± 0.0523.84 ± 0.03.
+15.15 ± 0.1516.05 ± 0.1817.61 ± 0.8518.42 ± 0.28.
+14.11 ± 0.2115.25 ± 0.2815.89 ± 0.7416.38 ± 0.24.
+14.01 ± 0.0914.53 ± 0.1712.62 ± 1.5313.96 ± 0.19.
+14.61 ± 0.1415.55 ± 0.5416.25 ± 0.3615.27 ± 0.38.
+1111.
+0.930.950.900.88.
+0.920.910.710.73.
+0.960.970.920.83.
+75.6m88.2m113.4m138.6m.
+72.4m (75.6m)75.6m (88.2m)100.8m (113.4m)126.0m (138.6m).
+72.4m (71.4m)75.6m (83.9m)100.8m (109.2m)126.0m (134.4m).
+72.4m (75.6m)75.6m (88.2m)100.8m (113.4m)126.0m (138.6m).
+0.505 ± 0.0050.643 ± 0.0060.877 ± 0.0291.036 ± 0.010.
+0.472 ± 0.0070.596 ± 0.0090.776 ± 0.0240.998 ± 0.009.
+0.441 ± 0.0030.524 ± 0.0060.743 ± 0.0180.964 ± 0.007.
+0.489 ± 0.0060.597 ± 0.0170.823 ± 0.0131.028 ± 0.012.table 2: wall-clock time (averaged over multiple runs) saved for wmt for different model types and encoderdepths.
+decoder depth is kept ﬁxed at 1..and achieves better/similar performance in lesstime in each case.
+as a point of reference, a halfhour gain on iwslt would translate to a gain ofseveral days in the training of bigger transformermodels like gpt-3 (brown et al., 2020)..we observe that reservoir transformers consis-tently perform better than, or are competitive to,regular transformers, both in terms of validationbleu aucc as well as test time bleu, for allexamined encoder depths..4.2 language modelling.
+to examine whether the same ﬁndings hold forother tasks, we evaluate on the enwiki8 (llc,.
+2009) language modelling task.
+we examine thebpc (bits per character) rate for a variety of net-work depths (since the task is language modelling,these layers are in the decoder).
+the results showthat except for the 64-layer regular transformer,which appears to be particularly optimal for thistask, we obtain consistently better bpc for alldepths.
+we observe similar trends during test time..4.3 masked language model pretraining.
+we train roberta (liu et al., 2019) models fromscratch at a variety of depths, both in the normaland reservoir setting.
+we ﬁnd that these networksshow minor differences in their best perplexity.
+4299figure 2: downstream roberta performance on sst-2 (left) and multinli-matched (right)..model.
+transformer.
+t reservoir.
+max bleu.
+aucc.
+train time.
+34.59 ± 0.11.
+114.57 ± 0.08.
+142.28 ± 1.87.
+34.80 ± 0.07.
+115.26 ± 0.26.
+134.49 ± 1.70.backskip reservoir.
+34.75 ± 0.05.
+115.99 ± 0.23.
+119.54 ± 1.78.table 3: validation max bleu, aucc at 4h and wall-clock time per epoch (averaged over multiple runs, inseconds) on iwslt comparing backskipping with reg-ular and reservoir transformers..and similar aucc perplexity (see appendix d).
+we then examine the performance of these modelswhen ﬁne-tuned on downstream tasks, speciﬁcallythe well known sst-2 (socher et al., 2013) andmultinli-matched (williams et al., 2017) tasks.
+when ﬁne-tuning the reservoir models, we keepthe reservoir layers ﬁxed (also ﬁne-tuning themdid not work very well, see appendix d)..figure 2 shows the results of ﬁne-tuning.
+weobserve that the reservoir transformer outperformsnormal roberta at all depths in both tasks.
+atlower depth, the improvements are substantial.
+asa sanity check, we also experiment with freez-ing some of the layers in a regular pre-trainedroberta model during ﬁne-tuning only (trans-former “frozen ﬁnetuned” in the figure) and showthat this helps a little but is still outperformed bythe reservoir transformer..these ﬁndings suggest.
+that we can train aroberta model without updating all of the lay-ers, achieving similar perplexity at a similar com-putational cost, but with better downstream per-formance.
+this strategy could prove to be beneﬁ-cial in a wide variety of pre-training scenarios..we follow jawahar et al.
+(2019) and inves-tigate what the frozen layers in the reservoirtransformer have actually “learned” (while beingfrozen) as measured by probing tasks, reported intable 4. the set of tasks comprises one surface.
+task, three syntactic tasks, and ﬁve semantic tasks.
+from the table, we can see that generally prob-ing performance is quite similar between trans-former and the t reservoir model.
+we also no-ticed that the representations collected after thereservoir layer (3, 5, 7, 9) in the t reservoir ac-tually have signiﬁcantly better performance overthe regular transformer representations across allthe probing tasks.
+related to our ﬁndings, voitaand titov (2020) show that the wholly-randomly-initialized model representations can still have rea-sonable probing accuracy if they are contextual-ized, though the accuracy is strictly worse thana trained one.
+these ﬁndings raise interestingrepercussions for the study of “bertology”, asit clearly shows that even completely random andfrozen layers can represent linguistic phenomena..4.4 backskipping.
+with the reservoirtransformers as describedabove, we obtain better efﬁciency by skippingthe “gradient application” matrix addition step insome of the layers (i.e., updating the weights).
+one step further would be to investigate skip-ping the entire backward pass for reservoirs al-together, which would save us from having to dothe much more expensive matrix multiplication forthese layers that is required for the propagation ofgradients through a regular layer..we report on preliminary experiments where inthe backward pass we replace the gradients forthe layer li going into the reservoir li+1 with anoisy estimate (jaderberg et al., 2017; czarneckiet al., 2017).
+promisingly, oktay et al.
+(2020) re-cently asked “why spend resources on exact gradi-ents when we’re going to use stochastic optimiza-tion?” and show that we can do randomized auto-differentiation quite successfully..430046810121416# updatable decoder layers919293949596valid accuracy transformert reservoirffn reservoirtransformer (frozen finetuned)46810121416# updatable decoder layers7880828486valid accuracy transformert reservoirffn reservoirtransformer (frozen finetuned)model.
+layer.
+sentlen(surface).
+treedepth(syntactic).
+topconst(syntactic).
+bshift(syntactic).
+tense(semantic).
+subjnum(semantic).
+objnum(semantic).
+somo(semantic).
+coordinv(semantic).
+transformer.
+t reservoir.
+123456789101112.
+123456789101112.
+84.56 ± 0.5487.22 ± 0.0784.25 ± 0.1687.37 ± 0.2084.61 ± 0.2482.56 ± 0.2570.85 ± 0.1366.23 ± 1.3371.17 ± 0.2973.19 ± 0.5071.37 ± 0.4271.66 ± 0.12.
+87.75 ± 0.1081.28 ± 0.2389.28 ± 0.0974.31 ± 0.3288.03 ± 0.2274.55 ± 0.3785.82 ± 0.3771.69 ± 0.7185.86 ± 0.1269.22 ± 0.2365.70 ± 0.0570.61 ± 0.18.
+32.30 ± 0.4133.63 ± 0.5732.60 ± 0.1732.59 ± 0.2931.14 ± 0.4830.31 ± 0.4026.65 ± 0.7223.46 ± 0.4431.21 ± 0.3127.74 ± 0.5330.22 ± 0.2833.43 ± 0.18.
+31.60 ± 0.2134.20 ± 0.4136.42 ± 0.1132.42 ± 0.8338.34 ± 0.6433.13 ± 0.2937.63 ± 0.1330.32 ± 0.0137.89 ± 0.0325.58 ± 0.3530.57 ± 0.0334.45 ± 0.20.
+54.40 ± 0.3358.38 ± 0.2054.41 ± 0.1050.06 ± 0.2144.76 ± 0.3839.30 ± 0.4040.70 ± 0.1325.19 ± 1.0258.42 ± 0.2941.01 ± 0.2248.58 ± 0.3564.38 ± 0.20.
+50.38 ± 0.2361.41 ± 0.4267.36 ± 0.4555.19 ± 0.3368.65 ± 0.2952.70 ± 0.8170.43 ± 0.0548.44 ± 0.3069.53 ± 0.3729.20 ± 0.5847.56 ± 0.0264.19 ± 0.10.
+49.99 ± 0.0150.12 ± 0.1750.02 ± 0.0169.76 ± 0.2674.82 ± 0.1178.80 ± 0.3878.98 ± 0.3277.42 ± 0.2785.55 ± 0.4483.56 ± 0.9684.40 ± 0.4487.38 ± 0.02.
+50.00 ± 0.0060.64 ± 0.6575.64 ± 0.5273.41 ± 0.0082.25 ± 0.1279.21 ± 0.1384.12 ± 0.3579.12 ± 0.1285.55 ± 0.1278.57 ± 0.0981.20 ± 0.0084.53 ± 0.03.
+80.98 ± 0.3282.84 ± 0.6881.72 ± 0.5981.63 ± 1.1780.16 ± 0.1981.88 ± 0.4785.11 ± 0.3180.35 ± 0.4586.77 ± 0.1986.13 ± 0.3587.28 ± 0.5988.41 ± 0.09.
+80.40 ± 0.1881.50 ± 0.7785.42 ± 0.1879.56 ± 0.0086.80 ± 0.0285.70 ± 0.3686.88 ± 0.0784.75 ± 0.0987.98 ± 0.2285.02 ± 0.0386.78 ± 0.0287.48 ± 0.16.
+76.26 ± 0.0978.65 ± 0.1977.00 ± 0.1376.47 ± 0.0973.66 ± 0.1675.30 ± 0.0772.03 ± 0.4667.55 ± 0.9980.30 ± 0.0883.04 ± 0.0482.34 ± 0.1584.46 ± 0.25.
+76.47 ± 0.2076.33 ± 0.0880.53 ± 0.0275.15 ± 0.0882.27 ± 0.3377.43 ± 0.0382.86 ± 0.3079.23 ± 0.1184.13 ± 0.0175.68 ± 0.1683.73 ± 0.0584.86 ± 0.14.
+50.01 ± 0.1951.47 ± 0.5351.32 ± 0.6452.41 ± 1.4952.95 ± 1.7756.21 ± 1.2658.15 ± 0.4654.94 ± 2.0464.36 ± 1.2062.01 ± 0.5961.10 ± 0.1463.01 ± 0.05.
+50.53 ± 0.1450.73 ± 0.3452.50 ± 1.8053.68 ± 0.6657.95 ± 0.2457.26 ± 0.1961.17 ± 0.2159.53 ± 0.1663.06 ± 0.0157.55 ± 1.5760.38 ± 0.1762.75 ± 0.14.
+76.38 ± 0.6178.00 ± 1.1276.57 ± 1.1376.15 ± 0.8472.90 ± 0.2174.37 ± 0.1668.71 ± 0.9163.69 ± 2.3281.68 ± 0.4579.73 ± 0.2180.00 ± 0.4081.80 ± 0.27.
+73.48 ± 0.1574.28 ± 0.6778.47 ± 1.8175.02 ± 0.1980.82 ± 0.9175.38 ± 0.6680.79 ± 0.1776.80 ± 0.4182.55 ± 0.3174.70 ± 0.0280.59 ± 0.1582.08 ± 0.03.
+54.33 ± 0.4754.66 ± 0.5554.13 ± 0.5152.62 ± 1.3451.26 ± 1.1451.44 ± 1.0455.39 ± 0.2750.58 ± 0.8366.90 ± 0.4962.60 ± 1.0464.44 ± 0.3865.72 ± 0.16.
+53.55 ± 0.7056.82 ± 0.1057.16 ± 0.2756.89 ± 0.0858.05 ± 0.1051.95 ± 1.3061.83 ± 0.9557.34 ± 0.1466.07 ± 0.0555.02 ± 0.6462.50 ± 0.1164.73 ± 0.06.table 4: roberta probing results.
+the line in bold text are the the frozen layers in the t reservoir.
+meanaccuracy with standard deviation, gathered over 3 random seeds..(cid:80)n.here, rather than minimizing the actual gradi-ents ∂li∂θli , we minimize their expectation and trainvia continuous-action reinforce (williams,1992).
+that is, li becomes a policy πa: s → µwhere we sample actions a ∼ n (µ, 1).
+we trainto minimize the gradient prediction loss via mse,i.e., 1i=0(ri − v i(a))2, and the reinforcenloss ea [log(a) (r − v (a))], where the value net-work v acts as the baseline.
+r is deﬁned as themean of the gradients of the top layer li+2, withthe sign ﬂipped.
+thus, simply put, we train to min-imize the expectation of the true gradients at thelayer directly following the reservoir.
+we employan annealing scheme where we ﬁrst train the valuenetwork and propagate the true gradients duringwarmup.
+afterwards, we anneal the probabilityof backskipping instead of doing a true backwardpass (multiplying the probability by 0.99 every it-eration until we only backskip).
+we experimentedwith setting r to the negation of the total loss butfound the mean upstream gradient reward to workbetter.
+we call this approach backskipping..as shown in table 3, the backskip reservoir ap-proach leads to a higher maximum bleu scorethan the regular transformer, with a much higheraucc and much lower training time.
+the en-coder depth is 8 with 2 frozen.
+appendix g showsthe raw validation bleu curves over time.
+weobserve that this approach helps especially duringthe earlier stages of training.
+this ﬁnding opensup intriguing possibilities for having parts of neu-ral networks be completely frozen both in the for-ward as well as in the backward pass, while still.
+contributing to the overall model computation..the computational cost is heavily reduced giventhat we completely bypass the expensive back-propagation computation in the reservoir layers.
+backskipping is shown to be a promising approachto further reduce computational costs, and wouldbe even more efﬁcient from a hardware perspec-tive since the circuitry for such layers (which donot need to propagate gradients) can be hardwired..5 related work.
+recent work has shown that modern nlp mod-els are able to function with different numbersof layers for different examples (elbayad et al.,2019; fan et al., 2019; he et al., 2021); that differ-ent layers specialize for different purposes (zhanget al., 2019); that layers can be compressed (liet al., 2020; zhu et al., 2019; shen et al., 2020;that layers can be re-sun et al., 2020); and,ordered (press et al., 2019).
+there is a growingbody of work in efﬁcient self-attention networks(tay et al., 2020b), such as linear attention (wanget al., 2020), on how to process long context infor-mation (beltagy et al., 2020; ainslie et al., 2020)and on approximations to make transformers morescalable (kitaev et al., 2020; katharopoulos et al.,2020).
+bigbird (zaheer et al., 2020) providesrandom keys as additional inputs to its attentionmechanism.
+locality sensitive hashing (lsh) asin reformer (kitaev et al., 2020)employed e.g.
+utilizes a ﬁxed random projection.
+random fea-ture attention (peng et al., 2021) uses random fea-.
+4301ture methods to approximate the softmax function.
+performer (choromanski et al., 2020) computesthe transformer’s multi-head attention weights asa ﬁxed orthogonal random projection.
+closely re-lated to this work, tay et al.
+(2020a) showed thatrandomized alignment matrices in their “synthe-sizer” architecture are sufﬁcient for many nlptasks.
+while these works focus on random atten-tion, we show that entire layers can be randomand ﬁxed.
+we also show that entire layers can bereplaced by ﬁxed random projections that do nothave any attention whatsoever..beyond transformers,.
+random features havebeen extensively explored.
+examples of this in-clude freezeout (brock et al., 2017), deep reser-voir computing networks (scardapane and wang,2017; gallicchio and micheli, 2017), as well asapplications in domains as varied as text classiﬁ-cation (conneau et al., 2017; zhang and bowman,2018; wieting and kiela, 2019) or music classiﬁ-cation (pons and serra, 2019).
+it is well knownthat randomly initialized networks can display im-pressive performance on their own (ulyanov et al.,2018; rosenfeld and tsotsos, 2019; ramanujanet al., 2020; voita and titov, 2020), which under-lies, for example, the recently popularized lotteryticket hypothesis (frankle and carbin, 2018; zhouet al., 2019).
+we know that learning deep over-parameterized networks appears to help in gen-eral (li and liang, 2018; du et al., 2019).
+ourmethod constitutes a way to add both depth andparameters to transformer networks without muchcomputational cost..6 conclusion.
+this work demonstrated that state-of-the-art trans-former architectures can be trained without up-dating all of the layers.
+this complements along history in machine learning of harnessingthe power of random features.
+we use the “areaunder the convergence curve” (aucc) metricto demonstrate that on a variety of tasks, andin a variety of settings, “reservoir transformers”achieve better performance-efﬁciency trade-offs.
+we show that such reservoir transformers showbetter convergence rates and test-set generaliza-tion.
+we demonstrated that the backward pass canbe skipped altogether, opening up exciting vanuesfor future research.
+future work includes furtherinvestigating hybrid networks and backskippingstrategies, as well as utilizing pruning..acknowledgements.
+we thank eric wallace, zhewei yao, kevin lin,zhiqing sun, zhuohan li, angela fan, shaojiebai, and anonymous reviewers for their commentsand suggestions.
+ss and kk were supported bygrants from samsung, facebook, and the berke-ley deep drive consortium..references.
+joshua ainslie, santiago ontanon, chris alberti, va-clav cvicek, zachary fisher, philip pham, anirudhravula, sumit sanghai, qifan wang, and li yang.
+2020. etc: encoding long and structured inputsin proceedings of the 2020 con-in transformers.
+ference on empirical methods in natural languageprocessing (emnlp)..thomas bachlechner, bodhisattwa prasad majumder,huanru henry mao, garrison w cottrell, and ju-rezero is all you need:lian mcauley.
+2020.arxiv preprintfast convergence at large depth.
+arxiv:2003.04887..alexei baevski, steffen schneider, and michael auli.
+vq-wav2vec: self-supervised learning ofarxiv preprint.
+2019.discrete speech representations.
+arxiv:1910.05453..eric b baum.
+1988. on the capabilities of multilayerperceptrons.
+journal of complexity, 4(3):193–215..iz beltagy, matthew e peters, and arman cohan.
+trans-.
+longformer: the long-document.
+2020.former.
+arxiv preprint arxiv:2004.05150..hans-dieter block.
+1962. the perceptron: a modelfor brain functioning.
+i. reviews of modern physics,34(1):123..ondˇrej bojar, christian buck, christian federmann,barry haddow, philipp koehn, johannes leveling,christof monz, pavel pecina, matt post, hervesaint-amand, radu soricut, lucia specia, and aleˇstamchyna.
+2014. findings of the 2014 workshopon statistical machine translation.
+in proceedings ofthe ninth workshop on statistical machine trans-lation, baltimore, maryland, usa.
+association forcomputational linguistics..a borsellino and a gamba.
+1961. an outline of ail nuovo cimento.
+mathematical theory of papa.
+(1955-1965), 20(2):221–231..andrew p bradley.
+1997. the use of the area underthe roc curve in the evaluation of machine learningalgorithms.
+pattern recognition, 30(7):1145–1159..andrew brock, theodore lim, james m ritchie, andnick weston.
+2017. freezeout: accelerate train-ing by progressively freezing layers.
+arxiv preprintarxiv:1706.04983..4302tom b brown, benjamin mann, nick ryder, melaniesubbiah, jared kaplan, prafulla dhariwal, arvindneelakantan, pranav shyam, girish sastry, amandaaskell, et al.
+2020. language models are few-shotlearners.
+arxiv preprint arxiv:2005.14165..nicolas carion, francisco massa, gabriel synnaeve,nicolas usunier, alexander kirillov, and sergeyzagoruyko.
+2020. end-to-end object detection withtransformers.
+arxiv preprint arxiv:2005.12872..m. cettolo, j. niehues, s. st¨uker, l. bentivogli, andmarcello federico.
+2015. report on the 11 th iwsltevaluation campaign , iwslt 2014. in proceedings ofiwslt..kyunghyun cho, bart van merri¨enboer, caglar gul-cehre, dzmitry bahdanau, fethi bougares, holgerschwenk, and yoshua bengio.
+2014.learningphrase representations using rnn encoder-decoderfor statistical machine translation.
+arxiv preprintarxiv:1406.1078..krzysztof choromanski, valerii likhosherstov, daviddohan, xingyou song, jared davis, tamas sarlos,david belanger, lucy colwell, and adrian weller.
+2020. masked language modeling for proteins vialinearly scalable long-context transformers.
+arxivpreprint arxiv:2006.03555..alexis conneau, douwe kiela, holger schwenk, loicbarrault, and antoine bordes.
+2017. supervisedlearning of universal sentence representations fromarxiv preprintnatural language inference data.
+arxiv:1705.02364..thomas m cover.
+1965. geometrical and statisticalproperties of systems of linear inequalities with ap-plications in pattern recognition.
+ieee transactionson electronic computers, (3):326–334..wojciech marian czarnecki, grzegorz ´swirszcz, maxjaderberg, simon osindero, oriol vinyals, and ko-ray kavukcuoglu.
+2017. understanding syntheticgradients and decoupled neural interfaces.
+arxivpreprint arxiv:1703.00522..zihang dai, zhilin yang, yiming yang, jaime car-bonell, quoc le, and ruslan salakhutdinov.
+2019.transformer-xl: attentive language models beyondin proceedings of the 57tha ﬁxed-length context.
+annual meeting of the association for computa-tional linguistics, florence, italy.
+association forcomputational linguistics..amit daniely, roy frostig, and yoram singer.
+2016.toward deeper understanding of neural networks:the power of initialization and a dual view on ex-pressivity.
+in advances in neural information pro-cessing systems, pages 2253–2261..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2018. bert: pre-training of deepbidirectional transformers for language understand-ing.
+arxiv preprint arxiv:1810.04805..simon du, jason lee, haochuan li, liwei wang, andxiyu zhai.
+2019. gradient descent ﬁnds global min-ima of deep neural networks.
+in international con-ference on machine learning, pages 1675–1685..sergey edunov, myle ott, michael auli, david grang-ier, and marc’aurelio ranzato.
+2018. classicalstructured prediction losses for sequence to se-quence learning.
+in proceedings of the 2018 con-ference of the north american chapter of the asso-ciation for computational linguistics: human lan-guage technologies, volume 1 (long papers), neworleans, louisiana.
+association for computationallinguistics..maha elbayad, jiatao gu, edouard grave, and michaelarxiv.
+auli.
+2019. depth-adaptive transformer.
+preprint arxiv:1910.10073..joseph enguehard, dan busbridge, vitalii zhelezniak,and nils hammerla.
+2019. neural language priors.
+arxiv preprint arxiv:1910.03492..angela fan, edouard grave, and armand joulin.
+2019.reducing transformer depth on demand with struc-tured dropout.
+arxiv preprint arxiv:1909.11556..jonathan frankle and michael carbin.
+2018. the lot-tery ticket hypothesis: finding sparse, trainable neu-ral networks.
+arxiv preprint arxiv:1803.03635..jonathan frankle, david j schwab, and ari s mor-cos. 2020. training batchnorm and only batchnorm:on the expressive power of random features in cnns.
+arxiv preprint arxiv:2003.00152..claudio gallicchio and alessio micheli.
+2017. echostate property of deep reservoir computing networks.
+cognitive computation, 9(3):337–350..claudio gallicchio and simone scardapane.
+2020.deep randomized neural networks.
+in recent trendsin learning from data, pages 43–68.
+springer..a. gamba, l. gamberini, g. palmieri, and r. sanna.
+1961. further experiments with papa.
+il nuovo ci-mento (1955-1965), 20(2):112–115..ankush garg, yuan cao, and qi ge.
+2020. echoarxiv preprint.
+state neural machine translation.
+arxiv:2002.11847..raja giryes, guillermo sapiro, and alex m bronstein.
+2016. deep neural networks with random gaussianweights: a universal classiﬁcation strategy?
+ieeetransactions on signal processing, 64(13):3444–3457..xavier glorot and yoshua bengio.
+2010. understand-ing the difﬁculty of training deep feedforward neu-in proceedings of the thirteenth in-ral networks.
+ternational conference on artiﬁcial intelligence andstatistics, pages 249–256..4303caglar gulcehre, marcin moczulski, misha denil, andyoshua bengio.
+2016. noisy activation functions.
+in international conference on machine learning,pages 3059–3068..angelos katharopoulos, apoorv vyas, nikolaos pap-pas, and franc¸ois fleuret.
+2020. transformers arernns: fast autoregressive transformers with linear at-tention.
+arxiv preprint arxiv:2006.16236..fatemeh hadaeghi, xu he, and herbert jaeger.
+2017.unconventional information processing systems,novel hardware: a tour d’horizon..chaoyang he, shen li, mahdi soltanolkotabi, andsalman avestimehr.
+2021. pipetransformer: auto-mated elastic pipelining for distributed training oftransformers.
+in icml..konstantin hicke, miguel escalona-moran, danielbrunner, miguel soriano, ingo fischer, and claudiomirasso.
+2013. information processing using tran-sient dynamics of semiconductor lasers subject todelayed feedback.
+selected topics in quantum elec-tronics, ieee journal of, 19:1501610–1501610..guang-bin huang, qin-yu zhu, and chee-kheongsiew.
+2006. extreme learning machine: theory andapplications.
+neurocomputing, 70(1-3):489–501..max jaderberg, wojciech marian czarnecki, simonosindero, oriol vinyals, alex graves, david sil-ver, and koray kavukcuoglu.
+2017. decoupled neu-in inter-ral interfaces using synthetic gradients.
+national conference on machine learning, pages1627–1635.
+pmlr..herbert jaeger.
+2003. adaptive nonlinear system iden-tiﬁcation with echo state networks.
+in advances inneural information processing systems..ganesh jawahar, benoˆıt sagot, and djam´e seddah.
+2019. what does bert learn about the structurein proceedings of the 57th annualof language?
+meeting of the association for computational lin-guistics..kam jim, bill g horne, and c lee giles.
+1995. effectsof noise on convergence and generalization in recur-in advances in neural informationrent networks.
+processing systems, pages 649–656..kam-chuen jim, c lee giles, and bill g horne.
+1996.an analysis of noise in recurrent neural networks:convergence and generalization.
+ieee transactionson neural networks, 7(6):1424–1438..william b johnson and joram lindenstrauss.
+1984.extensions of lipschitz mappings into a hilbertspace.
+contemporary mathematics, 26(189-206):1..jared kaplan, sam mccandlish, tom henighan,tom b brown, benjamin chess, rewon child, scottgray, alec radford, jeffrey wu, and dario amodei.
+2020. scaling laws for neural language models.
+arxiv preprint arxiv:2001.08361..yoon kim.
+2014..works for sentence classiﬁcation.
+arxiv:1408.5882..convolutional neural net-arxiv preprint.
+nikita kitaev, łukasz kaiser, and anselm levskaya.
+2020. reformer: the efﬁcient transformer.
+arxivpreprint arxiv:2001.04451..yann lecun, l´eon bottou, yoshua bengio, and patrickhaffner.
+1998. gradient-based learning applied todocument recognition.
+proceedings of the ieee,86(11):2278–2324..yuanzhi li and yingyu liang.
+2018. learning overpa-rameterized neural networks via stochastic gradientdescent on structured data.
+in advances in neuralinformation processing systems, pages 8157–8166..zhuohan li, eric wallace, sheng shen, kevin lin,kurt keutzer, dan klein, and joseph e gonzalez.
+2020. train large, then compress: rethinking modelsize for efﬁcient training and inference of transform-ers.
+arxiv preprint arxiv:2002.11794..yinhan liu, myle ott, naman goyal, jingfei du, man-dar joshi, danqi chen, omer levy, mike lewis,luke zettlemoyer, and veselin stoyanov.
+2019.roberta: a robustly optimized bert pretraining ap-proach.
+arxiv preprint arxiv:1907.11692..multimedia llc.
+2009..large text compression.
+benchmark..mantas lukoˇseviˇcius and herbert jaeger.
+2009. reser-voir computing approaches to recurrent neural net-work training.
+computer science review, 3(3)..wolfgang maass, thomas natschl¨ager, and henrymarkram.
+2002. real-time computing without sta-ble states: a new framework for neural computa-tion based on perturbations.
+neural computation,14(11):2531–2560..marvin minsky and seymour a papert.
+2017. percep-trons: an introduction to computational geometry.
+mit press..emre o neftci, charles augustine, somnath paul,and georgios detorakis.
+2017. event-driven ran-dom back-propagation: enabling neuromorphicdeep learning machines.
+frontiers in neuroscience,11:324..jungo kasai, nikolaos pappas, hao peng, jamescross, and noah a smith.
+2020. deep encoder,shallow decoder: reevaluating the speed-qualityarxiv preprinttradeoff in machine translation.
+arxiv:2006.10369..hyeonwoo noh, tackgeun you, jonghwan mun, andbohyung han.
+2017. regularizing deep neural net-works by noise: its interpretation and optimization.
+in advances in neural information processing sys-tems, pages 5109–5118..4304deniz oktay, nick mcgreivy, joshua aduol, alexbeatson, and ryan p adams.
+2020. random-arxiv preprintized automatic differentiation.
+arxiv:2007.10412..magnus sahlgren.
+2005. an introduction to randomindexing.
+in methods and applications of semanticindexing workshop at the 7th international confer-ence on terminology and knowledge engineering..myle ott, sergey edunov, david grangier, andmichael auli.
+2018. scaling neural machine trans-lation.
+arxiv preprint arxiv:1806.00187..yoh-han pao, gwang-hoon park, and dejan j sobajic.
+1994. learning and generalization characteristics ofthe random vector functional-link net.
+neurocom-puting, 6(2):163–180..hao peng, nikolaos pappas, dani yogatama, royschwartz, noah smith, and lingpeng kong.
+2021.random feature attention.
+in international confer-ence on learning representations..jonathan pilault, jaehong park, and christopher pal.
+2020. on the impressive performance of randomlyweighted encoders in summarization tasks.
+arxivpreprint arxiv:2002.09084..jordi pons and xavier serra.
+2019..randomlyweighted cnns for(music) audio classiﬁcation.
+in icassp 2019-2019 ieee international confer-ence on acoustics, speech and signal processing(icassp), pages 336–340.
+ieee..oﬁr press, noah a smith, and omer levy.
+2019. im-proving transformer models by reordering their sub-layers.
+arxiv preprint arxiv:1911.03864..alec radford, jeffrey wu, rewon child, david luan,dario amodei, and ilya sutskever.
+2018. languagemodels are unsupervised multitask learners..ali rahimi and benjamin recht.
+2008. random fea-tures for large-scale kernel machines.
+in advancesin neural information processing systems, pages1177–1184..ali rahimi and benjamin recht.
+2009. weighted sumsof random kitchen sinks: replacing minimizationin advances inwith randomization in learning.
+neural information processing systems, pages 1313–1320..vivek ramanujan, mitchell wortsman, aniruddhakembhavi, ali farhadi, and mohammad rastegari.
+2020. what’s hidden in a randomly weighted neuralnetwork?
+in proceedings of the ieee/cvf confer-ence on computer vision and pattern recognition,pages 11893–11902..anna rogers, olga kovaleva, and anna rumshisky.
+2020. a primer in bertology: what we know abouthow bert works.
+arxiv preprint arxiv:2002.12327..amir rosenfeld and john k tsotsos.
+2019. intriguingproperties of randomly weighted networks: gener-alizing while learning next to nothing.
+in 2019 16thconference on computer and robot vision (crv),pages 9–16.
+ieee..andrew m saxe, james l mcclelland, and surya gan-guli.
+2013. exact solutions to the nonlinear dynam-ics of learning in deep linear neural networks.
+arxivpreprint arxiv:1312.6120..simone scardapane and dianhui wang.
+2017. ran-domness in neural networks: an overview.
+wileyinterdisciplinary reviews: data mining and knowl-edge discovery, 7(2):e1200..wouter f schmidt, martin a kraaijveld,.
+androbert pw duin.
+1992. feedforward neural net-works with random weights.
+in proceedings of the11th international conference on pattern recogni-tion, 1992. vol.
+ii.
+conference b: pattern recogni-tion methodology and systems, pages 1–4..benjamin schrauwen, michiel d’haene, david ver-straeten, and jan campenhout.
+2007. compact hard-ware for real-time speech recognition using a liquidstate machine.
+pages 1097 – 1102..roy schwartz, jesse dodge, noah a smith, andarxiv preprint.
+oren etzioni.
+2019. green ai.
+arxiv:1907.10597..sheng shen, zhen dong, jiayu ye, linjian ma, zheweiyao, amir gholami, michael w mahoney, and kurtkeutzer.
+2020. q-bert: hessian based ultra lowin proceedings ofprecision quantization of bert.
+the aaai conference on artiﬁcial intelligence, vol-ume 34, pages 8815–8821..richard socher, alex perelygin, jean wu, jasonchuang, christopher d manning, andrew y ng,and christopher potts.
+2013. recursive deep mod-els for semantic compositionality over a sentimenttreebank.
+in proceedings of the 2013 conference onempirical methods in natural language processing,pages 1631–1642..emma strubell, ananya ganesh, and andrew mc-energy and policy considera-arxiv preprint.
+callum.
+2019.tions for deep learning in nlp.
+arxiv:1906.02243..zhiqing sun, hongkun yu, xiaodan song, renjie liu,yiming yang, and denny zhou.
+2020. mobilebert: acompact task-agnostic bert for resource-limited de-in proceedings of the 58th annual meetingvices.
+of the association for computational linguistics,pages 2158–2170..gouhei tanaka, toshiyuki yamane,.
+jean benoith´eroux, ryosho nakane, naoki kanazawa, seijitakeda, hidetoshi numata, daiju nakano, andakira hirose.
+2019. recent advances in physicalreservoir computing: a review.
+neural networks,115:100 – 123..4305yi tay, dara bahri, donald metzler, da-cheng juan,zhe zhao, and che zheng.
+2020a.
+synthesizer: re-thinking self-attention in transformer models.
+arxivpreprint arxiv:2005.00743..felix wu, angela fan, alexei baevski, yann ndauphin, and michael auli.
+2019. pay less attentionwith lightweight and dynamic convolutions.
+arxivpreprint arxiv:1901.10430..yi tay, mostafa dehghani, dara bahri, and donaldmetzler.
+2020b.
+efﬁcient transformers: a survey.
+arxiv preprint arxiv:2009.06732..ian tenney, dipanjan das, and ellie pavlick.
+2019.bert rediscovers the classical nlp pipeline.
+arxivpreprint arxiv:1905.05950..dmitry ulyanov, andrea vedaldi, and victor lempit-sky.
+2018. deep image prior.
+in proceedings of theieee conference on computer vision and patternrecognition, pages 9446–9454..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n gomez, łukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+in advances in neural information pro-cessing systems, pages 5998–6008..oriol vinyals, igor babuschkin, wojciech m. czar-necki, micha¨el mathieu, andrew dudzik, juny-oung chung, david h. choi, richard powell, timoewalds, petko georgiev, junhyuk oh, dan horgan,manuel kroiss, ivo danihelka, aja huang, lau-rent sifre, trevor cai, john p. agapiou, max jader-berg, alexander s. vezhnevets, r´emi leblond, to-bias pohlen, valentin dalibard, david budden, yurysulsky, james molloy, tom l. paine, caglar gul-cehre, ziyu wang, tobias pfaff, yuhuai wu, ro-man ring, dani yogatama, dario w¨unsch, katrinamckinney, oliver smith, tom schaul, timothy lil-licrap, koray kavukcuoglu, demis hassabis, chrisapps, and david silver.
+2019. grandmaster level instarcraft ii using multi-agent reinforcement learn-ing.
+nature, 575(7782):350–354..elena voita and ivan titov.
+2020..information-theoretic probing with minimum description length.
+in proceedings of the 2020 conference on em-pirical methods in natural language processing(emnlp), pages 183–196..sinong wang, belinda li, madian khabsa, hanlinformer: self-arxiv preprint.
+fang, and hao ma.
+2020.attention with linear complexity.
+arxiv:2006.04768..john wieting and douwe kiela.
+2019. no trainingrequired: exploring random encoders for sentenceclassiﬁcation.
+arxiv preprint arxiv:1901.10444..adina williams, nikita nangia, and samuel r bow-man.
+2017. a broad-coverage challenge corpus forarxivsentence understanding through inference.
+preprint arxiv:1704.05426..ronald j williams.
+1992. simple statistical gradient-following algorithms for connectionist reinforce-ment learning.
+machine learning, 8(3-4):229–256..manzil zaheer, guru guruganesh, avinava dubey,joshua ainslie, chris alberti, santiago ontanon,philip pham, anirudh ravula, qifan wang, li yang,et al.
+2020. big bird: transformers for longer se-quences.
+arxiv preprint arxiv:2007.14062..chiyuan zhang, samy bengio, and yoram singer.
+2019. are all layers created equal?
+arxiv preprintarxiv:1902.01996..kelly zhang and samuel bowman.
+2018. languagemodeling teaches you more than translation does:lessons learned through auxiliary syntactic taskthe 2018 emnlpanalysis.
+workshop blackboxnlp: analyzing and interpret-ing neural networks for nlp..in proceedings of.
+hattie zhou, janice lan, rosanne liu, and jasonyosinski.
+2019. deconstructing lottery tickets: ze-ros, signs, and the supermask.
+in advances in neu-ral information processing systems, pages 3597–3607..wei zhu, xiaofeng zhou, keqiang wang, xun luo,xiepeng li, yuan ni, and guotong xie.
+2019.panlp at mediqa 2019: pre-trained languagemodels, transfer learning and knowledge distillation.
+in proceedings of the 18th bionlp workshop andshared task, pages 380–388, florence, italy.
+asso-ciation for computational linguistics..a hybrid networks and.
+non-transformer reservoirs.
+we investigate whether reservoir layers need tobe transformer-based (or transformers-without-attention, i.e., ffn).
+we examine two differentalternatives: bidirectional gated recurrent units(cho et al., 2014) and convolutional neural net-works (lecun et al., 1998; kim, 2014), specif-ically light dynamical convolutions (wu et al.,2019).
+figure 3 shows the results for these hy-brids: depending on the setting, they may obtaina better aucc than the regular transformer, butthis is less consistent than with the other reservoirlayers, most likely because these layers have dif-ferent computational properties.
+it’s possible thatthese hybrids simply require further tuning, as wefound e.g.
+up-projecting to help for bigrus, butstudying this is outside of the scope of the currentwork..4306model.
+# layers.
+frozen max bleu.
+train timeuntil max (in hours).
+ratio.
+# paramstrainable (total).
+train time eachepoch (in seconds).
+transformer.
+t reservoir.
+ffn reservoir.
+layerdrop.
+681012.
+681012.
+681012.
+681012.
+0000.
+2222.
+2222.
+2222.
+34.97 ± 0.0534.99 ± 0.0834.98 ± 0.0434.78 ± 0.11.
+34.73 ± 0.1135.07 ± 0.0535.02 ± 0.0135.06 ± 0.02.
+34.85 ± 0.1034.99 ± 0.1134.92 ± 0.0335.16 ± 0.04.
+34.51 ± 0.1234.77 ± 0.1134.06 ± 0.0534.08 ± 0.13.
+1.984 ± 0.022.161 ± 0.032.345 ± 0.022.535 ± 0.05.
+1.838 ± 0.011.912 ± 0.031.970 ± 0.042.429 ± 0.02.
+1.729 ± 0.031.751 ± 0.021.907 ± 0.022.395 ± 0.01.
+1.908 ± 0.042.023 ± 0.021.912 ± 0.022.524 ± 0.01.
+1111.
+0.920.880.840.95.
+0.870.810.810.94.
+0.960.940.970.99.
+39.5m43.7m47.9m52.0m.
+35.3m (39.5m)39.5m (43.7m)43.7m (47.9m)47.8m (52.0m).
+35.3m (37.4m)39.5m (41.6m)43.7m (45.8m)47.8m (49.9m).
+35.3m (39.5m)39.5m (43.7m)43.7m (47.9m)47.8m (52.0m).
+177.84 ± 2.98206.59 ± 3.47236.72 ± 3.52265.90 ± 4.97.
+166.11 ± 2.21190.08 ± 3.73204.42 ± 2.89236.41 ± 4.35.
+161.72 ± 2.32180.21 ± 2.68191.40 ± 2.49216.08 ± 2.57.
+169.62 ± 3.16186.71 ± 2.17205.52 ± 3.31222.45 ± 2.21.table 5: wall-clock time (averaged over multiple runs) for iwslt for different model types and encoder depths.
+max bleu is for validation.
+number of layers is for encoder, decoder depth is kept ﬁxed at 6. ratio is computedcompared to comparable number of layers in the normal case..figure 3: iwslt comparison of different hybrid archi-tectures with different reservoir layers..b deep decoders.
+we show that the same results hold for a 6-layerdecoder on iwslt (although less pronounced foraucc, probably because the decoder is computa-tionally heavier).
+see figure 4 and table 5..figure 4: iwslt validation aucc and test bleu with6-layer decoder..c freezing strategy.
+we explored different strategies for the placementof reservoir layers and found the “alternating”strategy reported in the main body of the paper towork best.
+generally, we found repetitive applica-.
+figure 5: iwslt with 2-layer decoder using differentfreezing strategies..tion of reservoirs to yield diminishing returns, asmight be expected.
+see figure 5..d roberta results.
+results.
+the additional.
+forhere we presentroberta , i.e., convergence plots and auccs forvarious depth settings, in figure 7. as stated in themain paper, the differences in terms of aucc andconvergence between roberta models with andwithout reservoir layers are limited.
+moreover,we plot downstream task performance for sst-2and mnli compared to the pretraining wall-clocktime in figure 6. it can be seen that the ffn reser-voir can achieve up to 25% and 10% pretrainingtime savings while matching the best performance.
+430724681012# updatable encoder layers0.960.970.980.991.00valid bleu aucctransformert reservoirffn reservoirgru reservoirconv reservoir24681012# updatable encoder layers32.032.533.033.534.0test bleu transformert reservoirffn reservoirgru reservoirconv reservoir24681012# updatable encoder layers0.960.970.980.991.00valid bleu aucctransformert reservoirffn reservoir24681012# updatable encoder layers33.233.433.633.834.034.234.434.6test bleu transformert reservoirffn reservoir246810# updatable encoder layers0.920.930.940.950.960.970.980.991.00valid bleu aucctransformeralter t reservoirmid t reservoirtop t reservoirbottom t reservoirmodel.
+# layers.
+iwslt-dec2train timeuntil 95% max (in hours).
+max bleu # layers.
+iwslt-dec6train timeuntil 95% max (in hours).
+# layers.
+wmt-dec1train timeuntil 95% max (in hours).
+transformer.
+t reservoir.
+ffn reservoir.
+layerdrop.
+transformer.
+t reservoir.
+ffn reservoir.
+layerdrop.
+681012.
+681012.
+681012.
+681012.
+681012.
+681012.
+681012.
+681012.
+0.647 ± 0.030.711 ± 0.050.808 ± 0.021.037 ± 0.03.
+0.569 ± 0.020.619 ± 0.040.729 ± 0.040.982 ± 0.02.
+0.521 ± 0.050.533 ± 0.030.614 ± 0.010.811 ± 0.02.
+0.837 ± 0.080.934 ± 0.070.901 ± 0.060.914 ± 0.01.
+1.454 ± 0.061.475 ± 0.091.526 ± 0.042.259 ± 0.07.
+1.257 ± 0.041.472 ± 0.061.530 ± 0.032.043 ± 0.05.
+1.138 ± 0.031.101 ± 0.071.281 ± 0.011.785 ± 0.03.
+1.363 ± 0.051.468 ± 0.031.678 ± 0.042.071 ± 0.02.
+(95%).
+32.89 ± 0.0433.04 ± 0.0333.96 ± 0.0833.07 ± 0.09.
+32.78 ± 0.0333.12 ± 0.0533.13 ± 0.0733.03 ± 0.11.
+32.85 ± 0.0233.84 ± 0.0433.05 ± 0.0833.26 ± 0.10.
+32.87 ± 0.0533.12 ± 0.0333.18 ± 0.0232.33 ± 0.06.
+(99%).
+34.24 ± 0.0534.32 ± 0.0934.25 ± 0.0434.24 ± 0.11.
+34.05 ± 0.0934.47 ± 0.0534.36 ± 0.0234.53 ± 0.07.
+34.10 ± 0.1334.32 ± 0.1134.36 ± 0.0334.42 ± 0.06.
+34.58 ± 0.1434.50 ± 0.1234.52 ± 0.0733.45 ± 0.23.
+681012.
+681012.
+681012.
+681012.
+681012.
+681012.
+681012.
+681012.
+0.642 ± 0.020.765 ± 0.030.898 ± 0.041.037 ± 0.03.
+0.599 ± 0.010.726 ± 0.020.738 ± 0.030.958 ± 0.01.
+0.594 ± 0.030.651 ± 0.040.627 ± 0.050.780 ± 0.02.
+0.706 ± 0.010.753 ± 0.040.691 ± 0.030.803 ± 0.02.
+1.297 ± 0.031.390 ± 0.021.622 ± 0.051.748 ± 0.01.
+1.291 ± 0.031.339 ± 0.031.419 ± 0.041.642 ± 0.02.
+1.169 ± 0.021.201 ± 0.031.276 ± 0.031.440 ± 0.01.
+1.253 ± 0.011.244 ± 0.041.343 ± 0.041.423 ± 0.02.max bleu(95%).
+33.36 ± 0.0333.41 ± 0.0833.32 ± 0.0733.07 ± 0.11.
+33.09 ± 0.0533.38 ± 0.0933.37 ± 0.0433.46 ± 0.09.
+33.13 ± 0.0433.36 ± 0.0633.26 ± 0.0333.46 ± 0.08.
+33.08 ± 0.0333.14 ± 0.0532.39 ± 0.0532.94 ± 0.10.max bleu(99%).
+34.69 ± 0.0534.75 ± 0.0934.64 ± 0.0334.66 ± 0.08.
+34.51 ± 0.1034.80 ± 0.0434.72 ± 0.0334.87 ± 0.02.
+34.71 ± 0.0934.79 ± 0.0834.63 ± 0.0334.87 ± 0.02.
+34.42 ± 0.1034.44 ± 0.0933.83 ± 0.0633.97 ± 0.12.
+12162432.
+12162432.
+12162432.
+12162432.
+12162432.
+12162432.
+12162432.
+12162432.
+3.788 ± 0.0533.820 ± 0.0725.262 ± 0.6076.212 ± 0.232.
+3.563 ± 0.0613.603 ± 0.0564.923 ± 0.7715.780 ± 0.214.
+3.417 ± 0.0463.527 ± 0.0634.197 ± 0.6974.984 ± 0.321.
+3.912 ± 0.0683.581 ± 0.0764.875 ± 0.7285.980 ± 0.219.
+9.961 ± 0.05312.623 ± 0.07213.412 ± 0.83715.117 ± 0.232.
+8.314 ± 0.0629.221 ± 0.07310.413 ± 0.58011.465 ± 0.227.
+7.407 ± 0.0879.336 ± 0.0369.978 ± 0.54610.524 ± 0.341.
+8.372 ± 0.0599.741 ± 0.04310.145 ± 0.62810.168 ± 0.329.max bleu(95%).
+23.36 ± 0.0623.41 ± 0.0523.50 ± 0.0323.81 ± 0.04.
+23.21 ± 0.0423.80 ± 0.0623.75 ± 0.0223.71 ± 0.03.
+23.22 ± 0.0723.54 ± 0.0523.74 ± 0.0623.82 ± 0.02.
+23.33 ± 0.0823.17 ± 0.0423.43 ± 0.0722.97 ± 0.08.max bleu(99%).
+24.27 ± 0.0424.35 ± 0.0624.49 ± 0.0724.56 ± 0.02.
+24.15 ± 0.0624.41 ± 0.0524.56 ± 0.0324.49 ± 0.01.
+24.33 ± 0.0824.42 ± 0.0524.91 ± 0.0724.96 ± 0.01.
+24.17 ± 0.0423.93 ± 0.0824.07 ± 0.0923.81 ± 0.03.table 6: wall-clock time (averaged over multiple runs) for iwslt/wmt for different model types and encoderdepths.
+95% max bleu is for validation..model.
+# layers.
+iwslt-dec2train timeuntil 99% max (in hours).
+max bleu # layers.
+iwslt-dec6train timeuntil 99% max (in hours).
+# layers.
+wmt-dec1train timeuntil 99% max (in hours).
+table 7: wall-clock time (averaged over multiple runs) saved for iwslt/wmt for different model types andencoder depths.
+99% max bleu is for validation..of vanilla transformers for mnli-m and sst2, re-spectively..figure 6: roberta reservoir results, pre-trainingversus downstream task plot for 12 layer roberta.
+mnli-m (left).
+sst-2 (right)..f validation plots.
+e reservoir results for total layers.
+here we present the shifted reservoir results foriwslt14, wmt16, enwik8 and roberta ﬁne-tuning in figure 8, 9, 10, 11, respectively.
+weshow the same results also hold when it comes toreplace normal transformer blocks with reservoirblocks at least for mt..figure 7: roberta reservoir results, training plotfor 12 layer roberta (left).
+aucc result (right)..here we present the validation plots for train-ing a 8-layer encoder, 2-layer decoder modelfor iwslt14, a 24-layer encoder, 1-layer de-coder model for wmt16, a 48-layer decodermodel for enwik8 and a 12-layer decoder modelfor roberta for detailed steps to calculate theaucc.
+it can be clearly observed that given theconﬁgurations from section 3.1, all the modelshave converged.
+so when we compute the area un-der the convergence curve, this depicts the trainingefﬁciency of the model (basically time x perfor-mance) until convergence.
+speciﬁcally, we set t.4308102030405060pretraining wall-clock time7879808182838485accuray on mnli-mtransformert reservoirffn reservoir102030405060pretraining wall-clock time9192939495accuray on sst2transformert reservoirffn reservoir01224364860 training hours (h)  468101214161820validation ppltransformert reservoirffn reservoir46810121416# updatable decoder layers0.8500.8750.9000.9250.9500.9751.000valid ppl aucctransformert reservoirffn reservoirfigure 8: validation bleu aucc and test bleu foriwslt (high is good).
+comparison of regular trans-former and reservoir transformer with ffn or trans-former reservoir layers added..figure 10: validation bpc aucc and test bpc on theenwik8 language modelling task (low is good).
+com-parison of regular and reservoir transformers for vary-ing depths..figure 9: validation bleu aucc and test bleu forwmt (high is good).
+comparison of regular trans-former and reservoir transformer with ffn or trans-former reservoir layers added..sufﬁciently high for computing the aucc, whichis 4h for iwslt, 20h for wmt, 30h for enwik8and 60h for roberta pretraning.
+from the train-ing plot in the appendix, we can see that eachmodel has converged at that point.
+the reser-voir model in figure 12 has 2 layers frozen foriwslt14, 8 layers frozen for enwik8, and 4 lay-ers frozen for wmt16 and roberta..g backskipping.
+figure 13 shows the blue curves for iwsltcomparing regular vs reservoir vs backskippedtransformers, with the latter performing surpris-ingly well..figure 11: downstream roberta performance onsst-2 (left) and multinli-matched (right)..figure 12: iwslt with 2-layer decoder validation plot(upper left).
+wmt with 24-layer decoder validationplot (upper right).
+enwik8 with 48-layer decoder val-idation plot (lower left).
+roberta with 12-layer de-coder validation plot (lower right)..figure 13: iwslt comparison of the regular, reser-voir and backskipped transformer architectures (en-coder has 8 layers with 2 frozen, if any)..430924681012# total encoder layers0.960.970.980.991.00valid bleu aucctransformert reservoirffn reservoir24681012# total encoder layers32.533.033.534.0test bleu transformert reservoirffn reservoir12.515.017.520.022.525.027.530.032.5# total encoder layers0.940.950.960.970.980.991.00valid bleu aucctransformert reservoirffn reservoir12.515.017.520.022.525.027.530.032.5# total encoder layers26.2526.5026.7527.0027.2527.5027.7528.00test bleu transformert reservoirffn reservoir3040506070# total decoder layers0.60.70.80.91.0valid bpc aucctransformert reservoirffn reservoir3040506070# total decoder layers1.21.41.61.82.02.22.4test bpc transformert reservoirffn reservoir468101214161820# total decoder layers919293949596valid accuracy transformert reservoirffn reservoirtransformer (frozen finetuned)468101214161820# total decoder layers7880828486valid accuracy transformert reservoirffn reservoirtransformer (frozen finetuned)0.00.51.01.52.02.53.03.5 training hours (h)  101520253035validation bleutransformert reservoirffn reservoir0.02.55.07.510.012.515.017.520.0 training hours (h)  101214161820222426validation bleutransformert reservoirffn reservoir0510152025303540 training hours (h)  1.01.52.02.53.03.54.04.55.0validation bpcvalidation curve for training on enwik8transformert reservoirffn reservoir01224364860 training hours (h)  468101214161820validation ppltransformert reservoirffn reservoir0.00.51.01.52.02.53.03.5 training hours (h)  101520253035validation bleuvalidation curve for training on iwslt14transformert reservoirbackskipped reservoir

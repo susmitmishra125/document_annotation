@@ -1,0 +1,536 @@
+conditional generation of temporally-ordered event sequences.
+shih-ting lin♠.
+nathanael chambers♦♠ the university of texas at austin♦ united states naval academyj0717lin@cs.utexas.edu, nchamber@usna.edu, gdurrett@cs.utexas.edu.
+greg durrett♠.
+abstract.
+models of narrative schema knowledge haveproven useful for a range of event-related tasks,but they typically do not capture the tempo-ral relationships between events.
+we pro-pose a single model that addresses both tem-poral ordering, sorting given events into theorder they occurred, and event inﬁlling, pre-dicting new events which ﬁt into an existingtemporally-ordered sequence.
+we use a bart-based conditional generation model that cancapture both temporality and common eventco-occurrence, meaning it can be ﬂexibly ap-plied to different tasks in this space.
+ourmodel is trained as a denoising autoencoder:we take temporally-ordered event sequences,shufﬂe them, delete some events, and then at-tempt to recover the original event sequence.
+this task teaches the model to make infer-ences given incomplete knowledge about theevents in an underlying scenario.
+on the tem-poral ordering task, we show that our modelis able to unscramble event sequences fromexisting datasets without access to explicitlylabeled temporaltraining data, outperform-ing both a bert-based pairwise model and abert-based pointer network.
+on event inﬁll-ing, human evaluation shows that our modelis able to generate events that ﬁt better tempo-rally into the input events when compared togpt-2 story completion models..1.introduction.
+this paper proposes a single model of events tosupport inferences in two seemingly different tasks:(1) temporal event ordering and (2) event inﬁlling,or inferring unseen or unmentioned events occur-ring as part of a larger scenario.
+figure 1 shows anexample illustrating these two goals.
+unlike priorapproaches, we aim to address both with the samemodel architecture, rather than having to annotatedata and build ad-hoc models for each task sepa-rately; our goal is to work towards models that cap-.
+figure 1: diagram of our modeling setup: temporal-bart captures both temporal ordering and event cooc-currence to make various event-related inferences..ture temporal event knowledge broadly and supporta wide range of inferences.
+we thus need a suitablygeneral modeling framework to capture temporalknowledge about events, which in our case will bea bart-based (lewis et al., 2020) model we calltemporalbart.
+note that classic temporal relationextraction models, which model temporal orderingin context for a particular document, may chieﬂylearn how to use local discourse cues rather thangeneralizable event knowledge (chambers et al.,2014; ning et al., 2018b)..the goals in this work relate to past work onlearning narrative schemas (mooney and dejong,1985; chambers, 2013; peng and roth, 2016; penget al., 2017).
+our approach particularly followsa recent line of work using distributed representa-tions of schemas (pichotta and mooney, 2016; we-ber et al., 2018b), which support inferences aboutevents without explicitly materializing a discreteschema library.
+the target tasks in this work aredirectly motivated by downstream applications ofschema learning.
+text generation tasks like storycompletion rely on understanding what makes nar-ratives plausible and what events might be likelyto happen before, after, and between other events(jain et al., 2017; yao et al., 2019), motivating ourevent inﬁlling task.
+answering questions aboutcauses, effects, or what might happen next in ascenario requires knowing typical temporal ordersof event sequences (zhou et al., 2019, 2020; ninget al., 2020), motivating our temporal ordering task..proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages7142–7157august1–6,2021.©2021associationforcomputationallinguistics7142temporal barti opened a presentshe gave me the presentshe bought the presentcomplete ordered event sequenceshe bought the presenti opened a presentscrambled input eventsprior work has not combined traditional event cooc-currence with event temporality as we do..we propose a conditional generation model totackle temporal event ordering and event inﬁlling,and train it as a denoising autoencoder over out-of-context temporal event sequences.
+as shownin figure 1, the encoder of our temporalbartmodel reads a temporally scrambled sequence ofa subset of input events, obtained by corruptinga temporally-ordered sequence of events from acorpus.
+the decoder, which can be viewed as aconditional event language model (kiyomaru et al.,2019; bosselut et al., 2019; madaan et al., 2020),then reconstructs the complete, temporally-orderedevent sequence.
+such denoising training has beensuccessful exploited in many applications (vincentet al., 2010; lu et al., 2013; lample et al., 2018;lewis et al., 2020), and using seq2seq models to re-order and smooth inputs has been explored before(goyal and durrett, 2020), but to our knowledgewe are the ﬁrst to apply this in this temporal model-ing setting.
+the conditional generation architectureof our model is ﬂexible enough to address a varietyof tasks, including our temporal ordering and eventinﬁlling tasks, by either sampling from the modelor using it to score sequences.
+capitalizing on thesuccess of recent pre-trained encoder-decoder trans-formers (lewis et al., 2020; raffel et al., 2020), ourmodel itself is based on bart, consuming and pro-ducing predicate-argument structures rendered insurface order..gathering large-scale high-quality labeled datawith temporal annotations is often expensive andrequires specially designed annotation schemes(pustejovsky et al., 2003a; cassidy et al., 2014;ning et al., 2018b; zhao et al., 2021).
+here,we instead turn to a narrative documents corpus,eventsnarratives (yao and huang, 2018) and de-sign an automatic method to extract the trainingdata we need.
+in these documents, discourse or-der is loosely assumed to reﬂect temporal order, soevents extracted from this text can directly providetraining data for our models.
+this use of auto-matic annotation allows us to use broad-domaindata, giving us a strong domain-independent tem-poral model (zhao et al., 2021)..to evaluate how well our proposed models cap-ture temporal knowledge and solve the two targetedtasks, we apply them on out-of domain test sets in azero-shot manner.
+speciﬁcally, for event ordering,we ﬁrst extract test temporal event sequences from.
+the caters (mostafazadeh et al., 2016b) and mc-taco (zhou et al., 2019) datasets, which include theannotations on temporal relations between events.
+we then compare the performance of our modelswith two baselines: a bert-based pairwise modeland a bert-based pointer network.
+for event inﬁll-ing, we use the test event sequences from catersand examine the ability of our models to order un-seen events and generate inﬁlled events in compar-ison with gpt-2 baselines from story generation.
+our bart-based models signiﬁcantly outperformthe baseline models on the ordering settings weconsider, and human evaluation veriﬁes that ourmodels can generate inﬁlled events that are bettertemporally-ordered with respect to the input..2 background and related work.
+learning temporal knowledge to order events andgenerate new events as part of schemas or storiesare two problems that have received signiﬁcantattention, but in contrast to our work, previous worktypically focuses on each in isolation..2.1 temporal event ordering.
+closely related to the temporal ordering aspect ofthis paper is temporal relation extraction, whichorders pairs of events in text in document context(pustejovsky et al., 2003b; cassidy et al., 2014;ning et al., 2018b).
+this problem has been ad-dressed as pairwise classiﬁcation (mani et al., 2006;verhagen et al., 2007; chambers et al., 2007; ver-hagen and pustejovsky, 2008; cheng and miyao,2017; tourille et al., 2017; goyal and durrett,2019) or as a structured learning problem to en-force constraints on the output (do et al., 2012;ning et al., 2017, 2018a; leeuwenberg and moens,2017; han et al., 2019a,b).
+however, even in theselatter works, the models focus on pairwise relations.
+in contrast, our work here views temporal event or-dering as a sequence generation problem, whichprovides models a stronger inductive bias to cap-ture global temporal relations between events.
+onerecent effort (madaan and yang, 2020) treats thistask as a graph generation problem, and so is ableto predict more complex structures, but it focusessolely on ordering and is not suitable for our eventinﬁlling goals..2.2 schema induction.
+schema learning systems are often evaluated ontheir ability to predict unseen events.
+initial work.
+7143tions over a true underlying order of events, with-out obvious gaps in the event sequence, given thisincomplete information.
+by taking events out ofcontext rather than in the context of a document,we are encouraging the model to encode temporalknowledge between events rather than superﬁcialcues like surface textual order or discourse connec-tives that might determine their order..for the deﬁnition of events, we follow chambersand jurafsky (2008) where an event e is a predicateve along with its arguments (palmer et al., 2005).
+our model can be formulated as a denoisingautoencoder if x is created as a noised version ofy. speciﬁcally, given a temporal event sequencey as deﬁned above, we ﬁrst corrupt it to get therequired input x by performing two transformationfunctions consecutively (see figure 2):.
+event shufﬂing we ﬁrst perform a random shuf-ﬂing of the events in y to produce x. to perfectlyreconstruct the original sequence y, the model mustcapture the temporal relations between events..event deletion we randomly delete each eventin y with probability p to produce x. this denois-ing scheme is similar to the token deletion trans-formation in lewis et al.
+(2020).
+to perfectly re-construct the original event sequence, the modelneeds to encode schema-like event knowledge so asto generate events not included in the input x andinsert them at correct positions.
+as a result, thisdenoising can help the model learn event inﬁlling.
+we train our model to maximize log p (y | x).
+on this automatically-constructed data..3.2 model architecture.
+to leverage the power of pretrained transformers,we adopt bart (lewis et al., 2020) as the under-lying architecture for our model, and initialize ourmodel with its pretrained weights..the overall model, shown in figure 3, takes acorrupted event sequence x = {ei} as input, andoutputs the true event sequence y = {ej}.
+tofeed the event-based inputs and outputs to bart,we need to represent each event e in a textual for-mat repr(e).
+we represent e with the concate-nation of its predicate and all arguments.
+unlikeprevious work which only uses the syntactic headsof the predicate and certain arguments (pichottaand mooney, 2016; weber et al., 2018a,b), our ap-proach preserves complex noun phrase argumentsand exposes to the model arguments like tempo-ral modiﬁers.
+we strike a balance between using.
+figure 2: our event-based denoising autoencodingtraining scheme used to encourage our model to learntemporal event knowledge.
+the input is corrupted byshufﬂing and deletion..attempted to use statistical methods to derive alibrary of schematic information (mooney and de-jong, 1985; chambers and jurafsky, 2008; janset al., 2012).
+another thread exploits event lan-guage modeling to learn the distributions overevents (pichotta and mooney, 2016; peng and roth,2016; weber et al., 2018b), or focuses on learningevent representations (modi, 2016; weber et al.,2018a) rather than writing down discrete schemas.
+however, most of this work only models the co-occurrence between events instead of directly con-sidering temporal information, and only representevents as a small tuple of s-v-o headwords..another line of work instead directly focuses onextracting coherent narratives from “story salads”(wang et al., 2018) or more broadly generatingnarratives given predeﬁned scenarios (wang et al.,2019; qin et al., 2020).
+however, without consid-ering temporal ordering, these systems are proneto learn discourse ordering of events instead of astrong representation of temporal knowledge..3 method.
+3.1 task formulation and model.
+our framework involves modeling a conditionaldistribution p (y | x) over temporal event se-quences y = {e1, · · · , el}, which are sequencesof events taken out of context (i.e., not repre-sented as spans in a document) which are partof the same scenario, involve shared actors, andare temporally ordered.
+the input of the modelis a (not necessarily temporal) sequence of eventsx = {e1, · · · , em} that represents incomplete in-formation abut the scenario y: a partial set of un-ordered events.
+our model should learn distribu-.
+7144e1e2e3e4e5event deletionevent shuﬄinginput eventsautoencoder (reconstruct original sequence)encoderdecodere1e2e3e4e5e4e5e2e1e3e4e2e1e1e2e3e4e5figure 3: model architecture of the proposed bart-based conditional generation models.
+temporalbart-indexeduses indexed event tags [ei] as shown in this ﬁgure.
+temporalbart instead uses the single [e] for all events..enough information to have meaningful event rep-resentations and not consuming entire documents(han et al., 2019a,b), which would result in a modelthat overly relies on discourse clues.
+we then con-sider two variants for input and output:.
+temporalbart this model ﬁrst encodes eachevent ei in x as repr(ei), and concatenates themwith a special token [e] prepended in front ofeach event.
+this special token can help the modelidentify the boundary between the input events;such placeholder tokens have been used in relatedtasks like entity tracking in procedural text (guptaand durrett, 2019).
+for the output, we insteadprepend [e] vej [a] in front of each repr(ej).
+this setup not only provides an extra supervisionsignal that encourages the model to predict orderingon the basis of predicates, but also allows us topost-hoc recover an event sequence by checkingthe predicate part of the generation..temporalbart-indexed this model, depictedin figure 3, uses the same input and output formatas temporalbart, except the prepended specialtoken [e] is instead [ei] before each event ei.
+for the output, if ej is one of the input events andej = ei, then we also change the prepended tokensej to [ei] vej [a].
+otherwise, we still use [e]as the special event token.
+note that the model isnot able to “cheat” using the [ei] tokens to do theprediction since the input events are scrambled bythe shufﬂing denoising training scheme describedin §3.1.
+compared to temporalbart, the use of[ei] here provides an extra clue for the model toassociate input events to output events, which canbeneﬁt the event ordering.
+it also provides a po-tential way to focus only on modeling the orderingof the target sequence, rather than also mixing ingeneration decisions, many of which are copyingevent arguments and often affect the prediction.1.
+1we experiment with this method, which is denoted as.
+“temporalbart-indexed (tags only)”, in appendix a.training details of these bart-based models are.
+described in the appendix..3.3 training data collection.
+for our framework, the training data we need isevent sequences in temporal order.
+note that mosttext data occurs in discourse order, which is notthe same thing: human annotations of temporalrelation datasets like timebank (pustejovsky et al.,2003b) show that many events mentioned earlierin the text occur later in time.
+existing datasets oftemporal relations (cassidy et al., 2014; vashishthaet al., 2019) are small-scale, and annotating moredata is expensive and prone to low agreement (ninget al., 2018b).
+to combat this issue, we instead tryto automatically gather the training data we need..corpus we use the english-language eventsnar-ratives corpus (yao and huang, 2018), which con-tains more than 200,000 narrative-structured doc-uments identiﬁed from three different source do-mains including news articles, novel books, andblogs.
+yao and huang (2018) use a weakly super-vised method to identify narrative texts, describinga sequence of events in such a way that the dis-course order is very likely to reﬂect the temporalorder.
+this gives us an entry point to collect tempo-ral event sequences automatically from each doc-ument.
+here we focus on documents in the noveldomain as our source for temporal event sequences..extracting temporal event sequences to ob-tain the training event sequences, we ﬁrst use ansrl model from allennlp (gardner et al., 2017)to extract verbs (events) and their arguments.
+then,temporal event sequences are constructed by con-necting only the events in different sentences, sincethe relations between events within the same sen-tence are unclear even in narrative documents.
+here, to ensure all the events in a sequence havea strong relation with each other, we only includechains of events that are associated with a com-.
+7145arg0varg1argm-tmpe2she      bought        it          yesterday[e2] bought [a] she bought it yesterday [e] gave [a] she gave me a present [e1] opened [a] i opened the presentarg0varg1e1i        opened   the presentbart encoderbart decodernew event generated event copied from inputevent copied from inputdecoder outputencoder input[e1] i opened the present [e2] she bought it yesterdayordering task and a pointer network model thatdirectly models event sequence permutations dis-criminatively..bert-based pairwise model + ssvm we fol-low the architecture of the deep ssvm model usedin han et al.
+(2019a) as our ﬁrst baseline, whichtackles event ordering as a pairwise classiﬁcationproblem.
+this network ﬁrst exploits a bert-basedmodel (devlin et al., 2019) to compute pairwisescores for ei preceding ej in the output y. the ﬁnaloutput is then obtained by solving an ilp over allthe pairwise scores.
+the overall network is trainedwith the structured svm loss so that it can learn tomake joint predictions with transitivity constraint.
+to make this baseline more comparable to our mod-els, we take repr(ei) prepended with [e] as theevent representation instead of using the sentencecontaining vei as in han et al.
+(2019a).
+detailed for-mulas are in appendix b. we denote this baselineas “pairwise+ssvm” in the evaluations..bert-based pointer network this networkﬁrst follows the bert-based pairwise model +ssvm to extract the the vectorized representationupi for each ei, where u is the ﬁnal bert en-coded matrix, and pi is the position of the ﬁrst to-ken of ei in the input sequence.
+these event repre-sentations are then instead fed into a lstm-basedpointer network to model the ordering probabilityby decomposing it in a sequential fashion:.
+p seq(y | x) =.
+p (j | h1, .
+.
+.
+, up1, .
+.
+.).
+(1).
+(cid:89).
+j.ht is the decoder hidden state in the pointer net-work.
+compared to the above pairwise baseline,this model has a stronger inductive bias for exploit-ing global event relations.
+we train the sequentialmodel with teacher forcing to maximize the proba-bility of the gold ordering.
+we denote this baselineas “bert-based pn” in the evaluation section..4.2 baselines: event inﬁlling.
+haqae haqae (weber et al., 2018b) is a vec-tor quantized variational autoencoder which en-codes schema knowledge with hierarchical latentvariables.
+since haqae is also an event-levelseq2seq autoencoder, we can easily apply it to oursetting.
+during training we follow weber et al.
+(2018b) except that we use our narrative event se-quences for training and represent each event withthe predicate-argument format described in §3.2 soit is more comparable to our bart-based models..figure 4: the two targeted tasks in this work: orderingrearranges the set of input events, whereas inﬁlling in-volves hypothesizing a new event at a speciﬁed index..mon entity (chambers and jurafsky, 2008), as de-termined by checking whether the arguments oftwo event have some shared non-stopword tokens.
+with this procedure, we are able to collect nearly 2million temporal event sequences to train on, withnearly 70% of the sequences consisting of three ormore events..4 target task formulation.
+here we describe the two target tasks of our modeland how they can be handled as event-based con-ditional generation problems.
+a visual of the taskformulations is shown in figure 4..temporal event ordering given an unorderedset of events {ei}, this task’s goal is to produce thetemporal ordering of {ei}, as shown in figure 4(a).
+we ask the model to generate an ordered sequenceof events {ef (i)} given the set {ei}, where f (·) isa mapping function to determine the event to put atposition i. this is a conditional generation problemthat is directly solved by our proposed models..event inﬁlling the goal of event inﬁlling is togenerate inserted events at some pre-selected inser-tion positions in a seed event sequence (wang et al.,2020).
+to simplify the evaluation, here we assumethat given an event sequence x = {ei}, models willonly be required to generate one inserted event atone insertion position i∗, as shown in figure 4(b).
+we ﬁrst feed {ei} as the input to our model, thengenerate one event e∗ using xpreﬁx = {ei | i < i∗}as the decoding preﬁx.
+to force our models toproduce e∗ /∈ x, we prevent our model from gener-ating {vei} during the decoding process..4.1 baselines: temporal event ordering.
+we compare against two baselines: a state-of-the-art pairwise model used for the in-context temporal.
+7146e1e2e*e3e1e2e3e1e2e3e3e1e2(a) temporal event ordering:(b) event inﬁlling:decoding preﬁxencoderdecoderencoderdecodergpt-2 gpt-2 (radford et al., 2019)is atransformer-based pretrained language model thathas been exploited in various generation tasks likestory generation (dathathri et al., 2020; rashkinet al., 2020).
+however, one issue with the gpt-2model is that it can only perform uni-directionalgeneration.
+to apply gpt-2 to generate an insertedevent e∗, we ﬁrst concatenate {repr(ei) | ei ∈xpreﬁx} with periods in between, and treat it as thedecoding preﬁx only.
+we then decode until anotherperiod is generated, and take the model’s outputas the text representation of e∗.
+except where oth-erwise speciﬁed, we use the gpt2-medium pre-trained model from huggingface’s transformer(wolf et al., 2020), whose model size is compara-ble to bart-large..inﬁlling gpt-2 to build a stronger gpt-2 base-line that doesn’t only condition on the preﬁx events,we follow the baselines from qin et al.
+(2020) toadapt gpt-2 to inﬁlling tasks.
+inﬁlling gpt-2 gen-erates the inﬁlling events by “wrapping” the eventsafter the insertion position to the front.
+that is,the decoding preﬁx fed to the inﬁlling gpt-2 be-comes the concatenation of {repr(ei) | i >= i∗},<sep> and {repr(ei) | i < i∗}, again with a pe-riod appended after each event.
+the special token<sep> is used to help the model to differentiatethe events before and after the insertion position..5 evaluation.
+5.1 experimental setup.
+all the models used in the evaluation are trainedwith the temporal event sequences automaticallycollected on eventsnarratives except gpt-2, sincewe want to compare the learned knowledge in gpt-2 with our proposed models.
+although we areable to gather millions of sequences, for efﬁciency,we train on 100,000 sequences unless speciﬁedotherwise.
+for each sequence, we extract 2 distinctpermutations from the corruption process.
+thisresults in 200,000 training examples in total..during evaluation, all the models are evaluatedon out-of-domain datasets in a zero-shot way, i.e.,no ﬁne-tuning is performed on the evaluation sets..5.2 temporal event ordering.
+5.2.1 datasets.
+figure 5: an example of the event sequence extractedfrom a context-question-answer tuple in mctaco.
+eqand ea are highlighted with the color green and bluerespectively..permutations are produced from each extracted se-quence..caters (mostafazadeh et al., 2016b) catersincludes annotations of events and their casualand temporal relations on 320 ﬁve-sentence shortstories sampled from the rocstories corpus(mostafazadeh et al., 2016a).
+to extract the eval-uation data from caters, we ﬁrst apply the srlmodel used in §3.3 on each story.
+then, a directedacyclic graph is constructed with a node being anevent e whose predicate ve can be captured bythe srl model, and an edge (ei, ej) indicatingei happens temporally before ej.
+note that here wetreat all types of annotated relations except “iden-tity”, “during” and “cause_to_end” as“before”, as suggested in mostafazadeh et al.
+(2016b).
+test temporal event sequences are thenextracted by retrieving all the path from the sourcenodes to sink nodes in the graph.
+with this proce-dure, we are able to gather 842 event sequences,60% of which contain 3 or more events.
+withpermutations, the ﬁnal caters evaluation set has1684 examples..we use two out-of-domain english datasets to ex-tract the test temporal event sequences: catersand mctaco.
+as during training, two different.
+mctaco (zhou et al., 2019) mctaco is amultiple-choice qa dataset for evaluating modelunderstanding on 5 different types of temporal com-.
+7147candidate answer: they would destroy the democracycontext:  in colombia, the drug-ﬁnanced guerrillas trying to seize the country and destroy democracy include m-19, which castro has clearly backed.question:  what would the guerrillas do if able to seize the country ?extracted event sequence: e1: drug ﬁnanced guerrillase2: the drug - ﬁnanced guerrillas trying to seize       the country and destroy democracye3: the drug - ﬁnanced guerrillas seize the countrye4: the drug - ﬁnanced guerrillas destroy democracye5: in colombia the drug - ﬁnanced guerrillas trying to       seize the country and destroy democracy include       m-19 , which castro has clearly backede6: m-19 which castro clearly backede7: they would destroy the democracygold label: ea after eqall.
+length >= 3pairwise acc.
+pairwise acc..architecture.
+randompairwise+ssvmbert-based pn.
+temporalbarttemporalbart-indexed.
+50.465.754.1.
+77.179.7.
+50.262.352.3.
+74.778.0.architecture.
+acc.
+macro f1.
+majoritypairwise+ssvmbert-based pn.
+temporalbarttemporalbart-indexed.
+90.667.254.7.
+63.974.9.
+47.547.042.7.
+50.155.1.table 1: averaged pairwise accuracy between the goldand predicted ordering generated by each model ontemporal event sequences from caters.
+the rightmostcolumn is sequences with 3+ events..table 2: temporal ordering results on mctaco se-quences.
+metrics are computed on the ordering be-tween the answer event and sentence event.
+the testset is imbalanced, so we include macro f1.
+our bart-based models outperform the baselines for macro f1..monsense.
+to extract suitable test data, we focuson questions with the reasoning type of “event or-dering” and their positive candidates.
+each datapoint here consists of a sentence describing multi-ple events {eci }, a question asking what event couldhappen temporally before/after a particular eventeq ∈ {eci }, and a candidate event ea.
+critically,the question itself tells us whether ea should hap-pen before/after eq in the temporal event sequenceformed by {ec.
+i } ∪ {ea}..with this annotation, we evaluate our models byi }∪{ea} intoﬁrst feeding the randomly shufﬂed {eca model, then checking the ordering between eaand eq in the output sequence.
+here, we were ableto extract 585 test sequences from mctaco.
+fori } and ea are extracted with theeach sequence, {ecsrl model used in §3.3.
+for the question, we ﬁrstuse a set of pre-deﬁned regex templates to extractan event eq and a temporal relation (“before” / “af-ter”).
+we then match eq to one of eci by rouge-lscores.
+see figure 5 for an example of the extracteddata..compared to caters, since the sentences hereare from 9 different domains in multirc (khashabiet al., 2018), the types of events are more diverse.
+the event arguments are also more complex..5.2.2 results on caters.
+we ﬁrst examine the temporal ordering results oncaters, shown in table 1. we compute the pair-wise accuracy of the predicted event sequences, orhow many pairs of events in the output are orderedcorrectly by a model.
+note that the bart-basedmodels can deviate from generating permutationsof the input; however, we found that the most prob-able generated sequences were almost exact permu-tations of the input or easily aligned to the inputusing a heuristic..our bart-based models outperform the bert-based pointer network by more than 20 points, a.huge margin.
+one possible reason is that the de-coder of bart can condition on the token-level em-beddings of the events when generating the outputevents, whereas in the pointer network, the decoderis only aware of the condensed event embeddingsupi.
+our two bart-based models also outper-form the bert-based pairwise model on both allsequences and long sequences..5.2.3 results on mctaco.
+results on mctaco are shown in table 2. heresince we only know the gold temporal relation ofone pair of events in the input, i.e eq and ea, theaveraged accuracy on predicting the order of eqand ea is computed.
+in addition, since the ratio ofbefore/after questions is signiﬁcantly unbalancedin mctaco, with 90% asking about the “after” re-lationship, we also compute the macro f1 score asour metric (averaging f1 across these two classes).
+our two baselines perform worse than just pick-ing the majority label.
+this is possibly due to thehigh diversity of events in mctaco, which makesit much harder to apply a zero-shot model.
+in con-trast, temporalbart achieves an f1 score about3 points higher than the pairwise+ssvm baseline,and temporalbart-indexed further performs bestamong all..in appendix e, we also show that our models areable to learn temporal phenomenon not explicitlyannotated in our training data, which is anotherdemonstration of our model’s ability to generalize..5.3 ordering unseen events.
+we evaluate our bart-based models on an addi-tional variant of this ordering problem that bettertests their capability as generative models.
+recallthat previously, bart conditions on the complete(but possibly scrambled) sequence of events.
+wenow consider ordering an event in the decoder thatthe model does not condition on in the encoder..7148architecture.
+randomhaqaegpt-2inﬁlling gpt-2.
+temporalbart57.7temporalbart-indexed 58.4- event deletion42.4.all.
+length >= 3.em top2 em em top2 em.
+34.137.135.238.8.
+69.571.968.473.5.
+83.387.473.0.
+23.728.722.626.3.
+48.250.929.8.
+48.753.248.255.4.
+70.677.453.8.table 3: comparison of the ability to tackle unseenevents between our bart-based models and baselineson caters.
+the right columns are computed on testsequences of 3 or more events..concretely, for each temporal event sequence incaters, we randomly select one event e∗, and treatthe rest of the sequence as the seed input event se-quence {e1, · · · , en }.
+then we check if a modelcan correctly determine where to insert e∗ into theinput sequence.
+speciﬁcally, for both the bart-based models and the gpt-2 baselines, we usethe generation probability to rank event sequences{e1, · · · , ei∗−1, e∗, ei∗, · · · , en } for i∗ between 1and n + 1 (all possible locations).
+if a model cor-rectly ranks the gold candidate higher, it indicatesthat it can model temporal relations between seenevents and new unseen events it may generate..the results are shown in table 3, where we com-pute the top-1 and top-2 exact match (em): didthe model rank the gold sequence 1st or 2nd high-est?
+our gpt-2 variants are only slightly betterthan random.
+haqae, also using an autoencoderframework, performs worse than inﬁlling gpt-2,likely due to the lack of large-scale pretraining andthe loss of information when compressing inputinto latent variables.
+our bart-based models aresigniﬁcantly better, with temporalbart-indexedshowing the beneﬁt of using indexed event markersto help the model capture order.
+we also performan ablation of deletion during training (figure 2).
+unsurprisingly for this unseen event evaluation, notdeleting events in training (setting p to 0) causes amajor drop by 14 em points.
+deletion denoising isevidently critical to model new events..5.4 event inﬁlling.
+architecture.
+gpt-2inﬁlling gpt-2.
+temporalbarttemporalbart-indexed.
+coherence.
+temporality.
+1.371.50.
+1.431.50.
+0.570.87.
+1.101.03.table 4: human evaluation of event inﬁlling (0-2 scale).
+data are event sequences from caters.
+all models ﬁllin coherent events, but our bart-based output is moretemporally ordered with respect to the input events..we evaluate the quality of the generated (in-serted) events by human evaluation on amazonmechanical turk.
+speciﬁcally, we randomly sam-ple 30 examples from caters and have 5 ratersjudge the coherence and temporality (on a scalefrom 0 to 2) of the inserted event from each model.
+see figure 8 in appendix for our exact prompt.
+the ﬁnal scores for each model on coherence andtemporality are computed by taking the averageof the majority rating on each prediction.
+herewe only include gpt-2 models as baselines sincehaqae is also using the autoencoder framework,and already performs signiﬁcantly worse in §5.3.
+the results of this evaluation are shown in table4. all models achieve reasonable coherence scores.
+however in terms of temporality, gpt-2 performsworst, as expected, since it can only condition onpartial input event sequences while the other threeconsider the whole event sequence as input.
+bothof the bart-based models achieve better perfor-mance than inﬁlling gpt-2.
+the improvements onthe temporal score are signiﬁcant with p < 0.05according to bootstrap resampling for both tempo-ralbart models with respect to inﬁlling gpt-2..figure 6 gives examples of inﬁlled events gen-erated by gpt-2, inﬁlling gpt-2, and temporal-bart.
+on this speciﬁc test example, gpt-2 gen-erates an event generally about the apple watch,which is less relevant to the input scenario aboutmike making a tree.
+the event generated by inﬁll-ing gpt-2 is coherent with the scenario, but doesn’toccur in the correct order with respect to the inputevents.
+the event generated by temporalbartis the best in terms of coherence and temporality.
+more examples are in table 7 of the appendix..now we turn to temporal event inﬁlling: given acaters sequence, remove a random event at indexi∗, and denote the resulting sequence {e1, · · · , en }.
+we then ask a model to generate one event e∗ atposition i∗ so {e1, · · · , ei∗−1, e∗, ei∗, · · · , en } istemporally ordered with the new event..5.5 the effectiveness of narrative data.
+figure 7 shows that the performance of both ourmodels on the caters ordering task improveswhen increasing the amount of narrative trainingdata.
+this demonstrates that the automatically ex-.
+7149figure 6: real examples of inﬁlled events generated by gpt-2, inﬁlling gpt-2 and temporalbart respectively.
+green events are the input, and blue events are the inﬁlled events generated by the models..our experiments demonstrate that our model is ableto perform temporal ordering and inﬁlling in a zero-shot manner, not ﬁne-tuned on our target datasets,which suggests that it can also be applied to othersettings requiring event schematic and temporalknowledge..acknowledgments.
+thanks to mahnaz koupaee from stony brook uni-versity for providing directions on our haqaebaseline and to the members of the ut taur labfor helpful discussion, particularly yasumasa onoeand jiacheng xu for suggestions on the human eval-uation.
+thanks as well to the anonymous reviewersfor their comments.
+this work is based on researchthat is in part supported by the air force researchlaboratory (afrl), darpa, for the kairos pro-gram under agreement number fa8750-19-2-1003.
+the u.s. government is authorized to reproduceand distribute reprints for governmental purposesnotwithstanding any copyright notation thereon.
+the views and conclusions contained herein arethose of the authors and should not be interpretedas necessarily representing the ofﬁcial policies orendorsements, either expressed or implied, of theair force research laboratory (afrl), darpa,or the u.s. government..references.
+antoine bosselut, hannah rashkin, maarten sap, chai-tanya malaviya, asli celikyilmaz, and yejin choi.
+2019. comet: commonsense transformers for au-tomatic knowledge graph construction.
+in proceed-ings of the 57th annual meeting of the associationfor computational linguistics, pages 4762–4779,florence, italy.
+association for computational lin-guistics..taylor cassidy, bill mcdowell, nathanael chambers,and steven bethard.
+2014. an annotation frame-work for dense event ordering.
+in proceedings of the52nd annual meeting of the association for com-putational linguistics (volume 2: short papers),pages 501–506, baltimore, maryland.
+associationfor computational linguistics..figure 7: pairwise accuracy of the two proposed bart-based models on temporal event ordering on caterswhen trained with different numbers of event sequencesfrom narrative documents and matres..tracted temporal event sequences are useful and di-verse enough to help the models to learn temporal-related knowledge.
+the temporalbart-indexedmodel is effective on surprisingly small amounts ofdata, but also scales well with data size; however,we observe a plateau in both models which moti-vated our decision to use 100k training sequences.
+for comparison, we train our temporalbart-indexed model on 1266 event sequences gath-ered from the matres dataset, a human-labeleddataset for temporal relation extraction, using thesame procedure we applied to caters.
+however,figure 7 shows that the resulting performance, 65.6on matres, is signiﬁcantly lower than the bestnumber we get on narrative data.
+even with thesame size training set, using narrative data achievesover 7 points of improvement over using matres.
+this suggests that the small-scale human-labeleddataset is not enough for models to learn general-ized temporal knowledge, and even with the sameamount of data, narrative data may be a bettersource for general temporal knowledge..6 conclusion.
+this work presents a bart-based conditional gen-eration model and a denoising autoencoder frame-work to learn temporal event knowledge, and ad-dresses both temporal ordering and event inﬁllingtasks by pretraining on automatically collected data..7150temporalbart: after breakfast mike picked a good piece of twinegpt-2: you can buy a $25 apple watch with the watch facee3: he painted over the bad tree with design of his own creatione2: mike tried to make a treeinﬁlling gpt-2: he started with a rough - looking tree[inserted event]nathanael chambers.
+2013. event schema inductionwith a probabilistic entity-driven model.
+in proceed-ings of the 2013 conference on empirical methodsin natural language processing, pages 1797–1807,seattle, washington, usa.
+association for compu-tational linguistics..tanya goyal and greg durrett.
+2019. embedding timeexpressions for deep temporal ordering models.
+inproceedings of the 57th annual meeting of the asso-ciation for computational linguistics, pages 4400–4406, florence, italy.
+association for computationallinguistics..nathanael chambers, taylor cassidy, bill mcdowell,and steven bethard.
+2014. dense event orderingwith a multi-pass architecture.
+transactions of theassociation for computational linguistics, 2:273–284..nathanael chambers and dan jurafsky.
+2008. unsuper-vised learning of narrative event chains.
+in proceed-ings of acl-08: hlt, pages 789–797, columbus,ohio.
+association for computational linguistics..nathanael chambers, shan wang, and dan juraf-sky.
+2007. classifying temporal relations betweenin proceedings of the 45th annual meet-events.
+ing of the association for computational linguisticscompanion volume proceedings of the demo andposter sessions, pages 173–176, prague, czech re-public.
+association for computational linguistics..fei cheng and yusuke miyao.
+2017. classifying tem-poral relations by bidirectional lstm over depen-in proceedings of the 55th annualdency paths.
+meeting of the association for computational lin-guistics (volume 2: short papers), pages 1–6, van-couver, canada.
+association for computational lin-guistics..sumanth dathathri, andrea madotto, janice lan, janehung, eric frank, piero molino, jason yosinski, androsanne liu.
+2020. plug and play language mod-els: a simple approach to controlled text generation.
+in international conference on learning represen-tations..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language under-in proceedings of the 2019 conferencestanding.
+of the north american chapter of the associationfor computational linguistics: human languagetechnologies, volume 1 (long and short papers),pages 4171–4186, minneapolis, minnesota.
+associ-ation for computational linguistics..quang do, wei lu, and dan roth.
+2012. joint infer-ence for event timeline construction.
+in proceedingsof the 2012 joint conference on empirical methodsin natural language processing and computationalnatural language learning, pages 677–687, jeju is-land, korea.
+association for computational linguis-tics..matt gardner, joel grus, mark neumann, oyvindtafjord, pradeep dasigi, nelson f. liu, matthewpeters, michael schmitz, and luke s. zettlemoyer.
+2017. allennlp: a deep semantic natural lan-guage processing platform..tanya goyal and greg durrett.
+2020. neural syntacticpreordering for controlled paraphrase generation.
+inproceedings of the 58th annual meeting of the as-sociation for computational linguistics, pages 238–252, online.
+association for computational linguis-tics..aditya gupta and greg durrett.
+2019. tracking dis-crete and continuous entity state for process under-in proceedings of the third workshopstanding.
+on structured prediction for nlp, pages 7–12, min-neapolis, minnesota.
+association for computationallinguistics..rujun han, i-hung hsu, mu yang, aram galstyan,ralph weischedel, and nanyun peng.
+2019a.
+deepstructured neural network for event temporal rela-tion extraction.
+in proceedings of the 23rd confer-ence on computational natural language learning(conll), pages 666–106, hong kong, china.
+asso-ciation for computational linguistics..rujun han, qiang ning, and nanyun peng.
+2019b.
+joint event and temporal relation extraction withshared representations and structured prediction.
+inproceedings of the 2019 conference on empiricalmethods in natural language processing and the9th international joint conference on natural lan-guage processing (emnlp-ijcnlp), pages 434–444, hong kong, china.
+association for computa-tional linguistics..parag jain, priyanka agrawal, abhijit mishra, mo-hak sukhwani, anirban laha, and karthik sankara-narayanan.
+2017.story generation from se-quence of independent short descriptions.
+corr,abs/1707.05501..bram jans, steven bethard, ivan vulic, and marie-francine moens.
+2012. skip n-grams and rankingfunctions for predicting script events.
+in eacl..daniel khashabi, snigdha chaturvedi, michael roth,shyam upadhyay, and dan roth.
+2018. looking be-yond the surface: a challenge set for reading com-prehension over multiple sentences.
+in proceedingsof the 2018 conference of the north american chap-ter of the association for computational linguistics:human language technologies, volume 1 (long pa-pers), pages 252–262, new orleans, louisiana.
+as-sociation for computational linguistics..hirokazu kiyomaru, kazumasa omura, yugo mu-rawaki, daisuke kawahara, and sadao kurohashi.
+2019. diversity-aware event prediction based on aconditional variational autoencoder with reconstruc-tion.
+in proceedings of the first workshop on com-monsense inference in natural language process-.
+7151ing, pages 113–122, hong kong, china.
+associationfor computational linguistics..guillaume lample, alexis conneau, ludovic denoyer,and marc’aurelio ranzato.
+2018. unsupervised ma-chine translation using monolingual corpora only.
+in international conference on learning represen-tations..artuur leeuwenberg and marie-francine moens.
+2017.structured learning for temporal relation extractionin proceedings of the 15thfrom clinical records.
+conference of the european chapter of the associa-tion for computational linguistics: volume 1, longpapers, pages 1150–1158, valencia, spain.
+associa-tion for computational linguistics..mike lewis, yinhan liu, naman goyal, mar-jan ghazvininejad, abdelrahman mohamed, omerlevy, veselin stoyanov, and luke zettlemoyer.
+2020. bart: denoising sequence-to-sequence pre-training for natural language generation, translation,and comprehension.
+in proceedings of the 58th an-nual meeting of the association for computationallinguistics, pages 7871–7880, online.
+associationfor computational linguistics..x. lu, y. tsao, s. matsuda, and c. hori.
+2013. speechenhancement based on deep denoising autoencoder.
+in interspeech..aman madaan, dheeraj rajagopal, yiming yang, ab-hilasha ravichander, e. hovy, and shrimai prab-eigen: event inﬂuence genera-humoye.
+2020.arxiv,tion using pre-trained language models.
+abs/2010.11764..aman madaan and yiming yang.
+2020. neural lan-guage modeling for contextualized temporal graphgeneration.
+arxiv, abs/2010.10077..inderjeet mani, marc verhagen, ben wellner,chong min lee, and james pustejovsky.
+2006. ma-chine learning of temporal relations.
+in proceedingsof the 21st international conference on compu-tational linguistics and 44th annual meeting ofthe association for computational linguistics,pages 753–760, sydney, australia.
+association forcomputational linguistics..ashutosh modi.
+2016. event embeddings for semantic.
+script modeling.
+in conll..raymond mooney and gerald dejong.
+1985. learningschemata for natural language processing.
+in ijcai..nasrin mostafazadeh, nathanael chambers, xiaodonghe, devi parikh, dhruv batra, lucy vanderwende,pushmeet kohli, and james allen.
+2016a.
+a cor-pus and cloze evaluation for deeper understanding ofin proceedings of the 2016commonsense stories.
+conference of the north american chapter of theassociation for computational linguistics: humanlanguage technologies, pages 839–849, san diego,california.
+association for computational linguis-tics..nasrin mostafazadeh, alyson grealish, nathanaelchambers, james allen, and lucy vanderwende.
+2016b.
+caters: causal and temporal relationscheme for semantic annotation of event structures.
+in proceedings of the fourth workshop on events,pages 51–61, san diego, california.
+association forcomputational linguistics..qiang ning, zhili feng, and dan roth.
+2017. a struc-tured learning approach to temporal relation extrac-in proceedings of the 2017 conference ontion.
+empirical methods in natural language processing,pages 1027–1037, copenhagen, denmark.
+associa-tion for computational linguistics..qiang ning, hao wu, rujun han, nanyun peng, mattgardner, and dan roth.
+2020. torque: a readingcomprehension dataset of temporal ordering ques-in proceedings of the 2020 conference ontions.
+empirical methods in natural language process-ing (emnlp), pages 1158–1172, online.
+associa-tion for computational linguistics..qiang ning, hao wu, haoruo peng, and dan roth.
+2018a.
+improving temporal relation extraction witha globally acquired statistical resource.
+in proceed-ings of the 2018 conference of the north ameri-can chapter of the association for computationallinguistics: human language technologies, vol-ume 1 (long papers), pages 841–851, new orleans,louisiana.
+association for computational linguis-tics..qiang ning, hao wu, and dan roth.
+2018b.
+a multi-axis annotation scheme for event temporal relations.
+in proceedings of the 56th annual meeting of the as-sociation for computational linguistics (volume 1:long papers), pages 1318–1328, melbourne, aus-tralia.
+association for computational linguistics..martha palmer, daniel gildea, and paul kingsbury.
+2005. the proposition bank: an annotated cor-pus of semantic roles.
+computational linguistics,31(1):71–106..adam paszke, sam gross, francisco massa, adamlerer, james bradbury, gregory chanan, trevorkilleen, zeming lin, natalia gimelshein, lucaantiga, alban desmaison, andreas kopf, edwardyang, zachary devito, martin raison, alykhan te-jani, sasank chilamkurthy, benoit steiner, lu fang,junjie bai, and soumith chintala.
+2019.py-torch: an imperative style, high-performance deepin h. wallach, h. larochelle,learning library.
+a. beygelzimer, f. d'alché-buc, e. fox, and r. gar-nett, editors, advances in neural information pro-cessing systems 32, pages 8024–8035.
+curran asso-ciates, inc..haoruo peng, snigdha chaturvedi, and dan roth.
+a joint model for semantic sequences:2017.in proceedings offrames, entities, sentiments.
+the 21st conference on computational natural lan-guage learning (conll 2017), pages 173–183,vancouver, canada.
+association for computationallinguistics..7152haoruo peng and dan roth.
+2016. two discoursedriven language models for semantics.
+in proceed-ings of the 54th annual meeting of the associationfor computational linguistics (volume 1: long pa-pers), pages 290–300, berlin, germany.
+associationfor computational linguistics..karl pichotta and raymond j. mooney.
+2016. learningstatistical scripts with lstm recurrent neural net-in proceedings of the thirtieth aaai con-works.
+ference on artiﬁcial intelligence, aaai’16, page2800–2806.
+aaai press..james pustejovsky, josé m. castaño, robert ingria,roser saurí, robert j. gaizauskas, andrea set-zer, graham katz, and dragomir r. radev.
+2003a.
+timeml: robust speciﬁcation of event and tempo-ral expressions in text.
+in new directions in ques-tion answering..james pustejovsky, patrick hanks, roser saurí,andrew see, rob gaizauskas, andrea setzer,dragomir radev, beth sundheim, david day, lisaferro, and marcia lazo.
+2003b.
+the timebank cor-pus.
+proceedings of corpus linguistics..lianhui qin, vered shwartz, peter west, chandra bha-gavatula, jena d. hwang, ronan le bras, antoinebosselut, and yejin choi.
+2020. back to the future:unsupervised backprop-based decoding for counter-factual and abductive commonsense reasoning.
+inproceedings of the 2020 conference on empiricalmethods in natural language processing (emnlp),pages 794–805, online.
+association for computa-tional linguistics..a. radford, jeffrey wu, r. child, david luan, darioamodei, and ilya sutskever.
+2019. language mod-els are unsupervised multitask learners..colin raffel, noam shazeer, adam roberts, katherinelee, sharan narang, m. matena, yanqi zhou, w. li,and peter j. liu.
+2020. exploring the limits of trans-fer learning with a uniﬁed text-to-text transformer.
+j.mach.
+learn.
+res., 21:140:1–140:67..hannah rashkin, asli celikyilmaz, yejin choi, andplotmachines: outline-jianfeng gao.
+2020.conditioned generation with dynamic plot statein proceedings of the 2020 conferencetracking.
+on empirical methods in natural language process-ing (emnlp), pages 4274–4295, online.
+associa-tion for computational linguistics..julien tourille, olivier ferret, aurélie névéol, andxavier tannier.
+2017. neural architecture for tem-poral relation extraction: a bi-lstm approach fordetecting narrative containers.
+in proceedings of the55th annual meeting of the association for compu-tational linguistics (volume 2: short papers), pages224–230, vancouver, canada.
+association for com-putational linguistics..siddharth vashishtha, benjamin van durme, andaaron steven white.
+2019. fine-grained temporal.
+relation extraction.
+in proceedings of the 57th an-nual meeting of the association for computationallinguistics, pages 2906–2919, florence, italy.
+asso-ciation for computational linguistics..marc verhagen, robert gaizauskas, frank schilder,mark hepple, graham katz, and james pustejovsky.
+2007. semeval-2007 task 15: tempeval tempo-in proceedings of theral relation identiﬁcation.
+fourth international workshop on semantic evalua-tions (semeval-2007), pages 75–80, prague, czechrepublic.
+association for computational linguis-tics..marc verhagen and james pustejovsky.
+2008. tempo-ral processing with the tarsqi toolkit.
+in coling2008: companion volume: demonstrations, pages189–192, manchester, uk.
+coling 2008 organizingcommittee..p. vincent, h. larochelle, isabelle lajoie, yoshua ben-gio, and pierre-antoine manzagol.
+2010. stackeddenoising autoencoders: learning useful representa-tions in a deep network with a local denoising crite-rion.
+j. mach.
+learn.
+res., 11:3371–3408..su wang, greg durrett, and katrin erk.
+2019. query-in proceedings offocused scenario construction.
+the 2019 conference on empirical methods in nat-ural language processing and the 9th internationaljoint conference on natural language processing(emnlp-ijcnlp), pages 2712–2722, hong kong,china.
+association for computational linguistics..su wang, greg durrett, and katrin erk.
+2020. narra-tive interpolation for generating and understandingstories.
+corr, abs/2008.07466..su wang, eric holgate, greg durrett, and katrin erk.
+2018. picking apart story salads.
+in proceedings ofthe 2018 conference on empirical methods in nat-ural language processing, pages 1455–1465, brus-sels, belgium.
+association for computational lin-guistics..noah weber, niranjan balasubramanian,.
+andnathanael chambers.
+2018a.
+event representationsin proceedingswith tensor-based compositions.
+of the thirty-second aaai conference on artiﬁ-the 30th innovativecial intelligence, (aaai-18),intelligence (iaai-18),applications of artiﬁcialand the 8th aaai symposium on educationaladvances in artiﬁcial intelligence (eaai-18), neworleans, louisiana, usa, february 2-7, 2018,pages 4946–4953.
+aaai press..noah weber, leena shekhar, niranjan balasubrama-nian, and nathanael chambers.
+2018b.
+hierar-chical quantized representations for script genera-in proceedings of the 2018 conference ontion.
+empirical methods in natural language processing,pages 3783–3792, brussels, belgium.
+associationfor computational linguistics..7153thomas wolf, lysandre debut, victor sanh, julienchaumond, clement delangue, anthony moi, pier-ric cistac, tim rault, remi louf, morgan funtow-icz, joe davison, sam shleifer, patrick von platen,clara ma, yacine jernite, julien plu, canwen xu,teven le scao, sylvain gugger, mariama drame,quentin lhoest, and alexander rush.
+2020. trans-formers: state-of-the-art natural language process-ing.
+in proceedings of the 2020 conference on em-pirical methods in natural language processing:system demonstrations, pages 38–45, online.
+asso-ciation for computational linguistics..lili yao, nanyun peng, ralph m. weischedel, kevinknight, dongyan zhao, and rui yan.
+2019. plan-and-write: towards better automatic storytelling.
+proceedings of the aaai conference on artiﬁcial in-telligence, 33:7378–7385..wenlin yao and ruihong huang.
+2018. temporalevent knowledge acquisition via identifying narra-tives.
+in proceedings of the 56th annual meeting ofthe association for computational linguistics (vol-ume 1: long papers), pages 537–547, melbourne,australia.
+association for computational linguis-tics..xinyu zhao, shih-ting lin, and greg durrett.
+2021.effective distant supervision for temporal relationextraction.
+in proceedings of the second workshopon domain adaptation for nlp, pages 195–203,kyiv, ukraine.
+association for computational lin-guistics..ben zhou, daniel khashabi, qiang ning, and danroth.
+2019.
+“going on a vacation” takes longerthan “going for a walk”: a study of temporal com-in proceedings of themonsense understanding.
+2019 conference on empirical methods in natu-ral language processing and the 9th internationaljoint conference on natural language processing(emnlp-ijcnlp), pages 3363–3369, hong kong,china.
+association for computational linguistics..ben zhou, kyle richardson, qiang ning, tushar khot,a. sabharwal, and d. roth.
+2020. temporal rea-soning on implicit events from distant supervision.
+arxiv, abs/2010.12753..7154a scoring orderings with.
+temporalbart-indexed (tags only).
+temporalbart-indexed (tags only) scores whetheran output sequence y is temporally ordered by gath-ering the generation scores on the special tokens[ei] only as its ﬁnal ordering score:.
+p tag(y|x) =.
+bart(wy.
+t |x, wy.
+1 , · · · , wy.
+t−1).
+(2)where {wyt } is the text representation of y and i isthe set of the positions of the special tokens [ei]in {wyt }.
+this allows us to make a judgment onlydepending on the predicted temporal order of theevents rather than mixing in general token order.
+in contrast, temporalbart scores a sequence ofevents y with the generation probability on theentire text representation of y:.
+p gen(y|x) =.
+bart(wy.
+t |x, wy.
+1 , · · · , wy.
+t−1).
+(3)since many of the generation decisions here arecopying event arguments, the prediction could belargely affected by the correlation of tokens withineach argument..(cid:89).
+t∈i.
+(cid:89).
+t.architecture.
+acc.
+macro f1.
+temporalbart-indexed74.9temporalbart-indexed (tags only) 76.6.
+55.156.4.table 5: the comparison between temporalbart-indexed and its (tags only) variant on temporal eventordering.
+the test data and metrics used here are sameas in table 2..we evaluate “temporalbart-indexed (tagsonly)” on the temporal event ordering with the pro-cedure used for the models in table 2. table 5shows that this (tags only) variant further booststhe performance of temporalbart-indexed by 1.3points on the macro f1.
+this result veriﬁes thatthis setting can help prevent the ordering scoresfrom being overly affected by the text generationprobabilities, which is particularly important formctaco, where the arguments of events are morecomplex..b architecture of bert-based pairwise.
+for each input event ei in x. as with the bart-based models, the input to the bert model isthe concatenation of repr(ei) with [e] beingprepended in front of each event.
+the vector-ized representation for ei is then extracted by upi,where u is the ﬁnal bert encoded matrix, and piis the position of the ﬁrst token of ei in the inputsequence.
+each pair of event representations, upiand upj are then fed into a feed-forward functiong to compute a score b for ei preceding ej in theoutput y:.
+b(ei, ej) = g([upi; upj ; upi (cid:12) upj ]).
+(4).
+finally, the ﬁnal output y is computed by ﬁndingthe best permutation over all of the pairwise scoresby solving an ilp..c training details of bart-based.
+models.
+we train our bart-based conditional generationmodels to minimize negative log likelihood of re-constructing the original event sequence.
+we setthe learning rate to 1e-5, and use a polynomial de-cay scheduling with 500 steps of warm-up.
+all ofthe models are trained for 10 epochs, with eachepoch being 2000 updates and the batch size being64. for the deletion training scheme, we set theevent deletion probability p to 0.15. the frameworkis implemented with pytorch (paszke et al., 2019)and allennlp (gardner et al., 2017), and we usethe bart-large pretrained model from hugging-face’s transformers library (wolf et al., 2020)..during the evaluation for temporal event order-ing, we decode the output event sequences usingbeam search with the beam size being 4. for eventinﬁlling task, we use nucleus sampling with p setto 0.8..d human evaluation.
+figure 8 shows the prompt for the human evalua-tion described in §5.4, where we ask the mturkraters to evaluate the coherence and temporalityof the generation outputs.
+to help the raters ig-nore grammatical issues when making decisions,we ﬁrst ask them to check the grammaticality, thenseparately judge the coherence and the temporality..model + ssvm.
+e learning timex knowledge.
+this network uses a bert-based model (devlinet al., 2019) to obtain a vectorized representation.
+the temporal ordering and event inﬁlling tasks cor-respond to information that we might expect to be.
+7155architecture.
+randomgpt-2gpt-2 large.
+temporalbarttemporalbart-indexed.
+year.
+month.
+weekday.
+em pairwise em pairwise em pairwise em pairwise.
+hour:minute (24) hour:minute (12)em pairwise.
+26.018.015.0.
+93.081.0.
+53.049.047.3.
+96.791.3.
+21.014.016.0.
+83.085.0.
+51.045.347.7.
+88.790.0.
+18.018.019.0.
+67.071.0.
+52.055.357.7.
+78.080.7.
+18.012.09.0.
+88.084.0.
+50.743.341.7.
+93.390.7.
+13.015.011.0.
+67.065.0.
+52.746.748.7.
+78.778.0.table 6: the results of temporal event ordering on the events anchored with various types of timex.
+the test dataused here are length-3 sequences artiﬁcially made up with “die” events for the “year” timex, and 3 typical dailyevents as shown in figure 9 for other types of timex.
+the timexes of type “year” are randomly sampled from 1000to 2100. our bart-based models signiﬁcantly outperform the gpt-2 and random baselines, showing that theycan capture useful timex-related knowledge..figure 9: an example of test input event sequences fortimex evaluation.
+the appended timexes in each event,which are 12-hour clock time here, is highlighted..temporal order relations.
+we then randomly sam-ple 3 different timexes, e.g “june”, “may”, “july”for “month”, and append each of them to the eventsin the template sequence respectively with properprepositions.
+at the end, 100 examples are createdwith this process for each type of timex.
+moreconcrete examples are shown in figure 9. for thebaselines, here we use gpt-2 models to do the or-dering by using the generation probability to rankall permutations of the input events..e.2 results.
+the results are shown in table 6. first, we examinethe results of the gpt-2 models.
+in general boththe unsupervised gpt-2 (the medium model) andgpt-2 large perform worse than the random base-line, indicating that they have a limited ability toorder timexes.
+our bart-based models achievestronger results.
+the results are strongest on years.
+for 12-hour clock time, even though the modelhas to make a challenging link between the tempo-ral knowledge on “am’ and “pm” and numericalcomparisons, both of the bart-based models stillperforms signiﬁcantly better the random baseline..f examples for event inﬁlling.
+in table 7, we demonstrate more examples of theinﬁlled events generated by gpt-2, inﬁlling gpt-2and temporalbart given the seed event sequencesfrom caters.
+in general, while the events output.
+figure 8: a screenshot of prompt for the human evalu-ation described in §5.4, which includes the 3 questionsthe raters are asked to judge the event inﬁlling outputsfrom each model.
+the input events are highlighted withthe color green, and blue for the inserted events..encoded by our model pre-training.
+to test whetherour models generalize to slightly more distant tem-poral phenomena, we examine whether they areable to capture the temporal relationships betweentimexes.
+this knowledge has been shown to behard to learn in temporal relation extraction models(goyal and durrett, 2019)..e.1 evaluation setup.
+the timexes we examine here include years,months, weekdays, 24-hour clock time in“hour:minute” format and 12-hour clock time in“hour:minute am/pm” format.
+we evaluate the abil-ity of our models to order events that are anchoredwith a timex in their arguments.
+to prepare thetest input event sequences of a given type of timex,we ﬁrst artiﬁcially make up a template event se-quence with 3 typical daily events that have no.
+7156durer went to a supermarket at 7:52 pmdurer bought a book at a shop at 5:16 amdurer took a photo in front of a museum at 3:10 pmevent 1event 2event 3scenario: [inserted event] he tell me happy birthday.
+gpt-2: a new england universitystudy reveals the effect of the amer-ican tax code on college tuition ..inﬁlling gpt-2: he then turned tome and his mom and said, “ goodmorning ..temporalbart: he looked at mein the most amazing of ways, as if hewere wishing me a happy birthday..scenario: [inserted event] then he bought it with the card ..#1.
+#2.inﬁlling gpt-2: he put the card inhis wallet ..temporalbart: he pulled out asmall gift card from his wallet ..#3.scenario: kim hunkered down at home as a hurricane blew through town .
+[inserted event] she went tosleep hoping all would be well .
+she hoping all would be well ..inﬁlling gpt-2: kim slept soundly..temporalbart: kim turned thetv to catch the latest news ..gpt-2: a federal judge dismissed alawsuit wednesday from the familyof an elderly man who died after in-haling a toxic gas during an air showat the lincoln memorial ..gpt-2: it wasn’t until his brotherand mother returned from vacationthat he found out that a hurricanehad struck, bringing the death tollfrom hurricane andrew in 2012 upto 24 and leaving many people with-out electricity for weeks ..#4.scenario: tony needed to buy his grandma a birthday present .
+he went to her favorite bakery .
+the owner toldtony how to make it himself .
+[inserted event] his elated grandma couldn’t tell the difference ..gpt-2: tony got mad and left thebakery ..inﬁlling gpt-2: tony went to thegrocery store ..temporalbart: make a loaf thatlooked like grandma’s ..#5.scenario: [inserted event] he decided to use the batteries in his ﬁre detector .
+he use the batteries in hisﬁre detector ..gpt-2: i’m an independent devel-oper who’s worked for both big andsmall companies ..inﬁlling gpt-2: he ﬁnd a place tocharge the ﬁre detector batteries ..temporalbart: he see the batter-ies in his alarm clock were dead ..table 7: more examples of the inﬁlled events generated by gpt-2, inﬁlling gpt-2 and temporalbart respectively.
+scenarios are the temporally-ordered input events fed into the models, with the events separated by periods, andthe insertion position speciﬁed by [inserted event] in this ﬁgure.
+the second row in each example showsthe inﬁlled event generated by each model..by temporalbart are coherent and temporally-sensible, those from the gpt-2 models has a worsequality in terms of the temporality.
+note that thenature of the event representation does not neces-sarily guarantee a grammatical sentence when theevent is rendered in surface order..7157

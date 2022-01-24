@@ -1,0 +1,459 @@
+generating query focused summaries from query-free resources.
+yumo xu and mirella lapatainstitute for language, cognition and computationschool of informatics, university of edinburgh10 crichton street, edinburgh eh8 9ab.
+yumo.xu@ed.ac.uk.
+mlap@inf.ed.ac.uk.
+abstract.
+the availability of large-scale datasets hasdriven the development of neural models thatcreate generic summaries from single or mul-tiple documents.
+in this work we considerquery focused summarization (qfs), a task forwhich training data in the form of queries, doc-uments, and summaries is not readily available.
+we propose to decompose qfs into (1) querymodeling (i.e., ﬁnding supportive evidencewithin a set of documents for a query) and(2) conditional language modeling (i.e., sum-mary generation).
+we introduce marge, amasked rouge regression framework forevidence estimation and ranking which relieson a uniﬁed representation for summaries andqueries, so that summaries in generic data canbe converted into proxy queries for learning aquery model.
+experiments across qfs bench-marks and query types show that our modelachieves state-of-the-art performance despitelearning from weak supervision.1.
+1.introduction.
+the neural encoder-decoder framework has be-come increasingly popular in generic summariza-tion (see et al.
+2017; gehrmann et al.
+2018; liu andlapata 2019a; fabbri et al.
+2019, inter alia) thanksto the availability of large-scale datasets containinghundreds of thousands of document-summary pairs.
+training data of this magnitude is not readily avail-able for query focused summarization (qfs; dang2005) which aims to create a short summary froma set of documents that answers a speciﬁc query.
+existing corpora (nema et al., 2017; dang, 2005;hoa, 2006; baumel et al., 2016) are relatively smallfor modern data-hungry neural architectures andhave been mostly used for evaluation purposes..1our code and data is available at https://github..com/yumoxu/marge..a major bottleneck in leveraging generic sum-marization data for qfs is the absence of queriesthe majority of existing(nema et al., 2017);datasets consist of document-summary pairs, whileqfs summaries are expected to answer speciﬁcqueries.
+recent work (xu and lapata, 2020; suet al., 2020; laskar et al., 2020) sidesteps thisproblem by resorting to distant supervision fromquery-relevant nlp resources including questionanswering (rajpurkar et al., 2016; chakrabortyet al., 2020) and paraphrase identiﬁcation (dolanand brockett, 2005).
+such approaches incorporatequery modeling in the summarization process butare even more data hungry compared to genericsummarization ones, since they additionally re-quire access to qa datasets which can be extremelycostly to create (bajaj et al., 2016; kwiatkowskiet al., 2019).
+moreover, there is often a mismatchbetween queries in qa datasets and those in qfsscenarios (xu and lapata, 2020); the two types ofqueries are not identically distributed and it is prac-tically infeasible to ﬁnd appropriate query-relatedresources for all domains and topics..in this work we do not assume access to any re-sources other than those available for generic sum-marization.
+we further decompose abstractive qfsinto two subtasks: (1) query modeling (i.e., ﬁnd-ing supportive evidence within a set of documentsfor a query) and (2) conditional language model-ing (i.e., generating an abstractive summary basedon found evidence).
+under this formulation, weuse generic summarization data not only for condi-tional language modeling, but also for learning anevidence ranking model.
+inspired by the clozetask and its applications in nlp (taylor, 1953;lewis et al., 2019; lee et al., 2019), we proposemarge, a masked rouge regression frameworkfor evidence estimation and ranking.
+marge intro-.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages6096–6109august1–6,2021.©2021associationforcomputationallinguistics6096figure 1: overview of our abstractive qfs approach.
+summaries and queries are rendered with uniﬁed maskedrepresentation (umr) for training and testing, respectively.
+the summarization framework consists of a querymodel and a controllable generator.
+the query model ranks sentences in the input document(s) which provideevidence to answer the query; the generator operates over evidence bearing sentences to generate the ﬁnal summary..duces a uniﬁed representation for summaries andqueries, so that summaries in generic data can beconverted into proxy queries for learning a querymodel.
+based on the evidence selected by marge,we generate abstractive summaries whilst control-ling their length and the extent to which the queryinﬂuences their content..our contributions in this work are threefold: wepropose a weakly supervised system for abstrac-tive qfs where no query-related resources are re-quired; we discover a new type of connection be-tween generic summaries and qfs queries, andprovide a universal representation for them whichallows generic summarization data to be exploitedfor qfs; we provide experimental results on qfsbenchmarks, and show that across query types anddomains our system achieves state-of-the-art re-sults on both evidence ranking and abstractive qfs..2 related work.
+the majority of previous qfs approaches havebeen extractive, operating over queries and docu-ment clusters from which they select query-relevantsentences to compose a summary.
+they mostly dif-fer in the way centrality and relevance are estimatedand incorporated, e.g., via manifold ranking (wanet al., 2007), using a look-ahead strategy (badri-nath et al., 2011), uncertainty prediction (wan andzhang, 2014), or attention mechanisms (li et al.,2017a,b).
+more recently xu and lapata (2020)propose a coarse-to-ﬁne framework that leveragesdistant supervision from question answering to ex-tract summary-worthy content..abstractive qfs has received signiﬁcantly lessattention.
+this is due to generation models be-ing particularly data-hungry (lebanoff et al., 2018;liu and lapata, 2019a) and the scarcity of qfstraining data.
+the increasing availability of pre-.
+trained models has prompted the development ofpipeline-style frameworks for qfs which use re-sources from a wider range of nlp tasks.
+for exam-ple, su et al.
+(2020) ﬁne-tune bart (lewis et al.,2020) on cnn/dailymail (hermann et al., 2015),a single-document summarization dataset, and gen-erate abstracts for qfs by iteratively summarizingparagraphs to a budget.
+they learn a query modelfor paragraph selection based on a plethora of qaand machine reading datasets (su et al., 2019; ra-jpurkar et al., 2016).
+similarly, laskar et al.
+(2020)ﬁne-tune bertsum on cnn/dailymail, and pro-pose a three-stage system which uses supervisionfrom qfs data (typically reserved for evaluation)and related qa and paraphrase identiﬁcation tasks.
+we also focus on abstractive qfs, however, wedo not assume access to any additional trainingresources over and above generic summarizationdatasets, even for query modeling.
+moreover, oursystem is able to generate long qfs abstracts allat once, instead of iteratively creating bullet-stylesummaries which often lack coherence..3 problem formulation.
+let {(s, d)} denote a generic summarizationdataset where d = {d1, d2, .
+.
+.
+, dm } is a col-lection of documents with corresponding sum-maries s. |d| = 1 for single-document summariza-tion (sds) and |d| > 1 for multi-document sum-marization (mds).
+in qfs, a query q additionallyspeciﬁes an information request, {(s, d, q)}.
+itis often assumed (e.g., in duc benchmarks) thatq consists of a short title (e.g., amnesty interna-tional ), and a query narrative which is longer andmore detailed (e.g., what is the scope of opera-tions of amnesty international and what are theinternational reactions to its activities?
+)..in this work, we propose to decompose qfs.
+6097masked summary-the da vinci code was published in 2003, and within six years brown had booted john grisham from the no.
+1 slot on the list of writers whose books were most often donated to oxfam's 700 shops.-the independent in 2012 reported brown's best-seller was the most-donated book for the fourth year running.
+[mask] was published in 2003, and within [mask] had booted john grisham from [mask] whose books were most often donated to [mask].
+[mask] reported [mask] was the most-donated book for [mask] running .
+[mask] hydroelectric projects are planned or in progress and [mask] problems are associated with them .what hydroelectric projects are planned or in progress and what problems are associated with them?
+masked query training: generic summary   testing: qfs queryquery modelsent 1sent 2sent k sent 1sent 2sent nquery focused summarycontrollable generatorclsumr seqsepranked evidencedocument(s)sent 3sent 4umr seqsummary len(a) unified masked representaion(b) framework of query focused summarization into two sub-tasks, namely query modeling andlanguage modeling.
+conditionalthe querymodel qθ(d|q; θ) estimates whether textual units(e.g., sentences) within document cluster d arerelevant to query q, while pφ(s|d, q; φ) gener-ates summary s conditioned on evidence providedby the query model and (optionally) the query it-self (see figure 1(b) for an illustration).
+whens ⊥⊥ q, we have a query-agnostic conditionallanguage model pφ(s|d; φ).
+otherwise, the condi-tional language model is query-guided.
+our querymodel is trained with distant supervision derivedfrom generic summarization data which is easierto obtain (e.g., from online sources) compared toqa datasets which must be annotated from scratch(e.g., for different types of questions and domains).
+although queries are not verbalized in generic sum-marization, we hypothesize that the summariesthemselves constitute a response to latent queries..so, how can we reverse-engineer the queriesfrom the summaries?
+inspired by the standardcloze task (taylor, 1953) and its recent variants(lewis et al., 2019; lee et al., 2019), we renderqueries and summaries in a uniﬁed masked rep-resentation (umr) which enables summaries toserve as proxy queries for model training, as shownin figure 1(a).
+we further assume that the answerto these queries can be found in sentences whichform part of the document collection d. althoughwe do not know for certain what these sentencesare we can assume that if they have a high rougescore against the reference summary they are likelyto contain an answer.
+we therefore use rouge asa distant supervision signal, and train a model thattakes a query and document sentence as input andestimates their relevance.
+at inference time, wealso render actual queries in umr and rank all sen-tences in the document collection with our trainedmodel.
+the most relevant sentences serve as inputto a conditional language model to generate queryfocused abstractive summaries..4 query modeling.
+as explained earlier, we train a query modelqθ(d|q; θ) on summary-sentence pairs via distantsupervision.
+we use a summary-based proxy queryumrs during training and an actual query umrqduring testing.
+in the following, we ﬁrst describehow umrs are obtained and then discuss how thequery model is trained..algorithm 1 generate masked summary1: function masksummary(s, γ) (cid:46) summary sentences and mask ratioparse each s ∈ s with openie to extract information slots i2:reveal budget b = |i| ∗ γ3:initialize revealed word number b = 04:initialize masked summary m to s and ﬁll with [mask]5:initialize eom = false6:while true do7:8:9:10:.
+sa =getavaiable(s)for s ← sa do.
+(cid:46) reveal a randomly sampled slot and.
+(cid:46) reveal information partially.
+(cid:46) sentences with masked slots.
+b = b+ reveal(s).
+(cid:46) end of masking.
+record its length, i.e., #tokens.
+if b ≥ b then eom = true.
+if eom then.
+for m ← m domerge(m).
+(cid:46) start post-process.
+(cid:46) merge adjacent [mask].
+11:.
+12:13:14:.
+15:16: end function.
+return m.uniﬁed masked representation the intuitionbehind umr is that a summary will encapsulatemost salient information a user needs, while a querytypically covers only a small fraction.
+we thus addone or more “placeholders” to the query to repre-sent missing information the user actually seeks.
+we also identify such information in generic sum-maries for selective masking, to reduce the distri-butional shift during training..the umr for a summary is the concatenationof its sentential umrs.
+to convert a sentencefrom natural language to umr, we parse it withopen information extraction (open ie; stanovskyet al.
+2018) to a set of propositions consisting ofverbs and their arguments.
+the latter are consid-ered candidate information slots i. we initializealgorithm 1, by replacing all such slots with a[mask] token.
+we subsequently sample and re-veal a set of slots subject to a budget constraint.
+wedeﬁne the budget as b = γ ∗ |i| where γ ∈ [0, 1]modulates the proportion of tokens to be revealedwithin i slots (and is optimized on the develop-ment set).
+finally, in order to keep the representa-tion of umrs and umrq consistent (see next para-graph), we merge adjacent [mask] tokens to one[mask] resulting in a partially masked summary..we mask qfs queries by considering their struc-ture and lexical makeup.
+queries in duc bench-marks often contain interrogative words (e.g., howis a and what is b ) and request words (e.g., de-scribe a and tell me b ).
+following this observation,we manually collect a small set of such query wordsand replace them with [mask].
+for queries witha title and a narrative, we ﬁrst mask the narrativeand then prepend “[mask] t .”, where t is a se-quence of title tokens.
+figure 1(a) shows examplesof a masked query and summary..6098evidence ranking we represent sentences in adocument collection and umr queries with a pre-trained bert model (devlin et al., 2019).
+speciﬁ-cally, we concatenate a umr query and a candidatesentence to sequence “[cls] u [sep] c [sep]”where u is a sequence of tokens within a umrquery and c a sequence of tokens in a documentsentence (we pad each sequence in a minibatchof l tokens).
+the [cls] vector serves as inputto a single layer neural network which estimateswhether the sentence contains sufﬁcient evidenceto answer the query (see figure 1(b) right).
+we usethe mean-square error to compute the loss and up-date the encoding parameters in bert via standardbackpropagation:.
+l(θ) =.
+1|d|.
+(s,c)∼d.
+(cid:88).
+(y − ˆy(s, c; θ))2(cid:105)(cid:104).
+..(1).
+where s, c is a summary-sentence pair sampledfrom collection d and y the training signal.
+recallthe summary is rendered as umrs..previous work (liu and lapata, 2019a) hasused rouge-2 as training signal for paragraphranking.
+however, sentences are signiﬁcantlyshorter than paragraphs, and we observe a num-ber of instances with a rouge-2 score of 0.we therefore perform label smoothing and de-ﬁne y as the f1 interpolation of rouge-2 androuge-1: y = r2(s, c) + λ ∗ r1(s, c) whereλ is optimized on the development set.
+at infer-ence time, we use the trained model to compute theafﬁnity score between umrq and all candidate sen-tences in d and rank them accordingly.
+the highestranked sentences are deemed query-relevant andpassed on to our summary generation model.2.
+query narrative expansion in some casesqueries may be relatively short and narratives ab-sent.
+this can be problematic for our setup sincequery proxies (in the form of summaries) are typ-ically long and detailed.
+for datasets with shortqueries we automatically create query narrativesin an unsupervised fashion.
+we employ lexrank(erkan and radev, 2004) to select a subset of rep-resentative sentences under a word budget and con-catenate them to form narratives (which we appendto the original queries)..2the cloze task has been also employed in recent work ingeneric summarization (huang et al., 2020).
+in comparison,we address a different research question (i.e., query modelingvs. summary evaluation) based on a different formulation(masked rouge regression vs. multiple-choice qa)..5 query focused generation.
+we also leverage generic summarization datasets toﬁne-tune a pretrained language model for abstrac-tive qfs.
+in experiments we employ the publiclyreleased unilmv2 (bao et al., 2020) to instanti-ate the controllable generator shown in figure 1(b),however any other language model could have beenused instead..with transformer (vaswani et al., 2017) as thebackbone network, unilmv2 is jointly pretrainedfor natural language understanding and generation.
+speciﬁcally, a bidirectional model is employs anautoencoding objective (ae; identical to devlinet al.
+2019), while a partially autoregressive (par)sequence-to-sequence model decomposes the prob-ability of masked tokens in input sequence x as:.
+p(xm | x\m ) =.
+p(xm | x\m≥i).
+(2).
+|m |(cid:89).
+(cid:89).
+i=1.
+m∈mi.
+where m is the uniformly-produced factorizationorder.
+the masked position set mi at the ith fac-torization step can be either a token or a n-gramblock.
+xm is a set of xmi, and similarly, x\m is aset of x\mi.
+the pretraining loss is computed aslae + lpar..at inference, unilmv2 operates over sentencesdeemed relevant by the query model and decodessummaries autoregressively (see figure 1(b) left)..synthetic mds data the pre-trained languagemodel can be ﬁne-tuned on mds datasets(e.g., multi-news; fabbri et al.
+2019) which areperhaps better aligned with the qfs task since bothmds and qfs operate over document clusters.
+weadditionally propose a way to create synthetic mdsdatasets based on sds data.
+this is advantageousfor two reasons.
+firstly, mds resources are fairlylimited compared to sds data (zhang et al., 2018;lebanoff et al., 2018).
+and secondly, by construc-tion, we can ensure various data characteristicswhich might be desirable (e.g., the number of top-ics represented in the document collection)..a challenge with leveraging sds for qfs isthe summary length (lebanoff et al., 2018).
+sum-maries in sds datasets such as cnn/dailymail(hermann et al., 2015), are on average 30 tokenslong.
+in contrast, query focused summaries can beas long as 250 tokens.
+we sidestep this problem byadopting a retrieval-based solution.
+speciﬁcally,we ﬁrst build a database with all summaries in the.
+6099original dataset.
+for each sample (di, si), we querythe database with summary si.
+we retrieve ni − 1other summaries si with the bigram hashing andtf-idf matching method described in chen et al.
+(2017).
+then, we fetch their corresponding articlesdi, and form the ith cluster as:.
+d∗.
+i = {di}ˆs∗i = concat(si, , si,1, .
+.
+.
+, si,ni), si,n ∈ si.
+di.
+(3).
+(4).
+(cid:91).
+where d∗i are the source documents, and ˆs∗i is a po-tentially redundant summary of them.
+we set ni tominimize the length difference between ˆs∗i and oursummary length requirement (e.g., 250 tokens).
+toobtain the ﬁnal summary s∗i , we eliminate redun-dancy by selecting sentences from the start of ˆs∗i ,skipping sentences that have high cosine similaritywith those which have already been selected..summarization inputin generic mds, the in-put to the summarization model is a long sequence,i.e., documents within a cluster are concatenatedtogether and sentences in each document followtheir original order (fabbri et al., 2019).
+in qfs,information about absolute (document) position islost after evidence ranking.
+as a result, there is adiscrepancy between training and testing for ourgeneration model.
+to mitigate this, we collect allsentences across documents for each training sam-ple and rank them in descending order accordingto their rouge-2 score against the reference sum-mary.
+the pretrained language model is ﬁne-tunedagainst this evidence-ranked list of sentences.
+dur-ing inference, when actual queries are available,we instead use the top sentences ranked by ourquery model as input to summary generation..query guidance given that summarization in-put essentially consists of sentences that are highlyrelevant to the query, an obvious question con-cerns the usefulness of explicitly modeling thequery during generation.
+we thus instantiate twoconditional language models.
+for a query-guidedsummarizer pφ(s|d, q; φ), we prepend umrss tothe selected evidence during training and umrqat inference.
+while for a query-agnostic summa-rizer pφ(s|d; φ), we only consider the selectedevidence as input to our summarizer and this set-ting is identical to generic mds..length control qfs tasks usually require sum-maries of a ﬁxed length budget (e.g, 250 words),whereas summary length is bound to be variable.
+datasetdomainquery narrative#clusters#queries/cluster#documents/cluster#summaries/query#words/summary.
+2005 2006 2007 td-qfscross cross cross medicalshortlong long long4451011852534250250.
+501254250.
+501324-9250.table 1: multi-document qfs dataset statistics..in the training data.
+inspired by fan et al.
+(2018),we quantize summary length into discrete bins.
+weaugment each training instance with this informa-tion, i.e., we prepend a length token (e.g., [230])to document sentences.
+at inference, we inform themodel of the summary budget by prepending the ex-pected length token (e.g., [250]) to the sentencesselected by the evidence ranker (see figure 1(b))..6 experimental setup.
+datasets we performed experiments on the duc2005-2007 qfs benchmarks and td-qfs (baumelet al., 2016).
+duc benchmarks contain long querynarratives while td-qfs focuses on medical textswith short keyword queries.
+statistics for bothdatasets are given in table 1. we used duc 2005as a development set to optimize hyperparametersand select abstractive models, and evaluated perfor-mance on the other three datasets..we used multi-news (fabbri et al., 2019) andcnn/dailymail (hermann et al., 2015) as ourgeneric summarization datasets to train marge(for evidence ranking) and to ﬁne-tune unilmv2(for summary generation).
+data statistics are shownin table 2. to create the training and develop-ment sets for optimizing marge, we sampled sen-tences from each dataset.
+speciﬁcally, we tookthe ﬁrst and last 20 sentences from each clusterin multi-news and the ﬁrst and last three sen-tences from each article in cnn/dailymail.
+forﬁne-tuning unilmv2, we used the original multi-news and the synthetic multi-document version ofcnn/dailymail described in section 5..implementation details we used the publiclyreleased bert model3 and ﬁne-tuned it forrouge regression with a learning rate of 3×10−5and a batch size of 128 for 3 epochs on 8 gpus(gtx 2080 ti).
+we trained two summarization.
+3https://github.com/huggingface/pytorch-transformers.
+6100query modeling#sentence/doc#train#validation#words/proxy query#masks/proxy query.
+multi-news cnn/dm3201,615,508 1,719,21080,05226.08.1.
+200,824111.735.6.summary generation multi-news cnn/dm287,227#clusters4.1#documents/cluster261.3#words/summary.
+44,9722.8257.2.table 2: training data for query modeling and sum-mary generation.
+cnn/dm statistics for summary gen-eration refer to synthetic mds dataset proposed in thiswork (based on cnn/dm)..models on cnn/dailymail and multi-news, re-spectively, with the same hardware.
+for both mod-els, we set the maximum input length to 768, andﬁne-tuned the publicly released unilmv2 model4with a learning rate of 7 × 10−5 and a batch size of16 for 40,000 steps with gradient accumulation ev-ery 4 steps.
+during decoding, we used beam searchwith beam size 5 and trigram blocking (pauluset al., 2018) to reduce redundancy.
+the cosinesimilarity threshold for redundancy removal wasset to 0.6 and summary length was discretized to10 bins.
+the λ parameter for label smoothing wasset to 0.15. we set γ, the parameter which modu-lates the proportion of information slots to revealduring masking, to 0 (see appendix for detailedanalysis of γ and its effect on model performance)..7 results.
+our experiments evaluate both components of theproposed approach, namely query modeling andsummary generation.
+we assess the evidenceranker and the effectiveness of the uniﬁed mask-ing.
+we also compare our summaries against com-petitive abstractive and extractive systems usingautomatic and human-based evaluation..7.1 query modeling.
+evaluation metrics we evaluate query model-ing with retrieval and summarization metrics.
+forthe former evaluation, we follow liu and lapata(2019a), concatenate the top k ranked sentences,and calculate recall against gold summaries.
+weadditionally propose to evaluate model output as.
+4https://github.com/microsoft/unilm.
+models.
+duc 2006 duc 2007 td-qfsr@10 r@30 r@10 r@30 r@10 r@308.4 19.1 17.2 35.6oracle6.7 16.28.5 18.5 14.2 25.9termfreq 7.2 15.19.8 21.9bertqabertmrc8.1 16.4marge-mn 11.1 20.2 13.8 25.3 11.2 21.6+expand — — — — 18.1 32.9marge-cd 9.1 17.4 11.1 22.1 10.0 18.7+expand — — — — 17.2 27.7.
+8.5 16.3 10.2 20.29.0 19.28.2 16.6.table 3: retrieval performance of evidence rankers.
+top k sentences.
+r@k is rouge-2 recall againstmarge models are trained on multi-news (mn) andcnn/dailymail (cd) datasets..if it were an extractive summary, to better assesscoverage and informativeness.
+we thus take the topsentences subject to a budget of 250 tokens, and re-move redundancy by selecting sentences from thetop and skipping sentences that have high cosinesimilarity (e.g., ≥ 0.6) with selected ones.
+we userouge f1 to evaluate the resulting summaries sothat precision is also taken into account..results we compare marge against term fre-quency, a simple but effective retrieval method thatperforms particularly well on duc datasets (katra-gadda and varma, 2009).
+we also compare to twosemantic matching models used for extractive qfs(xu and lapata, 2020): bertqa which is trainedon the joint set of wikiqa (yang et al., 2015) andtrecqa (yao et al., 2013), and bertmrc which isﬁne-tuned on squad 2.0 (rajpurkar et al., 2018).
+oracle uses reference summaries as queries toretrieve summary sentences.
+for summarizationevaluation, we report upper bound performance(gold) which we estimated by comparing a (ran-domly selected) reference summary against the re-maining three reference summaries.
+in addition, wecompare to lead which returns all lead sentencesof the most recent document (up to 250 words)and lexrank (erkan and radev, 2004), a widely-used unsupervised method based on markov ran-dom walks on sentence-similarity graphs.5.
+we summarize ranking and summarization re-sults in tables 3 and 4. as we can see, despite learn-ing from weak signals, i.e., proxy queries and proxyanswers, marge outperforms the strongest base-.
+5to examine ranking performance, we exclude multi-stageframeworks like xu and lapata (2020) that rerank the evidencewith additional modules (e.g., centrality)..6101modelsgoldoracleleadtermfreqlexrankbertqabertmrcmarge-mn+expandmarge-cd+expand.
+duc 2006 duc 2007 td-qfs19.116.011.314.212.714.914.316.6—15.8—.
+—23.010.412.012.216.113.215.923.016.922.7.
+17.014.810.412.611.413.913.614.5—13.9—.
+table 4: performance of evidence rankers on extractiveqfs.
+we report the f1 score of r-su4 (for the full setof rouge results, see appendix)..modelsmarge-mn−verb−mask−query−openie.
+duc 2006 duc 2007 td-qfs16.6↓0.3↓1.2↓2.9↓1.1.
+23.0↓2.8↓1.5↓12.6↓2.1.
+14.5↓0.5↓0.8↓2.9↓0.9.
+table 5: ablation results on training data (absoluteperformance decrease denoted by ↓)..line, bertqa, under both evaluation tasks.
+with-out recourse to any question/answer annotations ordataset-speciﬁc retrieval methods, our model pro-vides more informative input to the downstreamgeneration task.
+as anticipated, query expansion(+expand) gives a big boost on td-qfs (whichhas short queries) leading to better coverage..ablation studies table 5 shows the outcome ofvarious ablation studies which assess the effec-tiveness of masking and how to best instantiate it.
+speciﬁcally, −verb additionally treats verbs as in-formation slots for sampling and masking; −maskremoves masking entirely so that the whole sum-mary is revealed; −query removes the proxy query(at training time) and the actual query (at infer-ence time); this is to investigate whether our modelsimply learns to judge sentence salience based onits own features, instead of performing semanticmatching with the given query; −openie removesthe dependency on open ie and chooses words tomask at random.
+speciﬁcally, we randomly mask15% words in summaries as in bert (devlin et al.,2019) and merge adjacent [mask] tokens.
+perfor-mance drops in all cases, especially when queries.
+modelspqsum-wsl†querysum∗bart-caqpqsumunilm-mnunilm-cdmargesum-mnmargesum-cd.
+duc 2006 duc 2007 td-qfs17.716.814.416.012.314.916.516.9.
+—20.7——12.916.716.520.9.
+16.515.312.914.811.813.614.315.1.table 6:abstractive summarization models withr-su4 (full set of results in appendix); ∗/†: extrac-tive/supervised method..are removed, underscoring the effectiveness of theproposed representation and training framework..7.2 abstractive summarization.
+automatic evaluation table 6 compares ourmodel, which we call margesum, against ex-isting qfs systems.
+these include pqsum-wsl(laskar et al., 2020) a supervised abstractive sys-tem which represents the state of the art on ducbenchmarks.
+it ﬁrst extracts relevant sentences foreach document with a qa model, it then replacessome of these with reference summary sentencesvia a paraphrase model, and uses them to furtherﬁne-tune bertsum (liu and lapata, 2019b).
+in itssupervised incarnation, two years’ duc datasetsare used for training and one for testing.
+query-sum (xu and lapata, 2020) is state-of-the-art ex-tractive system which adopts a coarse-to-ﬁne pro-cess for salience estimation..the second block compares our model with twodistantly supervised approaches.
+bart-caq (suet al., 2020) uses an ensembled qa model to ex-tract answer evidence, and ﬁne-tuned bart (lewiset al., 2020) to iteratively generate summaries fromparagraphs.
+pqsum (laskar et al., 2020), usesﬁne-tuned bertsum to generate summaries foreach document in a cluster, and a qa model torank summary sentences against the query.
+table 7compares these models and our own in terms oftheir training requirements..the third block presents the performanceof unilm ﬁne-tuned on multi-news andcnn/dailymail following the standard setting inbao et al.
+(2020).
+it uses no query guidance orlength control.
+documents are concatenated asinput for training.
+during testing, sentences areselected with marge but ordered according to.
+6102qa pi gs qfsmodels(cid:51) (cid:55) (cid:51) (cid:55)bart-caq (su et al., 2020)(cid:51) (cid:55) (cid:51) (cid:55)pqsum (laskar et al., 2020)pqsum-wsl (laskar et al., 2020) (cid:51) (cid:51) (cid:51) (cid:51)(cid:55) (cid:55) (cid:51) (cid:55)unilm (bao et al., 2020)(cid:55) (cid:55) (cid:51) (cid:55)margesum.
+table 7: training requirements for existing qfs mod-els (qa, pi, gs, and qfs stand for question answer-ing, paraphrase identiﬁcation, generic summarizationand query focused summarization)..duc 2006 duc 2007 td-qfs.
+modelsmarge-cdbertqa−rank−length−query.
+15.1↓1.0↓1.7↓0.1↓0.5.
+16.9↓2.2↓3.1↓0.5↓0.3.
+20.9↓6.1↓1.3↓0.2↓0.4.
+table 8:ablations for margesum trained oncnn/daily mail (performance decrease denoted by ↓)..their original document position.
+the last blockshows two variants of margesum, optimized onmulti-news and a synthetic training set built fromcnn/dailymail.
+both take as input sentences se-lected with marge-mn during inference..as we can see, without requiring expensive qadata (see table 7), margesum-cd outperformsexisting distantly supervised approaches.
+its perfor-mance on duc is on par with one of the strongestextractive systems, while on td-qfs it is supe-rior across metrics.
+also note that marge trainedon synthetic mds data outperforms margesum-mn.
+compared to multi-news, synthetic sum-maries cover more topics and are less redundant,which is suited to qfs where there are usuallymultiple sub-queries to answer..ablation studies table 8 presents the resultsof several ablation studies on margesum-cd.
+replacing the input to the summarization com-ponent with sentences selected by bertqa (xuand lapata, 2020) signiﬁcantly decreases perfor-mance, demonstrating that sentences selected bymarge are useful to downstream abstractive sum-marization.
+removing evidence ranking altogether(−rank) leads to a large performance drop; this isexpected since sentence position information fromthe original documents does not transfer well toqfs settings.
+removing length control (−length)also hurts performance as does the removal of queryguidance (−query) at inference time..ducgoldpqsum-wslquerysumunilm-cdmargesum-cd 2.91.rel3.052.952.792.43†◦.
+td-qfsgoldquerysumunilm-cdmargesum-cd 4.55.rel4.704.323.63†◦.
+suc3.293.273.133.093.25.suc4.233.90◦4.124.02.coh3.352.93†◦2.94†◦3.273.30.coh4.603.80†◦4.284.37.human evaluation results on ductable 9:average relevance,(above) and td-qfs (below):succinctness, coherence ratings; †:sig differentfrom margesum-cd; ◦: sig different from gold (atp < 0.05, using a pairwise t-test)..human evaluation we also evaluated modelsummaries in a judgment elicitation study via ama-zon mechanical turk.
+native english speakers(self-reported) were asked to rate query-summarypairs on two dimensions: succinctness (does thesummary avoid unnecessary detail and redundantinformation?)
+and coherence (does the summarymake logical sense?).
+the ratings were obtainedusing a ﬁvepoint likert scale.
+in addition, partic-ipants were asked to assess the relevance of thesummary to the query.
+crowdworkers read a sum-mary and for each sentence decided whether it isrelevant (i.e., it provides an answer to the query),irrelevant (i.e., it does not answer the query), andpartially relevant (i.e., it is not clear it directly an-swers the query).
+relevant sentences were awardeda score of 5, partially relevant ones a score of 2.5,and 0 otherwise.
+sentence scores were averaged toobtain a relevance score for the whole summary..participants assessed summaries created bypqsum-wsl, the state-of-the-art abstractive sys-tem, querysum, a state-of-the-art extractive sys-tem, unilm-cd, and margesum-cd.6 we alsorandomly selected gold standard summaries toinclude as an upper bound.
+we sampled 20 query-cluster pairs from duc (2006, 2007; 10 from eachset), and 20 pairs from td-qfs (5 from each clus-ter) and collected three responses per pair..6we are grateful to md tahmid rahman laskar for pro-viding us with the output of their pqsum-wsl system.
+weinclude pqsum-wsl only for human evaluation on ducsince it was not evaluated on td-qfs (laskar et al., 2020)and system output is not available..6103table 9 shows the human ratings for each sys-tem (we provide examples of summary output inappendix c).
+participants perceive margesum-cd on par with pqsum-wsl in terms of queryrelevance and summary succinctness, while sig-niﬁcantly better than pqsum-wsl and query-sum in terms of coherence.
+in fact, participantsﬁnd summaries pqsum-wsl summaries as inco-herent as those created by the extractive query-sum; this is probably due to the fact that pqsum-wsl ﬁrst generates an abstractive summary foreach document and then re-ranks the generated sen-tences.
+therefore, ﬁnal summary sentences areless related to each other.
+summaries from our sys-tem are also considered signiﬁcantly more relevantthan unilm-cd.
+compared to pqsum-wsl,although unilm-cd is not good at producing rel-evant content, it maintains relatively higher coher-ence, demonstrating the effectiveness of trainingabstractive systems with synthetic data from sdsand generating long summaries at once..8 conclusions.
+in this work we proposed an abstractive frame-work for query focused summarization.
+we pro-vided a uniﬁed mask representation for summariesand queries, which enables summaries to serveas proxy queries for model training.
+as a re-sult, a query model can be trained with genericsummarization data without relying on additionalquestion-answering resources.
+experimental re-sults across datasets show that the proposed sys-tem yields state-of-the-art performance despite theweakly supervised setting, and produces more rel-evant and coherent summaries compared to exist-ing approaches.
+in the future, we would like topush this low-resource approach even further andattempt to generate abstractive summaries withoutaccess to any summarization datasets..acknowledgments.
+the authors would like to thank the anonymousreviewers for their valuable feedback.
+we acknowl-edge the ﬁnancial support of the european re-search council (lapata; award number 681760).
+this research is based upon work supported in partby the ofﬁce of the director of national intelli-gence (odni), intelligence advanced researchprojects activity (iarpa), via contract fa8650-17-c-9118.
+the views and conclusions containedherein are those of the authors and should not be.
+interpreted as necessarily representing the ofﬁcialpolicies or endorsements, either expressed or im-plied, of the odni, iarpa, or the u.s. govern-ment.
+the u.s. government is authorized to re-produce and distribute reprints for governmentalpurposes notwithstanding any copyright annotationtherein..references.
+rama badrinath, suresh venkatasubramaniyan, andce veni madhavan.
+2011.improving query fo-cused summarization using look-ahead strategy.
+inproceedings of the 33rd european conference onadvances in information retrieval, pages 641–652,dublin, ireland..payal bajaj, daniel campos, nick craswell, li deng,jianfeng gao, xiaodong liu, rangan majumder,andrew mcnamara, bhaskar mitra, tri nguyen,et al.
+2016. ms marco: a human generatedarxivmachine reading comprehension dataset.
+preprint arxiv:1611.09268..hangbo bao, li dong, furu wei, wenhui wang, nanyang, xiaodong liu, yu wang, jianfeng gao, song-hao piao, ming zhou, et al.
+2020. unilmv2:pseudo-masked language models for uniﬁed lan-in proceedings of theguage model pre-training.
+37rd international conference on machine learn-ing, pages 642–652, online..tal baumel, raphael cohen, and michael elhadad.
+2016. topic concentration in query focused summa-rization datasets.
+in proceedings of the 30th aaaiconference on artiﬁcial intelligence, pages 2573–2579, phoenix, arizona..souradip chakraborty, ekaba bisong, shweta bhatt,thomas wagner, riley elliott, and francescomosconi.
+2020.biomedbert: a pre-trainedin pro-biomedical language model for qa and ir.
+ceedings of the 28th international conference oncomputational linguistics, pages 669–679, online..danqi chen, adam fisch, jason weston, and antoinebordes.
+2017. reading wikipedia to answer open-in proceedings of the 55th an-domain questions.
+nual meeting of the association for computationallinguistics, pages 1870–1879, vancouver, canada..hoa trang dang.
+2005. overview of duc 2005..inproceedings of the 2005 document understandingconference, pages 1–12, vancouver, canada..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language under-in proceedings of the 2019 conferencestanding.
+of the north american chapter of the associationfor computational linguistics: human languagetechnologies, pages 4171–4186, minneapolis, min-nesota..6104william b dolan and chris brockett.
+2005. automati-cally constructing a corpus of sentential paraphrases.
+in proceedings of the third international workshopon paraphrasing, pages 9–16, jeju island, korea..kenton lee, et al.
+2019. natural questions: a bench-mark for question answering research.
+transactionsof the association for computational linguistics,7:453–466..günes erkan and dragomir r radev.
+2004. lexrank:graph-based lexical centrality as salience in textsummarization.
+journal of artiﬁcial intelligence re-search, 22:457–479..alexander richard fabbri, irene li, tianwei she, suyili, and dragomir radev.
+2019. multi-news: alarge-scale multi-document summarization datasetand abstractive hierarchical model.
+in proceedingsof the 57th annual meeting of the association forcomputational linguistics, pages 1074–1084, flo-rence, italy..angela fan, david grangier, and michael auli.
+2018.controllable abstractive summarization.
+in proceed-ings of the 2nd workshop on neural machine trans-lation and generation, pages 45–54, melbourne,australia..sebastian gehrmann, yuntian deng, and alexanderrush.
+2018. bottom-up abstractive summarization.
+in proceedings of the 2018 conference on empiri-cal methods in natural language processing, pages4098–4109, brussels, belgium..jiafeng guo, yixing fan, qingyao ai, and w brucecroft.
+2016. a deep relevance matching modelin proceedings of the 25thfor ad-hoc retrieval.
+acm international on conference on informationand knowledge management, pages 55–64, indi-anapolis, indiana..karl moritz hermann, tomáš koˇciský, edward grefen-stette, lasse espeholt, will kay, mustafa suleyman,and phil blunsom.
+2015. teaching machines to readin proceedings of the 28th in-and comprehend.
+ternational conference on neural information pro-cessing systems, page 1693–1701, cambridge, ma,usa..td hoa.
+2006. overview of duc 2006..in proceed-ings of the 2006 document understanding confer-ence, new york, usa..luyang huang, lingfei wu, and lu wang.
+2020.knowledge graph-augmented abstractive summa-rization with semantic-driven cloze reward.
+in pro-ceedings of the 58th annual meeting of the asso-ciation for computational linguistics, pages 5094–5107, online..rahul katragadda and vasudeva varma.
+2009. query-focused summaries or query-biased summaries?
+inproceedings of the 47th annual meeting of the asso-ciation for computational linguistics and the 4th in-ternational joint conference on natural languageprocessing, pages 105–108, suntec, singapore..tom kwiatkowski, jennimaria palomaki, olivia red-ﬁeld, michael collins, ankur parikh, chris alberti,danielle epstein, illia polosukhin, jacob devlin,.
+md tahmid rahman laskar, enamul hoque, andjimmy xiangji huang.
+2020. wsl-ds: weakly su-pervised learning with distant supervision for queryfocused multi-document abstractive summarization.
+in proceedings of the 28th international conferenceon computational linguistics, pages 5647–5654,online..logan lebanoff, kaiqiang song, and fei liu.
+2018.adapting the neural encoder-decoder frameworkinfrom single to multi-document summarization.
+proceedings of the 2018 conference on empiricalmethods in natural language processing, pages4131–4141, brussels, belgium..kenton lee, ming-wei chang, and kristina toutanova.
+2019. latent retrieval for weakly supervised opendomain question answering.
+in proceedings of the57th annual meeting of the association for com-putational linguistics, pages 6086–6096, florence,italy..mike lewis, yinhan liu, naman goyal, mar-jan ghazvininejad, abdelrahman mohamed, omerlevy, veselin stoyanov, and luke zettlemoyer.
+2020. bart: denoising sequence-to-sequence pre-training for natural language generation, translation,and comprehension.
+in proceedings of the 58th an-nual meeting of the association for computationallinguistics, pages 7871–7880, online..patrick lewis, ludovic denoyer, and sebastian riedel.
+2019. unsupervised question answering by clozetranslation.
+arxiv preprint arxiv:1906.04980..piji li, wai lam, lidong bing, weiwei guo, and hangli.
+2017a.
+cascaded attention based unsupervisedinformation distillation for compressive summariza-in proceedings of the 2017 conference ontion.
+empirical methods in natural language processing,pages 2081–2090, brussells, belgium..piji li, zihao wang, wai lam, zhaochun ren, andlidong bing.
+2017b.
+salience estimation via varia-tional auto-encoders for multi-document summariza-tion.
+in proceedings of the 31th aaai conference onartiﬁcial intelligence, pages 3497–3503, san fran-cisco, california, usa..yang liu and mirella lapata.
+2019a.
+hierarchicaltransformers for multi-document summarization.
+inproceedings of the 57th annual meeting of the asso-ciation for computational linguistics, pages 5070–5081, florence, italy..yang liu and mirella lapata.
+2019b.
+text summariza-tion with pretrained encoders.
+in proceedings of the2019 conference on empirical methods in naturallanguage processing and the 9th international jointconference on natural language processing, pages3730–3740, hong kong, china..6105preksha nema, mitesh m. khapra, anirban laha, andbalaraman ravindran.
+2017. diversity driven at-tention model for query-based abstractive summa-in proceedings of the 55th annual meet-rization.
+ing of the association for computational linguistics,pages 1063–1072, vancouver, canada..romain paulus, caiming xiong, and richard socher.
+2018. a deep reinforced model for abstractive sum-marization.
+in proceedings of the 6th internationalconference on learning representations, vancou-ver, canada..pranav rajpurkar, robin jia, and percy liang.
+2018.know what you don’t know: unanswerable ques-tions for squad.
+in proceedings of the 56th annualmeeting of the association for computational lin-guistics, pages 784–789, austin, texas..pranav rajpurkar, jian zhang, konstantin lopyrev, andpercy liang.
+2016. squad: 100,000+ questions formachine comprehension of text.
+in proceedings ofthe 2016 conference on empirical methods in nat-ural language processing, pages 2383–2392, syd-ney, australia..abigail see, peter j. liu, and christopher d. manning.
+2017. get to the point: summarization with pointer-generator networks.
+in proceedings of the 55th an-nual meeting of the association for computationallinguistics, pages 1073–1083, vancouver, canada..xiaojun wan,.
+jianwu yang,.
+and jianguo xiao.
+2007. manifold-ranking based topic-focused multi-in proceedings of thedocument summarization.
+20th international joint conference on artiﬁcial in-telligence, pages 2903–2908, hyderabad, india..xiaojun wan and jianmin zhang.
+2014. ctsum: ex-tracting more certain summaries for news articles.
+in proceedings of the 37th international acm sigirconference on research & development in informa-tion retrieval, pages 787–796, new york, unitedstates..yumo xu and mirella lapata.
+2020. coarse-to-ﬁnequery focused multi-document summarization.
+inproceedings of the 2020 conference on empiricalmethods in natural language processing, pages3632–3645, online..yi yang, wen-tau yih, and christopher meek.
+2015.wikiqa: a challenge dataset for open-domain ques-in proceedings of the 2015 con-tion answering.
+ference on empirical methods in natural languageprocessing, pages 2013–2018, lisbon, portugal..xuchen yao, benjamin van durme, chris callison-burch, and peter clark.
+2013. answer extractionas sequence tagging with tree edit distance.
+in pro-ceedings of the 2013 conference of the north amer-ican chapter of the association for computationallinguistics: human language technologies, pages858–867, atlanta, georgia..gabriel stanovsky, julian michael, luke zettlemoyer,and ido dagan.
+2018. supervised open informa-tion extraction.
+in proceedings of the 2018 confer-ence of the north american chapter of the associ-ation for computational linguistics: human lan-guage technologies, pages 885–895, new orleans,louisiana..jianmin zhang, jiwei tan, and xiaojun wan.
+2018.neural single-document summarization model forabstractive multi-document summarization: a pilotin proceedings of the 11th inter-studyadapting.
+national conference on natural language genera-tion, pages 381–390, tilburg university, the nether-lands..dan su, yan xu, genta indra winata, peng xu,hyeondey kim, zihan liu, and pascale fung.
+2019.generalizing question answering system with pre-trained language model ﬁne-tuning.
+in proceedingsof the 2nd workshop on machine reading for ques-tion answering, pages 203–211, hong kong, china..dan su, yan xu, tiezheng yu, farhad bin siddique,elham barezi, and pascale fung.
+2020. caire-covid: a question answering and query-focusedmulti-document summarization system for covid-19 scholarly information management.
+in proceed-ings of the 1st workshop on nlp for covid-19(part 2) at emnlp 2020, online..wilson l taylor.
+1953.
+“cloze procedure”: a newjournalism quar-.
+tool for measuring readability.
+terly, 30(4):415–433..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n gomez, łukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+in advances in neural information pro-cessing systems, pages 6000–6010..6106a evidence ranking results.
+modelsoracletermfreqbertqabertmrcmarge-mn+expandmarge-cd+expand.
+duc 2006 duc 2007 td-qfs26.225.226.125.231.8—28.8—.
+22.720.822.122.325.9—23.3—.
+44.634.029.123.229.439.126.226.2.table 10: performance of evidence rankers on top re-trieval.
+we report the rouge 2 recall score for theconcatenation of the top 50 retrieved sentences..we show in the paper the top k retrieval perfor-mance of different models when k ∈ {10, 30}.
+insome cases, when top sentences are relatively short,the maximum input length to unilm (which isset to 768) allows for more than 30 sentences to beselected.
+therefore, in table 3, we further showthe top k retrieval performance of evidence rankerswith larger k, set to k = 50. results show that ourmodel outperforms strong baseline systems, and weconclude that it consistently provides high qualitycontent, under varied budgets (k ∈ {10, 30, 50}),to the downstream abstractive summarization task.
+we report the full set of rouge results for evi-dence rankers on extractive summarization in themain paper in table 4..b the effect of reveal ratio.
+we show how the mask reveal ratio γ affects modelperformance in figure 2. as we can see, perfor-mance on the rouge regression task improvesas γ increases; this is not surprising, the task be-comes easier when fewer tokens are masked; whenγ = 1.0, simply counting lexical overlap can solvethe task perfectly.
+however, model performanceon the qfs development set (duc 2005) showsthe opposite trend: actual queries seek information,instead of providing all the information needed.
+therefore, the model is required to perform se-mantic matching (guo et al., 2016) to accuratelyestimate evidence scores.
+based on our empiricalresults, a simple but effective strategy is to maskall information slots (i.e., potential arguments) andreveal the rest of the words (including verbs) in thesummary to construct proxy queries for training..figure 2: model performance when reveal ratio γ isvaried.
+correlation refers to the average of pearson’sr correlation.
+the star marker denotes query-agnosticperformance where all query tokens are masked, includ-ing information slots..c abstractive summarization results.
+we report the full set of rouge results for abstrac-tive summarization models in table 12. we alsoshow an example of system outputs in table 13..d datasets and evaluation package.
+multi-news and cnn/daily mail are used totrain the query model and abstractive summa-rization model described in this work, and theycan be downloaded from https://github.com/alex-fabbri/multi-news and https://github.
+com/abisee/cnn-dailymail, respectively..for evaluation purposes, the td-qfs datasetis publicly available at https://www.cs.bgu.ac.
+il/~talbau/td-qfs/dataset.html.
+duc 2005-2007 benchmarks can be requested from nist:https://www-nlpir.nist.gov/projects/duc/data.html..we computed rouge scores with pyrouge,a python wrapper for the rouge summariza-tion evaluation package: https://github.com/bheinzerling/pyrouge..6107duc 2006.duc 2007.models.
+r-145.740.632.136.534.238.639.639.0.goldoracleleadtermfreqlexrankbertqabertmrcmarge-mn.
+r-2 r-su4 r-1r-2 r-su4 r-1-19.114.147.917.011.244.916.010.441.814.89.133.511.36.533.410.45.335.714.29.038.512.67.035.312.77.735.811.46.439.514.910.039.813.98.436.614.38.939.913.67.816.641.614.511.69.338.8+expand — —— 45.9— ——15.840.713.940.110.88.6+expand — —— 45.9— ——.
+marge-cd.
+38.4.td-qfsr-2 r-su4.
+-18.95.26.57.610.58.410.518.811.618.3.
+-23.010.412.012.216.113.215.923.016.922.7.table 11: performance of evidence rankers on extractive qfs.
+r-1, r-2 and r-su4 stand for the f1 score ofrouge 1, 2, and su4, respectively..models.
+pqsum-wsl† (laskar et al., 2020)querysum∗ (xu and lapata, 2020) 41.638.3bart-caq (su et al., 2020)40.9pqsum (laskar et al., 2020)34.6unilm-mn37.6unilm-cd39.1margesum-mn40.2margesum-cd.
+td-qfs.
+duc 2006.duc 2007r-1 r-2 r-su4 r-1 r-2 r-su4 r-1 r-2 r-su443.5 10.89.57.79.46.78.39.19.7.
+44.7 12.443.3 11.640.59.242.2 10.87.635.539.6 10.142.1 11.742.5 12.0.
+----8.136.240.1 11.840.8 11.645.5 16.6.
+17.716.814.416.012.314.916.516.9.
+-20.7--12.916.716.520.9.
+16.515.312.914.811.813.614.315.1.
+44.3 16.1.
+-.
+-.
+table 12: performance of abstractive summarization systems.
+r-1, r-2 and r-su4 stand for the f1 score ofrouge 1, 2, and su4, respectively.
+∗/†: extractive/supervised method..6108query: steroid use among female athletes.
+discuss the prevalence of steroid use among female athletes over the years.
+include information regarding trends, side effects and consequences of such use.
+gold: increasing numbers of female athletes use anabolic steroids.
+among female college athletes, an estimated 5% inswimming, 6% in basketball and 10% in track and ﬁeld have used steroids.
+the fastest growing group of users is adolescentfemales.
+new steroids are often marketed as dietary supplements and girls are unaware of what they are taking.
+a youngtennis player tested positive for steroids after taking an "all natural" supplement later discovered to contain a variation onthe banned steroid nandrolone.
+a former olympic track coach believes at least 40% of the u.s. women’s team in seoulhad used steroids at some time.
+because of their naturally low testosterone levels, steroids have a more dramatic effecton women, boosting their levels up to 10 times.
+the health effects can be dramatic, including liver damage and tumors,elevated cholesterol, heart attacks, strokes, stunted growth in adolescents, infertility, uncontrollably violent behavior, chronicdepression, deeper voices, excessive facial hair, and acne.
+many east german female athletes were given steroids, oftenunbeknownst to them or their parents and suffered serious side-effects.
+athletes who have tested positive for steroids includea bulgarian triple jumper, a romanian hammer thrower, a russian runner, a dominican high, a jamaican sprinter, a spanishpole vaulter, a german marathon runner, two moroccan athletes, and two chinese taipei weightlifters.
+a number of femalechinese athletes have tested positive, including several swimmers and rowers.
+international organizations impose bans ofbetween two months and life on athletes found guilty of using illegal steroids.
+unilm-cd: at least 23 chinese athletes, mostly women, have tested positive for steroid use since 1990. such side-effectsof anabolic steroids have been generally known since 1977. some of the athletes were as young as 12 when they startedtaking the steroids.
+epo is one of at least 20 steroids prohibited by the international olympic committee.
+the drug is legaland sold over-the-counter, but is banned by the national olympic committee, the national football league and the nationalcollegiate athletic association.
+the national college athletic association (aca) has banned epo for life.
+epo has beenlinked to a number of health problems, including liver damage and liver cancer.
+the aca says epo’s use in the u.s.is safe,effective and safe to use.
+the national institute of drug abuse (nida) is investigating the use of epo in the united states.
+the nida says it has no evidence to support the claim that epo can cause liver damage.
+the drug was approved for use bythe u.s. olympic committee in 1996. the national association of college athletes (naa) is calling for the drug to bebanned from all u.s. sports.
+the naa says it’s time for the u.s. olympic committee (ioc) to ban epo.
+the drug has beenused by more than 200,000 athletes worldwide since it was approved in 1996.pqsum: about 175,000 teen age girls in the united states have reported using anabolic steroids at least once within a yearof the time surveyed a rise of 100 percent since 1991. in 1996 samantha reeves became the ﬁrst female tennis player tohave tested positive for steroids.
+the rise of steroid use in female athletes has led to a rise in women’s steroid use.
+over theyears the number of female steroid related women in the u.s has increased there is no mistaking the dangers of steroids forwomen with documentation provided by trainers and coaches from the former east german sports empire.
+in 1996 womenwere banned from the olympics for a positive test of methandienone.
+the women involved suffered serious side effects fromthe drugs and that they knew of the potential danger.
+she was found to have steroid stanozolol in her system.
+in the lastmonth cuban sprinter merlene ottey withdrew from the world.championships after testing positive for nandrolone.
+somewere as young as 12 when they started taking the anabolic steroid pills.
+the drug use has been generally known since 1977.pospelova would be the seventh athlete to test positive at the games.
+such side effects of anabolic steroids are generallyknown as with all probability linked to doping.
+an over the counter supplement called andro raises testosterone and estrogenabove normal levels and could be dangerous according to a harvard study by major league baseball and its players union.
+in1996.margesum-cd: penn state professor charles yesalis estimates the use of steroids among female athletes at 5 percentin swimming, 6 percent in basketball and 10 percent in track and ﬁeld, a rise of 100 percent since 1991. the nationalinstitutes of drug abuse says 175,000 teenage girls in the united states have reported taking anabolic steroids at least oncewithin a year of the time surveyed.
+the national institute on drug abuse provides information regarding trends, side effectsand consequences of such use.
+two moroccan female athletes have been stripped of gold and bronze medals for using amuscle-building steroid in the ﬁrst reported cases of doping at the arab games for using the steroid nandrolone, a steroidthat has been linked to liver cancer, heart disease and uncontrollable aggressiveness.
+two medical experts testifying in thedoping trial of a former east german sports doctor say the female swimmers they examined showed health damage linked toperformance-enhancing drugs, including liver damage and excessive facial hair.
+the study, published in wednesday’s journalof the american medical association, is the ﬁrst to conclude that high doses of the steroids can elevate testosterone levelsand that the hormone can be used as a performance-enhancing steroid, such as epitestosterone, as a marker the testosterone is6 to 1 in the male sex hormone and 5 to 1 for the female steroid hormone epitestoterone - a metabolite that is used as anindicator of testosterone use - the female sex hormone..table 13: system outputs for cluster d0602c in duc 2006. the gold summary answers the query coveringfour main aspects (denoted with different colors): (1) trend; (2) side-effects; (3) consequences of such use; (4)historical cases.
+both outputs from margesum-cd and pqsum have a good coverage of the main query focuses.
+compared to pqsum, margesum-cd produces a more coherent summary for the given query narrative with amore natural topic ﬂow..6109

@@ -1,0 +1,606 @@
+value-agnostic conversational semantic parsing.
+emmanouil antonios platanios, adam pauls, subhro roy, yuchen zhang, alex kyte,alan guo, sam thomson, jayant krishnamurthy, jason wolfe, jacob andreas, dan kleinmicrosoft semantic machinessminfo@microsoft.com.
+abstract.
+conversational semantic parsers map user ut-terances to executable programs given dia-logue histories composed of previous utter-ances, programs, and system responses.
+ex-isting parsers typically condition on rich repre-sentations of history that include the completeset of values and computations previously dis-cussed.
+we propose a model that abstractsover values to focus prediction on type- andfunction-level context.
+this approach providesa compact encoding of dialogue histories andpredicted programs, improving generalizationand computational efﬁciency.
+our model in-corporates several other components, includ-ing an atomic span copy operation and struc-tural enforcement of well-formedness con-straints on predicted programs, that are par-ticularly advantageous in the low-data regime.
+trained on the smcalflow and treedstdatasets, our model outperforms prior workby 7.3% and 10.6% respectively in terms ofabsolute accuracy.
+trained on only a thou-sand examples from each dataset, it outper-forms strong baselines by 12.4% and 6.4%.
+these results indicate that simple representa-tions are key to effective generalization in con-versational semantic parsing..1.introduction.
+conversational semantic parsers, which translatenatural language utterances into executable pro-grams while incorporating conversational context,play an increasingly central role in systems forinteractive data analysis (yu et al., 2019), instruc-tion following (guu et al., 2017), and task-orienteddialogue (zettlemoyer and collins, 2009).
+an ex-ample of this task is shown in figure 1. typicalmodels are based on an autoregressive sequenceprediction approach, in which a detailed represen-tation of the dialogue history is concatenated to theinput sequence, and predictors condition on this se-quence and all previously generated components of.
+the output (suhr et al., 2018).
+while this approachcan capture arbitrary dependencies between inputsand outputs, it comes at the cost of sample- andcomputational inefﬁciency..we propose a new “value-agnostic” approach tocontextual semantic parsing driven by type-basedrepresentations of the dialogue history and function-based representations of the generated programs.
+types and functions have long served as a founda-tion for formal reasoning about programs, but theiruse in neural semantic parsing has been limited,e.g., to constraining the hypothesis space (krishna-murthy et al., 2017), guiding data augmentation (jiaand liang, 2016), and coarsening in coarse-to-ﬁnemodels (dong and lapata, 2018).
+we show thatrepresenting conversation histories and partial pro-grams via the types and functions they contain en-ables fast, accurate, and sample-efﬁcient contextualsemantic parsing.
+we propose a neural encoder–decoder contextual semantic parsing model which,in contrast to prior work:.
+1. uses a compact yet informative representationof discourse context in the encoder that con-siders only the types of salient entities thatwere predicted by the model in previous turnsor that appeared in the execution results of thepredicted programs, and.
+2. conditions the decoder state on the sequenceof function invocations so far, without con-ditioning on any concrete values passed asarguments to the functions..our model substantially improves upon the bestpublished results on the smcalflow (semanticmachines et al., 2020) and treedst (cheng et al.,2020) conversational semantic parsing datasets, im-proving model performance by 7.3% and 10.6%, re-spectively, in terms of absolute accuracy.
+in furtherexperiments aimed at quantifying sample efﬁciency,.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages3666–3681august1–6,2021.©2021associationforcomputationallinguistics3666figure 1: illustration of the conversational semantic parsing problem that we focus on and the representations thatwe use.
+the previous turn user utterance and the previous program are shown in blue on the top.
+the dialoguehistory representation extracted using our approach is shown on the top right.
+the current turn user utterance isshown in red on the bottom left.
+the current utterance, the set of proposed entities, and the extracted dialoguehistory representation form the input to our parser.
+given this input, the parser predicts a program that is shown onthe bottom right (in red rectangles)..it improves accuracy by 12.4% and 6.4% respec-tively when trained on only a thousand examplesfrom each dataset.
+our model is also effective atnon-contextual semantic parsing, matching state-of-the-art results on the jobs, geoquery, and atisdatasets (dong and lapata, 2016).
+this is achievedwhile also reducing the test time computationalcost by a factor of 10 (from 80ms per utterancedown to 8ms when running on the same machine;more details are provided in appendix h), whencompared to our fastest baseline, which makes itusable as part of a real-time conversational system.
+one conclusion from these experiments is thatmost semantic parses have structures that dependonly weakly on the values that appear in the dia-logue history or in the programs themselves.
+ourexperiments ﬁnd that hiding values alone resultsin a 2.6% accuracy improvement in the low-dataregime.
+by treating types and functions, rather thanvalues, as the main ingredients in learned represen-tations for semantic parsing, we improve modelaccuracy and sample efﬁciency across a diverse setof language understanding problems, while alsosigniﬁcantly reducing computational costs..2 proposed model.
+our goal is to map natural language utterances toprograms while incorporating context from dia-logue histories (i.e., past utterances and their asso-.
+ciated programs and execution results).
+we modela program as a sequenceo of function invocations,each consisting of a function and zero or moreargument values, as illustrated at the lower rightof figure 1. the argument values can be eitherliteral values or references to results of previousfunction invocations.
+the ability to reference pre-vious elements of the sequence, sometimes calleda target-side copy, allows us to construct programsthat involve re-entrancies.
+owing to this referen-tial structure, a program can be equivalently repre-sented as a directed acyclic graph (see e.g., joneset al., 2012; zhang et al., 2019)..we propose a transformer-based (vaswaniet al., 2017) encoder–decoder model that predictsprograms by generating function invocations se-quentially, where each invocation can draw its argu-ments from an inventory of values (§2.5)—possiblycopied from the utterance—and the results of pre-vious function invocations in the current program.
+the encoder (§2.2) transforms a natural languageutterance and a dialogue history to a continuousrepresentation.
+subsequently, the decoder (§2.3)uses this representation to deﬁne an autoregressivedistribution over function invocation sequences andchooses a high-probability sequence by performingbeam search.
+as our experiments (§3) will show,a na¨ıve encoding of the complete dialogue historyand program results in poor model accuracy..3667entityproposersnumber(2)month.mayproposeentitiesfromthecurrentuserutterance.previousprogramextracteddialoguehistorytypes[0]constraint[event]()[1]constraint[any]()[2]like(value="shopping")[3]time(hour=2,meridiem=pm)[4]constraint[event](subject=[2],start=[3])[5]revise(oldloc=[0],rootloc=[1],new=[4])functionargumentinvocationcopyentityconstantreference(tothepreviousfunctioninvocation)valuepredictedprogramlinearizedrepresentationcanyoudeletemyeventcalledholidayshopping?previoususerutteranceican’tfindaneventwiththatname.previousagentutterancecurrentuserutteranceoh,it’sjustcalledshopping.itmaybeat2.parsingparsingexecutiondelete(find(constraint[event](subject=like("holidayshopping"))))revise(oldloc=constraint[event](),rootloc=constraint[any](),new=constraint[event](subject=like("shopping"),start=time(hour=2,meridiem=pm)))unitconstraint[string]constraint[event]eventstringeventnotfounderrorsetofsalienttypesextractedfromthedialoguehistoryandusedbytheparserasacompactrepresentationofthehistorytoconditionon.thelasttypecomesfromtheprogramexecutionresults.representationpredictedbytheproposedmodel.parserhelp the model generalize better to previously un-seen values that can be recognized in the utteranceusing hard-coded heuristics (e.g., regular expres-sions), auxiliary training data, or other runtime in-formation (e.g., a contact list).
+in our experimentswe make use of simple proposers that recognizenumbers, months, holidays, and days of the week,but one could deﬁne proposers for arbitrary values(e.g., song titles).
+as described in §2.5, certainvalues can also be predicted directly without theuse of an entity proposer..2.2 encoder.
+the encoder, shown in figure 3, maps a naturallanguage utterance to a continuous representation.
+like many neural sequence-to-sequence models,we produce a contextualized token representationof the utterance, hutt ∈ ru ×henc, where u is thenumber of tokens and henc is the dimensionality oftheir embeddings.
+we use a transformer encoder(vaswani et al., 2017), optionally initialized usingthe bert pretraining scheme (devlin et al., 2019).
+next, we need to encode the dialogue history andcombine its representation with hutt to producehistory-contextualized utterance token embeddings.
+prior work has incorporated history informationby linearizing it and treating it as part of the inpututterance (cheng et al., 2018; semantic machineset al., 2020; aghajanyan et al., 2020).
+while ﬂexi-ble and easy to implement, this approach presentsa number of challenges.
+in complex dialogues, his-tory encodings can grow extremely long relativeto the user utterance, which: (i) increases the riskof overﬁtting, (ii) increases computational costs(because attentions have to be computed over longsequences), and (iii) necessitates using small batchsizes during training, making optimization difﬁcult.
+thanks to the predictive locality of our repre-sentations (§2.1), our decoder (§2.3) never needsto retrieve values or program fragments fromthe dialogue history.
+instead, context enters intoprograms primarily when programs use referringexpressions that point to past computations, orrevision expressions that modify them.
+eventhough this allows us to dramatically simplifythe dialogue history representation, effectivegeneration of referring expressions still requiresknowing something about the past.
+for example,for the utterance “what’s next?” the model needsto determine what “what” refers to.
+perhapsmore interestingly, the presence of dates in recent.
+figure 2: illustration of the revise meta-computationoperator (§2.1) used in our program representations.
+this operator can remove the need to copy programfragments from the dialogue history..2.1 preliminaries.
+our approach assumes that programs have type an-notations on all values and function calls, similar tothe setting of krishnamurthy et al.
+(2017).1 further-more, we assume that program prediction is localin that it does not require program fragments to becopied from the dialogue history (but may still de-pend on history in other ways).
+several formalisms,including the typed references of zettlemoyer andcollins (2009) and the meta-computation opera-tors of semantic machines et al.
+(2020), make itpossible to produce local program annotations evenfor dialogues like the one depicted in figure 2,which reuse past computations.
+we transformedthe datasets in our experiments to use such meta-computation operators (see appendix c)..we also optionally make use of entity proposers,similar to krishnamurthy et al.
+(2017), which an-notate spans from the current utterance with typedvalues.
+for example, the span “one” in “changeit to one” might be annotated with the value 1of type number.
+these values are scored by thedecoder along with other values that it considers(§2.5) when predicting argument values for func-tion invocations.
+using entity proposers aims to.
+1this requirement can be trivially satisﬁed by assigningall expressions the same type, but in practice deﬁning a set oftype declarations for the datasets in our experiments was notdifﬁcult (refer to appendix c for details)..
+3668currentprogramwithrevisionrevise(oldloc=constraint[event](),rootloc=roleconstraint(start),new=time(hour=3,meridiem=pm))previousprogramdelete(find(constraint[event](subject=like("holidayshopping"),start=time(hour=2,meridiem=pm),end=time(hour=5,meridiem=pm))))currentprogramwithoutrevisiondelete(find(constraint[event](subject=like("holidayshopping"),start=time(hour=3,meridiem=pm),end=time(hour=5,meridiem=pm))))"itactuallystartsat3pm.
+"containsinformationthatisnotmentionedinthecurrentutteranceonlycontainsinformationthatismentionedinthecurrentutterancefigure 3: illustration of our encoder (§2.2), using theexample of figure 1. the utterance is processed by atransformer-based (vaswani et al., 2017) encoder andcombined with information extracted from the set ofdialogue history types using multi-head attention..turns (or values that have dates, such as meetings)should make the decoder more eager to generatereferring calls that retrieve dates from the dialoguehistory; especially so if other words in the currentutterance hint that dates may be useful and yetdate values cannot be constructed directly from thecurrent utterance.
+subsequent steps of the decoderwhich are triggered by these other words canproduce functions that consume the referred dates.
+we thus hypothesize that it sufﬁces to strip thedialogue history down to its constituent types, hid-ing all other information.2 speciﬁcally, we extracta set t of types that appear in the dialogue historyup to m turns back, where m = 1 in our experi-ments.3 our encoder then transforms hutt into a se-quence of history-contextualized embeddings hencby allowing each token to attend over t .
+this ismotivated by the fact that, in many cases, dialoguehistory is important for determining the meaningof speciﬁc tokens in the utterance, rather than thewhole utterance.
+speciﬁcally, we learn embeddingst ∈ r|t |×htype for the extracted types, where htypeis the embedding size, and use the attention mecha-nism of vaswani et al.
+(2017) to contextualize hutt:.
+henc (cid:44) hutt + mha( hutt(cid:124)(cid:123)(cid:122)(cid:125)queries.
+, t(cid:124)(cid:123)(cid:122)(cid:125)keys.
+(cid:124)(cid:123)(cid:122)(cid:125)values.
+, t.),.
+(1).
+where “mha” stands for multi-head attention, andeach head applies a separate linear transforma-tion to the queries, keys, and values.
+intuitively,.
+2for the previous example, if the type list[event] ap-peared in the history then we may infer that “what” probablyrefers to an event..3we experimented with different values of m and foundthat increasing it results in worse performance, presumablydue to overﬁtting..figure 4: illustration showing the way in which our de-coder is value-agnostic.
+speciﬁcally, it shows whichpart of the generated program preﬁx, our decoder con-ditions on while generating programs (§2.3)..each utterance-contextualized token is further con-textualized in (1) by adding to it a mixture ofembeddings of elements in t , where the mix-ture coefﬁcients depends only on that utterance-contextualized token.
+this encoder is illustratedin figure 3. as we show in §3.1, using this mech-anism performs better than the na¨ıve approach ofappending a set-of-types vector to hutt..2.3 decoder: programs.
+the decoder uses the history-contextualized repre-sentation henc of the current utterance to predict adistribution over the program π that correspondsto that utterance.
+each successive “line” πi of πinvokes a function fi on an argument value tuple(vi1, vi2, .
+.
+.
+, viai), where ai is the number of (for-mal) arguments of fi.
+applying fi to this orderedtuple results in the invocation fi(ai1 = vi1, ai2 =vi2, .
+.
+.
+), where (ai1, ai2, .
+.
+.
+, aiai) name the for-mal arguments of fi.
+each predicted value vij canbe the result of a previous function invocation, aconstant value, a value copied from the current ut-terance, or a proposed entity (§2.1), as illustrated inthe lower right corner of figure 1. these differentargument sources are described in §2.5.
+formally,the decoder deﬁnes a distribution of programs π:p(cid:89).
+p(π | henc) =.
+p(πi | f<i, henc),.
+(2).
+i=1.
+where p is the number of function invocations inthe program, and f<i (cid:44) {f1, .
+.
+.
+, fi−1}.
+addition-ally, we assume that argument values are condi-tionally independent given fi and f<i, resulting in:.
+ai(cid:89).
+j=1.
+p(πi | f<i) = p(fi | f<i)(cid:125).
+(cid:124).
+(cid:123)(cid:122)functionscoring.
+(3).
+,p(vij | f<i, fi)(cid:125)(cid:123)(cid:122)(cid:124)argument valuescoring.
+where we have elided the conditioning on henc.
+here, functions depend only on previous functions.
+3669dialoguehistorytypesunitconstraint[string]constraint[event]eventstringeventnotfounderrorembeddecoderutteranceencoderdialoguehistoryencoderuserutterance"oh,it'sjustcalledshopping.itmaybeat2."attentionkvq[0]+(1,2)[1]+([0],3)[2]+([1],4)[3]+([2],5)[0]+(number,number)[1]+(number,number)[2]+(number,number)considerthefollowingprogramrepresentingtheexpression1+2+3+4+5:whilegeneratingthisinvocation,thedecoderonlygetstoconditiononthefollowingprogramprefix:argumentvaluesaremaskedout!
+example is shown in figure 5. we encode thefunction and argument names using the utter-ance encoder of §2.2 and learn embeddings forto obtain (n, r), {τ1, .
+.
+.
+, τt }, andthe types,{(a1, t1), .
+.
+.
+, (aa, ta)}.
+then, we construct anembedding for each function as follows:.
+a = pool(a1 + t1, .
+.
+.
+, aa + ta),f = n + pool(τ1, .
+.
+.
+, τt ) + a + r,.
+(4).
+(5).
+where “pool” is the max-pooling operation whichis invariant to the arguments’ order..our main motivation for this function em-bedding mechanism is the ability to take cuesfrom the user utterance (e.g., due to a functionbeing named similarly to a word appearing in theutterance).
+if the functions and their argumentshave names that are semantically similar tocorresponding utterance parts, then this approachenables zero-shot generalization.6 however, thereis an additional potential beneﬁt from parametersharing due to the compositional structure of theembeddings (see e.g., baroni, 2020)..2.5 decoder: argument values.
+this section describes the implementation of theargument predictor p(vij | f<i, fi).
+there are fourdifferent kinds of sources that can be used to ﬁlleach available argument slot: references to previ-ous function invocations, constants from a staticvocabulary, copies that copy string values from theutterance, and entities that come from entity pro-posers (§2.1).
+many sources might propose thesame value, including multiple sources of the samekind.
+for example, there may be multiple spansin the utterance that produce the same string valuein a program, or an entity may be proposed that isalso available as a constant.
+to address this, wemarginalize over the sources of each value:.
+p(vij | f<i, fi) =.
+p(vij, s | f<i, fi),.
+(6).
+(cid:88).
+s∈s(vij ).
+where vij represents a possible value for the argu-ment named aij, and s ∈ s(vij) ranges over thepossible sources for that value.
+for example, giventhe utterance “change that one to 1:30pm” and thevalue 1, the set s(1) may contain entities that cor-respond to both “one” and “1” from the utterance..figure 5: illustration of our function encoder (§2.4),using a simpliﬁed example function signature..(not their argument values or results) and argumentvalues depend only on their calling function (noton one another or any of the previous argumentvalues).4 this is illustrated in figure 4. in addi-tion to providing an important inductive bias, theseindependence assumptions allow our inference pro-cedure to efﬁciently score all possible function in-vocations at step i, given the ones at previous steps,at once (i.e., function and argument value assign-ments together), resulting in an efﬁcient searchalgorithm (§2.6).
+note that there is also a corre-sponding disadvantage (as in many machine trans-lation models) that a meaningful phrase in the utter-ance could be independently selected for multiplearguments, or not selected at all, but we did notencounter this issue in our experiments; we rely onthe model training to evade this problem throughthe dependence on henc..2.4 decoder: functions.
+the sequence of.
+in equation 3,functionsf1, f2, .
+.
+.
+in the current program is modeled by(cid:81)i p(fi | f<i, henc).
+we use a standard autoregres-sive transformer decoder that can also attend tothe utterance encoding henc (§2.2), as done byvaswani et al.
+(2017).
+our decoder generates se-quences over the vocabulary of functions.
+thismeans that each function fi needs an embeddingfi (used as both an input to the decoder and anoutput), which we construct compositionally..we assume that each unique function f hasa type signature that speciﬁes a name n, a listof type parameters {τ1, .
+.
+.
+, τt } (to support poly-morphism),5 a list of argument names and types((a1, t1), .
+.
+.
+, (aa, ta)), and a result type r. an.
+4we also tried deﬁning a jointly normalized distributionover entire function invocations (appendix a), but found thatit results in a higher training cost for no accuracy beneﬁts..5the type parameters could themselves be parameterized,.
+but we ignore this here for simplicity of exposition..6the data may contain overloaded functions that have thesame name but different type signatures (e.g., due to optionalarguments).
+the overloads are given distinct identiﬁers f , butthey often share argument names, resulting in at least partiallyshared embeddings..3670functionembedderfrom:citynametypeargumentembeddingfunctionsignaturenametypetypeargumentargumentbook[flight](from:city,to:city):booking[flight]poolingfunctionembeddingargumentembedderthe argument scoring mechanism considers thelast-layer decoder state hidec that was used to pre-dict fi via p(fi | f<i) ∝ exp(f (cid:62)dec).
+we special-ize this decoder state to argument aij as follows:.
+i hi.
+hi,aijdec.(cid:44) ˆhi.
+dec (cid:12) tanh(fi + aij),.
+(7)where (cid:12) represents elementwise multiplication, fiis the embedding of the current function fi, aij isthe encoding of argument aij as deﬁned in §2.4,and ˆhdec is a projection of hdec to the necessarydimensionality.
+intuitively, tanh(fi + aij) acts asa gating function over the decoder state, decidingwhat is relevant when scoring values for argumentaij.
+this argument-speciﬁc decoder state is thencombined with a value embedding to produce aprobability for each (sourced) value assignment:.
+p(v, s | f<i, fi) ∝(cid:110)˜v(cid:62)(hi,a.
+exp.
+(cid:111).
+,.
+a.
+(8).)
++ bkind(s)a.dec + wkind(s)where a is the argument name aij, kind(s) ∈{reference, constant, copy, entity}, ˜v is theembedding of (v, s) which is described next, andwka are model parameters that are speciﬁcto a and the kind of the source s..a and bk.
+references.
+references are pointers to the re-turn values of previous function invocations.
+ifthe source s for the proposed value v is the resultof the kth invocation (where k < i), we take its em-bedding ˜v to be a projection of hkdec that was usedto predict that invocation’s function and arguments..constants.
+constants are values that are alwaysproposed, so the decoder always has the option ofgenerating them.
+if the source s for the proposedvalue v is a constant, we embed it by applying theutterance encoder on a string rendering of the value.
+the set of constants is automatically extracted fromthe training data (see appendix b)..copies.
+copies are string values that correspondto substrings of the user utterance (e.g., personnames).
+string values can only enter the programthrough copying, as they are not in the set of con-stants (i.e., they cannot be “hallucinated” by themodel; see pasupat and liang, 2015; nie et al.,2019).
+one might try to construct an approachbased on a standard token-based copy mechanism(e.g., gu et al., 2016).
+however, this would al-low copying non-contiguous spans and would alsorequire marginalizing over identical tokens as op-posed to spans, resulting in more ambiguity.
+in-stead, we propose a mechanism that enables the.
+decoder to copy contiguous spans directly fromthe utterance.
+its goal is to produce a score foreach of the u (u + 1)/2 possible utterance spans.
+na¨ıvely, this would result in a computational costthat is quadratic in the utterance length u , andso we instead chose a simple scoring model thatavoids it.
+similar to stern et al.
+(2017) and kurib-ayashi et al.
+(2019), we assume that the score for aspan factorizes, and deﬁne the embedding of eachspan value as the concatenation of the contextualembeddings of the ﬁrst and last tokens of the span,˜v = [hkstartutt ].
+to compute the copy scores weuttalso concatenate hi,adec with itself in equation 8..; hkend.
+entities.
+entities are treated the same way ascopies, except that instead of scoring all spans ofthe input, we only score spans proposed by theexternal entity proposers discussed in §2.1.
+specif-ically, the proposers provide the model with a listof candidate entities that are each described by anutterance span and an associated value.
+the can-didates are scored using an identical mechanismto the one used for scoring copies.
+this meansthat, for example, the string “sept” could be linkedto the value month.september even though thestring representations do not match perfectly..type checking.
+when scoring argument valuesfor function fi, we know the argument types, asthey are speciﬁed in the function’s signature.
+thisenables us to use a type checking mechanism thatallows the decoder to directly exclude values withmismatching types.
+for references, the value typescan be obtained by looking up the result types of thecorresponding function signatures.
+additionally,the types are always pre-speciﬁed for constantsand entities, and copies are only supported for asubset of types (e.g., string, personname; seeappendix b).
+the type checking mechanism setsp(vij | f<i, fi) = 0 whenever vij has a differenttype than the expected type for aij.
+finally, becausecopies can correspond to multiple types, we alsoadd a type matching term to the copy score.
+thisterm is deﬁned as the inner product of the argumenttype embedding and a (learnable) linear projectionof hkstartutt concatenated, where kstart anduttkend denote the span start and end indices..and hkend.
+2.6 decoder: search.
+similar to other sequence-to-sequence models, weemploy beam search over the sequence of functioninvocations when decoding.
+however, in contrastto other models, our assumptions (§2.3) allow us to.
+3671dataset.
+smcalflow.
+treedst.
+best reported resultour model.
+v1.1.
+66.573.8.v2.0.
+68.275.3.
+62.272.8.table 1: test set exact match accuracy comparing ourmodel to the best reported results for smcalflow(seq2seq model from the public leaderboard; semanticmachines et al., 2020) and treedst (ted-pp model;cheng et al., 2020).
+the evaluation on each datasetin prior work requires us to repeat some idiosyncrasiesthat we describe in appendix d..efﬁciently implement beam search over completefunction invocations, by leveraging the fact that:.
+maxπi.
+p(πi) = max.
+p(fi).
+p(vij | fi).
+, (9).
+(cid:26).
+fi.
+ai(cid:89).
+j=1.
+maxvij.
+(cid:27).
+where we have omitted the dependence on f<i.
+this computation is parallelizable and it also allowsthe decoder to avoid choosing a function if there areno high scoring assignments for its arguments (i.e.,we are performing a kind of lookahead).
+this alsomeans that the paths explored during the search areshorter for our model than for models where eachstep corresponds to a single decision, allowing forsmaller beams and more efﬁcient decoding..3 experiments.
+we ﬁrst report results on smcalflow (semanticmachines et al., 2020) and treedst (cheng et al.,2020), two recently released large-scale conversa-tional semantic parsing datasets.
+our model makesuse of type information in the programs, so wemanually constructed a set of type declarations foreach dataset and then used a variant of the hindley-milner type inference algorithm (damas and mil-ner, 1982) to annotate programs with types.
+asmentioned in §2.1, we also transformed treedstto introduce meta-computation operators for ref-erences and revisions (more details can be foundin appendix c).7 we also report results on non-conversational semantic parsing datasets in §3.2.
+we use the same hyperparameters across all ex-periments (see appendix e), and we use bert-medium (turc et al., 2019) to initialize our encoder..3.1 conversational semantic parsing.
+test set results for smcalflow and treedstare shown in table 1. our model signiﬁcantly out-performs the best published numbers in each case..7the transformed datasets are available at https://github.com/microsoft/task_oriented_dialogue_as_dataflow_synthesis/tree/master/datasets..dataset# training dialogues.
+smcalflow10k 33k1k.
+treedst.
+1k.
+10k 19k.
+trebo/w.treb.
+/.
+w.seq2seqseq2treeseq2tree++our model.
+seq2seqseq2treeour model.
+36.8 69.8 74.5 28.2 47.9 50.343.6 69.3 77.7 23.6 46.9 48.848.0 71.9 78.2 74.8 75.4 86.953.8 73.2 78.5 78.6 87.6 88.5.
+44.6 64.1 67.8 28.6 40.2 47.250.8 74.6 78.6 30.9 50.6 51.663.2 77.2 80.4 81.2 87.1 88.3.
+(a) baseline comparison..dataset# training dialogues.
+smcalflow1k 10k 33k.
+treedst1k 10k 19k.
+our model.
+63.2 77.2 80.4 81.2 87.1 88.360.6 76.4 79.4 79.3 86.2 86.5value dependenceno name embedder 62.8 76.7 80.3 81.1 87.0 88.162.4 76.5 79.9 80.6 87.1 88.3no types60.2 76.2 79.8 79.0 86.7 87.4no span copy59.6 76.4 79.8 80.5 86.9 88.2no entity proposers58.9 75.8 77.3 72.9 80.2 80.6all of the above59.0 70.0 73.8 68.3 75.0 76.5no history61.3 75.9 77.4 80.5 86.9 87.4previous turn63.0 76.5 80.2 81.2 87.1 88.3linear encoder.
+resrap.yrotsih.(b) ablation study..table 2: validation set exact match accuracy acrossvarying amounts of training data (each subset is sam-pled uniformly at random).
+the best results in eachcase are shown in bold red and are underlined..in order to further understand the performance char-acteristics of our model and quantify the impact ofeach modeling contribution, we also compare to avariety of other models and ablated versions of ourmodel.
+we implemented the following baselines:.
+– seq2seq: the opennmt (klein et al., 2017) im-plementation of a pointer-generator network (seeet al., 2017) that predicts linearized plans repre-sented as s-expressions and is able to copy to-kens from the utterance while decoding.
+thismodel is very similar to the model used by se-mantic machines et al.
+(2020) and represents thecurrent state-of-the-art for smcalflow.8– seq2tree: the same as seq2seq, except that itgenerates invocations in a top-down, pre-orderprogram traversal.
+each invocation is embeddedas a unique item in the output vocabulary.
+notethat smcalflow contains re-entrant programsrepresented with lisp-style let bindings.
+boththe seq2tree and seq2seq are unaware of thespecial meaning of let and predict calls to letas any other function, and references to bound.
+8semantic machines et al.
+(2020) used linearized plans torepresent the dialogue history, but our implementation usesprevious user and agent utterances.
+we found no difference inperformance..3672variables as any other literal..– seq2tree++: an enhanced version of the modelby krishnamurthy et al.
+(2017) that predictstyped programs in a top-down fashion.
+unlikeseq2seq and seq2tree, this model can only pro-duce well-formed and well-typed programs.
+italso makes use of the same entity proposers(§2.1) similar to our model, and it can atomi-cally copy spans of up to 15 tokens by treatingthem as additional proposed entities.
+further-more, it uses the linear history encoder that isdescribed in the next paragraph.
+like our model,re-entrancies are represented as references to pre-vious outputs in the predicted sequence..we also implemented variants of seq2seq andseq2tree that use bert-base9 (devlin et al., 2019)as the encoder.
+our results are shown in ta-ble 2a.
+our model outperforms all baselines onboth datasets, showing particularly large gains inthe low data regime, even when using bert.
+fi-nally, we implemented the following ablations,with more details provided in appendix g:.
+– value dependence: introduces a unique functionfor each value in the training data (except forcopies) and transforms the data so that valuesare always produced by calls to these functions,allowing the model to condition on them..– no name embedder: embeds functions and con-stants atomically instead of using the approachof §2.4 and the utterance encoder..– no types: collapses all types to a single type,which effectively disables type checking (§2.5).
+– no span copy: breaks up span-level copies intotoken-level copies which are put together us-ing a special concatenate function.
+note thatour model is value-agnostic and so this ablatedmodel cannot condition on previously copiedtokens when copying a span token-by-token.
+– no entity proposers: removes the entity pro-posers, meaning that previously entity-linkedvalues have to be generated as constants..– no history: sets henc = hutt (§2.2).
+– previous turn: replaces the type-based historyencoding with the previous turn user and systemutterances or linearized system actions..– linear encoder: replaces the history attention.
+9we found that bert-base worked best for these baselines,but was no better than the smaller bert-medium when usedwith our model.
+also, unfortunately, incorporating bert inseq2tree++ turned out to be challenging due to the way thatmodel was originally implemented..method.
+datasetgeo.
+jobs.
+zettlemoyer and collins (2007) —90.7wang et al.
+(2014)85.0zhao and huang (2015)81.4saparov et al.
+(2017).
+sdohte.m.laruen.dong and lapata (2016)rabinovich et al.
+(2017)yin and neubig (2018)dong and lapata (2018)aghajanyan et al.
+(2020)our model(cid:120) no bert.
+90.092.9———91.491.4.
+86.190.488.983.9.
+87.187.188.288.289.391.490.0.atis.
+84.691.384.2—.
+84.685.986.287.7—90.291.3.table 3: validation set exact match accuracy for single-turn semantic parsing datasets.
+note that aghajanyanet al.
+(2020) use bart (lewis et al., 2020), a large pre-trained encoder.
+the best results for each dataset areshown in bold red and are underlined..mechanism with a linear function over a multi-hot embedding of the history types..the results, shown in table 2b, indicate that allof our features play a role in improving accuracy.
+perhaps most importantly though, the “value de-pendence” ablation shows that our function-basedprogram representations are indeed important, andthe “previous turn” ablation shows that our type-based program representations are also important.
+furthermore, the impact of both these modelingdecisions grows larger in the low data regime, asdoes the impact of the span copy mechanism..3.2 non-conversational semantic parsing.
+our main focus is on conversational semanticparsing, but we also ran experiments on non-conversational semantic parsing benchmarks toshow that our model is a strong parser irrespec-tive of context.
+speciﬁcally, we manually anno-tated the jobs, geoquery, and atis datasetswith typed declarations (appendix c) and ran ex-periments comparing with multiple baseline andstate-of-the-art methods.
+the results, shown in ta-ble 3, indicate that our model meets or exceedsstate-of-the-art performance in each case..4 related work.
+our approach builds on top of a signiﬁcant amountof prior work in neural semantic parsing and alsocontext-dependent semantic parsing..neural semantic parsing.
+while there was abrief period of interest in using unstructured se-quence models for semantic parsing (e.g., andreas.
+3673et al., 2013; dong and lapata, 2016), most researchon semantic parsing has used tree- or graph-shapeddecoders that exploit program structure.
+most suchapproaches use this structure as a constraint whiledecoding, ﬁlling in function arguments one-at-a-time, in either a top-down fashion (e.g., dong andlapata, 2016; krishnamurthy et al., 2017) or abottom-up fashion (e.g., misra and artzi, 2016;cheng et al., 2018).
+both directions can sufferfrom exposure bias and search errors during decod-ing: in top-down when there’s no way to realizean argument of a given type in the current context,and in bottom-up when there are no functions in theprogramming language that combine the predictedarguments.
+to this end, there has been some workon global search with guarantees for neural seman-tic parsers (e.g., lee et al., 2016) but it is expensiveand makes certain strong assumptions.
+in contrastto this prior work, we use program structure notjust as a decoder constraint but as a source of in-dependence assumptions: the decoder explicitlydecouples some decisions from others, resulting ingood inductive biases and fast decoding algorithms.
+perhaps closest to our work is that of dong andlapata (2018), which is also about decoupling de-cisions, but uses a dataset-speciﬁc notion of anabstracted program sketch along with different in-dependence assumptions, and underperforms ourmodel in comparable settings (§3.2).
+also closeare the models of cheng et al.
+(2020) and zhanget al.
+(2019).
+our method differs in that our beamsearch uses larger steps that predict functions to-gether with their arguments, rather than predictingthe argument values serially in separate dependentsteps.
+similar to zhang et al.
+(2019), we use atarget-side copy mechanism for generating refer-ences to function invocation results.
+however, weextend this mechanism to also predict constants,copy spans from the user utterance, and link ex-ternally proposed entities.
+while our span copymechanism is novel, it is inspired by prior attemptsto copy spans instead of tokens (e.g., singh et al.,2020).
+finally, bottom-up models with similaritiesto ours include smbop (rubin and berant, 2020)and bustle (odena et al., 2020)..context-dependent semantic parsing.
+priorwork on conversational semantic parsing mainlyfocuses on the decoder, with few efforts on incor-porating the dialogue history information in the en-coder.
+recent work on context-dependent semanticparsing (e.g., suhr et al., 2018; yu et al., 2019).
+conditions on explicit representations of user utter-ances and programs with a neural encoder.
+whilethis results in highly expressive models, it also in-creases the risk of overﬁtting.
+contrary to this,zettlemoyer and collins (2009), lee et al.
+(2014)and semantic machines et al.
+(2020) do not usecontext to resolve references at all.
+they insteadpredict context-independent logical forms that areresolved in a separate step.
+our approach occu-pies a middle ground: when combined with localprogram representations, types, even without anyvalue information, provide enough information toresolve context-dependent meanings that cannot bederived from isolated sentences.
+the speciﬁc mech-anism we use to do this “infuses” contextual typeinformation into input sentence representations, ina manner reminiscent of attention ﬂow models fromthe qa literature (e.g., seo et al., 2016)..5 conclusion.
+we showed that abstracting away values whileencoding the dialogue history and decoding pro-grams signiﬁcantly improves conversational seman-tic parsing accuracy.
+in summary, our goal in thiswork is to think about types in a new way.
+similarto previous neural and non-neural methods, typesare an important source of constraints on the behav-ior of the decoder.
+here, for the ﬁrst time, they arealso the primary ingredient in the representation ofboth the parser actions and the dialogue history..our approach, which is based on type-centricencodings of dialogue states and function-centricencodings of programs (§2), outperforms priorwork by 7.3% and 10.6%, on smcalflow andtreedst, respectively (§3), while also beingmore computationally efﬁcient than competingmethods.
+perhaps more importantly, it results ineven more signiﬁcant gains in the low-data regime.
+this indicates that choosing our representationscarefully and making appropriate independenceassumptions can result in increased accuracy andcomputational efﬁciency..6 acknowledgements.
+we thank the anonymous reviewers for their helpfulcomments, jason eisner for his detailed feedbackand suggestions on an early draft of the paper, abul-hair saparov for helpful conversations and pointersabout semantic parsing baselines and prior work,and theo lanman for his help in scaling up someof our experiments..3674references.
+armen aghajanyan, jean maillard, akshat shrivas-tava, keith diedrick, michael haeger, haoran li,yashar mehdad, veselin stoyanov, anuj kumar,mike lewis, and sonal gupta.
+2020. conversa-tional semantic parsing.
+in proceedings of the 2020conference on empirical methods in natural lan-guage processing (emnlp), pages 5026–5035.
+as-sociation for computational linguistics..jacob andreas, andreas vlachos, and stephen clark.
+2013. semantic parsing as machine translation.
+inproceedings of the 51st annual meeting of the as-sociation for computational linguistics (volume 2:short papers), pages 47–52, soﬁa, bulgaria.
+associ-ation for computational linguistics..marco baroni.
+2020. linguistic generalization andcompositionality in modern artiﬁcial neural net-works.
+philosophical transactions of the royal so-ciety b, 375(1791):20190307..jianpeng.
+cheng,.
+devang agrawal,.
+h´ectormart´ınez alonso, shruti bhargava, joris driesen,federico flego, dain kaplan, dimitri kartsaklis,lin li, dhivya piraviperumal, jason d. williams,hong yu, diarmuid ´o s´eaghdha, and andersjohannsen.
+2020. conversational semantic parsingin proceedings of thefor dialog state tracking.
+2020 conference on empirical methods in naturallanguage processing (emnlp), pages 8107–8117.
+association for computational linguistics..jianpeng cheng, siva reddy, vijay saraswat, andmirella lapata.
+2018. learning an executable neu-ral semantic parser.
+computational linguistics,45(1):59–94.
+publisher: mit press..luis damas and robin milner.
+1982. principal type-schemes for functional programs.
+in proceedingsof the 9th acm sigplan-sigact symposium onprinciples of programming languages, popl ’82,page 207–212, new york, ny, usa.
+association forcomputing machinery..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language un-derstanding.
+in proceedings of the 2019 conferenceof the north american chapter of the associationfor computational linguistics: human languagetechnologies, volume 1 (long and short papers),pages 4171–4186, minneapolis, minnesota.
+associ-ation for computational linguistics..li dong and mirella lapata.
+2016..language toin proceed-logical form with neural attention.
+ings of the 54th annual meeting of the associationfor computational linguistics (volume 1: long pa-pers), pages 33–43, berlin, germany.
+associationfor computational linguistics..li dong and mirella lapata.
+2018. coarse-to-fine de-coding for neural semantic parsing.
+in proceedings.
+of the 56th annual meeting of the association forcomputational linguistics (volume 1: long papers),pages 731–742, melbourne, australia.
+associationfor computational linguistics..jiatao gu, zhengdong lu, hang li, and victor o.k.
+incorporating copying mechanism inli.
+2016.in proceedingssequence-to-sequence learning.
+of the 54th annual meeting of the association forcomputational linguistics (volume 1: long papers),pages 1631–1640, berlin, germany.
+association forcomputational linguistics..kelvin guu, panupong pasupat, e. liu, and percyliang.
+2017. from language to programs: bridg-ing reinforcement learning and maximum marginallikelihood.
+arxiv, abs/1704.07926..robin jia and percy liang.
+2016. data recombinationfor neural semantic parsing.
+in proceedings of the54th annual meeting of the association for compu-tational linguistics (volume 1: long papers), pages12–22, berlin, germany.
+association for computa-tional linguistics..bevan.
+jones,.
+jacob andreas, daniel bauer,karl moritz hermann, and kevin knight.
+2012.semantics-based machine translation with hyper-in proceedings ofedge replacement grammars.
+coling 2012, pages 1359–1376, mumbai, india.
+the coling 2012 organizing committee..diederik.
+p. kingma.
+2017.andadam: a method for stochastic optimization.
+arxiv:1412.6980 [cs.lg].
+arxiv: 1412.6980..jimmy ba..guillaume klein, yoon kim, yuntian deng, jean senel-lart, and alexander rush.
+2017. opennmt: open-insource toolkit for neural machine translation.
+proceedings of acl 2017, system demonstrations,pages 67–72, vancouver, canada.
+association forcomputational linguistics..jayant krishnamurthy, pradeep dasigi, and matt gard-ner.
+2017. neural semantic parsing with type con-in proceed-straints for semi-structured tables.
+ings of the 2017 conference on empirical methodsin natural language processing, pages 1516–1526,copenhagen, denmark.
+association for computa-tional linguistics..tatsuki kuribayashi, hiroki ouchi, naoya inoue, paulreisert, toshinori miyoshi, jun suzuki, and ken-taro inui.
+2019. an empirical study of span rep-resentations in argumentation structure parsing.
+inproceedings of the 57th annual meeting of the asso-ciation for computational linguistics, pages 4691–4698, florence, italy.
+association for computationallinguistics..kenton lee, yoav artzi, jesse dodge, and luke zettle-moyer.
+2014. context-dependent semantic parsingfor time expressions.
+in proceedings of the 52ndannual meeting of the association for computa-tional linguistics (volume 1: long papers), pages.
+36751437–1447, baltimore, maryland.
+association forcomputational linguistics..(conll 2017), pages 248–259, vancouver, canada.
+association for computational linguistics..kenton lee, mike lewis, and luke zettlemoyer.
+2016.global neural ccg parsing with optimality guar-antees.
+in proceedings of the 2016 conference onempirical methods in natural language process-ing, pages 2366–2376, austin, texas.
+associationfor computational linguistics..mike lewis, yinhan liu, naman goyal, mar-jan ghazvininejad, abdelrahman mohamed, omerlevy, veselin stoyanov, and luke zettlemoyer.
+2020. bart: denoising sequence-to-sequence pre-training for natural language generation, transla-in proceedings of thetion, and comprehension.
+58th annual meeting of the association for compu-tational linguistics, pages 7871–7880.
+associationfor computational linguistics..dipendra kumar misra and yoav artzi.
+2016. neuralin proceed-shift-reduce ccg semantic parsing.
+ings of the 2016 conference on empirical methodsin natural language processing, pages 1775–1786,austin, texas.
+association for computational lin-guistics..feng nie, jin-ge yao, jinpeng wang, rong pan, andchin-yew lin.
+2019. a simple recipe towards re-ducing hallucination in neural surface realisation.
+in proceedings of the 57th annual meeting of theassociation for computational linguistics, pages2673–2679, florence, italy.
+association for compu-tational linguistics..augustus odena, kensen shi, david bieber, rishabhsingh, and charles sutton.
+2020. bustle: bottom-up program synthesis through learning-guided ex-arxiv:2007.14381 [cs, stat].
+arxiv:ploration.
+2007.14381..panupong pasupat and percy liang.
+2015. composi-tional semantic parsing on semi-structured tables.
+in proceedings of the 53rd annual meeting of theassociation for computational linguistics and the7th international joint conference on natural lan-guage processing (volume 1: long papers), pages1470–1480, beijing, china.
+association for compu-tational linguistics..maxim rabinovich, mitchell stern, and dan klein.
+2017. abstract syntax networks for code gener-ation and semantic parsing.
+in proceedings of the55th annual meeting of the association for com-putational linguistics (volume 1: long papers),pages 1139–1149, vancouver, canada.
+associationfor computational linguistics..ohad rubin and jonathan berant.
+2020..smbop:semi-autoregressive bottom-up semantic parsing.
+arxiv:2010.12412 [cs].
+arxiv: 2010.12412..abulhair saparov, vijay saraswat, and tom mitchell.
+2017. probabilistic generative grammar for se-mantic parsing.
+in proceedings of the 21st confer-ence on computational natural language learning.
+abigail see, peter j. liu, and christopher d. manning.
+2017. get to the point: summarization with pointer-generator networks.
+in proceedings of the 55th an-nual meeting of the association for computationallinguistics (volume 1: long papers), pages 1073–1083, vancouver, canada.
+association for computa-tional linguistics..semantic machines, jacob andreas, john bufe, davidburkett, charles chen, josh clausman, jean craw-ford, kate crim, jordan deloach, leah dorner, ja-son eisner, hao fang, alan guo, david hall, kristinhayes, kellie hill, diana ho, wendy iwaszuk, sm-riti jha, dan klein, jayant krishnamurthy, theolanman, percy liang, christopher h. lin, ilyalintsbakh, andy mcgovern, aleksandr nisnevich,adam pauls, dmitrij petters, brent read, dan roth,subhro roy, jesse rusak, beth short, div slomin,ben snyder, stephon striplin, yu su, zacharytellman, sam thomson, andrei vorobev, izabelawitoszko, jason wolfe, abby wray, yuchen zhang,and alexander zotov.
+2020. task-oriented dia-logue as dataﬂow synthesis.
+transactions of the as-sociation for computational linguistics, 8:556–571..minjoon seo, aniruddha kembhavi, ali farhadi,bidirectionaland hannaneh hajishirzi.
+2016.attention flow for machine comprehension.
+arxiv:1611.01603 [cs.cl].
+arxiv: 1611.01603..abhinav singh, patrick xia, guanghui qin, mahsayarmohammadi, and benjamin van durme.
+2020.copynext: explicit span copying and alignmentin proceedingsin sequence to sequence models.
+of the fourth workshop on structured prediction fornlp, pages 11–16.
+association for computationallinguistics..mitchell stern, jacob andreas, and dan klein.
+2017.a minimal span-based neural constituency parser.
+in proceedings of the 55th annual meeting of the as-sociation for computational linguistics (volume 1:long papers), pages 818–827, vancouver, canada.
+association for computational linguistics..alane suhr, srinivasan iyer, and yoav artzi.
+2018.learning to map context-dependent sentences toexecutable formal queries.
+in proceedings of the2018 conference of the north american chapter ofthe association for computational linguistics: hu-man language technologies, volume 1 (long pa-pers), pages 2238–2249, new orleans, louisiana.
+association for computational linguistics..iulia turc, ming-wei chang, kenton lee, and kristinatoutanova.
+2019. well-read students learn better:on the importance of pre-training compact models.
+arxiv:1908.08962 [cs.cl].
+arxiv: 1908.08962..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n gomez, łukaszkaiser, and illia polosukhin.
+2017. attention is all.
+3676you need.
+in advances in neural information pro-cessing systems, volume 30, pages 5998–6008.
+cur-ran associates, inc..adrienne wang, tom kwiatkowski, and luke zettle-moyer.
+2014. morpho-syntactic lexical generaliza-tion for ccg semantic parsing.
+in proceedings ofthe 2014 conference on empirical methods in nat-ural language processing (emnlp), pages 1284–1295, doha, qatar.
+association for computationallinguistics..pengcheng yin and graham neubig.
+2018. tranx: atransition-based neural abstract syntax parser forsemantic parsing and code generation.
+in proceed-ings of the 2018 conference on empirical methodsin natural language processing: system demon-strations, pages 7–12, brussels, belgium.
+associa-tion for computational linguistics..tao yu, rui zhang, michihiro yasunaga, yi cherntan, xi victoria lin, suyi li, heyang er, ireneli, bo pang, tao chen, emily ji, shreya dixit,david proctor, sungrok shim, jonathan kraft, vin-cent zhang, caiming xiong, richard socher, anddragomir radev.
+2019. sparc: cross-domain se-in proceedings of themantic parsing in context.
+57th annual meeting of the association for com-putational linguistics, pages 4511–4523, florence,italy.
+association for computational linguistics..luke zettlemoyer and michael collins.
+2007. onlinelearning of relaxed ccg grammars for parsing toin proceedings of the 2007 jointlogical form.
+conference on empirical methods in natural lan-guage processing and computational natural lan-guage learning (emnlp-conll), pages 678–687,prague, czech republic.
+association for computa-tional linguistics..luke zettlemoyer and michael collins.
+2009. learn-ing context-dependent mappings from sentences tological form.
+in proceedings of the joint confer-ence of the 47th annual meeting of the acl andthe 4th international joint conference on naturallanguage processing of the afnlp, pages 976–984,suntec, singapore.
+association for computationallinguistics..sheng zhang, xutai ma, kevin duh, and benjaminvan durme.
+2019. amr parsing as sequence-to-graph transduction.
+in proceedings of the 57th an-nual meeting of the association for computationallinguistics, pages 80–94, florence, italy.
+associa-tion for computational linguistics..kai zhao and liang huang.
+2015. type-driven incre-inmental semantic parsing with polymorphism.
+proceedings of the 2015 conference of the northamerican chapter of the association for computa-tional linguistics: human language technologies,pages 1416–1421, denver, colorado.
+associationfor computational linguistics..3677a invocation joint normalization.
+instead of the distribution in equation 3, we can de-ﬁne a distribution over fi and {vij}aij=1 that factor-izes in the same way but is also jointly normalized:.
+p(πi | f<i) ∝ h(fi).
+g(fi, vij),.
+(10).
+ai(cid:89).
+j=1.
+where h and g are deﬁned as presented in §2.4and §2.5, respectively, before normalization.
+thismodel has the same cost as the locally normalizedmodel at test time but is signiﬁcantly more expen-sive at training time as we need to score all possiblefunction invocations, as opposed to always condi-tioning on the gold functions.
+it can in principleavoid some of the exposure bias problems of thelocally normalized model, but we observed no ac-curacy improvements in our experiments..b value sources.
+in our model, the type of a value determines whatsources it can be generated from.
+we enforce thatvalues of certain types can only be copied or entity-linked.
+any values that do not fall under theseconstraints are added to a static vocabulary of con-stants, and the model is always permitted to gener-ate them, as long as they pass type checking.
+val-ues that fall under these constraints are not addedto this vocabulary so that they cannot be “halluci-nated” by the model.
+the speciﬁc constraints thatwe use are described in the following paragraphs..types that must be copied: types for which themodel is only allowed to construct values directlyfrom string literals copied from the utterance.
+in§2.5 we noted that strings can be copied fromthe utterance to become string literals in the gen-erated program.
+for certain types t, argumentsof type t may also be willing to accept copiedstrings; in this case we generate a constructorcall that constructs a t object from the string lit-eral.
+for smcalflow, these copyable typesare string, personname, respondcomment, andlocationkeyphrase.
+for the other datasets it isjust string.
+we declare training examples wherea value of a copyable type appears in the pro-gram, but is not a substring of the correspondingutterance, as likely annotation errors and ignorethem during training (but not during evaluation).
+even though such examples are very rare for sm-calflow (∼0.5% of the examples), they turned.
+out to be relatively frequent in treedst (∼6% ofthe examples), as we discuss in appendix c..types that must be entity-linked: types forwhich argument values can only be picked fromthe set of proposed entities (§2.1) and cannot beotherwise hallucinated from the model, or directlycopied from the utterance.
+the number type istreated in a special way for all datasets, wherenumbers 0, 1, and 2 are allowed to be halluci-nated, but all other numbers must be entity-linked.
+furthermore, for smcalflow the set of typesthat must be entity-linked also contains the month,dayofweek, and holiday types.
+based on this,we can detect probable annotation errors..c dataset preparation.
+we now describe how we processed the datasetsto satisfy the requirements mentioned in §2.1.
+wehave made the processed datasets available at https://github.com/microsoft/task_oriented_dialogue_as_dataflow_synthesis/tree/master/datasets..c.1 type declarations.
+we manually speciﬁed the necessary type declara-tions by inspection of all functions in the trainingdata.
+in some cases, we found it helpful to trans-form the data into an equivalent set of functioncalls that simpliﬁed the resulting programs, whilemaintaining a one-to-one mapping with the origi-nal representations.
+for example, smcalflowcontains a function called get that takes in an ob-ject of some type and a path, which speciﬁes aﬁeld of that object, and acts as an accessor.
+forexample, the object could be an event and thespeciﬁed path may be "subject".
+we transformsuch invocations into invocations of functions thatare instantiated separately for each unique combi-nation of the object type and the provided path.
+forthe aforementioned example, the correspondingnew function would be deﬁned as:.
+def event.subject(obj: event): string.
+all such transformations are invertible, so we canconvert back to the original format after prediction..c.2 meta-computation operators.
+the meta-computation operators are only requiredfor the conversational semantic parsing datasets,and smcalflow already makes use of them.
+therefore, we only had to convert treedst.
+tothis end, we introduced two new operators:.
+3678def refer[t](): t.def revise[t, r](root: root[t],path: path[r],revision: r => r,.
+): t.refer goes through the programs and system ac-tions in the dialogue history, starting at the mostrecent turn, ﬁnds the ﬁrst sub-program that evalu-ates to type t, and replaces its invocation with thatsub-program.
+similarly, revise ﬁnds the ﬁrst pro-gram whose root matches the speciﬁed root, walksdown the tree along the speciﬁed path, and appliesthe provided revision on the sub-program rootedat the end of that path.
+it then replaces its invoca-tion with this revised program.
+we performed anautomated heuristic transformation of treedstso that it makes use of these meta-operators.
+weonly applied the extracted transformations whenexecuting them on the transformed programs usingthe gold dialogue history resulted in the originalprogram (i.e., before applying any of our transfor-mations).
+therefore, when using the gold dialoguehistory, this transformation is also guaranteed tobe invertible.
+we emphasize that we execute thesemeta-computation operators before computing ac-curacy so that our ﬁnal evaluation results are com-parable to prior work..c.3 annotation errors.
+while preparing the datasets for our experimentsusing our automated transformations, we noticedthat they contain some inconsistencies.
+for exam-ple, in treedst, the tree fragment:.
+...restaurant.book.restaurant.book....seemed to be interchangeable with:.
+...restaurant.object.equals....the annotation and checking mechanisms we em-ploy impose certain regularity requirements on thedata that are violated by such examples.
+there-fore, we had three choices for such examples: (i)we could add additional type declarations, (ii) wecould discard them, or (iii) we could collapse thetwo annotations together, resulting in a lossy con-version.
+we used our best judgment when choosingamong these options, preferring option (iii) whereit was possible to do so automatically.
+we believethat all such cases are annotation errors, but wecannot know for certain without more informationabout how the treedst dataset was constructed.
+overall, about 122 dialogues (0.4%) did not pass.
+our checks for smcalflow, and 585 dialogues(3.0%) for treedst.
+when converting back to theoriginal format, we tally an error for each discardedexample, and select the most frequent version ofany lossily collapsed annotation..our approach also provides two simple yet ef-fective consistency checks for the training data:(i) running type inference using the provided typedeclarations to detect ill-typed examples, and (ii)using the constraints described appendix b to de-tect other forms of annotation errors.
+we foundthat these two checks together caught 68 poten-tial annotation errors (<0.5%) in smcalflowand ∼1,000 potential errors (∼6%) in treedst.
+treedst was particularly interesting as we founda whole class of examples where user utteranceswere replaced with system utterances..note that our model does not technically requireany of these checks.
+it is possible to generate typesignatures that permit arbitrary function/argumentpairs based on observed data and to conﬁgure ourmodel so that any observed value may be generatedas a constant (i.e., not imposing the constraintsdescribed in appendix b).
+in practice we foundthat constraining the space of programs providesuseful sanity checks in addition to accuracy gains..c.4 non-conversational semantic parsing.
+we obtained the jobs, geoquery, and atisdatasets from the repository of dong and lapata(2016).
+for each dataset, we deﬁned a library thatspeciﬁes function and type declarations..d evaluation details.
+to compare with prior work for smcalflow(semantic machines et al., 2020) and treedst(cheng et al., 2020), we replicated their setups.
+forsmcalflow, we predict plans always condition-ing on the gold dialogue history for each utterance,but we consider any predicted plan wrong if therefer are correct ﬂag is set to false.
+thisﬂag is meant to summarize the accuracy of a hypo-thetical model for resolving calls to refer, but isnot relevant to the problem of program prediction.
+we also canonicalize plans by sorting keyword ar-guments and normalizing numbers (so that 30.0and 30 are considered equivalent, for example).
+for treedst, our model predicts programs thatuse the refer and revise operators, and we exe-cute them against the dialogue history that consistsof predicted programs and gold (oracle) system.
+3679actions (following cheng et al.
+(2020)) when con-verting back to the original tree representation.
+wecanonicalize the resulting trees by lexicographi-cally sorting the children of each node..for our baseline comparisons and ablations(shown in tables 2a and 2b), we decided to ignorethe refer are correct ﬂag for smcalflowbecause it assumes that refer is handled by someother model and for these experiments we are onlyinterested in evaluating program prediction.
+also,for treedst we use the gold plans for the di-alogue history in order to focus on the semanticparsing problem, as opposed to the dialogue statetracking problem.
+for the non-conversational se-mantic parsing datasets we replicated the evalua-tion approach of dong and lapata (2016), and sowe also canonicalize the predicted programs..e model hyperparameters.
+we use the same hyperparameters for all of ourconversational semantic parsing experiments.
+forthe encoder, we use either bert-medium (turcet al., 2019) or a non-pretrained 2-layer trans-former (vaswani et al., 2017) with a hidden sizeof 128, 4 heads, and a fully connected layer sizeof 512, for the non-bert experiments.
+for the de-coder we use a 2-layer transformer with a hiddensize of 128, 4 heads, and a fully connected layersize of 512, and set htype to 128, and harg to 512.for the non-conversational semantic parsing exper-iments we use a hidden size of 32 throughout themodel as the corresponding datasets are very small.
+we also use a dropout of 0.2 for all experiments..for training, we use the adam optimizer(kingma and ba, 2017), performing global gradi-ent norm clipping with the maximum allowed normset to 10. for batching, we bucket the training ex-amples by utterance length and adapt the batch sizeso that the total number of tokens in each batchis 10,240. finally, we average the log-likelihoodfunction over each batch, instead of summing it..experiments with bert.
+we use a pre-trainingphase for 2,000 training steps, where we freezethe parameters of the utterance encoder and onlytrain the dialogue history encoder and the decoder.
+then, we train the whole model for another 8,000steps.
+this because our model is not simply addinga linear layer on top of bert, and so, unless ini-tialized properly, we may end up losing some ofthe information contained in the pre-trained bertmodel.
+during the pre-training phase, we linearly.
+warm up the learning rate to 2 × 10−3 during theﬁrst 1,000 steps.
+we then decay it exponentiallyby a factor of 0.999 every 10 steps.
+during the fulltraining phase, we linearly warm up the learningrate to 1 × 10−4 during the ﬁrst 1,000 steps, andthen decay it exponentially in the same fashion..experiments without bert.
+we use a singletraining phase for 30,000 steps, where we linearlywarm up the learning rate to 5 × 10−3 during theﬁrst 1,000 steps, and then we decay it exponen-tially by a factor of 0.999 every 10 steps.
+we needa larger number of training steps in this case be-cause none of the model components have beenpre-trained.
+also, the encoder is now much smaller,meaning that we can afford a higher learning rate..even though these hyperparameters may seem veryspeciﬁc, we emphasize that our model is robust tothe choice of hyperparameters and this setup waschosen once and shared across all experiments..f baseline models.
+seq2seq.
+this model predicts linearized, tok-enized s-expressions using the opennmt imple-mentation of a transformer-based (vaswani et al.,2017) pointer-generator network (see et al., 2017).
+for example, the following program:.
++(length("some string"), 1).
+would correspond to the space-separated sequence:.
+( + ( length " some string " ) 1 ).
+in contrast to the model proposed in this paper, inthis case tokens that belong to functions and values(i.e., that are outside of quotes) can also be copieddirectly from the utterance.
+furthermore, thereis no guarantee that this baseline will produce awell-formed program..seq2tree.
+this model uses the same underly-ing implementation as our seq2seq baseline—alsowith no guarantee that it will produce a well-formedprogram—but it predicts a different sequence.
+forexample, the following program:.
+would be predicted as the sequence:.
++(+(1, 2), 3).
++(<nt>, 3)+(1, 2).
+each item in the sequence receives a unique em-bedding in the output vocabulary and so, "+(1,2)"and "+(<nt>, 3)" share no parameters.
+<nt> is.
+3680a special placeholder symbol that represents a sub-stitution point when converting the linearized se-quence back to a tree.
+furthermore, copies are notinlined into invocations, but broken out into tokensequences.
+for example, the following program:.
+[0] value_s0(s0)[1] event_0(subject = [0])[2] value_t0(t0)[3] event_1(curried = [1], start = [2])[4] value_t1(t1)[5] event_2(curried = [3], end = [4]).
++(length("some string"), 1).
+would be predicted as the sequence:.
++(<nt>, 1)length(<nt>)"somestring".
+seq2tree++.
+this is a re-implementation of kr-ishnamurthy et al.
+(2017) with some differences:(i) our implementation’s entity linking embeddingsare computed over spans, including type informa-tion (as in the original paper) and a span embed-ding computed based on the lstm hidden stateat the start and end of each entity span, (ii) copiesare treated as entities by proposing all spans upto length 15, and (iii) we use the linear dialoguehistory encoder described in §3.1..g ablations.
+the “value dependence” and the “no span copy”ablations are perhaps the most important in ourexperiments, and so we provide some more detailsabout them in the following paragraphs..value dependence.
+the goal of this ablation isto quantify the impact of the dependency structurewe propose in equation 3. to this end, we ﬁrstconvert all functions to a curried form, where eachargument is provided as part of a separate functioninvocation.
+for example, the following invocation:.
+[0] event(subject = s0, start = t0, end = t1).
+note that we keep the value s0, value t0, andvalue t1 function arguments because they allowthe model to marginalize over multiple possiblevalue sources (§2.5).
+the reason we do not trans-form the value functions that correspond to copiesis because we attempted doing that on top of thespan copy ablation, but it performed poorly and wedecided that it may be a misrepresentation.
+overall,this ablation offers us a way to obtain a bottom-upparser that maintains most properties of the pro-posed model, except for its dependency structure..no span copy.
+in order to ablate the proposedspan copy mechanism we implemented a data trans-formation that replaces all copied values with refer-ences to the result of a copy function (for spans oflength 1) or the result of a concatenate functioncalled on the results of 2 or more calls to copy.
+forexample, the function invocation:.
+[0] event(subject = "water the plant").
+is converted to:.
+[0] copy("water")[1] copy("the")[2] concatenate([0], [1])[3] copy("plant")[4] concatenate([2], [3])[5] event(subject = [4]).
+when applied on its own and not combined withother ablation, the single token copies are furtherinlined to produce the following program:.
+[0] concatenate("water", "the")[1] concatenate([0], "plant")[2] event(subject = [1]).
+is transformed to the following program fragment:.
+h computational efﬁciency.
+[0] value(s0)[1] event_0(subject = [0])[2] value(t0)[3] event_1(curried = [1], start = [2])[4] value(t1)[5] event_2(curried = [3], end = [4]).
+when choosing a function, our decoder does notcondition on the argument values of the previousinvocations.
+in order to enable such condition-ing without modifying the model implementation,we also transform the value function invocationswhose underlying values are not copies, such thatthere exists a unique function for each unique value.
+this results in the following program:.
+for comparing model performance we computedthe average utterance processing time across all ofthe smcalflow validation set, using a singlenvidia v100 gpu.
+the fastest baseline requiredabout 80ms per utterance, while our model onlyrequired about 8ms per utterance.
+this can beattributed to multiple reasons, such as the factsthat: (i) our independence assumptions allow us topredict the argument value distributions in parallel,(ii) we avoid enumerating all possible utterancespans when computing the normalizing constant forthe argument values, and (iii) we use ragged tensorsto avoid unnecessary padding and computation..3681

@@ -1,0 +1,429 @@
+counterfactual inference for text classiﬁcation debiasing.
+chen qiantsinghua universityqc16@mails.tsinghua.edu.cn.
+fuli feng∗national university of singaporefulifeng93@gmail.com.
+lijie wen∗tsinghua universitywenlj@tsinghua.edu.cn.
+chunping maalibaba damo academychunping.mcp@alibaba-inc.com.
+pengjun xiealibaba damo academychengchen.xpjg@taobao.com.
+abstract.
+today’s text classiﬁers inevitably suffer fromunintended dataset biases,especially thedocument-level label bias and word-level key-word bias, which may hurt models’ general-ization.
+many previous studies employed data-level manipulations or model-level balancingmechanisms to recover unbiased distributionsand thus prevent models from capturing thetwo types of biases.
+unfortunately, they ei-ther suffer from the extra cost of data col-lection/selection/annotation or need an elab-orate design of balancing strategies.
+differ-ent from traditional factual inference in whichdebiasing occurs before or during training,counterfactual inference mitigates the inﬂu-ence brought by unintended confounders aftertraining, which can make unbiased decisionswith biased observations.
+inspired by this,we propose a model-agnostic text classiﬁca-tion debiasing framework – corsair, whichcan effectively avoid employing data manip-ulations or designing balancing mechanisms.
+concretely, corsair ﬁrst trains a base modelon a training set directly, allowing the datasetbiases “poison” the trained model.
+in infer-ence, given a factual input document, cor-sair imagines its two counterfactual counter-parts to distill and mitigate the two biases cap-tured by the poisonous model.
+extensive ex-periments demonstrate corsair’s effective-ness, generalizability and fairness.
+1.
+1.introduction.
+text classiﬁcation, mapping text documents to aset of predeﬁned categories, is a fundamental andimportant technique serving for many applicationssuch as sentiment analysis (qian et al., 2020b),.
+∗ this work was partly done during chen qian’s intern-ship at alibaba damo academy.
+fuli feng and lijie wenare the co-corresponding authors..1the code is available at https://github.com/.
+qianc62/corsair..partisanship recognition (kiesel et al., 2019) andspam detection (castillo et al., 2007).
+machinelearning models have become the default choiceof solving text classiﬁcation, owing to their abil-ity to recognize the textual patterns from the la-beled documents (kim, 2014; howard and ruder,2018).
+nevertheless, they are at the risk of inad-vertently capturing and even amplifying the unin-tended dataset biases (zhao et al., 2017; zhanget al., 2020; feder et al., 2020; blodgett et al.,2020), which can be at document-level (i.e., labelbias) and word-level (i.e., keyword bias)..the label bias issue occurs in the scenarioswhere a portion of the categories possesses a ma-jority of training examples than others.
+for ex-ample, the label distribution of a binary sentimentanalysis dataset could be 95%:5% (dixon et al.,2018).
+many previous studies found that the mod-els trained on such data are potentially at the riskof simply predicting the majority answers (dixonet al., 2018; zhang et al., 2020).
+the keywordbias issue occurs in the situation where trainedmodels exhibit excessive correlations between cer-tain words and categories, e.g., some sentiment-irrelevant words – “black” or “islam” – are alwaysconnected to negative category.
+as such, mod-els always lean to unfairly predict any documentcontaining those keywords to a speciﬁc categoryaccording to the biased statistical information in-stead of intrinsic textual semantics (waseem andhovy, 2016; liu and avci, 2019).
+the seriousdisadvantages limit models’ generalization, espe-cially in the scenarios where the training data isdifferently-distributed with the testing data (niuet al., 2021; goyal et al., 2017)..to resolve the issues, an effective solution is toperform data-level manipulations (e.g., resampling(qian et al., 2020b)), which effectively transformsa training set to a relatively balanced one beforetraining.
+another line of debiasing work typically.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages5434–5445august1–6,2021.©2021associationforcomputationallinguistics5434designs model-level balancing mechanisms (e.g.,reweighting (zhang et al., 2020)), aiming to adap-tively decrease the inﬂuence of majority categorieswhile increasing the minority during training.
+thecore of the two types of solutions is to explicitlyor implicitly recover unbiased distributions andprevent models from capturing the unintended bi-ases.
+unfortunately, the data-level strategy typi-cally suffers from the extra manual cost of datacollection, selection and annotation (zhang et al.,2020), requires much longer training time and nor-mally enlarges the gap between training and test-ing data distributions.
+the model-level strategytypically needs elaborate selection or deﬁnitionof balancing strategies and needs relearning fromscratch once certain balancing mechanisms (e.g.,an unbiased training objective) are redesigned..must machine learning models perform debias-ing before or during training?
+think about the dif-ference in the decision making processes betweenmachines and humans.
+machine learning systemsare forced to imitate the behavior from observa-tions via maximizing the prior probability, fromwhich the decision is directly drawn during infer-ence.
+by contrast, we humans, although born andraised in a biased nature, have the ability of coun-terfactual inference to make unbiased decisionswith biased observations (niu et al., 2021).
+to il-lustrate, we brieﬂy compare the traditional factualinference and the counterfactual inference in textclassiﬁcation:• factual inference: what will the prediction beif seeing an input document?
+• counterfactual inference: what will the pre-diction be if seeing the main content of an inputdocument only and had not seen the confoundingdataset biases?
+the counterfactual inference essentially gifts hu-mans the imagination ability (i.e., had not done)to make decisions with a collaboration of the maincontent and the confounding biases (tang et al.,2020), as well as to introspect whether our deci-sion is deceived (niu et al., 2021), i.e., counter-factual inference leads to debiased prediction..inspired by this, we propose a novel model-agnostic paradigm (corsair), which adopts fac-tual learning before mitigating the negative inﬂu-ence of the dataset biases in inference (i.e., aftertraining), without the need of employing data ma-nipulations or designing balancing mechanisms.
+concretely, in training, corsair directly trains.
+a base model on an original training set, allowingthe unintended dataset biases “poison” the model.
+to “rescue” the testing documents from the poi-sonous model, in testing, for each factual inputdocument, corsair imagines its two types ofcounterfactual counterparts to produce two coun-terfactual outputs as the distilled label bias andkeyword bias.
+lastly, corsair performs a biasremoval operation to produce a counterfactual pre-diction that corresponds to a debiased decision.
+to verify, we perform extensive experiments onmultiple public benchmark datasets.
+the resultsdemonstrate our proposed framework’s effective-ness, generalizability and fairness, proving thatcorsair, when employed on four different typesof base models, is signiﬁcantly helpful to mitigatethe two types of dataset biases..2 methodology.
+problem formalization let x and y denotethe input (text document) and output (category)spaces, respectively.
+given a labeled training setdtrain = {(xi, yi) ∈ x × y} (i.e., the observeddata), the goal is to learn a text classiﬁer m ondtrain, which serves as a mapping function f (·) :x (cid:55)→ y to accurately classify testing examples indtest = {ˆx|ˆx ∈ x }..considering that the dataset biases would not becompletely eliminated via data manipulations, em-ploying data manipulations (e.g., resampling) ordesigning balancing mechanisms (e.g., reweight-ing) may be not a directly-reasonable solution.
+in-spired by the success of counterfactual inferencein mitigating biases in computer vision (niu et al.,2021; wang et al., 2020; tang et al., 2020; yanget al., 2020; goyal et al., 2017), we propose acounterfactual-inference-based text-classiﬁcationdebiasing framework (corsair), which is ableto make unbiased decisions with biased observa-tions.
+the core idea of corsair is to train a“poisonous” text classiﬁer regardless the datasetbiases and post-adjust the biased predictions ac-cording to the causes of the biases in inference.
+it’s worth mentioning that our proposed corsaircan be applied to almost any parameterized basemodel, including traditional one-stage classiﬁers(e.g., textcnn (kim, 2014), rcnn (lai et al.,2015) and leco (qian et al., 2020b)) and cur-rently prevalent two-stage classiﬁers2 (e.g., ulm-.
+2for brevity, two-stage classiﬁers refer to two-stage lan-.
+guage models with an additional prediction layer..5435figure 1: the architecture of our proposed model-agnostic framework (corsair).
+speciﬁcally, corsair ﬁrsttrains a base model on the training data directly so as to preserve the dataset biases in the trained model.
+in theinference phase, given a factual input document, corsair ﬁrst imagines its two types of counterfactual documentsto produce two counterfactual outputs as the distilled label bias and keyword bias.
+finally, corsair searches twoadaptive parameters to perform bias removal to produce a counterfactual prediction for a debiased answer..fit (howard and ruder, 2018), bert (devlinet al., 2019) and roberta (liu et al., 2019)).
+for brevity, we will elaborate corsair by taking(a robustly optimized bert-shaperobertalanguage model) as the example base model, andbinary sentiment analysis as the example applica-tion.
+the high-level architecture of corsair is il-lustrated in figure 1, which consists of three maincomponents: biased learning, bias distillation andbias removal..2.1 biased learning.
+in the learning phase (i.e., training), corsair ﬁrsttrains the base model roberta to learn a mappingrelation based on training data.
+similar to tradi-tional training, corsair uses feedforward to pre-dict batch examples and backward to update thoselearnable parameters in an end-to-end fashion.
+inpractice, we adopt the standard cross entropy asthe training objective (i.e., loss function):.
+l(θ) = −.
+πi,y ln πi,y.
+1n.n(cid:88).
+(cid:88).
+i=1.
+y∈y.
+πi = sof tmax(f (xi)).
+(1).
+where θ denotes the learnable parameters of thebase model f (·), n is the number of batch exam-ples, πi is the ground-truth label distribution (overy) and πi is the predicted probability distribution(over y) for a given training example xi..2.2 bias distillation.
+in the inference phase (i.e., testing), traditional de-biasing methods making predictions for each test-ing document via the conventional feedforward.
+operation on the trained base model to obtain theprobability distribution over y (i.e., factual pre-diction) for a most possible answer.
+however, inaddition to the textual contents of the document,the prediction is also affected by unintended con-founders (pearl and mackenzie, 2018) which mayproduce the label bias and keyword bias.
+aimingto obtain unbiased prediction, the key is to debiasduring inference by blocking the spread of the bi-ases from learning to inference.
+to achieve that,inspired by the counterfactual studies in causalreasoning (niu et al., 2021; tang et al., 2020), wedesign an effective strategy based on causal inter-vention (pearl, 2013; pearl and mackenzie, 2018)to distill the potentially-harmful biases capturedby the trained model (niu et al., 2021; tang et al.,2020), and then mitigate them via bias removal..2.2.1 causal graph.
+aiming to conduct proper causal intervention, weﬁrst formulate the causal graph (pearl, 2013; pearland mackenzie, 2018; tang et al., 2020) for thetext classiﬁcation models (see the left-bottom partof figure 1), which sheds light on how the docu-ment contents and dataset biases affecting the pre-diction.
+formally, a causal graph is a directedacyclic graph g = (n , e), indicating how a setof variables n causally interact with each otherthrough the causal links e.it provides a sketchof the causal relations behind the data and howvariables obtain their values (tang et al., 2020),e.g., (x, m )→y .
+in this causal graph, x, y andm denote a text document’s embedding, its corre-sponding prediction and the trained model which.
+5436biased learning(on training set)bias distillation(on testing set)w1w2w3(cid:335)w8y1w1w2w3w4…vocabularyy1y2…y3categoriesw2w5(cid:335)wny2w6w1w8(cid:335)w2w8ym(cid:335)(cid:335)factual output(i.e., factual prediction)bias removal(on testing set)x̃mycounterfactual world(partially-blindfolded)my(cid:1)xcounterfactual world(fully-blindfolded)w5w4w3w2w1imaginationsee nothingcounterfactual inputw5w4w3w2w1imaginationsee somecounterfactual inputw5w4w3w2w1factual inputxmyfactual world(traditional inference)counterfactual output(i.e., label bias)counterfactual output(i.e., keyword bias)xmyfactual learningelastic scaling(on validation set)label biaskeyword bias(cid:1)λ˜λ(cid:1)λ*˜λ*(cid:1)λ*˜λ*=counterfactualpredictionfactualpredictionlabelbiaskeywordbiasf(x)=y2c(x)=y4xprobability distribution or logit vectordocumentword-maskeddocumentelement-wise subtractionscaling factor(cid:1)λ˜λw5inevitably captures unintended confounders exist-ing in training data, respectively..information is given.
+thus, the fully-blindfoldedcounterfactual output:.
+2.2.2 label bias distillation.
+according to the causal graph, we diagnose howthe dataset biases existing in training data misleadsinference.
+concretely, by using bayes rule (wanget al., 2020), we can view the inference as:.
+f (x) = p (y |x) =.
+p (y |x, c)p (c|x).
+(2).
+(cid:88).
+c.where c could be any confounder captured bythe model trained on a biased training set (e.g.,the overwhelming majority of training documentsfall in positive).
+under such circumstances,once the training documents corresponding to thepositive category are dominating than nega-tive, the trained model tends to build strong spu-rious connections between testing documents andpositive, achieving high accuracy even with-out knowing testing documents’ main contents.
+as such, the model is inadvertently contaminatedby the spurious causal correlation: x←m →y ,a.k.a.
+a back-door path in causal theory (pearland mackenzie, 2018; pearl, 2013).
+to decouplethe spurious causal correlation, the back-door ad-justment (pearl and mackenzie, 2018; pearl, 2013;pearl et al., 2016) predicts an actively intervenedanswer via the do(·) operation:.
+p (y |do(x)) = p (y |x = ˆx) = f (ˆx).
+(3).
+where ˆx could be any counterfactual embeddingas long as it is no longer dependent on m to detachthe connection between x and m .
+as illustratedin the fully-blindfolded counterfactual world infigure 1, the causal intervention operation wipesout all the in-coming links of a cause variable x,which encourages the model m to inference with-out seeing any testing document, i.e., robertashould be fully blind in order to detaching theconnection between m and x. to achieve that,we use ˆx to denote the imagined fully-blindfoldedcounterfactual document where all words in thetest document x are consistently masked (to cre-ate a counterfactual embedding), and f (ˆx) as thecorresponding counterfactual output via feedfor-ward through the trained model.
+since the modelcannot see any word in the factual input x afterfully blindfolding, f (ˆx) actually reﬂects the pureinﬂuence from the trained base model m .
+further-more, f (ˆx) refers to the output (e.g., a probabil-ity distribution or a logit vector) where no textual.
+p (y |do(x)) = f (ˆx) = f ((cid:104)w1, w2, · · · , wn(cid:105))∀wi ∈ ˆx, wi ← [mask].
+(4).
+naturally reﬂects as the label bias captured by m ,where [mask] is a special token to mask a singleword.
+due to ˆx is fully-blindfolded and indepen-dent with trained model m , in implementation, wefollow wang et al.
+(2020) to use the average doc-ument feature on the whole training set as its em-bedding of the counterfactual document..2.2.3 keyword bias distillation.
+inspired by the factual inference where all tex-tual information in test documents are exposedto the base model and the fully-blindfolded casewhere all textual information in each test docu-ment are not exposed, we make the ﬁrst attempt toutilize a partially-blindfolded counterfactual docu-ment where some words in the test document x aremasked to distill the keyword bias from the trainedbase model..speciﬁcally, we deliberately expose somewords which may potentially cause spurious cor-relations (e.g., the spurious “black”-to-negativemapping) to the trained model to exhibit theirpotentially negative inﬂuence.
+some evil wordsmay serve as unintended confounders (tang et al.,2020), splitting a document into two pieces: maincontent and relatively-unimportant context.
+in thefollowing, we use ˜x to denote another counterfac-tual document where the main-content words ina test document x are masked while other con-text words are not, and f (˜x) as the correspondingcounterfactual output.
+to achieve that, an effectivemasking strategy is to use discriminative text sum-marization methods to extract the main content ofthe document, before masking content words (im-portant classiﬁcation clues) and exposing othersas potentially harmful biasing factors.
+since themodel is forced to see only the non-masked con-text words in x, f (˜x) actually reﬂects the inﬂuencefrom both the potentially harmful contexts andthe trained model.
+thus, the partially-blindfoldedcounterfactual output:.
+f (˜x) = f ((cid:104)w1, w2, · · · , wn(cid:105)).
+(cid:40).
+∀wi ∈ ˜x,.
+wi ← [mask] if wi ∈ xcontentif wi ∈ xcontextwi ← wi.
+(5).
+naturally reﬂects as the keyword bias captured bym for a speciﬁc text document x, where xcontentand xcontext denote the main content and the con-.
+5437text of x, respectively.
+inspired by a recent coun-terfactual word-embedding study of feder et al.
+(2020), to realize discriminative text summariza-tion, we use jieba3 tool, whose textrank-basedinterface can effectively extract the words thatmay inﬂuence the semantics of a sentence as con-tent, leaving potentially discriminative/unfair key-words (e.g., stop words, a part of adjectives, andsemantically-unimportant particles) as contexts.
+empirically, the average ratio of contents to con-texts produced by jieba on all datasets is approxi-mately 62.03%:37.97%..2.3 bias removal.
+our ﬁnal goal is to use the direct effect from x toy for debiased prediction, removing (\) the labelbias and the keyword bias existing in training data(i.e., blocking the spread of the biases from train-ing data to inference): f (x)\f (ˆx)\f (˜x).
+the de-biased prediction via bias removal can be formal-ized via the conceptually simple and empiricallypowerful element-wise subtraction operation:c(x) = f (x)\f (ˆx)\f (˜x) = f (x) − ˆλf (ˆx) − ˜λf (˜x).
+(6)where f (x) and c(x) correspond to the traditionalfactual prediction and our counterfactual predic-tion, respectively; f (ˆx) and f (˜x) correspond tothe label bias and the keyword bias distilled fromthe trained base model, respectively; ˆλ and ˜λare two independent parameters balancing the twotypes of biases..note that the two distilled biases could be prob-ability distributions over all categories or logitvectors (i.e., without normalization), and they typ-ically do not contribute completely equally tothe ﬁnal classiﬁcation.
+as such, in equation 6,directly subtracting without adaptive parameters(i.e., ˆλ=˜λ= 12 ) would cause that mitigating a certainbias too much or too less for a speciﬁc testing set.
+therefore, we propose the elastic scaling mecha-nism to search two adaptive parameters (scalingfactors) – ˆλ∗ and ˜λ∗ – on the validation set toamplify or penalize the two biases, which woulddynamically adapt to different datasets accord-ing to the extent to which two biases in trainingset “poison” the validation set.
+in practice, elas-tic scaling can be implemented using grid beamsearch (hokamp and liu, 2017) in a scoped two-dimensional space:.
+ˆλ∗, ˜λ∗ = arg maxˆλ,˜λ.
+ψ(ddev, c(x; ˆλ, ˜λ)).
+ˆλ, ˜λ ∈ [a, b].
+(7).
+3https://github.com/fxsjy/jieba.
+where ψ is a metric function (e.g., recall, precisionand f1-score) to evaluate the performance on thevalidation set ddev=(xdev, ydev); a and b are theboundaries of the search range.
+the two factorsare at dataset-level and thus searched only once foreach validation set, and would be used in inferencefor all testing documents..3 evaluation.
+baselines we choose four types of represen-tative text classiﬁers as the base models ofcovering classical,our proposed framework,data-manipulation-based, model-balancing-based,as well as large-scale and two-stage methods.
+textcnn (kim, 2014) is a classical classiﬁerthat uses convolutional neural networks (cnn)with scale-variant convolution ﬁlters to capture lo-cal textual features, which may potentially cap-ture spurious correlations between certain key-words and categories.
+leco (qian et al., 2020b)utilizes the combination of the implicit encod-ing of deep linguistic information and the ex-plicit encoding of morphological features, whichwould also capture the keyword bias inadvertently.
+besides, it uses a sentence-level over-samplingmechanism (he and garcia, 2009) to mitigate thelabel bias, and we further enhance it via a pow-erful word-level augmentation technique (eda)(wei and zou, 2019) to mitigate the keyword bias,denoted as lecoeda.
+weight (zhang et al.,2020) is a most recent debiasing text classiﬁer thatuses a specially-designed reweighting techniqueunder an unbiased objective for fair (i.e., non-discrimination) learning, which is proven effectiveto mitigate the unfairness or discrimination issuecaused by unintended dataset biases.
+roberta(liu et al., 2019) is an improved version of bert,whose effective modiﬁcations allow roberta togeneralize better and match or exceed the perfor-mance of many post-bert methods, serving as avery strong baseline in recent work (gururanganet al., 2020)..datasets we use multiple english benchmarkdatasets(used mainly in academic commu-nity): hyperpartisan (kiesel et al., 2019), twit-ter (huang et al., 2017), arc (jurgens et al.,2018), scierc (luan et al., 2018), chemprot(kringelum et al., 2016), economy (huang andpaul, 2018), news (lang, 1995), parties (huangand paul, 2018), yelphotel (zhang et al., 2014);real-world query-and also randomly collect.
+5438table 1: statistics of the datasets.
+#d denotes the aver-age number of characters per document.
+#c denotes thenumber of categories.
+#train, #dev and #test denotethe number of training set, validation set and testing set,respectively..datasethyptwiarcscicheeconewparyeltaosun.
+domain/genrepolitical newssocial networkcomputer sciencecomputer sciencebiomedicinefinancenewspolitical speechuser commente-commercee-commerce.
+#d3,265.6484.32222.49192.92220.281,152.221,801.20140.31651.738.097.70.
+#c2267132202314356.
+#train↑5161,6311,6883,2194,1694,7449,44510,05920,97568,086234,074.
+#dev642721257122,9445954,6892,0126,9916,94950,851.
+#test652721287172,9525964,6942,0126,9937,02250,844.category pairs (used in industrial community)from two famous chinese e-commerce platforms:taobao4 and suning5.
+for brevity, we will use theﬁrst three letters to denote each dataset (e.g., hypfor hyperpartisan).
+the statistics of the datasetsare summarized in table 1..metric we use the widely-used macro-f1 met-ric, which is the balanced harmonic mean of pre-cision and recall.
+furthermore, macro-f1 is moresuitable than micro-f1 to reﬂect the extent of thedataset biases, especially for the highly-skewedcases, since macro-f1 is strongly inﬂuenced bythe performance in each category (i.e., category-sensitive) but micro-f1 easily gives equal weightover all documents (i.e., category-agnostic) (kimet al., 2019)..implementation details the search range inequation 7 is set as [−2.0, 2.0].
+each trainingis run for 10 epochs with the adam optimizer(kingma and ba, 2015), a mini-batch size of 16,a learning rate of 2e−5, and a dropout rate of 0.1.we implement corsair via python 3.7.3 and py-torch 1.0.1. all of our experiments are run on amachine equipped with seven standard nvidiatitan-rtx gpus..3.1 overall performance.
+we report the average results over ﬁve differentinitiations in table 2. we can observe that cor-sair consistently improves the four types of rep-resentative baselines on almost all datasets with asigniﬁcance level, regardless of the languages, do-mains, volumes and applications of the datasets,which validates the effectiveness and the general-izability of the proposed framework.
+furthermore,since corsair performs debiasing between the.
+4https://www.taobao.com5https://www.suning.com.
+traditional factual predictions and two counter-factual outputs to produce counterfactual predic-tions, the comparison between each baseline andits corsair-equipped counterparts highlights theimportance of the counterfactual inference, whichis largely ignored by most of previous text clas-siﬁcation methods.
+particularly, corsair caneven beneﬁt the data-manipulation-based method(i.e., lecoeda) and the model-balancing-basedmethod (i.e., weight) consistently, which in turnveriﬁes our initial intuition that the dataset biaseswould not be completely eliminated via data ma-nipulations merely, and further illuminates our keyinsight – preserving biases in models before debi-asing in inference..we can also notice that corsair sometimeshurts performance (e.g., roberta+corsair onhyp and arc); we conjecture the phenomenoncomes from the small-scale data, making the giantmodel roberta overﬁts and thus “fail” to dis-till two potential biases that are identically dis-tributed with the ideal distributions of factual bi-ases.
+moreover, ﬁnetuning a roberta model onlarge-datasets (e.g., sun) would take about 36hours, nearly 50 times that of training a weightmodel (about 44 minutes); we thus suggest to uselightweight base models in practice with consid-ering systems’ robustness and efﬁciency.
+besides,the proposed framework works only in inferenceand can thus be employed on the previous already-trained models.
+therefore, by leveraging coun-terfactual inference, our approach can serve as apowerful, “data-manipulation-free” and “model-balancing-free” weapon to enhance different typesof text classiﬁcation methods..3.2 bias analysis.
+according to sweeney and najaﬁan (2020), themore imbalanced/skewed a prediction producedby a trained model is, the more unfair opportuni-ties it gives over predeﬁned categories, the moreunfairly-discriminative the trained model is.
+wethus follow previous work (xiang and ding, 2020;sweeney and najaﬁan, 2020) to use the metric –imbalance divergence – to evaluate whether a pre-diction (normally a probability distribution) p isimbalanced/skewed/unfair:.
+d(p, u ) =js(p ||u ).
+(8).
+where d(·) is deﬁned as the distance of p and theuniform distribution u (with |p | elements).
+con-cretely, we use the js divergence as the distance.
+5439table 2: experimental results (f1; %) of all methods on all benchmark datasets (higher is better).
+for eachdataset, the best-performing results among all methods are highlighted with boldfaces.
+for each baseline, the best-performing results between the baseline and our approach are highlighted with ∗.
+† denotes statistical signiﬁcance(p≤0.05) between a baseline and the counterpart employed on our framework..methodtextcnntextcnn+corsairlecoedalecoeda+corsairweightweight+corsairrobertaroberta+corsair.
+hyp40.4846.71†∗58.7860.46†∗49.1455.03†∗87.92∗86.45.twi65.9469.03†∗72.4374.62†∗60.8068.35†∗88.7189.12∗.
+arc12.4617.03†∗52.6453.10†∗12.7118.04†∗68.76∗68.10.sci10.0919.85†∗22.3723.28∗09.8017.73†∗81.7682.21∗.
+che18.9622.55†∗30.2230.42∗11.9822.08†∗50.1051.65∗.
+eco46.0759.74†∗60.8161.81∗44.6759.24†∗53.5561.31†∗.
+new par54.9412.0756.39†16.18†∗∗57.3354.3957.51∗54.48∗54.9015.1920.93†55.70∗∗65.5485.3867.09†86.83†∗∗.
+yel51.4958.37†∗60.6060.87∗45.7358.47†∗77.6777.69∗.
+tao08.1608.70∗12.0214.25†∗01.6706.54†∗50.7051.52†∗.
+sun10.9014.20†∗17.1722.62†∗06.5414.02†∗44.0546.15†∗.
+avg.
+∆–30.1435.34†5.20↑∗–45.3446.67†1.33↑∗–28.4636.01†7.55↑∗–68.5569.82†1.27↑∗.
+table 3: experimental results (imbalance divergence or unfairness; %) of all methods on all benchmark datasets(lower is better).
+the top subtable shows the average document-level imbalance of predictions for label biasevaluation, and the bottom one shows the average word-level imbalance of predictions for keyword bias evaluation..method.)
+textcnn.
+ilr.(.
+ecnalabm.i.lebal.(.
+ecnalabm.i.drowyek.i.)
+textcnnkr.textcnn+corsairlecoedalecoeda+corsairweightweight+corsairrobertaroberta+corsair.
+textcnn+corsairlecoedalecoeda+corsairweightweight+corsairrobertaroberta+corsair.
+hyp01.3901.07∗01.11∗01.2100.81∗00.8801.2900.11†∗17.9607.44†∗06.7706.61∗10.3206.34†∗21.5819.40†∗.
+twi06.3105.18†∗07.47†∗11.2903.1901.66†∗02.9601.27†∗17.3915.17†∗11.93†∗14.4618.7713.70†∗21.5813.52†∗.
+arc11.8802.27†∗10.42†∗12.9607.0601.95†∗14.5701.66†∗44.7629.36†∗26.5425.94∗43.6433.29†∗45.3935.87†∗.
+sci09.9901.62†∗11.08∗11.9905.1000.98†∗18.1012.57†∗47.3922.36†∗15.0114.13†∗47.7023.40†∗41.5734.19†∗.
+che18.8611.53†∗08.93∗09.2612.6504.68†∗16.7402.76†∗37.3528.84†∗24.1622.53†∗46.5328.97†∗54.5753.37∗.
+eco06.6201.52†∗03.51∗04.4703.8100.56†∗06.6902.15†∗20.6908.51†∗07.7104.77†∗21.2908.80†∗21.5818.99†∗.
+new par28.21∗28.4905.36†∗06.0501.9901.30†∗00.1600.02∗38.2335.80†∗30.0530.03∗38.9834.74†∗59.2655.82†∗.
+01.41∗01.4900.64∗00.7200.1800.16∗00.01∗00.01∗05.7605.09∗05.0905.05∗06.3005.32∗21.5817.74†∗.
+yel09.4309.23∗06.6605.08∗02.4301.21†∗02.5500.82†∗18.4612.02†∗12.39∗12.5821.3410.12†∗31.8330.52∗.
+tao41.87∗42.0126.9126.06†∗25.7114.08†∗57.7428.83†∗65.3764.81†∗65.3057.51†∗66.7564.87†∗67.2362.23†∗.
+sun46.12∗46.7722.25∗23.0534.7614.01†∗56.7622.91†∗60.8758.37†∗60.6352.98†∗61.7358.63†∗64.8260.82†∗.
+avg.
+∆–16.5513.74†2.81↓∗09.48†–∗0.71↑10.19–08.8803.77†5.11↓∗–16.1406.64†9.50↓∗–34.0226.16†7.86↓∗–24.1422.41†1.73↓∗–34.8526.19†8.66↓∗–40.9936.58†4.41↓∗.
+metric since it is symmetric (i.e., js(p ||u ) =js(u ||p )) and strictly scoped (in [0.0, 1.0]) com-pared with the kl divergence.
+based on this, toevaluate the label bias and the keyword bias of atrained model m , we average its relative label im-balance (rli) over the predicted distributions ofall the testing documents, and the relative keywordimbalance (rki) over all the testing documentscontaining whichever context word, respectively:.
+rli(m ) =.
+d(p (x), u ).
+1|d|.
+1|v|.
+(cid:88).
+x∈d(cid:88).
+w∈v.
+rki(m, v) =.
+d(p ({x|w ∈ x ∧ x ∈ d}), u ).
+(9)where a prediction p (x) could be a factual predic-tion f (x) or a counterfactual one c(x); v denotesthe vocabulary of context words.
+the two metricsimplicitly capture the distance between all predic-tions and the fair uniform distribution u ..table 3 shows the average results of the biasanalysis investigation over ﬁve different initia-tions.
+the results show that our framework re-.
+duces the imbalance metrics (lower is better) whenemployed on non-data-balanced baselines signif-icantly and consistently, indicating it is indeedhelpful to mitigate the two dataset bias issues.
+we all know that data-balanced lecoeda per-fectly mitigates the label bias issue via data bal-ancing, thus achieving the lowest rli.
+due to thepowerful debiasing operations via strictly balanc-ing data, it serves as the skyline of rli.
+thisﬁnding is similar to previous evidence of moriket al.
+(2020).
+moreover, we can also see thatlecoeda reduces the rki, validating that datamanipulation methodology is indeed helpful todebias the keyword bias issue but fails to elimi-nate it completely; our framework can further re-duce rki (1.73↓).
+note that weight exhibits amore severe keyword bias than label bias (34.85vs. 08.88).
+the key reason is that weight ex-plicitly balances each category according to a the-oretically fair objective but ignores the consider-ation of label distributions conditioned on ﬁner-grained words.
+moreover, roberta exhibits the.
+5440most imbalanced prediction against all baselinesand across small- and large-scale datasets (e.g.,arc and tao), indicating that its answers ex-cessively distribute on certain categories due tothe overﬁtting phenomenon rooted from its large-scale parameters (about 110m).
+luckily, by beingequipped with our framework, the roberta caseremarkably reduces the imbalance issue caused bydataset biases (9.50↓ and 4.41↓)..another ﬁnding is that the keyword bias issuetypically is more severe than the label bias, mean-ing that trained models typically utilize the word-level information to inference, which could catchangel keywords as good clues but also inevitablyutilize evil keywords that are potential biases.
+ad-ditionally, the keyword bias issue, compared withlabel bias, is much harder to be completely elim-inated via data manipulations, which imposes acaution for relevant studies to keep a watchful eyeon the detrimental causal correlations..3.3 ablation study.
+we conduct ablation studies on corsair to em-pirically examine the contribution of its mainmechanisms/components, including the label biasremoval operation (\lbr), the keyword bias re-moval operation (\kbr) and the elastic scalingmechanism (\es)..the average results of the ablation study areshown in table 4. we can see that removing theproposed corsair causes serious performancedegradation, dropping f1-score by 7.55 points forthe weight case.
+additionally, it also providesevidence that using the counterfactual frameworkfor text classiﬁcation can explicitly mitigate twotypes of dataset biases to generalize better on un-seen examples.
+moreover, we observe that mit-igating the two types of biases are consistentlyhelpful for classiﬁcation tasks.
+the key reasonis that the distilled label bias provides a global(i.e., document-agnostic) offset and the distilledkeyword bias provides a local (i.e., document-speciﬁc) one to “move” in the predicted space,which makes the trained models “blind” to see po-tentially harmful biases existing in observed dataso as to focus only on the main content of eachdocument to inference.
+meanwhile, elastic scal-ing effectively ﬁnds two dynamic scaling factorsto amplify or shrink two biases, making the biasesbe mitigated properly and adaptively..table 4: ablation study on main components or mecha-nisms of our framework evaluated on all datasets.
+\ de-notes the removing operation.
+↓ denotes performancedrop.
+the worst scores are underlined..lecoeda+corsair.
+weight+corsair.
+46.67 ∆45.34†40.82†45.30†43.97†.
+1.33↓5.85↓1.37↓2.70↓.
+\corsair\lbr\kbr\es.
+36.01 ∆28.46†33.05†30.05†32.85†.
+7.55↓2.96↓5.96↓3.16↓.
+\corsair\lbr\kbr\es.
+3.4 further investigation on counterfactual.
+learning.
+recall that our proposed framework ﬁrst trains abase model on a training set directly (factual learn-ing) so as to preserve dataset biases in the trainedmodel, and in the inference phase, given a factualinput document, corsair imagines two types ofcounterfactual documents aiming to produce twocounterfactual outputs as the distilled label biasand keyword bias for bias removal.
+that is, theframework deliberately causes the discrepancy be-tween learning and inference, leading to an opera-tional gap between the two phases.
+in this section,we investigate more deeply to explore what willhappen if the operational gap is bridged.
+• factual learning.
+learn with l(θ; f (xi), yi)as objective, i.e., to minimize the loss between fac-tual predictions and ground-truth labels.
+then, in-ference via counterfactual predictions.
+• counterfactual learning.
+learn withl(θ; c(xi), yi) as objective,to minimizethe loss between counterfactual predictions andground-truth labels.
+then, inference directly..i.e.,.
+the average results of textcnn on eco(|y|=2) and che (|y|=13) are reported in fig-ure 2. we observe that these conﬁgurations con-verge at different f1 scores as the number ofepochs increases gradually.
+as for each dataset,the conﬁguration of a factual model with coun-terfactual inference (i.e., corsair) achieves thebest performance with even a relatively more rapidin the earlyconvergence.
+more interestingly,phases of model training (e.g., epoch=0), cor-sair usually provides a higher starting point thantraditional factual inference.
+we conjecture thatthe superiority may come from the use of averageembedding which usually produces a stable distri-bution similarly distributed with ideal biases, mak-ing a base model happen to “see” the label biasonce the initiation operation is done.
+this phe-nomenon is empirically held, especially for small-scale classiﬁcation tasks..5441vectors, some subsequent studies explored differ-ent types of downstream text classiﬁcation mod-els, including support vector machine (joachims,1999), maximum entropy model (nigamy and mc-callum, 1999), naive bayes (pang et al., 2002),word clustering (baker and mccallum, 1998) andneural networks (kim, 2014; zhou et al., 2016;howard and ruder, 2018; devlin et al., 2019; liuet al., 2019)..to solve the dataset bias issue, a straightfor-ward solution is to perform data-level manipula-tions to prevent models from capturing the unin-tended dataset biases in model training, includingdata balance (dixon et al., 2018; geng et al., 2007;chen et al., 2017; sun et al., 2018; rayhan et al.,resampling)2017; nguyen et al., 2011) (a.k.a.
+and data augmentation (wei and zou, 2019; qianet al., 2020b).
+another common paradigm for textclassiﬁcation is typically to design model-levelbalancing mechanisms, including unbiased em-bedding (bolukbasi et al., 2016; kaneko and bol-legala, 2019), threshold correction (kang et al.,2020; provost, 2000; calders and verwer, 2010)and instance weighting (zhang et al., 2020; zhaoet al., 2017; jiang and zhai, 2007)..5 conclusion.
+we have designed a counterfactual framework fortext classiﬁcation debiasing.
+extensive experi-ments demonstrated the framework’s good effec-tiveness, generalizability and fairness.
+futurework will design a joint-learning technique to dy-namically decide each document’s main content.
+we hope the paradigm can illuminate a promisingtechnical direction of causal inference in naturallanguage processing..acknowledgements.
+we thank the anonymous reviewers for their en-couraging feedbacks.
+the work was supported bythe national key research and development pro-gram of china (no.
+2019yfb1704003), the na-tional nature science foundation of china (no.
+71690231), tsinghua bnrist, alibaba damoacademy, next++ research center and beijingkey laboratory of industrial bigdata system andapplication..figure 2: the average results of three types of differentlearning paradigms on two datasets, including a factuallearning with factual inference, a factual learning withcounterfactual inference (i.e., corsair) and a coun-terfactual learning with direct inference..surprisingly, counterfactual learning convergesat the factual learning case.
+this ﬁnding consis-tently holds on all other baselines across datasets,which means thatthe so-called counterfactuallearning actually degrades to a factual inference.
+this indicates that if a training model explicitlymitigates two types of dataset biases in an end-to-end fashion, i.e., without the operational gap, it ac-tually loses the function to perform debiased infer-ence.
+the important reason is that under such cir-cumstance, the potential biases actually “spread”throughout the whole model architecture, insteadof the mere part before bias removal is operated,which makes bias removal only look like debi-asing but is just a factual feedforward operationthat is unable to capture, distill and even miti-gate biases.
+therefore, the counterfactual infer-ence works only when the operational gap be-tween learning and inferencing exists.
+this ben-eﬁcial gap instead makes the biases spread onlythroughout the part before the bias removal mod-ule, and thus enables them to be distilled via coun-terfactual inference..4 related work.
+text classiﬁcation is a backbone component inmany downstream tasks or applications (broderet al., 2007; chen et al., 2019; sun et al., 2019;qian et al., 2020a,c).
+earlier text classiﬁca-tion methods focus on manual feature engineering(aggarwal and zhai, 2012; cavnar and trenkle,1994; post and bergsma, 2013).
+the key factorof text classiﬁcation lies in the quality of text rep-resentation (mikolov et al., 2013b,a; penningtonet al., 2014; canuto et al., 2019; yan, 2009; qianet al., 2021).
+beneﬁting from high-quality word.
+5442epoch30.0000.0060.0040.0050.004023791f1-score (%)1086520.0010.0015.0000.0030.0020.0025.0010.0005.00ecochefactual learning via counterfactual inferencefactual learning via factual inferencecounterfactual learning via direct inferenceasymptotereferences.
+charu c. aggarwal and chengxiang zhai.
+2012. asurvey of text classiﬁcation algorithms.
+in miningtext data, pages 163–222..l. douglas baker and andrew kachites mccallum.
+1998. distributional clustering of words for textin the acm sigir conference onclassiﬁcation.
+research and development in information retrieval(sigir), pages 96–103..su lin blodgett, solon barocas, hal daum´e iii, andhanna wallach.
+2020. language (technology) ispower: a critical survey of bias in nlp.
+in the an-nual meeting of the association for computationallinguistics (acl), pages 5454–5476..jacob devlin, ming-wei chang, kenton lee, et al.
+2019. bert: pre-training of deep bidirectionalin thetransformers for language understanding.
+north american chapter ofthe association forcomputational linguistics (naacl), pages 4171–4186..lucas dixon, john li, jeffrey sorensen, nithum thain,and lucy vasserman.
+2018. measuring and mitigat-in theing unintended bias in text classiﬁcation.
+aaai/acm conference on ai, ethics, and society(aies), pages 67–73..amir feder, nadav oved, uri shalit, and roi re-ichart.
+2020. causalm: causal model explana-tion through counterfactual language models.
+inarxiv:2005.13407..tolga bolukbasi, kai-wei chang,.
+james zou,venkatesh saligrama, and adam kalai.
+2016. manis to computer programmer as woman is to home-maker?
+debiasing word embeddings.
+in the con-ference on neural information processing systems(neurips), pages 4356–4364..guang-gang geng, chun-heng wang, qiu-dan li,lei xu, and xiao-bo jin.
+2007. boosting theperformance of web spam detection with ensem-in the confer-ble under-sampling classiﬁcation.
+ence on fuzzy systems and knowledge discovery(fskd), pages 583–587..andrei.
+fontoura,.
+broder, marcus.
+evgeniygabrilovich, et al.
+2007. robust classiﬁcationin theof rare queries using web knowledge.
+acm sigir conference on research and devel-in information retrieval (sigir), pagesopment231–238..toon calders and sicco verwer.
+2010. three naivebayes approaches for discrimination-free classiﬁ-cation.
+in data mining and knowledge discovery,pages 277–292..sergio canuto, thiago salles, et al.
+2019. similarity-based synthetic document representations formeta-feature generation in text classiﬁcation.
+inthe acm sigir conference on research and de-velopment in information retrieval (sigir), pages355–364..carlos castillo, debora donato, aristides gionis,vanessa graham murdock, and fabrizio silvestri.
+2007. know your neighbors: web spam detectionusing the web topology.
+in the acm sigir confer-ence on research and development in informationretrieval (sigir), pages 423–430..william b cavnar and john m trenkle.
+1994. n-gram-in annual symposiumbased text categorization.
+on document analysis and information retrieval(sdair)..xiaoshuang chen, sisi li, and mengchu zhou.
+2017.a noise-filtered under-sampling scheme for im-in ieee transactions onbalanced classiﬁcation.
+cybernetics, pages 4263–4274..zhenpeng chen, sheng shen, ziniu hu, et al.
+2019.emoji-powered representation learning for cross-lingual sentiment classiﬁcation.
+in the world wideweb conference (www), pages 251–262..yash goyal, tejas khot, douglas summers-stay,dhruv batra, and devi parikh.
+2017. making thev in vqa matter: elevating the role of image un-in thederstanding in visual question answering.
+conference on computer vision and pattern recog-nition (cvpr), pages 6904–6913..suchin gururangan, ana marasovic,.
+swabhaswayamdipta, kyle lo, iz beltagy, doug downey,and noah a. smith.
+2020. don’t stop pretraining:adapt language models to domains and tasks.
+inthe annual meeting of the association for compu-tational linguistics (acl), pages 8342–8360..haibo he and edwardo a. garcia.
+2009. learningin ieee transactions onfrom imbalanced data.
+knowledge and data engineering (tkde), pages1263–1284..chris hokamp and qun liu.
+2017. lexically con-strained decoding for sequence generation usingin the annual meeting of thegrid beam search.
+association for computational linguistics (acl),pages 1535–1546..jeremy howard and sebastian ruder.
+2018. universallanguage model fine-tuning for text classiﬁcation.
+in the annual meeting of the association for com-putational linguistics (acl), pages 328–339..xiaolei huang and michael j. paul.
+2018. examiningtemporality in document classiﬁcation.
+in the an-nual meeting of the association for computationallinguistics (acl), pages 694–699..xiaolei huang, michael c. smith, michael j. paul,dmytro ryzhkov, sandra c. quinn, david a. bro-niatowski, and mark dredze.
+2017. examiningpatterns of inﬂuenza vaccination in social media.
+in the aaai conference on artiﬁcial intelligence(aaai), pages 4–5..5443jing jiang and chengxiang zhai.
+2007..instancein theweighting for domain adaptation in nlp.
+annual meeting of the association for computa-tional linguistics (acl), pages 264–271..thorsten joachims.
+1999. transductive inference fortext classiﬁcation using support vector machines.
+in the international conference on machine learn-ing (icml), pages 200–209..david jurgens, srijan kumar, raine hoover, danmcfarland, and dan jurafsky.
+2018. measuringthe evolution of a scientiﬁc field through citationframes.
+in transactions of the association for com-putational linguistics (tacl), pages 391–406..masahiro kaneko and danushka bollegala.
+2019.gender-preserving debiasing for pre-trained wordin the annual meeting of the asso-embeddings.
+ciation for computational linguistics (acl), pages1641–1650..bingyi kang, saining xie, marcus rohrbach,zhicheng yan, albert gordo, and jiashi feng.
+2020. decoupling representation and classiﬁerin the internationalfor long-tailed recognition.
+conference on learning representations (iclr)..johannes kiesel, maria mestre, rishabh shukla, em-manuel vincent, payam adineh, david corney,benno stein, and martin potthast.
+2019. semeval-2019 task 4: hyperpartisan news detection.
+inthe international workshop on semantic evaluation,pages 829–839..kang-min kim, yeachan kim, jungho lee, et al.
+2019.from small-scale to large-scale text classiﬁcation.
+in the world wide web conference (www), pages853–862..yoon kim.
+2014. convolutional neural networks forsentence classiﬁcation.
+in the conference on em-pirical methods in natural language processing(emnlp), pages 1746–1751..diederik p. kingma and jimmy lei ba.
+2015.adam: a method for stochastic optimization.
+inarxiv:1412.6980..jens kringelum, sonny kim kjaerulff, soren brunak,ole lund, tudor i oprea, and olivier taboureau.
+2016. chemprot-3.0: a global chemical biologydiseases mapping.
+in database (oxford)..siwei lai, liheng xu, kang liu, and jun zhao.
+2015.recurrent convolutional neural networks for textclassiﬁcation.
+in the aaai conference on artiﬁcialintelligence (aaai), pages 2267–2273..for computational linguistics (acl), pages 6274–6283..yinhan liu, myle ott, naman goyal, jingfei du, man-dar joshi, danqi chen, omer levy, mike lewis,luke zettlemoyer, and veselin stoyanov.
+2019.roberta: a robustly optimized bert pretrain-ing approach.
+in arxiv:1907.11692..yi luan, luheng he, mari ostendorf, and hannanehhajishirzi.
+2018. multi-task identiﬁcation of en-tities and relations and and coreference for scien-in the con-tiﬁc knowledge graph construction.
+ference on empirical methods in natural languageprocessing (emnlp), pages 3219–3232..tomas mikolov, kai chen, greg corrado, and jeffreydean.
+2013a.
+efﬁcient estimation of word repre-sentations in vector space.
+in arxiv:1301.3781..tomas mikolov, ilya sutskever, kai chen, et al.
+2013b.
+distributed representations of words and phrasesin the conference onand their compositionality.
+neural information processing systems (neurips),pages 3111–3119..marco morik, ashudeep singh, jessica hong, andthorsten joachims.
+2020. controlling fairness andbias in dynamic learning-to-rank.
+in the acm si-gir conference on research and development ininformation retrieval (sigir), pages 429–438..hien m. nguyen, eric w. cooper, and katsuari kamei.
+2011. borderline over-sampling for imbalanceddata classiﬁcation.
+in the international journal ofknowledge engineering and soft data paradigms(ijkesdp), pages 4–21..kamal nigamy and andrew mccallum.
+1999. usingin themaximum entropy for text classiﬁcation.
+international joint conference on artiﬁcial intelli-gence (ijcai), pages 61–67..yulei niu, kaihua tang, hanwang zhang, zhiwu lu,xian-sheng hua, and ji-rong wen.
+2021. coun-terfactual vqa: a cause-effect look at languagein the conference on computer vision andbias.
+pattern recognition (cvpr)..bo pang, lillian lee, and shivakumar vaithyanathan.
+2002. thumbs up: sentiment classiﬁcation usingmachine llearning techniques.
+in the conferenceon empirical methods in natural language pro-cessing (emnlp), pages 79–86..judea pearl.
+2013. direct and indirect effects..in.
+arxiv:1301.2300..ken lang.
+1995. newsweeder: learning to filter net-news.
+in the international conference on machinelearning (icml), pages 331–339..judea pearl, madelyn glymour, and nicholas p jewell.
+2016. causal inference in statistics: a primer.
+injohn wiley and sons..frederick liu and besim avci.
+2019..incorporatingpriors with feature attribution on text classiﬁca-in the annual meeting of the associationtion..judea pearl and dana mackenzie.
+2018. the book ofwhy: the new science of cause and effect.
+inbasic books..5444jeffrey pennington, richard socher, and christo-pher d. manning.
+2014. glove: global vectors forin the conference on em-word representation.
+pirical methods in natural language processing(emnlp), pages 1532–1543..kaihua tang, yulei niu, jianqiang huang, jiaxin shi,and hanwang zhang.
+2020. unbiased scene graphin the confer-generation from biased training.
+ence on computer vision and pattern recognition(cvpr), pages 3716–3725..matt post and shane bergsma.
+2013. explicit and im-plicit syntactic features for text classiﬁcation.
+inthe annual meeting of the association for computa-tional linguistics (acl), pages 866–872..tan wang, jianqiang huang, hanwang zhang, andqianru sun.
+2020. visual commonsense r-cnn.
+in the conference on computer vision and patternrecognition (cvpr), pages 10760–10770..foster provost.
+2000. machine learning from imbal-in the aaai conference on.
+anced data sets 101.artiﬁcial intelligence (aaai), pages 1–3..chen qian, fuli feng, lijie wen, zhenpeng chen,li lin, yanan zheng, and tat-seng chua.
+2020a.
+solving sequential text classiﬁcation as board-game playing.
+in the aaai conference on artiﬁcialintelligence (aaai), pages 8640–8648..chen qian, fuli feng, lijie wen, and tat-seng chua.
+2021. conceptualized and contextualized gaussianin the aaai conference on artiﬁcialembedding.
+intelligence (aaai)..chen qian, fuli feng, lijie wen, li lin, and tat-sengchua.
+2020b.
+enhancing text classiﬁcation viadiscovering additional semantic clues from lo-in the acm sigir conference on re-gograms.
+search and development in information retrieval(sigir), pages 1201–1210..chen qian, lijie wen, akhil kumar, leilei lin, li lin,zan zong, shuang li, and jianmin wang.
+2020c.
+an approach for process model extraction by multi-in proceedings of thegrained text classiﬁcation.
+32nd international conference on advanced infor-mation systems engineering (caise), pages 268–282..farshid rayhan, sajid ahmed, asif mahbub, rafsanjani, swakkhar shatabda, and dewan md.
+farid.
+2017. cusboost: cluster-based under-samplingwith boosting for imbalanced classiﬁcation.
+in theinternational conference on computational systemsand information technology for sustainable solu-tion (csitss), pages 1–5..bo sun, haiyan chen, jiandong wang, and hua xie.
+2018. evolutionary under-sampling based baggingensemble method for imbalanced data classiﬁca-tion.
+in frontiers of computer science, pages 331–350..lihua sun, junpeng guo, and yanlin zhu.
+2019. ap-plying uncertainty theory into the restaurant rec-ommender system based on sentiment analysis ofin the world wide webonline chinese reviews.
+conference (www), pages 83–100..chris sweeney and maryam najaﬁan.
+2020. a trans-parent framework for evaluating unintended de-in the an-mographic bias in word embeddings.
+nual meeting of the association for computationallinguistics (acl), pages 1662–1667..zeerak waseem and dirk hovy.
+2016. hateful sym-bols or hateful people?
+predictive features for hatespeech detection on twitter.
+in the north americanchapter of the association for computational lin-guistics (naacl), pages 88–93..jason wei and kai zou.
+2019. eda: easy data aug-mentation techniques for boosting performance onin the conference ontext classiﬁcation tasks.
+empirical methods in natural language processing(emnlp), pages 6382–6388..liuyu xiang and guiguang ding.
+2020. learningfrom multiple experts: self-paced knowledge dis-tillation for long-tailed classiﬁcation.
+in the euro-pean conference on computer vision (eccv)..jun yan.
+2009. text representation.
+in encyclopedia.
+of database systems..xu yang, hanwang zhang, and jianfei cai.
+2020. de-confounded image captioning: a causal retro-spect.
+in arxiv:2003.03923..guanhua zhang, bing bai, junqi zhang, kun bai, con-ghui zhu, and tiejun zhao.
+2020. demographicsshould not be the reason of toxicity: mitigatingdiscrimination in text classiﬁcations with instanceweighting.
+in the annual meeting of the associationfor computational linguistics (acl), pages 4134–4145..yongfeng zhang, guokun lai, et al.
+2014. explicitfactor models for explainable recommendationin thebased on phrase-level sentiment analysis.
+acm sigir conference on research and develop-ment in information retrieval (sigir), pages 83–92..jieyu zhao, tianlu wang, mark yatskar, vicente or-donez, and kai-wei chang.
+2017. men also likeshopping: reducing gender bias ampliﬁcation us-ing corpus-level constraints.
+in the conference onempirical methods in natural language processing(emnlp), pages 2979–2989..peng zhou, wei shi, jun tian, et al.
+2016. attention-based bidirectional long short-term memory net-in the annualworks for relation classiﬁcation.
+meeting of the association for computational lin-guistics (acl), pages 207–212..5445

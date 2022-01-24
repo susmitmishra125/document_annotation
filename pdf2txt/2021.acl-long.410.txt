@@ -1,0 +1,767 @@
+lexfit: lexical fine-tuning of pretrained language models.
+ivan vuli´c♠ edoardo m. ponti♥,♠ anna korhonen♠ goran glavaš♦♠language technology lab, university of cambridge, uk♥mila - quebec ai institute and mcgill university, canada♦data and web science group, university of mannheim, germany{iv250,alk23}@cam.ac.uk.
+edoardo-maria.ponti@mila.quebec.
+goran@informatik.uni-mannheim.de.
+abstract.
+transformer-based language models (lms)pretrained on large text collections implicitlystore a wealth of lexical semantic knowledge,but it is non-trivial to extract that knowledgeeffectively from their parameters.
+inspired byprior work on semantic specialization of staticword embedding (we) models, we show that itis possible to expose and enrich lexical knowl-edge from the lms, that is, to specialize themto serve as effective and universal “decontex-tualized” word encoders even when fed inputwords “in isolation” (i.e., without any context).
+their transformation into such word encodersis achieved through a simple and efﬁcient lex-ical ﬁne-tuning procedure (termed lexfit)based on dual-encoder network structures.
+fur-ther, we show that lexfit can yield effectiveword encoders even with limited lexical super-vision and, via cross-lingual transfer, in dif-ferent languages without any readily availableexternal knowledge.
+our evaluation over fourestablished, structurally different lexical-leveltasks in 8 languages indicates the superior-ity of lexfit-based wes over standard staticwes (e.g., fasttext) and wes from vanillalms.
+other extensive experiments and abla-tion studies further proﬁle the lexfit frame-work, and indicate best practices and perfor-mance variations across lexfit variants, lan-guages, and lexical tasks, also directly ques-tioning the usefulness of traditional we mod-els in the era of large neural models..1.introduction.
+probing large pretrained encoders like bert (de-vlin et al., 2019) revealed that they contain a wealthof lexical knowledge (ethayarajh, 2019; vuli´c et al.,2020).
+if type-level word vectors are extracted frombert with appropriate strategies, they can evenoutperform traditional word embeddings (wes) insome lexical tasks (vuli´c et al., 2020; bommasaniet al., 2020; chronis and erk, 2020).
+however,.
+figure 1: illustration of the full pipeline for obtainingdecontextualized word representations, based on lexi-cally ﬁne-tuning pretrained lms via dual-encoder net-works (step 1, §2.1), and then extracting the represen-tations from their (ﬁne-tuned) layers (step 2, §2.2)..both static and contextualized wes ultimately learnsolely from the distributional word co-occurrencesignal.
+this source of signal is known to lead todistortions in the induced representations by con-ﬂating meaning based on topical relatedness ratherthan authentic semantic similarity (hill et al., 2015;schwartz et al., 2015; vuli´c et al., 2017).
+this alsocreates a ripple effect on downstream applications,where model performance may suffer (faruqui,2016; mrkši´c et al., 2017; lauscher et al., 2020).
+our work takes inspiration from the methods tocorrect these distortions and complement the distri-butional signal with structured information, whichwere originally devised for static wes.
+in particu-lar, the process known as semantic specialization(or retroﬁtting) injects information about lexicalrelations from databases like wordnet (beckwithet al., 1991) or the paraphrase database (ganitke-vitch et al., 2013) into wes.
+thus, it accentuatesrelationships of pure semantic similarity in the re-.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages5269–5283august1–6,2021.©2021associationforcomputationallinguistics5269lexfit loss(w, v) = (dormant, asleep)1. softmax2.
+mneg3.
+msimbertbertpoolingpoolingword embeddingextractionwvu = sleepingbertstep 1: lexical ﬁne-tuningustep 2: extracting word vectors from (lexfit-ed) bert ﬁned representations (faruqui et al., 2015; mrkši´cet al., 2017; ponti et al., 2019, inter alia)..cess from the ﬁne-tuned layers of pretrained lms(§2.2), see figure 1..our goal is to create representations that takeadvantage of both 1) the expressivity and lexicalknowledge already stored in pretrained languagemodels (lms) and 2) the precision of lexical ﬁne-tuning.
+to this effect, we develop lexfit, a versa-tile lexical ﬁne-tuning framework, illustrated in fig-ure 1, drawing a parallel with universal sentence en-coders like sentencebert (reimers and gurevych,2019).1 our working hypothesis, extensively evalu-ated in this paper, is as follows: pretrained encodersstore a wealth of lexical knowledge, but it is notstraightforward to extract that knowledge.
+we canexpose this knowledge by rewiring their parame-ters through lexical ﬁne-tuning, and turn the lmsinto universal (decontextualized) word encoders..compared to prior attempts at injecting lexicalknowledge into large lms (lauscher et al., 2020),our lexfit method is innovative as it is deployedpost-hoc on top of already pretrained lms, ratherthan requiring joint multi-task training.
+moreover,lexfit is: 1) more efﬁcient, as it does not in-cur the overhead of masked language modelingpretraining; and 2) more versatile, as it can beported to any model independently from its archi-tecture or original training objective.
+finally, ourresults demonstrate the usefulness of lexfit: wereport large gains over wes extracted from vanillalms and over traditional we models across 8 lan-guages and 4 lexical tasks, even with very limitedand noisy external lexical knowledge, validatingthe rewiring hypothesis.
+the code is available at:https://github.com/cambridgeltl/lexfit..2 from language models to.
+(decontextualized) word encoders.
+the motivation for this work largely stems from therecent work on probing and analyzing pretrainedlanguage models for various types of knowledgethey might implicitly store (e.g., syntax, worldknowledge) (rogers et al., 2020).
+here, we focuson their lexical semantic knowledge (vuli´c et al.,2020; liu et al., 2021), with an aim of extractinghigh-quality static word embeddings from the pa-rameters of the input lms.
+in what follows, wedescribe lexical ﬁne-tuning via dual-encoder net-works (§2.1), followed by the we extraction pro-.
+1these approaches are connected as they are both trainedvia contrastive learning on dual-encoder architectures, but theyprovide representations for a different granularity of meaning..2.1 lexfit: methodology.
+our hypothesis is that the pretrained lms can beturned into effective static decontextualized wordencoders via additional inexpensive lexical ﬁne-tuning (i.e., lexfit-ing) on lexical pairs from anexternal resource.
+in other words, they can be spe-cialized to encode lexical knowledge useful fordownstream tasks, e.g., lexical semantic similarity(wieting et al., 2015; mrkši´c et al., 2017; pontiet al., 2018).
+let p = {(w, v, r)m}mm=1 refer tothe set of m external lexical constraints.
+each itemp ∈ p comprises a pair of words w and v, anddenotes a semantic relation r that holds betweenthem (e.g., synonymy, antonymy).
+further, let prdenote a subset of p where a particular relation rholds for each item, e.g., psyn is a set of synonymypairs.
+finally, for each positive tuple (w, v, r), wecan construct 2k negative “no-relation” examplesby randomly pairing w with another word w¬,k(cid:48),and pairing v with v¬,k(cid:48), k(cid:48) = 1, .
+.
+.
+, k, ensuringthat these negative pairs do not occur in p .
+we re-fer to the full set of negative pairs as n p .
+lexicalﬁne-tuning then leverages p and n p ; we proposeto tune the underlying lms (e.g., bert, mbert),using external lexical knowledge, via different lossfunctions, relying on dual-encoder networks withshared lm weights and mean pooling, as illustratedin figure 1. we now brieﬂy describe several lossfunctions, evaluated later in §4..classiﬁcation loss.
+similar to prior work onsentence-level text inputs (reimers and gurevych,2019), for each input word pair (w, v) we con-catenate their d-dimensional encodings w and v(obtained after passing them through bert andafter pooling, see figure 1) with their element-wisedifference |w − v|.
+the objective is then:.
+l = softmax(cid:0)w (w ⊕ v ⊕ |w − v|)(cid:1)..(1).
+⊕ denotes concatenation, and w ∈ r3d×c is atrainable weight matrix of the softmax classiﬁer,where c is the number of classiﬁcation classes.
+we experiment with two variants of this objective,termed softmax henceforth: in the simpler binaryvariant, the goal is to distinguish between positivesynonymy pairs (the subset psyn) and the corre-sponding set of 2k × |psyn| no-relation negativepairs.
+in the ternary variant (c = 3), the classi-ﬁer must distinguish between synonyms (psyn),.
+5270antonyms (pant), and no-relation negatives.
+theclassiﬁers are optimized via standard cross-entropy..ranking loss.
+the multiple negatives rankingloss (mneg) is inspired by prior work on learn-ing universal sentence encoders (cer et al., 2018;henderson et al., 2019, 2020); the aim of the loss,now adapted to word-level inputs, is to rank truesynonymy pairs from psyn over randomly pairedwords.
+the similarity between any two words wand v is quantiﬁed via the similarity function s op-erating on their encodings s(wi, wj).
+in this workwe use the scaled cosine similarity following hen-derson et al.
+(2019): s(wi, wj) = c·cos(w1, w2),where c is the scaling constant.
+lexical ﬁne-tuningwith mneg then proceeds in batches of b pairs(wi, vi), .
+.
+.
+, (wb, vb) from psyn, with the mnegloss for a single batch computed as follows:.
+l = −.
+s(wi, vi) +.
+log.
+es(wi,vj).
+(2).
+b(cid:88).
+i=1.
+b(cid:88).
+b(cid:88).
+i=1.
+j=1,j(cid:54)=i.
+effectively, for each batch eq.
+(2) maximizes thesimilarity score of positive pairs (wi, vi), and mini-mizes the score of b −1 random pairs.
+for simplic-ity, as negatives we use all pairings of wi with vj-sin the current batch where (wi, vj) (cid:54)∈ psyn (yanget al., 2018; henderson et al., 2019)..multi-similarity loss.
+we also experiment witha recently proposed state-of-the-art multi-similarityloss of wang et al.
+(2019), labeled msim.
+theaim is again to rank positive examples from psynabove any corresponding no-relation 2k negativesfrom n p .
+again using the scaled cosine similarityscores, the adapted msim loss per batch of b posi-tive pairs (wi, vi) from psyn is deﬁned as follows:.
+l =.
+1b.
+(cid:32).
+b(cid:88).
+i=1.
+k(cid:88).
+k(cid:48)=1.
+(cid:16).
+log.
+1 +.
+ec(cos(wi,wi,¬,k(cid:48) )−(cid:15))(cid:17).
+1 + e−c(cos(wi,vi)−(cid:15))(cid:17)(cid:16).
+log.
++.
+1c.(3).
+(cid:33)..for brevity, in eq.
+(3) we only show the formula-tion with the k negatives associated with wi, butthe reader should be aware that the complete lossfunction contains another term covering k nega-tives vi,¬,k(cid:48) associated with each vi.
+c is againthe scaling constant, and (cid:15) is the offset applied onthe similarity matrix.2 msim can be seen as anextended variant of the mneg ranking loss..2(cid:15)=1; c=20 (also in mneg).
+for further technical detailswe refer the reader to the original paper (wang et al., 2019)..finally, for any input word w, we extract its wordvector via the approach outlined in §2.2; exactly thesame approach can be applied to the original lms(e.g., bert) or their lexically ﬁne-tuned variants(“lexfit-ed” bert), see figure 1..2.2 extracting static word representations.
+the extraction of static type-level vectors from anyunderlying transformer-based lm, both before andafter lexfit ﬁne-tuning, is guided by best prac-tices from recent comparative analyses and probingwork (vuli´c et al., 2020; bommasani et al., 2020).
+starting from an underlying lm with n trans-former layers {l1 (bottom layer), .
+.
+.
+, ln (top)}and referring to the embedding layer as l0, weextract a decontextualized word vector for someinput word w, fed into the lm “in isolation” with-out any surrounding context, following vuli´c et al.
+(2020): 1) w is segmented into 1 or more of itsconstituent subwords [swi], i ≥ 1, where [] refersto the sequence of i subwords; 2) special tokens[cls] and [sep ] are respectively prepended andappended to the subword sequence, and the se-quence [cls][swi][sep ] is then passed throughthe lm; 3) the ﬁnal representation is constructedas the average over the subword encodings furtheraveraged over n ≤ n layers (i.e., all layers up tolayer ln included, denoted as avg(≤ n)).3 fur-ther, vuli´c et al.
+(2020) empirically veriﬁed that:(a) discarding ﬁnal encodings of [cls] and [sep ]produces better type-level vectors – we follow thisheuristic in this work; and (b) excluding higherlayers from the average may also result in strongervectors with improved performance in lexical tasks.
+this approach operates fully “in isolation” (iso):we extract vectors of words without any surround-ing context.
+the iso approach is lightweight: 1) itdisposes of any external text corpora; 2) it encodeswords efﬁciently due to the absence of context.
+moreover, it allows us to directly study the richnessof lexical information stored in the lm’s parame-ters, and to combine it with iso lexical knowledgefrom external resources (e.g., wordnet)..3 experimental setup.
+languages and language models.
+our languageselection for evaluation is guided by the following(partially clashing) constraints (vuli´c et al., 2020):a) availability of comparable pretrained monolin-gual lms; b) task and evaluation data availabil-.
+3note that this always includes the embedding layer (l0)..5271ity; and c) ensuring some typological diversity ofthe selection.
+the ﬁnal test languages are english(en), german (de), spanish (es), finnish (fi), ital-ian (it), polish (pl), russian (ru), and turkish(tr).
+for comparability across languages, we usemonolingual uncased bert base models for alllanguages (n = 12 transformer layers, 12 atten-tion heads, hidden layer dimensionality is 768),available (see the appendix) via the huggingfacerepository (wolf et al., 2020)..external lexical knowledge.
+we use the stan-dard collection of en lexical constraints from pre-vious work on (static) word vector specialization(zhang et al., 2014; ono et al., 2015; vuli´c et al.,2018; ponti et al., 2018, 2019).
+it covers thelexical relations from wordnet (fellbaum, 1998)and roget’s thesaurus (kipfer, 2009); it com-prises 1,023,082 synonymy (psyn) word pairs and380,873 antonymy pairs (pant).
+for all other lan-guages, we rely on non-curated noisy lexical con-straints, obtained via an automatic word translationmethod by ponti et al.
+(2019); see the original workfor the details of the translation procedure..lexfit: technical details.
+the implementa-tion is based on the sbert framework (reimersand gurevych, 2019), using the suggested settings:adamw (loshchilov and hutter, 2018); learningrate of 2e − 5; weight decay rate of 0.01, and werun lexfit for 2 epochs.
+the batch size is 512with mneg, and 256 with softmax and msim,where one batch always balances between b posi-tive examples and 2k · b negatives (see §2.1)..word vocabularies and baselines.
+we extractdecontextualized type-level wes in each languageboth from the original berts (termed bert-reg)4and the lexfit-ed bert models for exactly thesame vocabulary.
+following vuli´c et al.
+(2020),the vocabularies cover the top 100k most fre-quent words represented in the respective fasttext(ft) vectors, trained on lowercased monolingualwikipedias by bojanowski et al.
+(2017).5 theequivalent vocabulary coverage allows for a directcomparison of all wes regardless of the induc-tion/extraction method; this also includes the ft.vectors, used as baseline “traditional” static wes(termed fasttext.wiki) in all evaluation tasks..evaluation tasks.
+we evaluate on the followingstandard and diverse lexical semantic tasks:.
+task 1: lexical semantic similarity (lsim) isan established intrinsic task for evaluating staticwes (hill et al., 2015).
+we use the recent com-prehensive multilingual lsim benchmark multi-simlex (vuli´c et al., 2020), which comprises 1,888pairs in 13 languages, for our en, es, fi, pl, andru lsim evaluation.
+we also evaluate on a verb-focused en lsim benchmark: simverb-3500 (sv)(gerz et al., 2016), covering 3,500 verb pairs, andsimlex-999 (sl) for de and it (999 pairs) (le-viant and reichart, 2015).6.task 2: bilingual lexicon induction (bli), astandard task to assess the “semantic quality” ofstatic cross-lingual word embeddings (clwes)(ruder et al., 2019), enables investigations on thealignability of monolingual type-level wes in dif-ferent languages before and after the lexfit pro-cedure.
+we learn clwes from monolingual wesobtained with all we methods using the establishedand supervision-lenient mapping-based approach(mikolov et al., 2013a; smith et al., 2017) with thevecmap framework (artetxe et al., 2018).
+werun main bli evaluations for 10 language pairsspanning en, de, ru, fi, tr.7.
+task 3: lexical relation prediction (relp).
+we assess the usefulness of lexical knowledge inwes to learn relation classiﬁers for standard lex-ical relations (i.e., synonymy, antonymy, hyper-nymy, meronymy, plus no relation) via a state-of-the-art neural model for relp which learns solelybased on input type-level wes (glavaš and vuli´c,2018).
+we use the wordnet-based evaluation dataof glavaš and vuli´c (2018) for en, de, es; theycontain 10k annotated word pairs per language, 8kfor training, 2k for test, balanced by class and inthe splits.
+we extract evaluation data for two morelanguages: fi and it.
+we report micro-averaged f1scores, averaged across 5 runs for each input wespace; the default relp model setting is used.
+inrelp and lsim, we remove all training and test.
+4for the baseline bert-reg wes, we report two variants:(a) all performs layerwise averaging over all transformerlayers (i.e., avg(≤ 12)); (b) best reports the peak score whenpotentially excluding highest layers from the layer averaging(i.e., avg(≤ n), n ≤ 12; see §2.2) (vuli´c et al., 2020)..5note that the lexfit procedure does not depend on thechosen vocabulary, as it operates only on the lexical itemsfound in the external constraints (i.e., the set p )..6the evaluation metric is the spearman’s rank correlationbetween the average of human lsim scores for word pairsand the cosine similarity between their respective wes..7a standard bli setup and data from glavaš et al.
+(2019) isadopted: 5k training word pairs are used to learn the mapping,and another 2k pairs as test data.
+the evaluation metric isstandard mean reciprocal rank (mrr).
+for en–es, we runexperiments on muse data (conneau et al., 2018)..5272relp/lsim examples also present in the psyn andpant sets to avoid any evaluation data leakage.8task 4: lexical simpliﬁcation (lexsimp) aimsto automatically replace complex words (i.e., spe-cialized terms, less-frequent words) with their sim-pler in-context synonyms, while retaining gram-maticality and conveying the same meaning asthe more complex input text (paetzold and specia,2017).
+therefore, discerning between semanticsimilarity (e.g., synonymy injected via lexfit)and broader relatedness is critical for lexsimp(glavaš and vuli´c, 2018).
+we adopt the standardlexsimp evaluation protocol used in prior researchon static wes (ponti et al., 2018, 2019).
+1) we uselight-ls (glavaš and štajner, 2015), a language-agnostic lexsimp tool that makes simpliﬁcationsin an unsupervised way based solely on word simi-larity in an input (static) we space; 2) we rely onstandard lexsimp benchmarks, available for en(horn et al., 2014), it (tonelli et al., 2016), andes (saggion, 2017); and 3) we report the standardaccuracy scores (horn et al., 2014).9.important disclaimer.
+we note that the main pur-pose of the chosen evaluation tasks and experimen-tal protocols is not necessarily achieving state-of-the-art performance, but rather probing the vectorsin different lexical tasks requiring different typesof lexical knowledge,10 and offering fair and in-sightful comparisons between different lexfitvariants, as well as against standard static wes(fasttext) and non-tuned bert-based static wes..4 results and discussion.
+the main results for all four tasks are summarizedin tables 1-4, and further results and analyses areavailable in §4.1 (with additional results in the ap-pendix).
+these results offer multiple axes of com-parison, discussed in what follows..comparison to other static word embeddings.
+the results over all 4 tasks indicate that static wesfrom lexfited monolingual bert 1) outperformtraditional we methods such as ft, and 2) offeralso large gains over wes originating from non-lexfited berts (vuli´c et al., 2020).
+these re-.
+8in bli and relp, we do pca (d = 300) on all input.
+wes, which slightly improves performance..9for further details regarding the lexsimp benchmarks.
+and evaluation, we refer the reader to the previous work..10relp and lexsimp use wes as input features of neu-ral architectures; lsim and bli fall under similarity-basedevaluation tasks (ruder et al., 2019)..sults demonstrate that the inexpensive lexical ﬁne-tuning procedure can indeed turn large pretrainedlms into effective decontextualized word encoders,and this can be achieved for a reasonably widespectrum of languages for which such pretrainedlms exist.
+what is more, lexfit for all non-en languages has been run with noisy automat-ically translated lexical constraints, which holdspromise to support even stronger static lexfit-based wes with human-curated data in the future,e.g., extracted from multilingual wordnets (bondand foster, 2013), panlex (kamholz et al., 2014),or babelnet (ehrmann et al., 2014)..the results give rise to additional general impli-cations.
+first, they suggest that the pretrained lmsstore even more lexical knowledge than thoughtpreviously (ethayarajh, 2019; bommasani et al.,2020; vuli´c et al., 2020); the role of lexfit ﬁne-tuning is simply to ‘rewire’ and expose that knowl-edge from the lm through (limited) lexical-levelsupervision.
+to further investigate the ‘rewiring’hypothesis, in §4.1, we also run lexfit with adrastically reduced amount of external knowledge.
+bert-reg vectors display large gains over ftvectors in tasks such as relp and lexsimp, againhinting that plenty of lexical knowledge is storedin the original parameters.
+however, they still lagft vectors for some tasks (bli for all languagepairs; lsim for es, ru, pl).
+however, lexfit-edbert-based wes offer large gains and outperformft wes across the board.
+our results indicate that‘classic’ we models such as skip-gram (mikolovet al., 2013b) and ft are undermined even in theirlast ﬁeld of use, lexical tasks..this comes as a natural ﬁnding, given thatword2vec and ft can in fact be seen as reduced andtraining-efﬁcient variants of full-ﬂedged languagemodels (bengio et al., 2003).
+the modern lmsare pretrained on larger training data with more pa-rameters and with more sophisticated transformer-based neural architectures.
+however, it has notbeen veriﬁed before that effective static wes canbe distilled from such lms.
+efﬁciency differencesaside, this begs the following discussion point forfuture work: with the existence of large pretrainedlms, and effective methods to extract static wesfrom them, as proposed in this work, how useful aretraditional we models still in nlp applications?.
+lexical fine-tuning objectives.
+the scores indi-cate that all lexfit variants are effective and canexpose the lexical knowledge from the ﬁne-tuned.
+5273method.
+fasttext.wiki.
+bert-reg (all)bert-reg (best).
+mneg [113 min]msim [174 min]softmax (binary) [177 min]softmax (ternary) [212 min].
+en.
+44.2.
+46.751.8.
+73.674.364.367.8.en: sv.
+25.8.
+23.928.9.
+68.369.658.861.7.es.
+45.0.
+42.444.2.
+62.361.858.959.4.fi.
+58.7.
+55.361.5.
+72.071.162.466.2.pl.
+36.7.
+32.032.4.
+52.451.844.746.3.ru.
+35.8.
+30.630.7.
+50.449.944.638.8.de: sl.
+it: sl.
+41.3.
+31.334.6.
+49.749.743.745.3.
+30.5.
+28.831.1.
+58.758.949.452.4.table 1: results in the lsim task; spearman’s ρ correlation scores (× 100).
+k = 1 for the msim and softmaxlexical ﬁne-tuning variants (see §3).
+sv = simverb-3500; sl = simlex-999.
+the best score in each column isin bold; the second best is underlined.
+additional lsim results are available in the appendix.
+the numbers in []denote the average ﬁne-tuning time with each lexfit objective per 1 epoch in english (1 gtx titan x gpu)..method.
+en–de.
+en–tr.
+en–fi.
+en–ru.
+de–tr.
+de–fi.
+de–ru.
+tr–fi.
+tr–ru.
+fi–ru.
+fasttext.wiki.
+bert-reg (all)bert-reg (best).
+mnegmsimsoftmax (binary)softmax (ternary).
+61.0.
+44.647.2.
+58.158.957.957.1.
+43.3.
+37.939.0.
+46.245.945.344.9.
+48.8.
+47.148.6.
+57.757.753.854.8.
+52.2.
+47.348.8.
+54.053.753.652.7.
+35.8.
+32.332.3.
+36.237.135.935.2.
+43.5.
+39.539.5.
+46.146.444.344.0.
+46.9.
+41.241.2.
+46.746.743.544.6.
+35.8.
+35.235.2.
+39.639.438.438.4.
+36.4.
+31.931.9.
+36.737.436.034.9.
+43.9.
+38.739.2.
+42.444.242.841.1.avg.
+44.8.
+39.640.3.
+46.446.745.244.8.table 2: results in the bli task (mmr × 100).
+k = 1. additional bli results are available in the appendix..method.
+fasttext.wiki.
+bert-reg (all)bert-reg (best).
+mnegmsimsoftmax (binary)softmax (ternary).
+en.
+de.
+es.
+fi.
+it.
+66.0.
+71.471.8.
+74.174.374.075.5.
+60.1.
+67.367.9.
+69.769.068.470.3.
+62.2.
+65.165.5.
+67.868.667.470.3.
+68.2.
+69.669.9.
+71.372.271.573.2.
+64.8.
+66.867.2.
+71.171.470.171.3.table 3: results in the relp task (micro-f1 × 100,averaged over 5 runs).
+more results in the appendix..method.
+fasttext.wiki.
+bert-reg (all).
+mnegmsimsoftmax (binary)softmax (ternary).
+en.
+11.4.
+71.6.
+83.884.484.884.0.es.
+16.3.
+38.3.
+55.356.756.753.9.it.
+14.2.
+32.7.
+45.045.445.844.2.table 4: lexsimp results (accuracy ×100)..berts.
+however, there are differences across theirtask performance: the ranking-based mneg andmsim variants display stronger performance onsimilarity-based ranking lexical tasks such as lsimand bli.
+the classiﬁcation-based softmax objec-tive is, as expected, better aligned with the relptask, and we note slight gains with its ternary vari-ant which leverages extra antonymy knowledge..this ﬁnding is well aligned with the recent ﬁnd-ings demonstrating that task-speciﬁc pretraining re-sults in stronger (sentence-level) task performance(glass et al., 2020; henderson et al., 2020; lewiset al., 2020).
+in our case, we show that task-speciﬁclexical ﬁne-tuning can reshape the underlying lm’sparameters to not only act as a universal word en-coder, but also towards a particular lexical task..the per-epoch time measurements from table 1validate the efﬁciency of lexfit as a post-trainingﬁne-tuning procedure.
+previous approaches that at-tempted to inject lexical information (i.e., wordsenses and relations) into large lms (lauscheret al., 2020; levine et al., 2020) relied on joint lm(re)training from scratch: it is effectively costlierthan training the original bert models..performance across languages and tasks.
+asexpected, the scores in absolute terms are highestfor en: this is attributed to (a) larger pretraininglm data as well as (b) to clean external lexicalknowledge.
+however, we note encouragingly largegains in target languages even with noisy trans-lated lexical constraints.
+lexfit variants showsimilar relative patterns across different languagesand tasks.
+we note that, while bert-reg vectorsare unable to match ft performance in the blitask, our lexfit methods (e.g., see mneg andmsim bli scores) outperform ft wes in this task.
+5274(a) lsim.
+(b) bli.
+(c) relp.
+figure 2: varying the amount of external lexical knowledge for lexfit (msim, k = 1)..(a) lsim.
+(b) bli.
+(c) relp.
+figure 3: impact of the number of of negative examples k on lexical task performance.
+in the legends, a = msim;b = softmax (the binary variant plotted for relp and bli, ternary for relp).
+the numbers in the parenthesesdenote performance of ft vectors.
+the full results with more languages and lexfit variants are in the appendix..as well, offering improved alignability (søgaardet al., 2018) between monolingual wes.
+the largegains of bert-reg over ft in relp and lexsimpacross all evaluation languages already suggest thatplenty of lexical knowledge is stored in the pre-trained berts’ parameters; however, lexfit-ingthe models offers further gains in lexsimp andrelp across the board, even with limited externalsupervision (see also figure 2c)..high scores with fi in lsim and bli are alignedwith prior work (virtanen et al., 2019; rust et al.,2021) that showcased strong monolingual perfor-mance of fi bert in sentence-level tasks.
+alongthis line, we note that the ﬁnal quality of lexfit-based wes in each language depends on severalfactors: 1) pretraining data; 2) the underlying lm;3) the quality and amount of external knowledge..4.1 further discussion.
+the multi-component lexfit framework allowsfor a plethora of additional analyses, varying com-ponents such as the underlying lm, properties ofthe lexfit variants (e.g., negative examples, ﬁne-tuning duration, the amount of lexical constraints).
+we now analyze the impact of these componentson the “lexical quality” of the lexfit-tuned staticwes.
+unless noted otherwise, for computationalfeasibility and to avoid clutter, we focus 1) on asubset of target languages: en, es, fi, it, 2) on themsim variant (k = 1), which showed robust perfor-.
+(a) lsim.
+(b) bli.
+(c) relp.
+(d) lexsimp.
+figure 4: performance comparison between language-speciﬁc monolingual bert models (monobert) andmbert serving as the underlying lm.
+msim (k = 1)..mance in the main experiments before, and 3) onlsim, bli, and relp as the main tasks in theseanalyses, as they offer a higher language coverage..varying the amount of lexical constraints.
+wealso probe what amount of lexical knowledge isrequired to turn berts into effective decontextual-ized word encoders by running tests with reducedlexical sets p sampled from the full set.
+the scoresover different p sizes, averaged over 5 samples pereach size, are provided in figure 2, and we notethat they extend to other evaluation languages andlexfit objectives.
+as expected, we do observeperformance drops with fewer external data.
+how-ever, the decrease is modest even when relying on.
+5275full100k50k20k10k5k#oflexfitﬁne-tuningexamples505560657075spearmanρcorrelationenen(sv)esfiit(sl)full100k50k20k10k5k#oflexfitﬁne-tuningexamples404550556065meanreciprocalranken–esen–fien–itfi–itfull100k50k20k10k5k#oflexfitﬁne-tuningexamples62.565.067.570.072.575.0microf1enesfik=1k=2k=4k=8numberofnegativeexamples50607080spearmanρcorrelationen:a(44.2)en:bes:a(45.0)es:bfi:a(58.7)fi:bk=1k=2k=4k=8numberofnegativeexamples30405060bliscores(mrr)en-fi:a(48.8)en-fi:ben-tr:a(43.3)en-tr:btr-fi:a(35.8)tr-fi:bk=1k=2k=4k=8numberofnegativeexamples60657075microf1en:a(66.0)en:bde:a(60.1)de:bes:a(62.2)es:benesfiitlanguage505560657075spearmanρcorrelationmonobertmberten–esen–fien–itfi–itlanguagepair10203040506070meanreciprocalrank(mrr)monobertmbertenesfilanguage666870727476microf1monobertmbertenesitlanguage657075808590accuracymonobertmbertn =.
+2.
+4.
+6.
+8.
+10.
+12.lsim.
+en:regen:msimfi:regfi:msim.
+51.6 51.8 50.7 49.5 48.0 46.758.8 61.5 64.2 65.0 71.7 74.357.3 59.8 61.5 61.1 59.3 55.357.0 64.1 66.6 69.6 70.2 71.1.bli.
+39.2 43.8 47.6 48.6 48.3 47.1en–fi:regen–fi:msim 40.2 45.6 50.7 54.3 56.1 57.7.table 5: task performance of wes extracted vialayerwise averaging over different transformer layers(avg(≤ n) extraction variants; §2.2) for a selection oftasks and languages.
+lexfit variant: msim (k = 1).
+reg = bert-reg.
+highest scores per row are in bold..only 5k external constraints (e.g., see the scores inbli and relp for all languages; en multi-simlexscore is 69.4 with 50k constraints, 65.0 with 5k),or even non-existent (relp in fi)..remarkably, the lexfit performance with only10k or 5k ﬁne-tuning pairs11 remains substantiallyhigher than with ft or bert-reg wes in all tasks.
+this empirically validates lexfit’s sample efﬁ-ciency and further empirically corroborates ourknowledge rewiring hypothesis: the original lmsalready contain plenty of useful lexical knowledgeimplicitly, and even a small amount of externalsupervision can expose that knowledge..copying or rewiring knowledge?
+large gainsover bert-reg even with mere 5k pairs (lexfit-ing takes only a few minutes), where the large por-tion of the 100k word vocabulary is not coveredin the external input, further reveal that lexfitdoes not only copy the knowledge of seen wordsand relations into the lm: it leverages the (small)external set to generalize to uncovered words..we conﬁrm this hypothesis with another experi-ment where our input lm is the same bert basearchitecture parameters with the same subword vo-cabulary as english bert, but with its parametersnow randomly initialized using the xavier initial-ization (glorot and bengio, 2010).
+running lex-fit on this model for 10 epochs with the full setof lexical constraints (see §3) yields the follow-ing lsim scores: 23.1 (multi-simlex) and 14.6(simverb), and the english relp accuracy scoreof 61.8%.
+the scores are substantially higher thanthose of fully random static wes (see also the ap-pendix), which indicates that the lexfit proce-dure does enable storing some lexical knowledgeinto the model parameters.
+however, at the same.
+time, these scores are substantially lower than theones achieved when starting from lm-pretrainedmodels, even when lexfit is run with mere 5kﬁne-tuning lexical pairs.12 this again strongly sug-gests that lexfit ’unlocks’ already available lexi-cal knowledge stored in the pretrained lm, yieldingbeneﬁts beyond the knowledge available in the ex-ternal data.
+another line of recent work (liu et al.,2021) further corroborates our ﬁndings..multilingual lms.
+prior work indicated that mas-sively multilingual lms such as multilingual bert(mbert) (devlin et al., 2019) and xlm-r (con-neau et al., 2020) cannot match the performanceof their language-speciﬁc counterparts in both lex-ical (vuli´c et al., 2020) and sentence-level tasks(rust et al., 2021).
+we also analyze this conjec-ture by lexfit-ing mbert instead of monolin-gual berts in different languages.
+the resultswith msim (k = 1) are provided in figure 4; weobserve similar comparison trends with other lan-guages and lexfit variants, not shown due tospace constraints.
+while lexfit-ing mbert of-fers huge gains over the original mbert model,sometimes even larger in relative terms than withmonolingual berts (e.g., lsim scores for en in-crease from 0.21 to 0.69, and from 0.24 to 0.60 forfi; bli scores for en-fi rise from 0.21 to 0.37), itcannot match the absolute performance peaks oflexfit-ed monolingual berts..storing the knowledge of 100+ languages inits limited parameter budget, mbert still cannotcapture monolingual knowledge as accurately aslanguage-speciﬁc berts (conneau et al., 2020).
+however, we believe that its performance withlexfit may be further improved by leveraging re-cently proposed multilingual lm adaptation strate-gies that mitigate a mismatch between shared multi-lingual and language-speciﬁc vocabularies (artetxeet al., 2020; chung et al., 2020; pfeiffer et al.,2020); we leave this for future work..layerwise averaging.
+a consensus in prior work(tenney et al., 2019; ethayarajh, 2019; vuli´c et al.,2020) points that out-of-context lexical knowledgein pretrained lms is typically stored in bottomtransformer layers (see table 5).
+however, table 5also reveals that this does not hold after lexfit-ing: the tuned model requires knowledge from alllayers to extract effective decontextualized wesand reach peak task scores.
+effectively, this means.
+11when sampling all reduced sets, we again deliberately.
+excluded all words occurring in our lsim benchmarks..12the same ﬁndings hold for other tasks and languages..5276that, through lexical ﬁne-tuning, model “reformats”all its parameter budget towards storing useful lexi-cal knowledge, that is, it specializes as (decontex-tualized) word encoder..varying the number of negative examples andtheir impact on task performance is recapped infigure 3b.
+overall, increasing k does not beneﬁt(and sometimes even hurts) performance – the ex-ceptions are en lsim; and the relp task with thesoftmax variant for some languages.
+we largelyattribute this to the noise in the target-language lex-ical pairs: with larger k values, it becomes increas-ingly difﬁcult for the model to discern betweennoisy positive examples and random negatives..longer fine-tuning.
+instead of the standardsetup with 2 epochs (see §3), we run lexfit for 10epochs.
+the per-epoch snapshots of scores are sum-marized in the appendix.
+the scores again validatethat lexfit is sample-efﬁcient: longer ﬁne-tuningyields negligible to zero improvements in en lsimand relp after the ﬁrst few epochs, with very highscores achieved after epoch 1 already.
+it even yieldssmall drops for other languages in lsim and bli:we again attribute this to slight overﬁtting to noisytarget-language lexical knowledge..5 conclusion and future work.
+we proposed lexfit, a lexical ﬁne-tuning pro-cedure which transforms pretrained lms such asbert into effective decontextualized word en-coders through dual-encoder architectures.
+ourexperiments demonstrated that the lexical knowl-edge already stored in pretrained lms can be fur-ther exposed via additional inexpensive lexfit-ing with (even limited amounts of) external lexicalknowledge.
+we successfully applied lexfit evento languages without any external human-curatedlexical knowledge.
+our lexfit word embeddings(wes) outperform “traditional” static wes (e.g.,fasttext) across a spectrum of lexical tasks acrossdiverse languages in controlled evaluations, thusdirectly questioning the practical usefulness of thetraditional we models in modern nlp..besides inducing better static wes for lexicaltasks, following the line of lexical probing work(ethayarajh, 2019; vuli´c et al., 2020), our goal inthis work was to understand how (and how much)lexical semantic knowledge is coded in pretrainedlms, and how to ‘unlock’ the knowledge from thelms.
+we hope that our work will be beneﬁcial forall lexical tasks where static wes from traditional.
+we models are still largely used (schlechtweget al., 2020; kaiser et al., 2021)..despite the extensive experiments, we onlyscratched the surface, and can indicate a spectrumof future enhancements to the proof-of-conceptlexfit framework beyond the scope of this work.
+we will test other dual-encoder loss functions, in-cluding ﬁner-grained relation classiﬁcation tasks(e.g., in the softmax variant), and hard (instead ofrandom) negative examples (wieting et al., 2015;mrkši´c et al., 2017; lauscher et al., 2020; kalan-tidis et al., 2020).
+while in this work, for simplicityand efﬁciency, we focused on fully decontextual-ized iso setup (see §2.2), we will also probe alter-native ways to extract static wes from pretrainedlms, e.g., averages-over-context (liu et al., 2019;bommasani et al., 2020; vuli´c et al., 2020).
+wewill also investigate other approaches to procuringmore accurate external knowledge for lexfit intarget languages, and extend the framework to morelanguages, lexical tasks, and specialized domains.
+we will also focus on reducing the gap betweenpretrained monolingual and multilingual lms..acknowledgments.
+we thank the three anonymous reviewers, nilsreimers, and jonas pfeiffer for their helpful com-ments and suggestions.
+ivan vuli´c and anna korho-nen are supported by the erc consolidator grantlexical: lexical acquisition across languages(no.
+648909) awarded to korhonen, and the ercpoc grant multiconvai: enabling multilingualconversational ai (no.
+957356).
+goran glavašis supported by the baden württemberg stiftung(eliteprogramm, agree grant)..references.
+mikel artetxe, gorka labaka, and eneko agirre.
+2018.a robust self-learning method for fully unsupervisedcross-lingual mappings of word embeddings.
+in pro-ceedings of acl 2018, pages 789–798..mikel artetxe, sebastian ruder, and dani yogatama.
+2020. on the cross-lingual transferability of mono-in proceedings of acllingual representations.
+2020, pages 4623–4637..richard beckwith, christiane fellbaum, derek gross,and george a. miller.
+1991. wordnet: a lexicaldatabase organized on psycholinguistic principles.
+lexical acquisition: exploiting on-line resources tobuild a lexicon, pages 211–231..5277yoshua bengio, réjean ducharme, pascal vincent, andchristian jauvin.
+2003. a neural probabilistic lan-journal of machine learning re-guage model.
+search, 3:1137–1155..piotr bojanowski, edouard grave, armand joulin, andtomas mikolov.
+2017. enriching word vectors withtransactions of the acl,subword information.
+5:135–146..rishi bommasani, kelly davis, and claire cardie.
+2020. interpreting pretrained contextualized repre-sentations via reductions to static embeddings.
+inproceedings of acl 2020, pages 4758–4781..francis bond and ryan foster.
+2013. linking and ex-tending an open multilingual wordnet.
+in proceed-ings of acl 2013, pages 1352–1362..daniel cer, yinfei yang, sheng-yi kong, nan hua,nicole limtiaco, rhomni st. john, noah constant,mario guajardo-cespedes, steve yuan, chris tar,yun-hsuan sung, brian strope, and ray kurzweil.
+2018. universal sentence encoder for english.
+inproceedings of emnlp 2018, pages 169–174..gabriella chronis and katrin erk.
+2020. when is abishop not like a rook?
+when it’s like a rabbi!
+multi-prototype bert embeddings for estimating semanticrelationships.
+in proceedings of conll 2020, page227–244..hyung won chung, dan garrette, kiat chuan tan, andjason riesa.
+2020. improving multilingual modelsin proceed-with language-clustered vocabularies.
+ings of emnlp 2020, pages 4536–4546..alexis conneau, kartikay khandelwal, naman goyal,vishrav chaudhary, guillaume wenzek, franciscoguzmán, edouard grave, myle ott, luke zettle-moyer, and veselin stoyanov.
+2020. unsupervisedcross-lingual representation learning at scale.
+inproceedings of acl 2020, pages 8440–8451..alexis conneau, guillaume lample, marc’aurelioranzato, ludovic denoyer, and hervé jégou.
+2018.word translation without parallel data.
+in proceed-ings of iclr 2018..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language under-in proceedings of naacl-hlt 2019,standing.
+pages 4171–4186..maud ehrmann, francesco cecconi, daniele vannella,john philip mccrae, philipp cimiano, and robertonavigli.
+2014. representing multilingual data aslinked data: the case of babelnet 2.0. in proceed-ings of lrec 2014, pages 401–408..kawin ethayarajh.
+2019. how contextual are contex-tualized word representations?
+comparing the ge-ometry of bert, elmo, and gpt-2 embeddings.
+in proceedings of emnlp-ijcnlp 2019, pages 55–65..manaal faruqui.
+2016. diverse context for learningword representations.
+ph.d. thesis, carnegie mel-lon university..manaal faruqui, jesse dodge, sujay kumar jauhar,chris dyer, eduard hovy, and noah a. smith.
+2015. retroﬁtting word vectors to semantic lexi-in proceedings of naacl-hlt 2015, pagescons.
+1606–1615..christiane fellbaum.
+1998. wordnet.
+mit press..juri ganitkevitch, benjamin van durme, and chrisppdb: the paraphrasein proceedings of naacl-hlt 2013,.callison-burch.
+2013.database.
+pages 758–764..daniela gerz, ivan vuli´c, felix hill, roi reichart, andanna korhonen.
+2016. simverb-3500: a large-scale evaluation set of verb similarity.
+in proceed-ings of emnlp 2016, pages 2173–2182..michael glass, alﬁo gliozzo, rishav chakravarti, an-thony ferritto, lin pan, gp shrivatsa bhargav, di-nesh garg, and avirup sil.
+2020. span selection pre-training for question answering.
+in proceedings ofacl 2020, pages 2773–2782..goran glavaš and sanja štajner.
+2015. simplifying lex-ical simpliﬁcation: do we need simpliﬁed corpora?
+in proceedings of acl-ijcnlp 2015, pages 63–68..goran glavaš and ivan vuli´c.
+2018. discriminating be-tween lexico-semantic relations with the specializa-tion tensor model.
+in proceedings of naacl-hlt2018, pages 181–187..goran glavaš and ivan vuli´c.
+2018..retroﬁtting of distributional word vectors.
+ceedings of acl 2018, pages 34–45..explicitin pro-.
+goran glavaš, robert litschko, sebastian ruder, andivan vuli´c.
+2019. how to (properly) evaluate cross-lingual word embeddings: on strong baselines, com-parative analyses, and some misconceptions.
+in pro-ceedings of acl 2019, pages 710–721..xavier glorot and yoshua bengio.
+2010. understand-ing the difﬁculty of training deep feedforward neuralnetworks.
+in proceedings of aistats 2010, pages249–256..matthew henderson, iñigo casanueva, nikola mrkši´c,pei-hao su, tsung-hsien wen, and ivan vuli´c.
+2020. convert: efﬁcient and accurate conversa-in find-tional representations from transformers.
+ings of emnlp 2020, pages 2161–2174..matthew henderson, ivan vuli´c, daniela gerz, iñigocasanueva, paweł budzianowski, sam coope,georgios spithourakis, tsung-hsien wen, nikolamrkši´c, and pei-hao su.
+2019. training neural re-sponse selection for task-oriented dialogue systems.
+in proceedings of acl 2019, pages 5392–5404..5278felix hill, roi reichart, and anna korhonen.
+2015.simlex-999: evaluating semantic models with (gen-uine) similarity estimation.
+computational linguis-tics, 41(4):665–695..tomas mikolov, quoc v. le, and ilya sutskever.
+2013a.
+exploiting similarities among languagesarxiv preprint, corr,for machine translation.
+abs/1309.4168..colby horn, cathryn manduca, and david kauchak.
+2014. learning a lexical simpliﬁer using wikipedia.
+in proceedings of acl 2014, pages 458–463..jens kaiser, sinan kurtyigit, serge kotchourko, anddominik schlechtweg.
+2021. effects of pre- andpost-processing on type-based embeddings in lexi-in proceedings ofcal semantic change detection.
+eacl 2021, pages 125–137..yannis kalantidis, mert bülent sariyildiz, noé pion,philippe weinzaepfel, and diane larlus.
+2020. hardnegative mixing for contrastive learning.
+in proceed-ings of neurips 2020..david kamholz, jonathan pool, and susan m. colow-ick.
+2014. panlex: building a resource for panlin-in proceedings of lrecgual lexical translation.
+2014, pages 3145–3150..barbara ann kipfer.
+2009. roget’s 21st century the-.
+saurus (3rd edition).
+philip lief group..anne lauscher, ivan vuli´c, edoardo maria ponti, annakorhonen, and goran glavaš.
+2020. specializingunsupervised pretraining models for word-level se-mantic similarity.
+in proceedings of coling 2020,pages 1371–1383..ira leviant and roi reichart.
+2015..separated byan un-common language: towards judgment lan-guage informed vector space modeling.
+corr,abs/1508.00106..yoav levine, barak lenz, or dagan, ori ram, danpadnos, or sharir, shai shalev-shwartz, amnonshashua, and yoav shoham.
+2020. sensebert:driving some sense into bert.
+in proceedings ofacl 2020, pages 4656–4667..mike lewis, marjan ghazvininejad, gargi ghosh, ar-men aghajanyan, sida wang, and luke zettle-moyer.
+2020. pre-training via paraphrasing.
+corr,abs/2006.15020..fangyu liu, ivan vuli´c, anna korhonen, and nigelcollier.
+2021. fast, effective and self-supervised:transforming masked language models into uni-corr,versalabs/2104.08027..lexical and sentence encoders..qianchu liu, diana mccarthy, ivan vuli´c, and annainvestigating cross-lingual align-korhonen.
+2019.ment methods for contextualized embeddings within proceedings of conlltoken-level evaluation.
+2019, pages 33–43..ilya loshchilov and frank hutter.
+2018. decoupledin proceedings of.
+weight decay regularization.
+iclr 2018..tomas mikolov, ilya sutskever, kai chen, gregory s.corrado, and jeffrey dean.
+2013b.
+distributed rep-resentations of words and phrases and their compo-sitionality.
+in proceedings of neurips 2013, pages3111–3119..nikola mrkši´c, diarmuid ó séaghdha, tsung-hsienwen, blaise thomson, and steve young.
+2017. neu-ral belief tracker: data-driven dialogue state track-ing.
+in proceedings of acl 2017, pages 1777–1788..nikola mrkši´c, ivan vuli´c, diarmuid ó séaghdha, iraleviant, roi reichart, milica gaši´c, anna korho-nen, and steve young.
+2017. semantic specialisa-tion of distributional word vector spaces using mono-lingual and cross-lingual constraints.
+transactionsof the acl, 5:309–324..masataka ono, makoto miwa, and yutaka sasaki.
+2015. word embedding-based antonym detectionusing thesauri and distributional information.
+inproceedings of naacl-hlt 2015, pages 984–989..gustavo paetzold and lucia specia.
+2017. a surveyon lexical simpliﬁcation.
+journal of artiﬁcial intel-ligence research, 60:549–593..jonas pfeiffer, ivan vuli´c, iryna gurevych, and sebas-tian ruder.
+2020. unks everywhere: adapting mul-tilingual language models to new scripts.
+corr,abs/2012.15562..edoardo maria ponti, ivan vuli´c, goran glavaš, nikolamrkši´c, and anna korhonen.
+2018. adversar-ial propagation and zero-shot cross-lingual transferin proceedings ofof word vector specialization.
+emnlp 2018, pages 282–293..edoardo maria ponti, ivan vuli´c, goran glavaš, roireichart, and anna korhonen.
+2019. cross-lingualsemantic specialization via lexical relation induction.
+in proceedings of emnlp 2019, pages 2206–2217..nils reimers and iryna gurevych.
+2019. sentence-bert: sentence embeddings using siamese bert-in proceedings of emnlp 2019, pagesnetworks.
+3982–3992..anna rogers, olga kovaleva, and anna rumshisky.
+2020. a primer in bertology: what we know abouthow bert works.
+transactions of the acl, 8:842–866..sebastian ruder, ivan vuli´c, and anders søgaard.
+2019. a survey of cross-lingual embedding models.
+journal of artiﬁcial intelligence research, 65:569–631..phillip rust, jonas pfeiffer, ivan vuli´c, sebastianruder, and iryna gurevych.
+2021. how good is your.
+5279xun wang, xintong han, weilin huang, dengke dong,and matthew r. scott.
+2019. multi-similarity losswith general pair weighting for deep metric learning.
+in proceedings of cvpr 2019, pages 5022–5030..john wieting, mohit bansal, kevin gimpel, and karenlivescu.
+2015. from paraphrase database to compo-sitional paraphrase model and back.
+transactions ofthe acl, 3:345–358..thomas wolf, lysandre debut, victor sanh, julienchaumond, clement delangue, anthony moi, pier-ric cistac, tim rault, remi louf, morgan funtow-icz, joe davison, sam shleifer, patrick von platen,clara ma, yacine jernite, julien plu, canwen xu,teven le scao, sylvain gugger, mariama drame,quentin lhoest, and alexander rush.
+2020. trans-formers: state-of-the-art natural language process-in proceedings of emnlp 2020: systeming.
+demonstrations, pages 38–45..yinfei yang, steve yuan, daniel cer, sheng-yi kong,noah constant, petr pilar, heming ge, yun-hsuansung, brian strope, and ray kurzweil.
+2018. learn-ing semantic textual similarity from conversations.
+in proceedings of the 3rd workshop on representa-tion learning for nlp, pages 164–174..jingwei zhang, jeremy salwen, michael glass, and al-ﬁo gliozzo.
+2014. word semantic representationsusing bayesian probabilistic tensor factorization.
+inproceedings of emnlp 2014, pages 1522–1531..tokenizer?
+on the monolingual performance of mul-tilingual language models.
+in proceedings of acl2021..horacio saggion.
+2017. automatic text simpliﬁcation.
+synthesis lectures on human language technolo-gies, 10(1):1–137..dominik schlechtweg, barbara mcgillivray, simonhengchen, haim dubossarsky, and nina tahmasebi.
+2020. semeval-2020 task 1: unsupervised lexicalin proceedings of se-semantic change detection.
+meval 2020, pages 1–23..roy schwartz, roi reichart, and ari rappoport.
+2015.symmetric pattern based word embeddings for im-in proceedingsproved word similarity prediction.
+of conll 2015, pages 258–267..samuel l. smith, david h.p.
+turban, steven hamblin,and nils y. hammerla.
+2017. ofﬂine bilingual wordvectors, orthogonal transformations and the invertedsoftmax.
+in proceedings of iclr 2017..anders søgaard, sebastian ruder, and ivan vuli´c.
+2018. on the limitations of unsupervised bilingualdictionary induction.
+in proceedings of acl 2018,pages 778–788..ian tenney, dipanjan das, and ellie pavlick.
+2019.bert rediscovers the classical nlp pipeline.
+inproceedings of acl 2019, pages 4593–4601..sara tonelli, alessio palmero aprosio, and francescasaltori.
+2016. simpitiki: a simpliﬁcation corpusfor italian.
+in proceedings of clic-it 2016..antti virtanen, jenna kanerva, rami ilo, jouni luoma,juhani luotolahti, tapio salakoski, filip ginter, andsampo pyysalo.
+2019. multilingual is not enough:bert for finnish.
+corr, abs/1912.07076..ivan vuli´c, simon baker, edoardo maria ponti, ullapetti, ira leviant, kelly wing, olga majewska, edenbar, matt malone, thierry poibeau, roi reichart,and anna korhonen.
+2020. multi-simlex: a large-scale evaluation of multilingual and cross-linguallexical semantic similarity.
+computational linguis-tics..ivan vuli´c, goran glavaš, nikola mrkši´c, and annakorhonen.
+2018. post-specialisation: retroﬁttingvectors of words unseen in lexical resources.
+in pro-ceedings of naacl-hlt 2018, pages 516–527..ivan vuli´c, edoardo maria ponti, robert litschko,goran glavaš, and anna korhonen.
+2020. probingpretrained language models for lexical semantics.
+inproceedings of emnlp 2020, pages 7222–7240..ivan vuli´c, roy schwartz, ari rappoport, roi reichart,and anna korhonen.
+2017. automatic selection ofcontext conﬁgurations for improved class-speciﬁcin proceedings of conllword representations.
+2017, pages 112–122..5280language.
+url.
+endeesfiitplrutrmultilingual.
+https://huggingface.co/bert-base-uncasedhttps://huggingface.co/bert-base-german-dbmdz-uncasedhttps://huggingface.co/dccuchile/bert-base-spanish-wwm-uncasedhttps://huggingface.co/turkunlp/bert-base-finnish-uncased-v1https://huggingface.co/dbmdz/bert-base-italian-xxl-uncasedhttps://huggingface.co/dkleczek/bert-base-polish-uncased-v1https://huggingface.co/deeppavlov/rubert-base-casedhttps://huggingface.co/dbmdz/bert-base-turkish-uncasedhttps://huggingface.co/bert-base-multilingual-uncased.
+table 6: urls of the pretrained lms used in our study, obtained via the huggingface repo (wolf et al., 2020)..method.
+fasttext.wiki.
+bert-reg (all)bert-reg (best)mneg–msimk = 1k = 2k = 4k = 8softmax (binary)k = 1k = 2k = 4k = 8softmax (ternary)k = 1k = 2k = 4k = 8.en.
+44.2.
+46.751.8.
+73.6.
+74.374.375.775.9.
+64.367.970.271.3.
+67.868.870.671.6.en: sv.
+25.8.
+23.928.9.
+68.3.
+69.669.671.772.3.
+58.861.464.967.2.
+61.762.665.867.8.es.
+45.0.
+42.444.2.
+62.3.
+61.861.861.962.0.
+58.860.160.661.4.
+59.460.159.760.9.fi.
+58.7.
+55.361.5.
+72.0.
+71.171.168.466.4.
+62.467.669.670.2.
+66.266.767.868.5.ru.
+35.8.
+30.630.7.
+50.4.
+49.949.948.649.9.
+44.646.646.746.7.
+38.842.445.345.0.de: sl.
+41.3.
+31.334.6.
+49.7.
+49.749.647.946.5.
+43.745.947.047.6.
+45.346.647.647.0.table 7: a summary of results in the lexical semantic similarity (lsim) task (spearman’s ρ correlation scores),also showing the dependence on the number of negative examples per positive example: k. the scores for en, es,fi, and ru are reported on the multi-simlex lexical similarity benchmark (vuli´c et al., 2020) (1,888 word pairs).
+the scores for de, not represented in multi-simlex, are calculated on a smaller benchmark: german simlex-999 (hill et al., 2015; leviant and reichart, 2015) (sl; 999 word pairs) for en, we also report the scores on theverb similarity dataset simverb-3500 (gerz et al., 2016) (sv).
+all lexfit-based wes have been induced from“lexically ﬁne-tuned” lms, relying on the standard setup described in §3, and relying on lexical constraints alsosummarized in §3.
+all results with lexfit variants are obtained relying on the best-performing conﬁgurationfor extracting word representations from the comparative study of vuli´c et al.
+(2020).
+bert-reg denotes theextraction of word representations (again with the best strategy from prior work) from the regular underlyingbert models, which were not further “lexfit-ed”: (all) layerwise averaging over all transformer layers; (best)the highest results reported by vuli´c et al.
+(2020), often achieved by excluding several highest layers from thelayerwise averaging.
+the highest scores per column are in bold; the second best result per column is underlined..(a) lsim.
+(b) bli.
+(c) relp.
+figure 5: impact of lexfit ﬁne-tuning duration (i.e., the number of ﬁne-tuning epochs) in three lexical tasks(lsim, bli, relp).
+we report a subset of results with a selection of languages and language pairs, relying on themsim (k = 1) lexfit ﬁne-tuning variant.
+similar trends are observed with other lexfit variants..528112345678910epoch505560657075spearmanρcorrelationenen(sv)esfiit(sl)12345678910epoch404550556065meanreciprocalrank(mrr)en–esen–fien–itfi–it12345678910epoch60657075microf1enesmethod.
+en–de.
+en–tr.
+en–fi.
+en–ru.
+de–tr.
+de–fi.
+de–ru.
+tr–fi.
+tr–ru.
+fi–ru.
+(a) training dictionary: 5,000 word translation pairs.
+fasttext.wiki.
+bert-reg (all).
+mneg–msimk = 1k = 2k = 4k = 8softmax (binary)k = 1k = 2k = 4k = 8softmax (ternary)k = 1k = 2k = 4k = 8.fasttext.wiki.
+bert-reg (all).
+mneg–msimk = 1k = 2k = 4k = 8softmax (binary)k = 1k = 2k = 4k = 8softmax (ternary)k = 1k = 2k = 4k = 8.
+61.0.
+44.6.
+58.1.
+58.957.257.055.4.
+57.955.855.854.2.
+57.155.755.554.9.
+53.9.
+26.4.
+55.2.
+54.354.353.051.4.
+54.152.352.752.2.
+53.552.752.951.8.
+43.3.
+37.9.
+46.2.
+45.944.443.644.0.
+45.344.643.843.1.
+44.945.244.744.2.
+31.7.
+20.6.
+34.1.
+33.232.031.830.6.
+32.032.331.931.1.
+32.032.731.731.6.
+48.8.
+47.1.
+57.7.
+57.656.755.253.0.
+53.855.454.954.4.
+54.854.455.153.3.
+35.4.
+25.8.
+44.8.
+45.143.341.640.1.
+40.443.742.442.1.
+42.843.042.841.2.
+52.2.
+47.3.
+54.0.
+53.752.851.549.1.
+53.651.951.450.2.
+52.753.252.651.5.
+39.0.
+25.4.
+40.3.
+39.338.838.136.4.
+39.739.637.438.0.
+38.738.037.036.8.
+35.8.
+32.3.
+36.2.
+37.135.735.534.0.
+35.934.734.633.3.
+35.234.134.033.3.
+23.0.
+17.4.
+25.9.
+26.024.624.322.7.
+25.625.525.523.5.
+24.223.922.923.1.
+43.5.
+39.5.
+46.1.
+46.444.743.641.8.
+44.343.842.842.0.
+44.043.642.841.3.
+31.5.
+24.6.
+33.9.
+33.932.730.928.7.
+32.133.432.230.0.
+32.030.432.029.8.
+46.9.
+41.2.
+46.7.
+46.746.144.842.2.
+43.541.939.939.7.
+44.642.640.238.7.
+37.8.
+23.4.
+31.7.
+31.430.027.424.9.
+31.631.329.628.4.
+31.029.629.827.8.
+35.8.
+35.2.
+39.6.
+39.439.338.036.5.
+38.439.137.936.8.
+38.438.438.637.2.
+21.4.
+20.4.
+29.2.
+29.128.425.224.2.
+27.228.927.525.9.
+27.627.126.926.1.
+36.4.
+31.9.
+36.7.
+37.437.435.132.0.
+36.034.633.332.9.
+34.934.533.432.9.
+22.2.
+15.6.
+22.3.
+23.822.120.117.8.
+23.122.821.020.8.
+22.021.822.320.2.method.
+en–de.
+en–tr.
+en–fi.
+en–ru.
+de–tr.
+de–fi.
+de–ru.
+tr–fi.
+tr–ru.
+fi–ru.
+(b) training dictionary: 1,000 word translation pairs.
+42.4.
+46.4.avg.
+44.8.
+39.6.
+46.745.744.442.6.
+45.244.243.342.5.
+44.844.243.842.5.avg.
+32.6.
+22.1.
+34.733.331.930.1.
+33.533.832.731.8.
+33.232.732.631.4.
+43.9.
+38.7.
+44.242.239.337.5.
+42.840.039.038.7.
+41.140.740.737.8.
+29.6.
+21.4.
+30.827.126.123.7.
+29.427.826.525.8.
+28.627.527.925.3.
+30.1.
+34.8.table 8: results in the bli task across different language pairs and dual-encoder lexical ﬁne-tuning (lexfit)objectives (mneg, msim, softmax).
+the size of the training dictionary is (a) 5,000 or (b) 1,000 word translationpairs.
+mrr scores reported; avg refers to the average score across all 10 language pairs.
+all results with lexfitvariants are obtained relying on the best-performing conﬁguration for extracting word representations from thecomparative study of vuli´c et al.
+(2020).
+bert-reg denotes the extraction of word representations (again with thebest strategy from prior work) from the regular underlying bert models, which were not further “lexfit-ed”:(all) layerwise averaging over all transformer layers.
+the highest scores per column for each training dictionarysize are in bold; the second best result is underlined..5282method.
+random.xavierfasttext.wiki.
+bert-reg (all)bert-reg (best)mneg–msimk = 1k = 2k = 4k = 8softmax (binary)k = 1k = 2k = 4k = 8softmax (ternary)k = 1k = 2k = 4k = 8.en.
+47.3±0.366.0±0.8.
+71.4±1.271.8±0.2.
+74.1±1.1.
+74.3±1.373.8±0.873.5±1.072.1±0.9.
+74.0±1.673.8±1.073.9±1.073.2±1.0.
+75.5±0.575.7±0.874.4±0.874.0±0.2.
+de.
+51.2±0.860.1±0.7.
+67.3±0.367.9±0.8.
+69.7±1.0.
+69.0±0.668.6±1.268.8±1.268.9±0.6.
+68.4±0.769.4±0.569.4±0.968.2±1.1.
+70.3±0.768.8±0.869.9±0.568.1±0.9.
+es.
+49.7±0.962.2±1.6.
+65.1±1.165.5±1.2.
+67.8±0.3.
+68.6±0.768.4±0.567.1±1.167.6±1.3.
+67.4±0.367.4±0.867.2±1.167.8±1.1.
+70.3±0.669.8±0.869.9±0.568.1±0.9.
+fi.
+51.8±0.568.2±0.3.
+69.6±0.669.9±0.5.
+71.3±1.5.
+72.2±0.472.3±0.372.0±0.971.2±1.3.
+71.5±0.671.2±0.972.7±0.771.4±1.1.
+73.2±1.273.2±0.572.2±0.672.3±0.4.
+table 9: a summary of results in the relation prediction (relp) task, also showing the dependence on the numberof negative examples per positive example: k. micro-averaged f1 scores, obtained as averages over 5 experimentalruns for each input word vector space; standard deviation is also reported in the subscript.
+random.xavierare 768-dimensional vectors for the same vocabularies, randomly initialized via xavier initialization (glorot andbengio, 2010).
+the highest scores per column are in bold, the second best is underlined..5283

@@ -1,0 +1,718 @@
+vocabulary learning via optimal transportfor neural machine translation.
+jingjing xu1, hao zhou1, chun gan1,2†, zaixiang zheng1,3†, lei li11bytedance ai lab2math department, university of wisconsin–madison3nanjing university{xujingjing.melody,zhouhao.nlp,lileilab}@bytedance.comcgan5@wisc.eduzhengzx@smail.nju.edu.cn.
+abstract.
+the choice of token vocabulary affects the per-formance of machine translation.
+this paperaims to ﬁgure out what is a good vocabularyand whether one can ﬁnd the optimal vocab-ulary without trial training.
+to answer thesequestions, we ﬁrst provide an alternative un-derstanding of the role of vocabulary from theperspective of information theory.
+motivatedby this, we formulate the quest of vocabular-ization – ﬁnding the best token dictionary witha proper size – as an optimal transport (ot)problem.
+we propose volt, a simple andefﬁcient solution without trial training.
+em-pirical results show that volt outperformswidely-used vocabularies in diverse scenar-ios, including wmt-14 english-german andted’s 52 translation directions.
+for example,volt achieves 70% vocabulary size reduc-tion and 0.5 bleu gain on english-germantranslation.
+also, compared to bpe-search,volt reduces the search time from 384 gpuhours to 30 gpu hours on english-germantranslation.
+codes are available at https://github.com/jingjing-nlp/volt..1.introduction.
+due to the discreteness of text, vocabulary con-struction ( vocabularization for short) is a prereq-uisite for neural machine translation (nmt) andmany other natural language processing (nlp)tasks using neural networks (mikolov et al., 2013;vaswani et al., 2017; gehrmann et al., 2018;zhang et al., 2018; devlin et al., 2019).
+cur-rently, sub-word approaches like byte-pair en-coding (bpe) are widely used in the commu-nity (ott et al., 2018; ding et al., 2019; liu et al.,2020), and achieve quite promising results in prac-tice (sennrich et al., 2016; costa-juss`a and fonol-losa, 2016; lee et al., 2017; kudo and richardson,.
+†this work is done during the internship at bytedance ai.
+lab..2018; al-rfou et al., 2019; wang et al., 2020).
+the key idea of these approaches is selecting themost frequent sub-words (or word pieces withhigher probabilities) as the vocabulary tokens.
+in information theory, these frequency-based ap-proaches are simple forms of data compression toreduce entropy (gage, 1994), which makes the re-sulting corpus easy to learn and predict (martinand england, 2011; bentz and alikaniotis, 2016).
+however, the effects of vocabulary size are notsufﬁciently taken into account since current ap-proaches only consider frequency (or entropy) asthe main criteria.
+many previous studies (sennrichand zhang, 2019; ding et al., 2019; provilkovet al., 2020; salesky et al., 2020) show that vocab-ulary size also affects downstream performances,especially on low-resource tasks.
+due to the lackof appropriate inductive bias about size, trial train-ing (namely traversing all possible sizes) is usuallyrequired to search for the optimal size, which takeshigh computation costs.
+for convenience, mostexisting studies only adopt the widely-used set-tings in implementation.
+for example, 30k-40kis the most popular size setting in all 42 papersof conference of machine translation (wmt)through 2017 and 2018 (ding et al., 2019)..in this paper, we propose to explore auto-matic vocabularization by simultaneously consid-ering entropy and vocabulary size without expen-sive trial training.
+designing such a vocabulariza-tion approach is non-trivial for two main reasons.
+first, it is challenging to ﬁnd an appropriate objec-tive function to optimize them at the same time.
+roughly speaking, the corpus entropy decreaseswith the increase of vocabulary size, which bene-ﬁts model learning (martin and england, 2011).
+on the other side,too many tokens cause to-ken sparsity, which hurts model learning (allisonet al., 2006).
+second, supposing that an appropri-ate measurement is given, it is still challenging to.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages7361–7373august1–6,2021.©2021associationforcomputationallinguistics7361translation tasks,including wmt-14 english-translation,german translation, ted bilingualand ted multilingual translation.
+empirical re-sults show that volt beats widely-used vocabu-laries in diverse scenarios.
+furthermore, volt isa lightweight solution and does not require expen-sive computation resources.
+on english-germantranslation, volt only takes 30 gpu hours to ﬁndvocabularies, while the traditional bpe-search so-lution takes 384 gpu hours..2 related work.
+initially, most neural models were built uponword-level vocabularies (costa-juss`a and fonol-losa, 2016; vaswani et al., 2017; zhao et al.,2019).
+while achieving promising results, it isa common constraint that word-level vocabulariesfail on handling rare words under limited vocabu-lary sizes..researchers recently have proposed several ad-vanced vocabularization approaches,like byte-level approaches (wang et al., 2020), character-level approaches (costa-juss`a and fonollosa,2016; lee et al., 2017; al-rfou et al., 2019),and sub-word approaches (sennrich et al., 2016;kudo and richardson, 2018).
+byte-pair encoding(bpe) (sennrich et al., 2016) is proposed to getsubword-level vocabularies.
+the general idea isto merge pairs of frequent character sequences tocreate sub-word units.
+sub-word vocabularies canbe regarded as a trade-off between character-levelvocabularies and word-level vocabularies.
+com-pared to word-level vocabularies, it can decreasethe sparsity of tokens and increase the sharedfeatures between similar words, which probablyhave similar semantic meanings, like “happy” and“happier”.
+compared to character-level vocabu-laries, it has shorter sentence lengths without rarewords.
+following bpe, some variants recentlyhave been proposed, like bpe-dropout (provilkovet al., 2020), sentencepiece (kudo and richard-son, 2018), and so on..despite promising results, most existing sub-word approaches only consider frequency whilethe effects of vocabulary size is neglected.
+thus,trial training is required to ﬁnd the optimal size,which brings high computation costs.
+morerecently, some studies notice this problem andpropose some practical solutions (kreutzer andsokolov, 2018; cherry et al., 2018; chen et al.,2019; salesky et al., 2020)..figure 1: an illustration of marginal utility.
+we samplebpe-generated vocabularies with different sizes fromeo-en translation and draw their entropy (see eq.2)and bleu lines.
+“star” represents the vocabulary withthe maximum marginal utility.
+marginal utility (seeeq.1) evaluates the increase of beneﬁt (entropy de-crease) from an increase of cost (size)..solve such a discrete optimization problem due tothe exponential search space..to address the above problems, we proposea vocabulary learning approach via optimaltransport, volt for short.
+it can give an appro-priate vocabulary in polynomial time by consider-ing corpus entropy and vocabulary size.
+speciﬁ-cally, given the above insight of contradiction be-tween entropy and size, we ﬁrst borrow the con-cept of marginal utility in economics (samuelson,1937) and propose to use marginal utility of vo-cabularization (muv) as the measurement.
+thein economics, marginalinsight is quite simple:utility is used to balance the beneﬁt and the costand we use muv to balance the entropy (bene-ﬁt) and vocabulary size (cost).
+higher muv isexpected for pareto optimality.
+formally, muvis deﬁned as the negative derivative of entropyto vocabulary size.
+figure 1 gives an exampleabout marginal utility.
+preliminary results verifythat muv correlates with the downstream perfor-mances on two-thirds of tasks (see figure 2)..then our goal.
+turns to maximize muv intractable time complexity.
+we reformulate our dis-crete optimization objective into an optimal trans-port problem (cuturi, 2013) that can be solvedin polynomial time by linear programming.
+in-tuitively, the vocabularization process can be re-garded as ﬁnding the optimal transport matrixfrom the character distribution to the vocabularytoken distribution.
+finally, our proposed voltwill yield a vocabulary from the optimal transportmatrix..we evaluate our approach on multiple machine.
+73623000400050006000700080009000size3.603.653.703.753.803.853.903.954.00entropy27.027.528.028.529.029.530.0bleueoentropybleudeﬁned by the sum of token entropy.
+to avoid theeffects of token length, here we normalize entropywith the average length of tokens and the ﬁnal en-tropy is deﬁned as:.
+hv = −.
+p (i) log p (i),.
+(2).
+1lv.
+(cid:88).
+i∈v.
+where p (i) is the relative frequency of token ifrom the training corpus and lv is the averagelength of tokens in vocabulary v..preliminary results to verify the effectivenessof muv as the vocabulary measurement, we con-duct experiments on 45 language pairs from tedand calculate the spearman correlation score∗ be-tween muv and bleu scores.
+we adopt the sameand widely-used settings to avoid the effects ofother attributes on bleu scores, such as modelhyper-parameters and training hyper-parameters.
+we generate a sequence of vocabularies with in-cremental sizes via bpe.
+all experiments use thesame hyper-parameters.
+two-thirds of pairs showpositive correlations as shown in figure 2. themiddle spearman score is 0.4. we believe that it isa good signal to show muv matters.
+please referto section 5 for more dataset details and appendixa for more implementation details..given muv, we have two natural choices toget the ﬁnal vocabulary: search and learning.
+inthe search-based direction, we can combine muvwith widely-used vocabularization solutions.
+forexample, the optimal vocabularies can be obtainedby enumerating all candidate vocabularies gener-ated by bpe.
+while being simple and effective,it is not a self-sufﬁcient approach.
+furthermore,it still requires a lot of time to generate vocabu-laries and calculate muv.
+to address these prob-lems, we further explore a learning-based solutionvolt for more vocabulary possibilities.
+we em-pirically compare muv-search and volt in sec-tion 5..4 maximizing muv via optimal.
+transport.
+this section describes the details of the proposedapproach.
+we ﬁrst show the general idea of voltin section 4.1, then describe the optimal transportsolution in section 4.2, followed by the implemen-tation details in section 4.3..∗https://www.statstutor.ac.uk/resources/uploaded/spearmans.pdf.
+figure 2: muv and downstream performance are pos-itively correlated on two-thirds of tasks.
+x-axis clas-siﬁes spearman scores into different groups.
+y-axisshows the number of tasks in each group.
+the middlespearman score is 0.4..3 marginal utility of vocabularization.
+in this section, we propose to ﬁnd a good vocabu-lary measurement by considering entropy and size.
+as introduced in section 1, it is non-trivial to ﬁndan appropriate objective function to optimize themsimultaneously.
+on one side, with the increase ofvocabulary size, the corpus entropy is decreased,which beneﬁts model learning (bentz and alikan-iotis, 2016).
+on the other side, a large vocabu-lary causes parameter explosion and token spar-sity problems, which hurts model learning (alli-son et al., 2006)..to address this problem, we borrow the con-cept of marginal utility in economics (samuel-son, 1937) and propose to use marginal utility ofvocabularization (muv) as the optimization ob-jective.
+muv evaluates the beneﬁts (entropy) acorpus can get from an increase of cost (size).
+higher muv is expected for higher beneﬁt-costratio.
+preliminary results verify that muv corre-lates with downstream performances on two-thirdsof translation tasks (see figure 2).
+according tothis feature, our goal turns to maximize muv intractable time complexity..deﬁnition of muv formally, muv representsthe negative derivation of entropy to size.
+for sim-pliﬁcation, we leverage a smaller vocabulary to es-timate muv in implementation.
+specially, muvis calculated as:.
+mv(k+m) =.
+−(hv(k+m) − hv(k))m.,.
+(1).
+where v(k), v(k + m) are two vocabularies withk and k + m tokens, respectively.
+hv representsthe corpus entropy with the vocabulary v, which is.
+73631.751.511.251.111.251.511.752.11spearman score124682122count4.1 overview.
+we formulate vocabulary construction as a dis-crete optimization problem whose target is to ﬁndthe vocabulary with the highest muv accordingto eq.
+1. however, the vocabulary is discrete andsuch discrete search space is too large to traverse,which makes the discrete optimization intractable.
+in this paper, we simplify the original discreteoptimization problem by searching for the optimalvocabulary from vocabularies with ﬁxed sizes.
+in-tuitively, muv is the ﬁrst derivative of entropy ac-cording to the vocabulary size (eq.
+1), and we in-troduce an auxiliary variable s (s is an incremen-tal integer sequence) to approximate the computa-tion by only computing muv between vocabularysizes as adjacent integers in s..formally, s = {i, 2 · i, ..., (t − 1) · i, · · · } whereeach timestep t represents a set of vocabularieswith the number up to s[t].
+for any vocabulary, itsmuv score can be calculated based on a vocabu-lary from its previous timestep.
+with sequence s,the target to ﬁnd the optimal vocabulary v(t) withthe highest muv can be formulated as:.
+v(t−1)∈v.
+arg maxs[t−1],v(t)∈v.
+s[t].
+mv(t) =.
+v(t−1)∈v.
+arg maxs[t−1],v(t)∈v.
+s[t].
+−.
+1i.
+(cid:2)hv(t) − hv(t−1).
+(cid:3),.
+where vs[t−1] and vs[t] are two sets containingall vocabularies with upper bound of size s[t −1] and s[t].
+due to exponential search space, wepropose to optimize its lower bound:.
+arg maxt.1i.
+(cid:2) max.
+v(t)∈v.
+s[t].
+hv(t) −.
+maxv(t−1)∈v.
+s[t−1].
+hv(t−1).
+(cid:3)..(3)where i means the size difference between t − 1vocabulary and t vocabulary.
+muv requires thesize difference as a denominator.
+based on thisequation, the whole solution is split into two steps:1) searching for the optimal vocabulary with thehighest entropy at each timestep t; 2) enumeratingall timesteps and outputing the vocabulary corre-sponding to the time step satisfying eq.
+3..the ﬁrst step of our approach is to search for thevocabulary with the highest entropy from vs[t].
+formally, the goal is to ﬁnd a vocabulary v(t) suchthat entropy is maximized,.
+arg maxv(t)∈vs[t].
+−.
+1lv(t).
+(cid:88).
+i∈v(t).
+p (i) log p (i),.
+(4).
+figure 3: an illustration of vocabulary constructionfrom a transport view.
+each transport matrix representsa vocabulary.
+the transport matrix decides how manychars are transported to token candidates.
+the tokenswith zero chars will not be added into the vocabulary..where lv is the average length for tokens in v(t),p (i) is the probability of token i. however, no-tice that this problem is in general intractable dueto the extensive vocabulary size.
+therefore, weinstead propose a relaxation in the formulationof discrete optimal transport, which can then besolved efﬁciently via the sinkhorn algorithm (cu-turi, 2013)..intuitively, we can imagine vocabulary con-struction as a transport process that transportschars into token candidates with the number up tos[t].
+as shown in figure 3, the number of chars isﬁxed, and not all token candidates can get enoughchars.
+each transport matrix can build a vocab-ulary by collecting tokens with chars.
+differenttransport matrices bring different transport costs.
+the target of optimal transport is to ﬁnd a transportmatrix to minimize the transfer cost, i.e., negativeentropy in our setting..4.2 vocabularization via optimal transportgiven a set of vocabularies vs[t], we want to ﬁndthe vocabulary with the highest entropy.
+conse-quently, the objective function in eq.
+4 becomes.
+min.
+v∈v.
+s[t].
+1lv.
+(cid:88).
+i∈v.
+p (i) log p (i),.
+s.t.
+p (i) =.
+token(i)i∈v token(i).
+(cid:80).
+, lv =.
+(cid:80).
+i∈v len(i)|v|.
+..token(i) is the frequency of token i in the vo-cabulary v. len(i) represents the length of tokeni. notice that both the distribution p (i) and theaverage length lv depend on the choice of v..objective approximation to obtain a tractablelower bound of entropy,it sufﬁces to give atractable upper bound of the above objective func-tion.
+we adopt the merging rules to segment rawtext similar with bpe where two consecutive to-kens will be merged into one if the merged one isin the vocabulary.
+to this end, let t ∈ vs[t] be.
+7364ab cabbcacabc…a20016000004000b1000100000000c1000060004000#chra200b100c100transport matriceschar vocab#toka160b100c60ac40enumerating  possible compositionsfinding the optimal compositiontoken vocabcorpusthe vocabulary containing top s[t] most frequenttokens, c be the set of chars and |t|, |c| be theirsizes respectively.
+since t is an element of vs[t],clearly, we have.
+min.
+v∈v.
+s[t].
+1lv.
+(cid:88).
+i∈v.
+1lt.(cid:88).
+i∈t.
+p (i) log p (i) ≤.
+p (i) log p (i)..(5).
+(cid:80).
+here we start from the upper bound of the aboveobjective function, that is 1i∈t p (i) log p (i)ltand then search for a reﬁned token set from t. inthis way, we reduce the search space into the sub-sets of t. let p (i, j) be the joint probability dis-tribution of the tokens and chars that we want tolearn.
+then we have.
+p (i) log p (i) =.
+p (i, j) log p (i).
+(cid:88).
+i∈t.
+=.
+p (i, j) log p (i, j).
+(cid:88).
+(cid:88).
+i∈t(cid:88).
+j∈c(cid:88).
+j∈c.
+i∈t(cid:124).
+(cid:88).
+(cid:88).
++.
+j∈c.
+i∈t(cid:124).
+p (i, j)(− log p (j|i)).
+..(cid:123)(cid:122)l1.
+(cid:123)(cid:122)l2.
+(cid:125).
+(6).
+(cid:125).
+the details of proof can be found at appendix c.since l1 is nothing but the negative entropy of thejoint probability distribution p (i, j), we shall de-note it as −h(p )..let d be the |c| × |t| matrix whose (i, j)-thentry is given by − log p (j|i), and let p be thejoint probability matrix, then we can write.
+l2 = (cid:104)p , d(cid:105) =.
+p (i, j)d(i, j)..(7).
+(cid:88).
+(cid:88).
+i.j.in this way, eq.
+6 can be reformulated as thefollowing objective function which has the sameform as the objective function in optimal transport:.
+(cid:88).
+|.
+j.
+(cid:88).
+i.estimate p (j|i) where len(i) is the length of tokeni. formally, the distance matrix is deﬁned as(cid:26)− log p (j|i) = +∞,− log p (j|i) = − log.
+d(i, j) =.
+if j /∈ i.len(i) , otherwise.
+1.furthermore, the number of chars is ﬁxed and weset the sum of each row in the transport matrix tothe probability of char j. the upper bound of thechar requirements for each token is ﬁxed and weset the sum of each column in the transport matrixto the probablity of token j. formally, the con-straints are deﬁned as:.
+p (i, j) − p (i)| ≤ (cid:15),.
+(9).
+and.
+p (i, j) = p (j)..(10).
+given transport matrix p and distance matrix.
+d, the ﬁnal objective can be formulated as:.
+arg minp ∈r|c|×|t|.
+−h(p ) + (cid:104)p , d(cid:105) ,.
+s.t..p (i, j) = p (j),.
+|.
+p (i, j) − p (i)| ≤ (cid:15),.
+(cid:88).
+i.
+(cid:88).
+j.with small (cid:15) > 0. figure 4 shows the detailsof optimal transport solution.
+strictly speaking,this is an unbalanced entropy regularized optimaltransport problem.
+nonetheless, we can still usethe generalized sinkhorn algorithm to efﬁcientlyﬁnd the target vocabulary as detailed in section4.6 of peyr´e and cuturi (2019).
+the algorithm de-tails are shown in algorithm 1. at each timestep t,we can generate a new vocabulary associated withentropy scores based on the transport matrix p .
+finally, we collect these vocabularies associatedwith entropy scores, and output the vocabulary sat-isfying eq.
+3..minp ∈rm×n.
+(cid:104)p , d(cid:105) − γh(p )..(8).
+4.3.implementation.
+setup of ot from the perspective of optimaltransport, p can be regarded as the transport ma-trix, and d can be regarded as the distance matrix.
+intuitively, optimal transport is about ﬁnding thebest transporting mass from the char distributionto the target token distribution with the minimumwork deﬁned by (cid:104)p , d(cid:105)..to verify the validness of transport solutions,we add the following constraints.
+first, to avoidinvalid transport between char j and token i, weset the distance to +∞ if the target token i does1not contain the char j. otherwise, we uselen(i) to.
+algorithm 1 lists the process of volt.
+first,we rank all token candidates according to theirfrequencies.
+for simpliﬁcation, we adopt bpe-generated tokens (e.g.
+bpe-100k) as the tokencandidates.
+it is important to note that any seg-mentation algorithms can be used to initialize to-ken candidates.
+experiments show that differentinitialization approaches result in similar results.
+we simply adopt bpe-100k for bilingual transla-tion and bpe-300k for multilingual translation inthis work.
+all token candidates with their proba-bilities are then used to initialize l in algorithm 1..7365algorithm 1: voltinput: a sequence of token candidates l ranked byfrequencies, an incremental integer sequence swhere the last item of s is less than |l|, a charactersequence c, a training corpus dcparameters: u ∈ r|c|vocabularies = []for item in s do.
++ , v ∈ r|t|.
++.
+// begin of sinkhorn algorithminitialize u = ones() and v = ones()t = l[: item]calculate token frequencies p (t) based on dccalculate char frequencies p (c) based on dccalculate dwhile not converge dou = p (t)/dvv = p (c)/dt u.optimal matrix = u.reshape(-1, 1) * d *.
+v.reshape(1, -1).
+// end of sinkhorn algorithmentropy, vocab = get vocab(optimal matrix)vocabularies.append(entropy,vocab)output v∗ from vocabularies satisfying eq.
+3.datasetis processed following ott et al.
+(2018).
+we choose newstest14 as the test set..2. ted bilingual dataset: we include two set-tings: x-to-english translation and english-to-x translation.
+we choose 12 language-pairs with the most training data.
+we use thelanguage code according to iso-639-1 stan-dard†.
+ted data is provided by qi et al.
+(2018)..3. ted multilingual dataset: we conduct exper-iments with 52 language pairs on a many-to-english setting.
+the network is trained onall language pairs.
+we adopt the same pre-processing pipeline in the wmt-14 en-dedataset..5.2 main results.
+vocabularies searched by volt are betterthan widely-used vocabularies on bilingualmt settings.
+ding et al.
+(2019) gather 42 pa-pers that have been accepted by the research trackof conference of machine translation (wmt)through 2017 and 2018. among these papers,the authors ﬁnd that 30k-40k is the most popularrange for the number of bpe merge actions.
+fol-lowing this work, we ﬁrst compare our methodswith dominant bpe-30k.
+the results are listed intable 1. as we can see, the vocabularies searchedby volt achieve higher bleu scores with large.
+†http://www.lingoes.net/en/translator/langcode.htm.
+figure 4: the details of optimal transport.
+the objec-tive function is the sum of negative entropy and trans-port cost.
+each element d(i, j) in the distance matrixis the negative log of 1/n where n is the length of tokeni. it deﬁnes the distance between char j and token i. toavoid invalid transport between char j and token i, weset the distance to inﬁnite if the target token i does notcontain the char j..the size of the incremental integer sequence sis a hyper-parameter and set to (1k, ..., 10k) forbilingual translation, (40k, ..., 160k) for multi-lingual settings.
+at each timestep, we can getthe vocabulary with the maximum entropy basedon the transport matrix.
+it is inevitable to handleillegal transport case due to relaxed constraints.
+we remove tokens with distributed chars less than0.001 token frequencies.
+finally, we enumerateall timesteps and select the vocabulary satisfyingeq.
+3 as the ﬁnal vocabulary..after generating the vocabulary, volt uses agreedy strategy to encode text similar to bpe.
+toencode text, it ﬁrst splits sentences into character-level tokens.
+then, we merge two consecutive to-kens into one token if the merged one is in thevocabulary.
+this process keeps running until notokens can be merged.
+out-of-vocabulary tokenswill be split into smaller tokens..5 experiments.
+to evaluate the performance of volt, we conductexperiments on three datasets, including wmt-14english-german translation, ted bilingual trans-lation, and ted multilingual translation..5.1 settings.
+we run experiments on the following machinetranslation datasets.
+see appendix b for moremodel and training details..1. wmt-14 english-german (en-de) dataset:this dataset has 4.5m sentence pairs.
+the.
+7366table 1: comparison between vocabularies search by volt and widely-used bpe vocabularies.
+volt achieveshigher bleu scores with large size reduction.
+here the vocabulary size is adopted from the x-en setting..bilingual.
+wmt-14.
+ted.
+de.
+es.
+ptbr.
+fr.
+ru.
+he.
+ar.
+nl.
+ro.
+tr.
+de.
+vi.
+39.57 39.95 40.11 19.79 26.52 16.27 34.61 32.48 27.65 15.15 29.37 28.2039.97 40.47 40.42 20.36 27.98 16.96 34.64 32.59 28.08 16.17 29.98 28.52.es.
+ptbr.
+fr.
+ru.
+he.
+ar.
+nl.
+ro.
+tr.
+de.
+vi.
+42.59 45.12 40.72 24.95 37.49 31.45 38.79 37.01 35.60 25.70 36.36 27.4842.34 45.93 40.72 25.33 38.70 32.97 39.09 37.31 36.53 26.75 36.68 27.39.it.
+it.
+it.
+vocab size (k).
+es.
+ptbr.
+fr.
+ru.
+he.
+ar.
+29.95.3.
+29.85.2.
+29.89.2.
+30.13.3.
+30.07.3.
+30.39.4.
+33.53.2.nl.
+29.82.4.ro.
+29.83.2.tr.
+29.97.2.de.
+30.08.2.vi.
+29.98.4.en-x.
+bpe-30kvolt.
+x-en.
+bpe-30kvolt.
+bpe-30kvolt.
+29.3129.80.de.
+32.6032.30.de.
+33.611.6.table 2: comparison between vocabularies search by volt and bpe-1k, recommended by ding et al.
+(2019) forlow-resource datasets.
+here we take ted x-en bilingual translation as an example.
+this table demonstrates thatvocabularies searched by volt are on par with heuristically-searched vocabularies in terms of bleu scores..x-en.
+bpe-1kvolt.
+bpe-1kvolt.
+vocab size (k).
+es.
+ptbr.
+fr.
+ru.
+he.
+ar.
+it.
+nl.
+ro.
+tr.
+de.
+vi.
+avg.
+42.36 45.58 40.90 24.94 38.62 32.23 38.75 37.44 35.74 25.94 37.00 27.28 35.6542.34 45.93 40.72 25.33 38.70 32.97 39.09 37.31 36.53 26.75 36.68 27.39 35.81.es.
+1.45.3.ptbr.
+1.35.2.fr.
+1.39.2.ru.
+1.43.3.he.
+1.37.3.ar.
+1.59.4.ko.
+4.73.2.it.
+1.22.4.nl.
+1.23.2.ro.
+1.27.2.tr.
+1.28.2.de.
+1.28.4.avg.
+1.66.0.size reduction.
+the promising results demonstratethat volt is a practical approach that can ﬁnda well-performing vocabulary with higher bleuand smaller size..vocabularies searched by volt are on parwith heuristically-searched vocabularies onlow-resource datasets.
+ding et al.
+(2019)study how the size of bpe affects the model per-formance in low-resource settings.
+they conductexperiments on four language pairs and ﬁnd thatsmaller vocabularies are more suitable for low-resource datasets.
+for transformer architectures,the optimal vocabulary size is less than 4k, aroundup to 2k merge actions.
+we compare voltand bpe-1k on an x-to-english bilingual setting.
+the results are shown in table 2. we can seethat volt can ﬁnd a good vocabulary on parwith heuristically searched vocabularies in termsof bleu scores.
+note that bpe-1k is selectedbased on plenty of experiments.
+in contrast, voltonly requires one trials for evaluation and onlytakes 0.5 cpu hours plus 30 gpu hours to ﬁndthe optimal vocabulary..volt works well on multilingual mt set-tings.
+we conduct a multilingual experiment.
+these languages come from multiple language.
+families and have diverse characters.
+we comparevolt with bpe-60k, the most popular setting inmultilingual translation tasks.
+table 3 lists the fullresults.
+the size of the searched vocabulary isaround 110k.
+as we can see, volt achieves bet-ter bleu scores on most pairs..volt is a green vocabularization solution.
+one advantage of volt lies in its low resourceconsumption.
+we compare volt with bpe-search, a method to select the best one froma bpe-generated vocabulary set based on theirbleu scores.
+the results are shown in table 4.in bpe-search, we ﬁrst deﬁne a vocabulary setincluding bpe-1k, bpe-2k, bpe-3k, bpe-4k,bpe-5k, bpe-6k, bpe-7k, bpe-8k, bpe-9k,bpe-10k, bpe-20k, bpe-30k.
+then, we run fullexperiments to select the best vocabulary.
+table 4demonstrates that volt is a lightweight solutionthat can ﬁnd a competitive vocabulary within 0.5hours on a single cpu, compared to bpe-searchthat takes hundreds of gpu hours.
+the cost ofbpe-search is the sum of the training time onall vocabularies.
+furthermore, we also comparevolt with muv-search as introduced in section3. muv-search is a method that combines muvand popular approaches by selecting the vocabu-lary with the highest muv as the ﬁnal vocabulary..7367table 3: comparison between volt and widely-used bpe vocabularies on multilingual translation.
+voltachieves higher bleu scores on most pairs..x-en.
+es.
+pt-br.
+fr.
+ru.
+he.
+ar.
+ko.
+zh-cn.
+it.
+ja.
+zh-tw.
+nl.
+ro.
+bpe-60k 32.7733.84volt.
+35.9737.18.
+31.4532.85.
+19.3920.23.
+26.6526.85.
+14.1314.36.
+15.8016.59.
+29.0630.44.
+15.0315.73.
+26.8327.68.
+26.4427.45.x-en.
+tr.
+de.
+vi.
+pl.
+pt.
+el.
+fa.
+sr.hr.
+uk.
+cs.
+bpe-60k 16.7417.55volt.
+25.9227.01.
+21.0022.25.
+18.0618.93.
+34.1735.64.
+29.3531.27.x-en.
+id.
+th.
+sv.
+sk.
+sq.
+lt.da.
+bpe-60k 24.5825.87volt.
+17.9218.89.
+30.4331.47.
+24.6825.69.
+28.5029.09.
+19.1719.85.
+34.6536.04.x-en.
+hi.
+nb.
+ka.
+et.
+ku.
+gl.
+zh.
+ur.
+eo.
+bpe-60k 18.57volt18.54.
+35.9635.88.
+16.4715.97.
+15.9116.03.
+13.3913.20.
+26.7526.94.
+13.3512.67.
+14.2113.89.
+21.6621.43.mn.
+7.967.96.
+22.2822.17.bg.
+30.4131.77.
+10.3110.75.hu.
+17.9719.00.mk.
+28.2328.54.
+26.6627.45.sl.
+20.5921.36.
+28.3029.25.fr-ca.
+27.2028.35.
+20.4920.05.my.
+13.5413.65.mr.8.948.40.
+22.1823.34.fi.
+15.1315.98.ms.19.8219.06.
+22.0823.54.hy.
+17.6818.44.az.
+9.679.09.table 5: comparison between volt and strong base-lines.
+volt achieves almost the best performance witha much smaller vocabulary..table 4: results of volt, muv-search and bpe-search.
+muv-search does not require full training andsaves a lot of costs.
+among them, volt is the mostefﬁcient solution.
+muv-search and volt require ad-ditional costs for downstream evaluation, which takesaround 32 gpu hours.
+“gh” and “ch” represent gpuhours and cpu hours, respectively..en-de.
+bleu.
+size.
+cost.
+bpe-searchmuv-searchvolt.
+29.929.729.8.
+384 gh.
+12.6k9.70k 5.4 ch + 30 gh11.6k 0.5 ch + 30 gh.
+we generate a sequence of bpe vocabularies withincremental size 1k, 2k, 3k, 4k, 5k, 6k, 7k, 8k,9k, 10k, 20k.
+for t-th vocabulary v(t), its muvscore is calculated according to v(t) and v(t − 1).
+we enumerate all vocabularies and select the vo-cabulary with the highest muv as the ﬁnal vocab-ulary.
+the comparison between volt and muv-search is shown in table 4. although muv-search does not require downstream full-training,it still takes a lot of time to generate vocabular-ies and calculate muv.
+among them, volt is themost efﬁcient approach..5.3 discussion.
+we conduct more experiments to answer the fol-lowing questions: 1) can a baseline beat strong ap-proaches with a better vocabulary; 2) can voltbeat recent vocabulary solutions, like sentence-piece; 3) can volt work on diverse architectures?.
+a simple baseline with a volt-generated vo-cabulary reaches sota results.
+we comparevolt and several strong approaches on the en-de.
+en-de.
+bleu parameters.
+(vaswani et al., 2017)(shaw et al., 2018)(ott et al., 2018)(so et al., 2019)(liu et al., 2020).
+sentencepiecewordpiece.
+volt.
+28.429.229.329.830.1.
+28.729.0.
+29.8.
+210m213m210m218m256m.
+210m210m.
+188m.
+table 6: vocabularies searched by volt are bet-ter than widely-used vocabularies on various archi-tectures.
+here “better” means competitive results butmuch smaller sizes..en-de.
+approach bleu.
+size.
+transformer-big.
+convolutional seq2seq.
+bpe-30kvolt.
+bpe-30kvolt.
+29.329.8.
+26.426.3.
+33.6k11.6k.
+33.6k11.6k.
+dataset.
+table 5 shows surprisingly good results.
+compared to the approaches in the top block,volt achieves almost the best performance witha much smaller vocabulary.
+these results demon-strate that a simple baseline can achieve good re-sults with a well-deﬁned vocabulary..volt beats sentencepiece and wordpiece.
+sentencepiece and wordpiece are two variants ofsub-word vocabularies.
+we also compare our ap-proach with them on wmt-14 en-de translation.
+7368to evaluate the effectiveness of volt.
+the mid-dle block of table 5 lists the results of senten-piece and wordpiece.
+we implement these twoapproaches with the default settings.
+we can ob-serve that volt outperforms sentencepiece andwordpiece by a large margin, with over 1 bleuimprovements..volt works on various architectures.
+thiswork mainly uses transformer-big in experiments.
+we are curious about whether volt works onother architectures.
+we take wmt-14 en-detranslation as an example and implement a convo-lutional seq2seq model.
+the network uses the de-fault settings from fairseq‡.
+we set the maximumepochs to 100 and average the last ﬁve models asthe ﬁnal network for evaluation.
+table 6 demon-strates that vocabularies searched by volt alsoworks on convolutional seq2seq with competi-tive bleu but much smaller size.
+in this work,we verify the effectiveness of volt on architec-tures with standard sizes.
+since model capacity isalso an important factor on bleu scores, we rec-ommend larger vocabularies associated with moreembedding parameters for small architectures..volt can bring slight speedup during train-ing.
+we evaluate the running time for volt vo-cabulary and bpe-30k on wmt en-de transla-tion.
+the model with volt-searched vocabu-lary (11.6k tokens) can process 133 sentences persecond, while the model with bpe-30k (33.6ktokens) only executes 101 sentences per second.
+all experiments run on the same environment (2tesla-v100-gpus + 1 gold-6130-cpu), with thesame beam size for decoding.
+the speedup mainlycomes from larger batch size with reduced embed-ding parameters.
+we also ﬁnd that although voltreduces the softmax computations, it does not sig-niﬁcantly boost the softmax running time due tooptimized parallel computation in gpus..volt vocabularies and bpe vocabularies arehighly overlapped.
+for simpliﬁcation, voltstarts from bpe-segmented tokens.
+we take wmten-de as an example to see the difference be-tween volt vocabulary and bpe vocabulary.
+thesize of volt vocabulary is around 9k and weadopt bpe-9k vocabulary for comparison.
+weﬁnd that these two vocabularies are highly over-lapped, especially for those high-frequency words..‡https://github.com/pytorch/fairseq/.
+tree/master/examples/translation.
+they also have similar downstream performance.
+therefore, from an empirical perspective, bpewith volt size is also a good choice..6 conclusion.
+in this work, we propose a new vocabulary searchapproach without trail training.
+the whole frame-work starts from an informtaion-therotic under-standing.
+according to this understanding, we for-mulate vocabularization as a two-step discrete op-timization objective and propose a principled op-timal transport solution volt.
+experiments showthat volt can effectively ﬁnd a well-performingvocabulary in diverse settings..acknowledgments.
+we thank the anonymous reviewers, demi guo,for their helpful feedback.
+lei li and hao zhouare corresponding authors..references.
+rami al-rfou, dokook choe, noah constant, mandyguo, and llion jones.
+2019. character-level lan-guage modeling with deeper self-attention.
+in thethirty-third aaai conference on artiﬁcial intelli-gence, aaai 2019, the thirty-first innovative ap-plications of artiﬁcial intelligence conference, iaai2019, the ninth aaai symposium on educationaladvances in artiﬁcial intelligence, eaai 2019, hon-olulu, hawaii, usa, january 27 - february 1, 2019,pages 3159–3166.
+aaai press..ben allison, david guthrie, and louise guthrie.
+2006.another look at the data sparsity problem.
+in text,speech and dialogue, 9th international conference,tsd 2006, brno, czech republic, september 11-15,2006, proceedings, volume 4188 of lecture notes incomputer science, pages 327–334.
+springer..christian bentz and dimitrios alikaniotis.
+2016. theword entropy of natural languages.
+arxiv preprintarxiv:1606.06996..wenhu chen, yu su, yilin shen, zhiyu chen, xifengyan, and william yang wang.
+2019. how large avocabulary does text classiﬁcation need?
+a varia-tional approach to vocabulary selection.
+in proceed-ings of the 2019 conference of the north americanchapter of the association for computational lin-guistics: human language technologies, naacl-hlt 2019, minneapolis, mn, usa, june 2-7, 2019,volume 1 (long and short papers), pages 3487–3497. association for computational linguistics..colin cherry, george f. foster, ankur bapna, orhanfirat, and wolfgang macherey.
+2018. revisitingcharacter-based neural machine translation with ca-pacity and compression.
+in proceedings of the 2018.
+7369conference on empirical methods in natural lan-guage processing, brussels, belgium, october 31 -november 4, 2018, pages 4295–4305.
+associationfor computational linguistics..marta r. costa-juss`a and jos´e a. r. fonollosa.
+2016.character-based neural machine translation.
+in pro-ceedings of the 54th annual meeting of the associ-ation for computational linguistics, acl 2016, au-gust 7-12, 2016, berlin, germany, volume 2: shortpapers.
+the association for computer linguistics..marco cuturi.
+2013. sinkhorn distances: lightspeedin advances incomputation of optimal transport.
+neural information processing systems 26: 27thannual conference on neural information process-ing systems 2013. proceedings of a meeting helddecember 5-8, 2013, lake tahoe, nevada, unitedstates, pages 2292–2300..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language under-in proceedings of the 2019 conferencestanding.
+of the north american chapter of the associationfor computational linguistics: human languagetechnologies, naacl-hlt 2019, minneapolis, mn,usa, june 2-7, 2019, volume 1 (long and short pa-pers), pages 4171–4186.
+association for computa-tional linguistics..shuoyang ding, adithya renduchintala, and kevinduh.
+2019. a call for prudent choice of sub-word merge operations in neural machine transla-tion.
+in proceedings of machine translation summitxvii volume 1: research track, mtsummit 2019,dublin, ireland, august 19-23, 2019, pages 204–213. european association for machine translation..philip gage.
+1994. a new algorithm for data compres-.
+sion.
+c users journal, 12(2):23–38..sebastian gehrmann, yuntian deng, and alexander m.rush.
+2018. bottom-up abstractive summarization.
+in proceedings of the 2018 conference on empiricalmethods in natural language processing, brussels,belgium, october 31 - november 4, 2018, pages4098–4109.
+association for computational linguis-tics..diederik p. kingma and jimmy ba.
+2015. adam: ain 3rd inter-method for stochastic optimization.
+national conference on learning representations,iclr 2015, san diego, ca, usa, may 7-9, 2015,conference track proceedings..julia kreutzer and artem sokolov.
+2018. learning tosegment inputs for nmt favors character-level pro-cessing.
+corr, abs/1810.01480..taku kudo and john richardson.
+2018. sentencepiece:a simple and language independent subword tok-enizer and detokenizer for neural text processing.
+inproceedings of the 2018 conference on empiricalmethods in natural language processing, emnlp.
+2018: system demonstrations, brussels, belgium,october 31 - november 4, 2018, pages 66–71.
+as-sociation for computational linguistics..jason lee, kyunghyun cho, and thomas hofmann.
+2017. fully character-level neural machine trans-lation without explicit segmentation.
+transactionsof the association for computational linguistics,5:365–378..xiaodong liu, kevin duh, liyuan liu, and jianfenggao.
+2020. very deep transformers for neural ma-chine translation.
+corr, abs/2008.07772..nathaniel fg martin and james w england.
+2011.mathematical theory of entropy.
+12. cambridge uni-versity press..tomas mikolov, ilya sutskever, kai chen, gregory s.corrado, and jeffrey dean.
+2013. distributed rep-resentations of words and phrases and their com-in advances in neural informationpositionality.
+processing systems 26: 27th annual conference onneural information processing systems 2013. pro-ceedings of a meeting held december 5-8, 2013,lake tahoe, nevada, united states, pages 3111–3119..myle ott, sergey edunov, david grangier, andmichael auli.
+2018. scaling neural machine trans-in proceedings of the third conference onlation.
+machine translation: research papers, wmt 2018,belgium, brussels, october 31 - november 1, 2018,pages 1–9.
+association for computational linguis-tics..gabriel peyr´e and marco cuturi.
+2019. computationaloptimal transport.
+found.
+trends mach.
+learn.,11(5-6):355–607..ivan provilkov, dmitrii emelianenko, and elena voita.
+2020. bpe-dropout: simple and effective subwordin proceedings of the 58th annualregularization.
+meeting of the association for computational lin-guistics, acl 2020, online, july 5-10, 2020, pages1882–1892.
+association for computational linguis-tics..ye qi, devendra singh sachan, matthieu felix, sar-guna padmanabhan, and graham neubig.
+2018.when and why are pre-trained word embeddingsuseful for neural machine translation?
+in proceed-ings of the 2018 conference of the north americanchapter of the association for computational lin-guistics: human language technologies, naacl-hlt, new orleans, louisiana, usa, june 1-6, 2018,volume 2 (short papers), pages 529–535.
+associa-tion for computational linguistics..elizabeth salesky, andrew runge, alex coda, janniehues, and graham neubig.
+2020. optimizingsegmentation granularity for neural machine trans-lation.
+machine translation, pages 1–19..paul a samuelson.
+1937. a note on measurement ofutility.
+the review of economic studies, 4(2):155–161..7370rico sennrich, barry haddow, and alexandra birch.
+2016. neural machine translation of rare words withsubword units.
+in proceedings of the 54th annualmeeting of the association for computational lin-guistics, acl 2016, august 7-12, 2016, berlin, ger-many, volume 1: long papers.
+the association forcomputer linguistics..rico sennrich and biao zhang.
+2019. revisiting low-resource neural machine translation: a case study.
+in proceedings of the 57th conference of the as-sociation for computational linguistics, acl 2019,florence, italy, july 28- august 2, 2019, volume 1:long papers, pages 211–221.
+association for com-putational linguistics..peter shaw, jakob uszkoreit, and ashish vaswani.
+2018. self-attention with relative position represen-in proceedings of the 2018 conference oftations.
+the north american chapter of the association forcomputational linguistics: human language tech-nologies, naacl-hlt, new orleans, louisiana,usa, june 1-6, 2018, volume 2 (short papers),pages 464–468.
+association for computational lin-guistics..david r. so, quoc v. le, and chen liang.
+2019.in proceedings of thethe evolved transformer.
+36th international conference on machine learn-ing, icml 2019, 9-15 june 2019, long beach, cal-ifornia, usa, volume 97 of proceedings of machinelearning research, pages 5877–5886.
+pmlr..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n. gomez, lukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+in advances in neural information pro-cessing systems 30: annual conference on neuralinformation processing systems 2017, 4-9 decem-ber 2017, long beach, ca, usa, pages 5998–6008..changhan wang, kyunghyun cho, and jiatao gu.
+2020. neural machine translation with byte-levelin the thirty-fourth aaai conferencesubwords.
+on artiﬁcial intelligence, aaai 2020, the thirty-second innovative applications of artiﬁcial intelli-gence conference, iaai 2020, the tenth aaai sym-posium on educational advances in artiﬁcial intel-ligence, eaai 2020, new york, ny, usa, february7-12, 2020, pages 9154–9160.
+aaai press..lei zhang, shuai wang, and bing liu.
+2018. deeplearning for sentiment analysis: a survey.
+wiley in-terdisciplinary reviews: data mining and knowl-edge discovery, 8(4)..yi zhao, yanyan shen, and junjie yao.
+2019. re-current neural network for text classiﬁcation within pro-hierarchical multiscale dense connections.
+ceedings of the twenty-eighth international jointconference on artiﬁcial intelligence, ijcai 2019,macao, china, august 10-16, 2019, pages 5450–5456. ijcai.org..7371the averaged model to generate translation results.
+for multilingual translation, all approaches run 10epochs and we adopt the last model for evaluation.
+we calculate case-sensitive tokenized bleu forevaluation..appendix a: muv.
+to evaluate the relationship between muv andbleu scores, we conduct experiments on 45 lan-guage pairs (x-en) with most resources (includingar-en, eg-en, cs-en, da-en, de-en, el-en, es-en, et-en, fa-en, ﬁ-en, fr-ca-en, fr-en, gl-en, he-en, hi-en,hr-en, hu-en, hy-en, id-en, it-en, ja-en, ka-en, ko-en, ku-en, lt-en, mk-en, my-en, nb-en, nl-en, pl-en,pt-br-en, pt-en, ro-en, ru-en, sk-en, sl-en, sq-en, sr-en, sv-en, th-en, tr-en, uk-en, vi-en, zh-cn-en, zh-tw-en) from ted and calculate the spearman cor-relation score beween muv and bleu.
+we mergeall bilingual training data together and pre-train amultilingual network.
+to avoid the effects of un-steady bleu scores, we use the multilingual net-work to initialize bilingual networks.
+all bilingualdatasets are segment by four multilingual vocabu-laries, including bpe-20k, bpe-60k, bpe-100k,bpe-140k.
+in this way, we can get four bilingualcorpora for each translation task.
+the muv is cal-culated based on these corpora.
+for each corpus,we leverage a corpus with a smaller vocabularyto calculate muv.
+for example, the muv scoreof ar-en (bpe-20k) is calculated based on ar-en (bpe-20k) and ar-en (bpe-10k).
+it is impor-tant to note that all corpora adopt the same inter-val, 10k, to calculate muv.
+all bilingual datasetsshare the same model hyper-parameters and train-ing hyper-parameters (please refer to appendix bfor more implementation details).
+we set the max-imum training epoch to 50 and average the last ﬁvemodels as the ﬁnal network for evaluation..appendix b: experiments.
+models.
+we use fairseq to train a transformer-big model with the same setting in the original pa-per (ott et al., 2018).
+the input embedding andoutput embeddings are shared.
+we use the adamoptimizer (kingma and ba, 2015) with a learningrate 5e-4 and an inverse sqrt decay schedule.
+thewarm-up step is 4, 000, the dropout rate is 0.3,the update frequency is 4, the number of tokensis 9, 600, or 4, 800 in a single batch..training and evaluation.
+we run wmt-14 en-de experiments with 8 gpus, ted bilingualtranslation with 4 gpus, ted multilingual trans-lation with 16 gpus.
+we set a beamwidth to4 for en-de and 5 for the other.
+for bilingualtranslation, we run approaches 40 epochs, aver-age the last ﬁve models on all datasets, and use.
+7372appendix c: proofs for eq.
+6(cid:88).
+(cid:88).
+(cid:88).
+p (i) log p (i) =.
+p (i, j) log p (i).
+i∈t.
+=.
+=.
+=.
+i∈t.
+j∈c.
+(cid:88).
+(cid:88).
+i∈t.
+j∈c.
+(cid:88).
+(cid:88).
+i∈t(cid:88).
+j∈c(cid:88).
+j∈c.
+i∈t(cid:124).
+p (i, j) log p (i, j) ·.
+p (i)p (i, j).
+(cid:88).
+(cid:88).
+i∈t(cid:88).
+j∈c(cid:88).
+j∈c.
+i∈t(cid:124).
+(cid:125).
+p (i, j) log p (i, j) +.
+p (i, j) log.
+p (i)p (i, j).
+p (i, j) log p (i, j).
++.
+p (i, j)(− log p (j|i)).
+..(cid:123)(cid:122)l1.
+(cid:123)(cid:122)l2.
+(cid:125).
+7373

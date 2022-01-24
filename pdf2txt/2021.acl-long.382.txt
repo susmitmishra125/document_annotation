@@ -1,0 +1,507 @@
+lexicon learning for few-shot neural sequence modeling.
+ekin akyürek.
+jacob andreas.
+massachusetts institute of technology{akyurek,jda}@mit.edu.
+abstract.
+sequence-to-sequence transduction is the coreproblem in language processing applicationsas diverse as semantic parsing, machine trans-lation, and instruction following.
+the neuralnetwork models that provide the dominant so-lution to these problems are brittle, especiallyin low-resource settings: they fail to generalizecorrectly or systematically from small datasets.
+past work has shown that many failures of sys-tematic generalization arise from neural mod-els’ inability to disentangle lexical phenomenafrom syntactic ones.
+to address this, we aug-ment neural decoders with a lexical transla-tion mechanism that generalizes existing copymechanisms to incorporate learned, decontex-tualized, token-level translation rules.
+we de-scribe how to initialize this mechanism usinga variety of lexicon learning algorithms, andshow that it improves systematic generaliza-tion on a diverse set of sequence modelingtasks drawn from cognitive science, formal se-mantics, and machine translation.1.
+1.introduction.
+humans exhibit a set of structured and remarkablyconsistent inductive biases when learning from lan-guage data.
+for example, in both natural languageacquisition and toy language-learning problemslike the one depicted in fig.
+1, human learnersexhibit a preference for systematic and composi-tional interpretation rules (guasti 2017, chapter 4;lake et al.
+2019).
+these inductive biases in turnsupport behaviors like one-shot learning of newconcepts (carey and bartlett, 1978).
+but in naturallanguage processing, recent work has found thatstate-of-the-art neural models, while highly effec-tive at in-domain prediction, fail to generalize inhuman-like ways when faced with rare phenomena.
+1our code is released under https://github.com/.
+ekinakyurek/lexical.
+figure 1: a fragment of the colors dataset from lakeet al.
+(2019), a simple sequence-to-sequence translationtask.
+the output vocabulary is only the colored circlesr , g , b , y .
+humans can reliably ﬁll in the miss-ing test labels on the basis of a small training set, butstandard neural models cannot.
+this paper describes aneural sequence model that obtains improved general-ization via a learned lexicon of token translation rules..and small datasets (lake and baroni, 2018), pos-ing a fundamental challenge for nlp tools in thelow-data regime..pause for a moment to ﬁll in the missing labelsin fig.
+1. while doing so, which training exam-ples did you pay the most attention to?
+how manytimes did you ﬁnd yourself saying means or mapsto?
+explicit representations of lexical items andtheir meanings play a key role diverse models ofsyntax and semantics (joshi and schabes, 1997;pollard and sag, 1994; bresnan et al., 2015).
+butone of the main ﬁndings in existing work on gener-alization in neural models is that they fail to cleanlyseparate lexical phenomena from syntactic ones(lake and baroni, 2018).
+given a dataset like theone depicted in fig.
+1, models conﬂate (lexical)information about the correspondence between zupand y with the (syntactic) fact that y appearsonly in a sequence of length 1 at training time.
+longer input sequences containing the word zupin new syntactic contexts cause models to outputtokens only seen in longer sequences (section 5)..proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages4934–4946august1–6,2021.©2021associationforcomputationallinguistics4934traintestdax         lug         wif          zupzup fep zup blicket lug   ___?
+dax blicket zup  ___?
+zup kiki dax  ___?
+wif kiki zup  ___?rgbybbbrrrbgbgrggbbryyylug fep dax fep lug blicket wif wif blicket dax lug kiki wif dax kiki luglexiconin this paper, we describe a parameterizationfor sequence decoders that facilitates (but doesnot enforce) the learning of context-independentword meanings.
+speciﬁcally, we augment decoderoutput layers with a lexical translation mecha-nism which generalizes neural copy mechanisms(e.g.
+see et al., 2017) and enables models to gen-erate token-level translations purely attentionally.
+while the lexical translation mechanism is quitegeneral, we focus here on its ability to improvefew-shot learning in sequence-to-sequence models.
+on a suite of challenging tests of few-shot seman-tic parsing and instruction following, our modelexhibits strong generalization, achieving the high-est reported results for neural sequence models ondatasets as diverse as cogs (kim and linzen 2020,with 24155 training examples) and colors (lakeet al.
+2019, with 14).
+our approach also generalizesto real-world tests of few-shot learning, improvingbleu scores (papineni et al., 2002) by 1.2 on alow-resource english–chinese machine translationtask (2.2 on test sentences requiring one-shot wordlearning)..in an additional set of experiments, we exploreeffective procedures for initializing the lexicaltranslation mechanism using lexicon learning al-gorithms derived from information theory, statis-tical machine translation, and bayesian cognitivemodeling.
+we ﬁnd that both mutual-information-and alignment- based lexicon initializers performwell across tasks.
+surprisingly, however, we showthat both approaches can be matched or outper-formed by a rule-based initializer that identiﬁeshigh-precision word-level token translation pairs.
+we then explore joint learning of the lexicon anddecoder, but ﬁnd (again surprisingly) that this givesonly marginal improvements over a ﬁxed initializa-tion of the lexicon..in summary, this work:.
+• introduces a new, lexicon-based output mech-anism for neural encoder–decoder models..• investigates and improves upon lexicon learn-ing algorithms for initialising this mechanism..• uses it to solve challenging tests of generaliza-tion in instruction following, semantic parsingand machine translation..a great deal of past work has suggested thatneural models come equipped with an inductivebias that makes them fundamentally ill-suited to.
+human-like generalization about language data, es-pecially in the low-data regime (e.g.
+fodor et al.,1988; marcus, 2018).
+our results suggest that thesituation is more complicated: by ofﬂoading theeasier lexicon learning problem to simpler models,neural sequence models are actually quite effec-tive at modeling (and generalizing about) aboutsyntax in synthetic tests of generalization and realtranslation tasks..2 related work.
+systematic generalization in neural sequencemodels the desired inductive biases noted aboveare usually grouped together as “systematicity” butin fact involve a variety of phenomena: one-shotlearning of new concepts and composition rules(lake and baroni, 2018), zero-shot interpretationof novel words from context cues (gandhi andlake, 2020), and interpretation of known conceptsin novel syntactic conﬁgurations (keysers et al.,2020; kim and linzen, 2020).
+what they share is acommon expectation that learners should associatespeciﬁc production or transformation rules withspeciﬁc input tokens (or phrases), and generalizeto use of these tokens in new contexts..recent years have seen tremendous amount ofmodeling work aimed at encouraging these gener-alizations in neural models, primarily by equippingthem with symbolic scaffolding in the form of pro-gram synthesis engines (nye et al., 2020), stack ma-chines (grefenstette et al., 2015; liu et al., 2020),or symbolic data transformation rules (gordonet al., 2019; andreas, 2020).
+a parallel line of workhas investigated the role of continuous representa-tions in systematic generalization, proposing im-proved methods for pretraining (furrer et al., 2020)and procedures for removing irrelevant contex-tual information from word representations (arthuret al., 2016; russin et al., 2019; thrush, 2020).
+thelatter two approaches proceed from similar intu-ition to ours, aiming to disentangle word meaningsfrom syntax in encoder representations via alterna-tive attention mechanisms and adversarial training.
+our approach instead focuses on providing an ex-plicit lexicon to the decoder; as discussed below,this appears to be considerably more effective..copying and lexicon learningin neuralencoder–decoder models, the clearest exampleof beneﬁts from special treatment of word-levelproduction rules is the copy mechanism.
+a greatdeal of past work has found that neural models.
+4935inputs.
+outputs.
+a crocodile blessed william .
+william needed to walk ..crocodile(x_1) and bless.agent (x_2, x_1) and bless.theme (x_2, william)need.agent (x_1 , william) and need.xcomp(x_1, x_3) and walk.agent (x_3, william).
+many moons orbit around saturnearth is a planet ..許多 衛星 繞著 土星 運行.
+地球 是 一個 行星..walk around leftturn rightturn leftjumpjump opposite right after look left.
+lturn iwalk lturn iwalk lturn iwalk lturn iwalkrturnlturnijumplturn ilook rtrun ijump rturn ijump.
+lexicon entriesblessed (cid:55)→ blessneeded (cid:55)→ needwilliam (cid:55)→ williamsaturn (cid:55)→ 土星earth (cid:55)→ 地球moon (cid:55)→ 衛星.
+walk (cid:55)→ iwalkjump (cid:55)→ ijumpright (cid:55)→ rturnleft (cid:55)→ lturnlook (cid:55)→ ilook.
+table 1: we present example (input,output) pairs from cogs, english-to-chinese machine translation and scandatasets.
+we also present some of the lexicon entries which can be learned by proposed lexicon learning methodsand that are helpful to make generalizations required in each of the datasets..beneﬁt from learning a structural copy operationthat selects output tokens directly from the inputsequence without requiring token identity to becarried through all neural computation in theencoder and the decoder.
+these mechanismsare described in detail in section 3, and arewidely used in models for language generation,summarization and semantic parsing.
+our workgeneralizes these models to structural operationson the input that replace copying with generalcontext-independent token-level translation..as will be discussed, the core of our approachis a (non-contextual) lexicon that maps individualinput tokens to individual output tokens.
+learn-ing lexicons like this is of interest in a numberof communities in nlp and language sciencemore broadly.
+a pair of representative approaches(brown et al., 1993; frank et al., 2007) will be dis-cussed in detail below; other work on lexicon learn-ing for semantics and translation includes lianget al.
+(2009); goldwater (2007); haghighi et al.
+(2008) among numerous others..finally, and closest to the modeling contributionin this work, several previous papers have proposedalternative generalized copy mechanisms for tasksother than semantic lexicon learning.
+concurrentwork by prabhu and kann (2020) introduces a sim-ilar approach for grapheme-to-phoneme translation(with a ﬁxed functional lexicon rather than a train-able parameter matrix), and nguyen and chiang(2018) and g¯u et al.
+(2019) describe less expres-sive mechanisms that cannot smoothly interpolatebetween lexical translation and ordinary decodingat the token level.
+pham et al.
+(2018) incorpo-rate lexicon entries by rewriting input sequencesprior to ordinary sequence-to-sequence translation.
+akyürek et al.
+(2021) describe a model in whicha copy mechanism is combined with a retrieval-.
+based generative model; like the present work, thatmodel effectively disentangles syntactic and lexicalinformation by using training examples as implicitrepresentations of lexical correspondences..we generalize and extend this previous work in anumber of ways, providing a new parameterizationof attentive token-level translation and a detailedstudy of initialization and learning.
+but perhapsthe most important contribution of this work is theobservation that many of the hard problems stud-ied as “compositional generalization” have directanalogues in more conventional nlp problems, es-pecially machine translation.
+research on system-aticity and generalization would beneﬁt from closerattention to the ingredients of effective translationat scale..3 sequence-to-sequence models withlexical translation mechanisms.
+this paper focuses on sequence-to-sequence lan-guage understanding problems like the ones de-picted in table 1, in which the goal is to map froma natural language input x = [x1, x2, .
+.
+.
+, xn] to astructured output y = [y1, y2, .
+.
+.
+, ym]—a logicalform, action sequence, or translation.
+we assumeinput tokens xi are drawn from a input vocabu-lary vx, and output tokens from a correspondingoutput vocabulary vy..neural encoder–decoders our approach buildson the standard neural encoder–decoder model withattention (bahdanau et al., 2014).
+in this model, anencoder represents the input sequence [x1, .
+.
+.
+, xn]as a sequence of representations [e1, .
+.
+.
+, en].
+e = encoder(x).
+(1).
+4936(3).
+(4).
+(5).
+next, a decoder generates a distribution over out-put sequences y according to the sequentially:.
+log p(y | x) =.
+log p(yi | y<i, e, x).
+(2).
+y(cid:88).
+i=1.
+here we speciﬁcally consider decoders with at-tention.2 when predicting each output token yi,we assign each input token an attention weightαji as in eq.
+(3).
+then, we construct a contextrepresentation ci as the weighted sum of encoderrepresentations ei:.
+i watt ej).
+αji ∝ exp(h(cid:62)|x|(cid:88).
+ci =.
+αj.
+i ej.
+j=1.
+the output distribution over vy, which we denotepwrite,i, is calculated by a ﬁnal projection layer:.
+p(yi = w|x) = pwritei(w) ∝ exp(wwrite[ci, hi]).
+copying a popular extension of the model de-scribed above is the copy mechanism, in whichoutput tokens can be copied from the input se-quence in addition to being generated directly bythe decoder (jia and liang, 2016; see et al., 2017).
+using the decoder hidden state hi from above, themodel ﬁrst computes a gate probability:.
+pgate = σ(w(cid:62).
+gatehi).
+(6).
+and then uses this probability to interpolate be-tween the distribution in eq.
+(5) and a copy dis-tribution that assigns to each word in the outputvocabulary a probability proportional to that word’sweight in the attention vector over the input:.
+|x|(cid:88).
+j=1.
+pcopy(yi = w | x) =.
+1[xj = w] · αji.
+(7).
+p(yi = w | x) = pgate · pwrite(yi = w | x).
++ (1 − pgate) · pcopy(yi = w | x) (8).
+(note that this implies vy ⊇ vx)..content-independent copying is particularly use-ful in tasks like summarization and machine transla-tion where rare words (like names) are often reusedbetween the input and output..2all experiments in this paper use lstm encoders anddecoders, but it could be easily integrated with cnns or trans-formers (gehring et al.
+2017; vaswani et al.
+2017).
+we onlyassume access to a ﬁnal layer hi, and ﬁnal attention weightsαi; their implementation does not matter..figure 2: an encoder-decoder model with a lexicaltranslation mechanism applied to english-to-chinesetranslation.
+at decoder step t = 4, attention is focusedon the english token saturn.
+the lexical translationmechanism is activated by pgate, and the model outputsthe token 土星 directly from the lexicon.
+地球 meansearth and appears much more frequently than saturnin the training set..our model: lexical translation when the in-put and output vocabularies are signiﬁcantly dif-ferent, copy mechanisms cannot provide furtherimprovements on a sequence-to-sequence model.
+however, even for disjoint vocabularies as in fig.
+1,there may be strict correspondences between indi-vidual words on input and output vocabularies, e.g.
+zup (cid:55)→ y in fig.
+1. following this intuition, thelexical translation mechanism we introduce inthis work extends the copy mechanism by intro-ducing an additional layer of indirection betweenthe input sequence x and the output prediction yias shown in fig.
+2. speciﬁcally, after selecting aninput token xj ∈ vx, the decoder can “translate” itto a context-independent output token ∈ vy priorto the ﬁnal prediction.
+we equip the model withan additional lexicon parameter l, a |vx| × |vy|matrix in which (cid:80)w lvw = 1, and ﬁnally deﬁne.
+plex(yi = w | x) =.
+lxj w · αji.
+(9).
+|x|(cid:88).
+j=1.
+p(yi = w | x) = pgate · pwrite(yi = w | x).
++ (1 − pgate) · plex(yi = w | x) (10).
+the model is visualized in fig.
+2. note that whenvx = vy and l = i is diagonal, this is iden-tical to the original copy mechanism.
+however,this approach can in general be used to produce alarger set of tokens.
+as shown in table 1, coher-.
+4937ent token-level translation rules can be identiﬁedfor many tasks; the lexical translation mechanismallows them to be stored explicitly, using param-eters of the base sequence-to-sequence model torecord general structural behavior and more com-plex, context-dependent translation rules..4.initializing the lexicon.
+the lexicon parameter l in the preceding sectioncan be viewed as an ordinary fully-connected layerinside the copy mechanism, and trained end-to-endwith the rest of the network.
+as with other neu-ral network parameters, however, our experimentswill show that the initialization of the parameterl signiﬁcantly impacts downstream model perfor-mance, and speciﬁcally beneﬁts from initializationwith a set of input–output mappings learned withan ofﬂine lexicon learning step.
+indeed, while notwidely used in neural sequence models (though c.f.
+section 2), lexicon-based initialization was a stan-dard feature of many complex non-neural sequencetransduction models, including semantic parsers(kwiatkowski et al., 2011) and phrase-based ma-chine translation systems (koehn et al., 2003)..but an important distinction between our ap-proach and these others is the fact that we canhandle outputs that are not (transparently) com-positional.
+not every fragment of an input willcorrespond to a fragment of an output: for exam-ple, thrice in scan has no corresponding outputtoken and instead describes a structural transforma-tion.
+moreover, the lexicon is not the only way togenerate: complex mappings can also be learnedby pwrite without going through the lexicon at all..thus, while most existing work on lexicon learn-ing aims for complete coverage of all word mean-ings, the model described in section 3 beneﬁts froma lexicon with high-precision coverage of rare phe-nomena that will be hard to learn in a normal neu-ral model.
+lexicon learning is widely studied inlanguage processing and cognitive modeling, andseveral approaches with very different inductivebiases exist.
+to determine how to best initializel, we begin by reviewing three algorithms in sec-tion 4.1, and identify ways in which each of themfail to satisfy the high precision criterion above.
+in section 4.2, we introduce a simple new lexiconlearning rule that addresses this shortcoming..4.1 existing approaches to lexicon learning.
+statistical alignmentin the natural languageprocessing literature, the ibm translation models(brown et al., 1993) have served as some of themost popular procedures for learning token-levelinput–output mappings.
+while originally devel-oped for machine translation, they have also beenused to initialize semantic lexicons for semanticparsing (kwiatkowski et al., 2011) and grapheme-to-phoneme conversion (rama et al., 2009).
+weinitialize the lexicon parameter l using model 2.model 2 deﬁnes a generative process in whichsource words yi are generated from target wordsxj via latent alignments ai.
+speciﬁcally, given a(source, target) pair with n source words and mtarget words, the probability that the target word iis aligned to the source word j is:.
+p(ai = j) ∝ exp (cid:0) −.
+(cid:12)(cid:12)(cid:12).
+im.−.
+(cid:12)(cid:1)(cid:12)(cid:12).
+jn.(11).
+finally, each target word is generated by its alignedsource word via a parameter θ: p(yi = w) =θ(v, xai).
+alignments ai and lexical parametersθ can be jointly estimated using the expectation–maximization algorithm (dempster et al., 1977)..in neural models, rather than initializing lexi-cal parameters l directly with corresponding ibmmodel parameters θ, we run model 2 in both theforward and reverse directions, then extract countsby intersecting these alignments and applying asoftmax with temperature τ :.
+lvw ∝ exp (cid:0)τ −1 (cid:88).
+1[xai = v]1[yi = w](cid:1).
+|y|(cid:88).
+(x,y).
+i=1.
+(12).
+for all lexicon methods discussed in this paper,if an input v is not aligned to any output w, wemap it to itself if vx ⊆ vy.
+otherwise we align ituniformly to any unmapped output words (a mutualexclusivity bias, gandhi and lake 2020)..mutual information another, even simpler pro-cedure for building a lexicon is based on identi-fying pairs that have high pointwise mutual infor-mation.
+we estimate this quantity directly fromco-occurrence statistics in the training corpus:.
+pmi(v; w) = log.
++ log |dtrain|.
+(13).
+#(v, w)#(v)#(w).
+where #(w) is the number of times the word wappears in the training corpus and #(w, v) is the.
+4938number of times that w appears in the input andv appears in the output.
+finally, we populate theparameter l via a softmax transformation: lvw ∝exp((1/τ ) pmi (v; w))..bayesian lexicon learning last, we explore thebayesian cognitive model of lexicon learning de-scribed by frank et al.
+(2007).
+like ibm model2, this model is deﬁned by a generative process;here, however, the lexicon itself is part of the gener-ative model.
+a lexicon (cid:96) is an (unweighted, many-to-many) map deﬁned by a collection of pairs (x,y) with a description length prior: p((cid:96)) ∝ e−|(cid:96)|(where |(cid:96)| is the number of (input, output) pairsin the lexicon).
+as in model 2, given a meaningy and a natural-language description x, each xiis generated independently.
+we deﬁne the prob-ability of a word being used non-referentially aspnr(xi | (cid:96)) ∝ 1 if xi (cid:54)∈ (cid:96) and κ otherwise.
+theprobability of being used referentially is: pr(xj |yi, (cid:96)) ∝ 1(xj ,yi)∈(cid:96).
+finally,.
+p(xj | yi, (cid:96)) = (1 − γ)pnr(xj | (cid:96)).
++ γ.pr(xj | yi, (cid:96)).
+(14).
+|y|(cid:88).
+i=1.
+to produce a ﬁnal lexical translation matrix lfor use in our experiments, we set lvw ∝exp((1/τ ) p((v, w) ∈ (cid:96))): each entry in l is theposterior probability that the given entry appears ina lexicon under the generative model above.
+param-eters are estimated using the metropolis–hastingsalgorithm, with details described in appendix c..4.2 a simpler lexicon learning rule.
+example lexicons learned by the three modelsabove are depicted in fig.
+3 for the scan taskshown in table 1. lexicons learned for remain-ing tasks can be found in appendix b. it can beseen that all three models produce errors: the pmiand bayesian lexicons contain too many entries (inboth cases, numbers are associated with the turnright action and prepositions are associated withthe turn left action).
+for the ibm model, one ofthe alignments is conﬁdent but wrong, because thearound preposition is associated with turn leftaction.
+in order to understand these errors, and tobetter characterize the difference between the de-mands of lexical translation model initializers andpast lexicon learning schemes, we explore a sim-ple logical procedure for extracting lexicon entries.
+figure 3: learned lexicons for the around right splitin scan (τ = 0.1).
+the rule-based lexicon learn-ing procedure (simple) produces correct alignments,while other methods fail due to the correlation betweenaround and left in training data..that, surprisingly, matchers or outperforms all threebaseline methods in most of our experiments..what makes an effective, precise lexicon learn-ing rule?
+as a ﬁrst step, consider a maximallyrestrictive criterion (which we’ll call c1) that ex-tracts only pairs (v, w) for which the presence of vin the input is a necessary and sufﬁcient conditionfor the presence of w in the output..
+nec.
+(v, w) = ∀xy.
+(w ∈ y) → (v ∈ x).
+suff.
+(v, w) = ∀xy.
+(v ∈ x) → (w ∈ y)c1(v, w) = nec.
+(v, w) ∧ suff.
+(v, w).
+(15).
+(16).
+(17).
+c1 is too restrictive: in many language understand-ing problems, the mapping from surface forms tomeanings is many-to-one (in table 1, both blessedand bless are associated with the logical formbless).
+such mappings cannot be learned by thealgorithm described above.
+we can relax the neces-sity condition slightly, requiring either that v is anecessary condition for w, or is part of a group thatcollectively explains all occurrences of w:no-winner(w) = (cid:64)v(cid:48).
+c1(v(cid:48), w).
+(18).
+c2(v, w) = suff.
+(v, w) ∧.
+(nec.
+(v, w) ∨ no-win.(w)).
+(19)as a ﬁnal reﬁnement, we note that c2 is likelyto capture function words that are present in mostsentences, and exclude these by restricting the lexi-con to words below a certain frequency threshold:.
+c3 = c2 ∧ (cid:12).
+(cid:12){v(cid:48) : suff.
+(v(cid:48), w)}(cid:12).
+(cid:12) ≤ (cid:15).
+(20).
+4939andthricetwiceoppositeafteraroundrightwalkrunleftlookjumpibmmodel-2pmiirightiwalkirunileftilookijumpandthricetwiceoppositeafteraroundrightwalkrunleftlookjumpbayesianirightiwalkirunileftilookijumpsimplethe lexicon matrix l is computed by taking theword co-occurrence matrix, zeroing out all entrieswhere c3 does not hold, then computing a soft-max: lvw ∝ c3(v, w) exp((1/τ ) #(v, w)).
+sur-prisingly, as shown in fig.
+3 and and evaluatedbelow, this rule (which we label simple) producesthe most effective lexicon initializer for three ofthe four tasks we study.
+the simplicity (and ex-treme conservativity) of this rule highlight the dif-ferent demands on l made by our model and moreconventional (e.g.
+machine translation) approaches:the lexical translation mechanism beneﬁts from asmall number of precise mappings rather than alarge number of noisy ones..5 experiments.
+we investigate the effectiveness of the lexical trans-lation mechanism on sequence-to-sequence mod-els for four tasks, three focused on compositionalgeneralization and one on low-resource machinetranslation.
+in all experiments, we use an lstmencoder–decoder with attention as the base predic-tor.
+we compare our approach (and variants) withtwo other baselines: geca (andreas 2020; a dataaugmentation scheme) and synatt (russin et al.
+2019; an alternative seq2seq model parameteriza-tion).
+hyper-parameter selection details are givenin the appendix c. unless otherwise stated, we useτ = 0 and do not ﬁne-tune l after initialization..5.1 colors.
+task the colors sequence translation task (seeappendix a for full dataset) was developed tomeasure human inductive biases in sequence-to-sequence learning problems.
+it poses an extremetest of low-resource learning for neural sequencemodels: it has only 14 training examples that com-bine four named colors and three composition op-erations that perform concatenation, repetition andwrapping.
+liu et al.
+(2020) solve this dataset witha symbolic stack machine; to the best of our knowl-edge, our approach is the ﬁrst “pure” neural se-quence model to obtain non-trivial accuracy..results both the simple and ibmm2 initializersproduce a lexicon that maps only color words tocolors.
+both, combined with the lexical translationmechanism, obtain an average test accuracy of 79%across 16 runs, nearly matching the human accu-racy of 81% reported by lake et al.
+(2019).
+the.
+two test examples most frequently predicted incor-rectly require generalization to longer sequencesthan seen during training.
+more details (includ-ing example-level model and human accuracies)are presented in the appendix appendix a).
+theseresults show that lstms are quite effective at learn-ing systematic sequence transformation rules from≈ 3 examples per function word when equippedwith lexical translations.
+generalization to longersequences remains as an important challenge forfuture work..5.2 scan.
+task scan (lake and baroni, 2018) is a largercollection of tests of systematic generalization thatpair synthetic english commands (e.g.
+turn lefttwice and jump) to action sequences (e.g.
+lturnlturn ijump) as shown in table 1. followingprevious work, we focus on the jump and aroundright splits, each of which features roughly 15,000training examples, and evaluate models’ ability toperform 1-shot learning of new primitives (jump)and zero-shot interpretation of composition rules(around right).
+while these tasks are now solved bya number of specialized approaches, they remain achallenge for conventional neural sequence models,and an important benchmark for new models..in the jump split, all initializers improveresultssigniﬁcantly over the base lstm when combinedwith lexical translation.
+most methods achieve99% accuracy at least once across seeds.
+theseresults are slightly behind geca (in which all runssucceed) but ahead of synatt.3 again, they showthat lexicon learning is effective for systematic gen-eralization, and that simple initializers (pmi andsimple) outperform complex ones..5.3 cogs.
+task cogs (compositional generalization forsemantic parsing; kim and linzen 2020) is an au-tomatically generated english-language semanticparsing dataset that tests systematic generalizationin learning language-to-logical-form mappings.
+itincludes 24155 training examples.
+compared tothe colors and scan datasets, it has a larger vo-cabulary (876 tokens) and ﬁner-grained inventoryof syntactic generalization tests (table 3)..results notably, because some tokens appearin both inputs and logical forms in the cogs.
+3synatt results here are lower than reported in the original.
+paper, which discarded runs with a test accuracy of 0%..4940colors.
+jump (scan).
+around right (scan).
+cogs.
+lstmgecasyntatt.
+lstm + copylstm + lex.
+: simplelstm + lex.
+: pmilstm + lex.
+: ibmm2lstm + lex.
+: bayesian.
+0.00 ±0.000.41 ±0.110.57 ±0.26.
+-0.79 ±0.020.41 ±0.190.79 ±0.020.51 ±0.21.
+0.00 ±0.001.00 ±0.000.57 ±0.38.
+-0.92 ±0.170.95 ±0.080.79 ±0.270.82 ±0.21.
+0.09 ±0.050.98 ±0.020.28 ±0.26.
+-0.95 ±0.010.02 ±0.040.00 ±0.000.02 ±0.04.
+0.51 ±0.050.48 ±0.050.15 ±0.14.
+0.66 ±0.030.82 ±0.010.82 ±0.000.82 ±0.000.70 ±0.04.
+table 2: exact match accuracy results for baselines and lexicon learning models on 4 different compositionalgeneralization splits.
+errors are standard deviation among 16 different seeds for colors, 10 seeds for cogs andscan.
+unbolded numbers are signiﬁcantly(p < 0.01) worse than the best result in the column.
+models withlexical translation mechanisms and simple initialization consistently improve over ordinary lstms..categories.
+lstm.
++ copy.
++ simple.
+primitive → {subj, obj, inf}active → passiveobj pp → subj pppassive → activerecursionunacc → transitiveobj → subj propersubj → obj commonpp dative ↔ obj dative.
+all.
+table 3: cogs accuracy breakdown according to syn-tactic generalization types for word usages.
+the labela → b indicates that syntactic context a appears in thetraining set and b in the test set..task, even a standard sequence-to-sequence modelwith copying signiﬁcantly outperforms the baselinemodels in the original work of kim and linzen(2020), solving most tests of generalization oversyntactic roles for nouns (but performing worse atgeneralizations over verbs, including passive anddative alternations).
+as above, the lexical transla-tion mechanism (with any of the proposed initial-izers) provides further improvements, mostly forverbs that baselines model incorrectly (table 3)..5.4 machine translation.
+task to demonstrate that this approach is usefulbeyond synthetic tests of generalization, we eval-uate it on a low-resource english–chinese transla-tion task (the tatoeba4 dataset processed by kelly2021).
+for our experiments, we split the data ran-domly into 19222 training and 2402 test pairs..results results are shown in table 4. modelswith a lexical translation mechanism obtain modestimprovements (up to 1.5 bleu) over the baseline.
+notably, if we restrict evaluation to test sentences.
+4https://tatoeba.org/.
+lstmlstm + gecalstm + lex.
+: pmilstm + lex.
+: simplelstm + lex.
+: ibmm2.
+eng-chn.
+full24.18 ±0.3723.90 ±0.5524.36 ±0.0924.35 ±0.0925.49 ±0.42.
+1-shot17.47 ±0.6417.94 ±0.4318.46 ±0.1318.46 ±0.1919.62 ±0.64.
+table 4: bleu scores for english-chinese translation.
+full shows results on the full test set, and 1-shot showsresults for text examples in which the english text con-tains a token seen only once during training..featuring english words that appeared only oncein the training set, bleu improves by more than2 points, demonstrating that this approach is par-ticularly effective at one-shot word learning (orfast mapping; carey and bartlett 1978).
+fig.
+2shows an example from this dataset, in which themodel learns to reliably translate saturn from asingle training example.
+geca, which makes spe-ciﬁc generative assumptions about data distribu-tions, does not generalize to a more realistic lowresource mt problem.
+however, the lexical trans-lation mechanism remains effective in natural taskswith large vocabularies and complex grammars..5.5 fine-tuning the lexicon.
+in all the experiments above, the lexicon was dis-cretized (τ = 0) and frozen prior to training.
+inthis ﬁnal section, we revisit that decision, eval-uating whether the parameter l can be learnedfrom scratch, or effectively ﬁne-tuned along withdecoder parameters.
+experiments in this sectionfocus on the cogs dataset..ofﬂine initialization of the lexicon is crucial.
+rather than initializing l using any of the algo-rithms described in section 3, we initialized l to auniform distribution for each word and optimized.
+4941lstm.
+lex.
+: uniformlex.
+: simplesoft.
+learned.
+cogs.
+0.51 ±0.060.56 ±0.070.82 ±0.010.83 ±0.000.83 ±0.01.
+table 5: ablation experiments on the cogs dataset.
+uniform shows results for a lexicon initialized to a uni-form distribution.
+soft sets τ = 0.1 with the sim-ple lexicon learning rule (rather than 0 in previous ex-periments).
+learned shows results for a soft lexiconﬁne-tuned during training.
+soft lexicons with or with-out learning improve signiﬁcantly (p < 0.01) but veryslightly over ﬁxed initialization..it during training.
+this improves over the baselstm (uniform in table 5), but performs signiﬁ-cantly worse than pre-learned lexicons..beneﬁts from ﬁne-tuning are minimal.
+we ﬁrstincreased the temperature parameter τ to 0.1 (pro-viding a “soft” lexicon); this gave a 1% improve-ment on cogs (table 5. soft).
+finally, we updatedthis soft initialization via gradient descent; this pro-vided no further improvement (table 5, learned).
+one important feature of cogs (and other testsof compositional generalization) is perfect train-ing accuracy is easily achieved; thus, there is littlepressure on models to learn generalizable lexicons.
+this pressure must instead come from inductivebias in the initializer..6 conclusion.
+we have described a lexical translation mecha-nism for representing token-level translation rulesin neural sequence models.
+we have additionallydescribed a simple initialization scheme for thislexicon that outperforms a variety of existing algo-rithms.
+together, lexical translation and proper ini-tialization enable neural sequence models to solvea diverse set of tasks—including semantic pars-ing and machine translation—that require 1-shotword learning and 0-shot compositional generaliza-tion.
+future work might focus on generalizationto longer sequences, learning of atomic but non-concatenative translation rules, and online lexiconlearning in situated contexts..acknowledgements.
+sources were provided by a gift from nvidiathrough the nvail program and by the lincolnlaboratory supercloud..references.
+ekin akyürek, afra feyza akyürek, and jacob an-dreas.
+2021. learning to recombine and resamplein interna-data for compositional generalization.
+tional conference on learning representations..jacob andreas.
+2020. good-enough compositionaldata augmentation.
+in proceedings of the 58th an-nual meeting of the association for computationallinguistics, pages 7556–7566..philip arthur, graham neubig, and satoshi nakamura.
+2016.incorporating discrete translation lexiconsinto neural machine translation.
+in proceedings ofthe 2016 conference on empirical methods in natu-ral language processing, pages 1557–1567..dzmitry bahdanau, kyunghyun cho, and yoshua ben-gio.
+2014. neural machine translation by jointlyarxiv preprintlearning to align and translate.
+arxiv:1409.0473..joan bresnan, ash asudeh, ida toivonen, and stephenwechsler.
+2015. lexical-functional syntax.
+john wi-ley & sons..peter f brown, stephen a della pietra, vincent jdella pietra, and robert l mercer.
+1993. the math-ematics of statistical machine translation: parameterestimation.
+computational linguistics, 19(2):263–311..susan carey and elsa bartlett.
+1978. acquiring a sin-gle new word.
+papers and reports on child lan-guage development, 2..arthur p dempster, nan m laird, and donald b rubin.
+1977. maximum likelihood from incomplete datavia the em algorithm.
+journal of the royal statisti-cal society: series b (methodological), 39(1):1–22..chris dyer, victor chahuneau, and noah a smith.
+2013. a simple, fast, and effective reparameteriza-tion of ibm model 2. in proceedings of the 2013conference of the north american chapter of theassociation for computational linguistics: humanlanguage technologies, pages 644–648..jerry a fodor, zenon w pylyshyn, et al.
+1988. connec-tionism and cognitive architecture: a critical analy-sis.
+cognition, 28(1-2):3–71..michael c. frank, noah d. goodman, and j. tenen-baum.
+2007. a bayesian framework for cross-situational word-learning.
+in neurips..this work was supported by the machine-learningapplications initiative at mit csail andthe mit–ibm watson ai lab.
+computing re-.
+daniel furrer, marc van zee, nathan scales, andnathanael schärli.
+2020. compositional generaliza-tion in semantic parsing: pre-training vs. specializedarchitectures.
+arxiv preprint arxiv:2007.08970..4942kanishk gandhi and brenden m lake.
+2020. mutualexclusivity as a challenge for deep neural networks.
+advances in neural information processing systems,33..jonas gehring, m. auli, david grangier, denis yarats,and yann dauphin.
+2017. convolutional sequenceto sequence learning.
+in icml..sharon j goldwater.
+2007. nonparametric bayesian.
+models of lexican acquisition.
+citeseer..jonathan gordon, david lopez-paz, marco baroni,and diane bouchacourt.
+2019. permutation equiv-ariant models for compositional generalization inlanguage.
+in international conference on learningrepresentations..edward grefenstette, karl moritz hermann, mustafasuleyman, and phil blunsom.
+2015. learning totransduce with unbounded memory.
+in nips..jetic g¯u, hassan s shavarani, and anoop sarkar.
+2019. pointer-based fusion of bilingual lexiconsarxiv preprintinto neural machine translation.
+arxiv:1909.07907..maria teresa guasti.
+2017. language acquisition: the.
+growth of grammar.
+mit press..a. haghighi, percy liang, taylor berg-kirkpatrick,and d. klein.
+2008. learning bilingual lexiconsfrom monolingual corpora.
+in acl..robin jia and percy liang.
+2016. data recombinationfor neural semantic parsing.
+in proceedings of the54th annual meeting of the association for compu-tational linguistics (volume 1: long papers), pages12–22..aravind k joshi and yves schabes.
+1997..tree-in handbook of formal lan-.
+adjoining grammars.
+guages, pages 69–123.
+springer..charles kelly.
+2021.
+[link]..daniel keysers, nathanael schärli, nathan scales,hylke buisman, daniel furrer, sergii kashubin,nikola momchev, danila sinopalnikov, lukaszstaﬁniak, tibor tihon, dmitry tsarkov, xiao wang,marc van zee, and olivier bousquet.
+2020. measur-ing compositional generalization: a comprehensivemethod on realistic data.
+in iclr..najoung kim and tal linzen.
+2020. cogs: a com-positional generalization challenge based on seman-tic interpretation.
+in proceedings of the 2020 con-ference on empirical methods in natural languageprocessing (emnlp), pages 9087–9105..philipp koehn, f. och, and d. marcu.
+2003. statistical.
+phrase-based translation.
+in hlt-naacl..t. kwiatkowski, luke zettlemoyer, s. goldwater, andmark steedman.
+2011. lexical generalization inccg grammar induction for semantic parsing.
+inemnlp..b. lake, tal linzen, and m. baroni.
+2019. humanfew-shot learning of compositional instructions.
+incogsci..brenden lake and marco baroni.
+2018. generalizationwithout systematicity: on the compositional skillsof sequence-to-sequence recurrent networks.
+in in-ternational conference on machine learning, pages2873–2882.
+pmlr..percy liang, michael i jordan, and dan klein.
+2009.learning semantic correspondences with less super-in proceedings of the joint conference ofvision.
+the 47th annual meeting of the acl and the 4th in-ternational joint conference on natural languageprocessing of the afnlp, pages 91–99..qian liu, shengnan an, jian-guang lou, bei chen,zeqi lin, yan gao, bin zhou, nanning zheng, anddongmei zhang.
+2020. compositional generaliza-tion by learning analytical expressions.
+advances inneural information processing systems, 33..gary marcus.
+2018. deep learning: a critical ap-.
+praisal.
+arxiv preprint arxiv:1801.00631..toan q. nguyen and david chiang.
+2018. improvinglexical choice in neural machine translation.
+arxiv,abs/1710.01329..maxwell nye, armando solar-lezama, josh tenen-baum, and brenden m lake.
+2020. learning com-positional rules via neural program synthesis.
+inadvances in neural information processing systems,volume 33, pages 10832–10842.
+curran associates,inc..kishore papineni, salim roukos, todd ward, and wei-jing zhu.
+2002. bleu: a method for automatic eval-uation of machine translation.
+in proceedings of the40th annual meeting of the association for compu-tational linguistics, pages 311–318..ngoc-quan pham, jan niehues, and alex waibel.
+2018.towards one-shot learning for rare-wordtranslation with external experts.
+in proceedings ofthe 2nd workshop on neural machine translationand generation, pages 100–109..carl pollard and ivan a sag.
+1994. head-drivenphrase structure grammar.
+university of chicagopress..nikhil prabhu and k. kann.
+2020. making a point:pointer-generator transformers for disjoint vocabu-laries.
+in aacl..taraka rama, anil kumar singh, and sudheer ko-lachina.
+2009. modeling letter-to-phoneme con-version as a phrase based statistical machine trans-lation problem with minimum error rate training.
+in proceedings of human language technologies:the 2009 annual conference of the north ameri-can chapter of the association for computationallinguistics, companion volume: student researchworkshop and doctoral consortium, pages 90–95..4943jake russin, jason jo, randall c o’reilly, and yoshuabengio.
+2019. compositional generalization in adeep seq2seq model by separating syntax and seman-tics.
+arxiv preprint arxiv:1904.09708..abigail see, peter j liu, and christopher d manning.
+2017. get to the point: summarization with pointer-generator networks.
+in proceedings of the 55th an-nual meeting of the association for computationallinguistics, pages 1073–1083..tristan thrush.
+2020. compositional neural machinetranslation by removing the lexicon from syntax.
+arxiv preprint arxiv:2002.08899..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n. gomez, lukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+in advances in neural information pro-cessing systems, pages 6000–6010..4944a colors dataset & detailed results.
+here we present the full dataset in table 6 fromlake et al.
+(2019), and detailed comparisons ofeach model with human results in table 7..train.
+input.
+daxlugwifzuplug fepdax feplug blicket wifwif blicket daxlug kiki wifdax kiki luglug fep kiki wifwif kiki dax blicket luglug kiki wif fepwif blicket dax kiki lug.
+output.
+rbgyb b brrrb g bggrg bbrg b b brgg g g bgb g.b.r.r.test.
+input.
+output.
+zup fepzup kiki daxwif kiki zupzup blicket lugdax blicket zupwif kiki zup fepzup fep kiki luglug kiki wif blicket zupzup blicket wif kiki dax fepzup blicket zup kiki zup fep.
+y y yryy gy b yrryy y y gb y y yg y g bry g yy y y y y y.r.r.table 6: full colors dataset with train and test exam-ples (lake et al., 2019).
+test examples.
+simple/ibm-m2 bayesian geca.
+syntatt.
+human.
+zup fepzup kiki daxwif kiki zupdax blicket zupzup blicket lugwif kiki zup fepzup fep kiki luglug kiki wif blicket zupzup blicket wif kiki dax fepzup blicket zup kiki zup fep.
+1.0±0.001.0±0.001.0±0.001.0±0.000.94±0.241.0±0.001.0±0.001.0±0.000.0±0.000.0±0.00.
+0.88±0.330.88±0.330.8±0.40.88±0.330.8±0.40.3±0.50.2±0.40.4±0.50.0±0.000.0±0.00.
+1.0±0.001.0±0.001.0±0.001.0±0.001.0±0.000.0±0.000.0±0.000.0±0.000.0±0.000.0±0.00.
+0.7±0.50.7±0.50.8±0.40.8±0.40.8±0.40.4±0.00 50.8±0.40.4±0.50.0±00.0±0.00.
+0.880.860.860.880.790.850.850.650.700.75.table 7: colors dataset exact match breakdown foreach individual test example.
+human results are takenfrom (lake et al., 2019)fig2..b learned lexicons.
+here we provide lexicons for each model anddataset (see fig.
+2 and fig.
+3 for remainingdatasets).
+for cogs, we show a representativesubset of words..figure 4: learned lexicons from scan datset jumpsplit with τ = 0.1.figure 5: learned lexicons from colors datset withτ = 0.1.figure 6: learned lexicons from cogs datset withτ = 0.1. we only show important rare words resposi-ble for our model’s improvements over the baseline..c hyper-parameter settings.
+c.1 neural seq2seq.
+most of the datasets we evaluate do not come witha out-of-distribution validation set, making prin-cipled hyperparameter tuning difﬁcult.
+we wereunable to reproduce the results of kim and linzen(2020) with the hyperparameter settings reportedthere with our base lstm setup, and so adjustedthem until training was stabilized.
+like the originalpaper, we used a unidirectional 2-layer lstm with512 hidden units, an embedding size of 512, gradi-ent clipping of 5.0, a noam learning rate schedulerwith 4000 warm-up steps, and a batch size of 512.unlike the original paper, we found it necessary toreduce learning rate to 1.0, increase dropout valueto 0.4, and the reduce maximum step size timeout.
+4945andthricetwiceoppositeafteraroundrightwalkrunleftlookjumpibmmodel-2pmiirightiwalkirunileftilookijumpandthricetwiceoppositeafteraroundrightwalkrunleftlookjumpbayesianirightiwalkirunileftilookijumpsimplefepblicketkikidaxwifzuplugibmmodel-2pmiredgreenyellowbluefepblicketkikidaxwifzuplugbayesianredgreenyellowbluesimplenoticedbakedshatteredblessedhopedibmmodel-2pminoticebakeshatterblesshopenoticedbakedshatteredblessedhopedbayesiannoticebakeshatterblesshopesimpled.2 syntattwe used the public github repository of syntatt5and reproduced reported results for the scandataset.
+for other datasets, we also explored ”syn-tax action” option, in which both contextualizedcontext (syntax) and un-contextualized embeddings(semantics) used in ﬁnal layer russin et al.
+(2019).
+we additionally performed a search over hiddenlayer sizes {128,256,512} and depths {1,2}.
+wereport the best results for each dataset..e datasets & evaluation & tokenization.
+e.1 datasets and sizes.
+around_right.
+jump.
+cogs colors eng-chn.
+trainvalidationtest.
+15225-4476.
+14670-7706.
+24155300021000.
+14-10.
+1922224022402.e.2 evaluation.
+we report exact match accuracies and bleu scores.
+in both evaluations we include punctuation.
+forbleu we use nltk 6 library’s default implemen-tation..e.3 tokenizationwe use moses library7 for english tokenization,and jieba8 library for chinese tokenization.
+inother datasets, we use default space tokenization..f computing infrastructure.
+experiments were performed on a dgx-2 withnvidia 32gb volta-v100 gpus.
+experimentstake at most 2.5 hours on a single gpu..to 8000..we use same parameters for all cogs, scan,and machine translation experiments.
+for scanand colors, we applied additional dropout (p=0.5)in the last layer of pwrite..since colors has 14 training examples, we needa different batch size, set to 1/3 of the trainingset size (= 5).
+qualitative evaluation of gradi-ents in training time revealed that stricter gradientclipping was also needed (= 0.5).
+similarly, wedecreased warm-up steps to 32 epochs.
+all otherhyper-parameters remain the same..c.2 lexicon learning.
+simple lexicon the only parameter in the sim-ple lexicon is (cid:15), set to 3 in all experiments..bayesian the original work of frank et al.
+(2007) did not report hyperparemeter settings orsampler details.
+we found α = 2, γ = 0.95 andκ = 0.1 to be effective.
+the m–h proposal distri-bution inserts or removes a word from the lexiconwith 50% probability.
+for deletions, an entry isremoved uniformly at random.
+for insertions, anentry is added with probability proportional to theempirical joint co-occurrence probability of theinput and output tokens.
+results were averagedacross 5 runs, with a burn-in period of 1000 and asample drawn every 10 steps..ibm model 2 we used the fastalign implemen-tation (dyer et al., 2013) and experimented with avariety of hyperparameters in the alignment algo-rithm itself (favoring diagonal alignment, optimiz-ing tension, using dirichlet priors) and diagonaliza-tion heuristics (grow-diag, grow-diag-ﬁnal, grow-diag-ﬁnal-and, union).
+we found that optimizingtension and using the “intersect” diagonalizationheuristic works the best overall..d baseline results.
+d.1 geca.
+we reported best results for scan dataset fromreproduced results in (akyürek et al., 2021).
+forother datasets (cogs and colors), we performeda hyperparameter search over augmentation ratiosof 0.1 and 0.3 and hidden sizes of {128, 256, 512}.
+we report the best results for each dataset..5(https://github.com/jlrussin/syntactic_.
+attention).
+6https://www.nltk.org/7https://pypi.org/project/mosestokenizer/8https://github.com/fxsjy/jieba.
+4946

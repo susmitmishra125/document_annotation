@@ -1,0 +1,411 @@
+selecting informative contexts improves language model fine-tuning.
+richard antonellout austinrjantonello@utexas.edu.
+nicole m. beckageintel labsnicole.beckage@intel.com.
+javier s. turekintel labsjavier.turek@intel.com.
+alexander g. huthut austinhuth@cs.utexas.edu.
+abstract.
+language model ﬁne-tuning is essentialfor modern naturallanguage processing,but is computationally expensive and time-consuming.
+further, the effectiveness of ﬁne-tuning is limited by the inclusion of trainingexamples that negatively affect performance.
+here we present a general ﬁne-tuning methodthat we call information gain ﬁltration for im-proving the overall training efﬁciency and ﬁnalperformance of language model ﬁne-tuning.
+we deﬁne the information gain of an exam-ple as the improvement on a validation met-ric after training on that example.
+a sec-ondary learner is then trained to approximatethis quantity.
+during ﬁne-tuning, this learnerselects informative examples and skips unin-formative ones.
+we show that our method hasconsistent improvement across datasets, ﬁne-tuning tasks, and language model architec-tures.
+for example, we achieve a median per-plexity of 54.0 on a books dataset compared to57.3 for standard ﬁne-tuning.
+we present sta-tistical evidence that offers insight into the im-provements of our method over standard ﬁne-tuning.
+the generality of our method leads usto propose a new paradigm for language modelﬁne-tuning — we encourage researchers to re-lease pretrained secondary learners on com-mon corpora to promote efﬁcient and effec-tive ﬁne-tuning, thereby improving the perfor-mance and reducing the overall energy foot-print of language model ﬁne-tuning..1.introduction.
+language modeling is the task of generating lan-guage from context.
+this is often framed as anautoregressive task, where a model predicts theconditional probability of the next word based onthe sequence of previously observed or generatedtokens.
+language modeling has seen a recentsurge in relevance thanks to its success as a pre-training objective for self-supervised representa-.
+tion learning.
+the most prominent language mod-els today are transformer-based models (vaswaniet al., 2017) such as bert (devlin et al., 2019)and gpt-2 (radford et al., 2019)..language models are most commonly trainedwith backpropagation using traditional nlp lossfunctions such as cross entropy.
+these loss func-tions are designed so that the models are rewardedfor assigning high probability to text that appearscommonly in the training corpus.
+the energy andcomputational costs of training a state-of-the-artlanguage model from scratch are very high, tothe point of impracticality for most researchers.
+one recent estimate suggests that training a sin-gle state-of-the-art model with architecture searchtakes more energy than ﬁve cars will use in theirentire lifetimes (strubell et al., 2019).
+in prac-tice, this cost is sidestepped by pretraining, wherea language model is trained once and then releasedpublicly.
+this language model can then be up-dated for use in other tasks through ﬁne-tuning.
+for example, a generic language model can beﬁne-tuned to generate text that matches the styleand syntax of any new corpus (howard and ruder,2018).
+while better than training from scratch, thecost of ﬁne-tuning such large networks is still rel-atively high.
+fine-tuning to convergence for a sin-gle task can easily take in excess of a day on multi-ple energy-intensive gpus (strubell et al., 2019).
+recent work analyzing the ﬁne-tuning processhas shown that it has high variability betweenruns and is particularly sensitive to data ordering(dodge et al., 2020).
+those authors propose toovercome this variability by training models us-ing many random seeds and then only keeping thebest, effectively trading computational efﬁciencyfor model performance.
+while this improves per-formance, the reasons for the high variability be-tween random seeds have yet to be explored.
+wehypothesize that much of this variability can be ex-.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages1072–1085august1–6,2021.©2021associationforcomputationallinguistics1072plained by the random selection of highly “infor-mative” training examples, which most effectivelycapture low-level distributional statistics of the tar-get corpus.
+if this is the case, then it should bepossible to quickly screen for informative trainingexamples, ensuring high performance at reducedcost..in this paper, we suggest replacing the retro-spective approach of testing many random seeds(dodge et al., 2020) with a prospective approachto improving the effectiveness of language modelﬁne-tuning.
+our approach uses a secondarylearner to estimate the usefulness of each train-ing example, and then selects only informative ex-amples for training.
+we show that this techniqueworks well and is applicable in a variety of ﬁne-tuning settings.
+we examine why it works well,and present evidence that supports our hypothesisabout informative examples explaining data order-ing effects.
+in addition to performance gains, thismethod may mitigate the energy impact of deepneural network language modeling, as we requirefewer backpropagation steps than other techniquesthat trade computational power for ﬁne-tuning per-formance..2 related work.
+several methods have recently been proposed toimprove language model ﬁne-tuning performance.
+lee et al.
+(2020) proposed a technique based onneural network dropout (srivastava et al., 2014)for regularizing ﬁnetuned language models thatinvolved stochastically mixing the parameters ofmultiple language models for the same domain,and further demonstrated the usefulness of pre-trained weight decay over conventional weightdecay for improving language model ﬁne-tuningperformance.
+phang et al.
+(2018) showed thatadding supplementary training to pretrained lan-guage models using supervised tasks yielded stateof the art results for bert (devlin et al., 2019).
+moore and lewis (2010) proposed a related tech-nique for increasing the amount of language modeltraining data from out-of-domain data sources thatrelies on ﬁltering out high cross-entropy contextsas measured by an in-domain language model.
+tenney et al.
+(2019) and liu et al.
+(2019) haveboth suggested that language model ﬁnetuning isbetter in transformer-based models when startingwhen using features from intermediate layers asopposed to later layers..the instability of language model ﬁne-tuninghas previously been investigated by others.
+mos-bach et al.
+(2021) suggested that this instability iscaused by a combination of insufﬁciently generaltraining sets and optimization challenges.
+zhanget al.
+(2021) investigated how similar factors, suchas non-standard optimization techniques and over-reliance on a standard number of training itera-tions hurts the performance of ﬁne-tuned languagemodels.
+dodge et al.
+(2020), whose work wereplicate and build on here, showed that languagemodel ﬁnetuning is sufﬁciently stochastic so thateven random seed searches are a suitable tech-nique for improving their overall performance..3 background.
+a language model l is a function with parametersθ, which, when given an ordered sequence of to-kens x = {x1, .
+.
+.
+, xn} as input, outputs a proba-bility distribution over the next token y:.
+l(x; θ) = ˆp(y|x)..given a test set t of (sequence, next token) pairs,t = {(x1, y1), .
+.
+.
+, (xn, yn)},the perplexityλ(t ; θ) of the language model l(x; θ) over theset t is deﬁned as:.
+λ(t ; θ) = 2− (cid:80).
+(xi,yi)∈t ¯p(yi)·log2 l(xi;θ),.
+where ¯p(yi) denotes the one-hot probability dis-tribution that assigns all of its probability massto the token yi.
+autoregressive language modelssuch as gpt-2 (radford et al., 2019) are trainedto minimize perplexity using backpropagation onvery large training corpora..in practice, pre-trained language models are of-ten ﬁne-tuned using a new corpus or transferred toa new task (howard and ruder, 2018).
+formally,let f = {(xi, yi)}i be a target set.
+fine-tuning onthe set f tries to minimize the expected value ofthe loss function λ:.
+ˆθ = arg min.
+e(log2 λ(f; θ))..(1).
+θ.the initial parameterization ˆθ0 of the languagemodel is deﬁned by its pre-trained parametersˆθ0 = θ. the ﬁne-tuning problem in eq.
+(1) isthen solved by applying stochastic gradient de-scent (sgd) on samples from f. namely, for agiven batch b of samples from f, the languagemodel parameters are updated by ˆθk ← ˆθk−1 −.
+1073α∇λ(b; ˆθk−1), where α is the step size.
+we referto methods that randomly sample contexts to up-date pretrained model parameters as standard ﬁne-tuning..while random sampling methods are useful(bottou, 1991), the stochasticity of context sam-pling suggests an avenue for additional improve-ment.
+such methods make no assumption on theinformativeness of the examples in f, instead re-lying on randomness to ﬁnd useful training sam-ples.
+it is worth asking ourselves: can we efﬁ-ciently measure the informativeness of an exam-ple?
+and if so, can we exploit that measurementfor additional ﬁne-tuning improvement?.
+4.information gain filtration.
+4.1.informativeness of an example.
+next, we characterize the informativeness of anexample (x, y) ∈ f, given a pre-trained languagemodel l(x; θ) and a target dataset f. we deﬁnean example (x, y) as “informative” if our estimateof the improvement that it will grant to the modelexceeds a chosen threshold.
+namely, if we expectthat a given example will reduce model perplexityby more than a preset amount, then we will denoteit as “informative”..we deﬁne the information gain (ig) of a exam-ple (x, y) over an objective set o as the differencein perplexity measured on the objective set o be-fore and after training on the example (x, y),.
+igo(x, y) = λ(o; θ(cid:48)(x, y)) − λ(o; θ),.
+(2).
+where θ is the initial parameterization of thelanguage model and θ(cid:48)(x, y) is the parameteri-zation after backpropagating the loss associatedwith training example (x, y).
+the objective seto = {(x1, y1), .
+.
+.
+, (xn, yn)} is a held-out sub-set of training data that informs our decision aboutwhich contexts are informative.
+in practice, theobjective set could be a subset of the ﬁne-tuningset f. for brevity, we denote igo(x, y) as sim-ply ig(x) since there exists an implicit direct bi-jection between all x’s and y’s and the objectiveset is implied..4.2 filtering examples.
+since information gain evaluates the informative-ness of an example, we next propose a method thatexploits it for ﬁne-tuning.
+let us assume that themethod encounters a new example (x, y).
+then,the method has a choice between two actions:.
+• backprop:.
+update the language modelparameters θ by backpropagating the lossλ({(x, y)}; θ), taking the gradient descentstep, and updating parameters from θ to θ(cid:48)..• skip: leave the language model parameters.
+unchanged..with this idea in mind we deﬁne the function1q(x, action) and assign a value to each of the ac-tions above:.
+q(x, backprop) = ig(x).
+q(x, skip) = tskip,.
+(3).
+(4).
+where tskip is a free “threshold” parameter for de-ciding which ig(x) values are sufﬁciently highto warrant backpropagation..following this deﬁnition, we can apply a greedy.
+policy for ﬁltering examples during ﬁne-tuning:.
+π(x) = argmaxa∈{backprop,skip}q(x, a)..by ﬁltering examples in this way, we aim to reducethe effect of variability in data order observed inprevious work (dodge et al., 2020), and improvethe generalizability of our training set (mosbachet al., 2021).
+by doing this, we expect to improvethe performance of our language model.
+we callthis technique information gain filtration or sim-ply igf..4.3 approximating information gain.
+thus far, we have described a general methodto segregate informative from non-informative ex-amples, deferring the issue of computational cost.
+computing ig(x) in equation (2) entails a back-propagation step, making direct application ofq(x, action) at least as expensive as standardﬁne-tuning.
+to address this issue, we aim to ap-proximate the information gain ig(x) using aseparate model that we will call the secondarylearner and denote with ˆq(x)..to train this secondary learner, we ﬁrst con-struct a training dataset d by measuring ig(x)for a random subset of examples drawn from theﬁne-tuning set f. the objective set o used tocompute ig(x) is selected as a different sub-set of f. each entry in d consists of a pair of.
+1due to its intuitive similarity with notions in reinforce-ment learning (mnih et al., 2013) of using a network to ap-proximate the expected value of a given action, we abbre-viate this normalized informativeness metric as a “q-value”(watkins and dayan, 1992).
+1074the input text x and its associated ig(x) value,i.e., d = {(x1, ig(x1)), .
+.
+.
+, (xn, ig(xn))}.
+we then train the secondary learner ˆq to approxi-mate a normalized ig(x) given x. we normalizeig(x) so that tskip can be interpreted as a stan-dardized threshold on the selectivity of the ﬁltra-tion.
+finally, the resulting secondary learner ˆq isused to ﬁlter examples during ﬁne-tuning.
+algo-rithm 1 summarizes igf with a secondary learnerfor language model ﬁne-tuning..algorithm 1 information gain filtrationinput: fine-tuning (f) and objective (o) datasetof contexts, (x , o) := {(x1, y1), ..., (xn, yn)},parameterization of initial pretrained lm, θ, andinitial secondary learner model ˆq.
+parameters: size of learner dataset, s, andthreshold parameter, tskipoutput: θ(cid:48), new parameterization for the lm1: initialize d, b = {}.
+2: for i = 0 .
+.
+.
+s do3:.
+sample context (xi, yi) from x .
+append (xi, igo(xi, yi)) to d.4:5: normalize igo(x, y) values in d to n (0, 1).
+6: train secondary learner ˆq, using dataset d.7: for i = 0 .
+.
+.
+number of batches−1 dowhile |b| < batch size do8:.
+9:.
+10:.
+11:.
+12:.
+sample context c = (x, y) from x .
+if ˆq(c) ≥ tskip thenadd c to batch b..backpropagate over batch b, updating θreset batch b = {}..13:14: return θ..4.4 scheduled thresholding.
+the secondary learner training set d is con-structed using the initial pretrained model param-eters θ0.
+this means that the effectiveness of thelearner at distinguishing “high quality” from “lowquality” examples should degrade as the parame-ters diverge from their initial values.
+to amelio-rate this problem, equation (4) can be modiﬁedby changing tskip during the ﬁne-tuning process.
+since ˆq is most accurate at the ﬁrst step, we sched-uled tskip to switch from highly selective (a highvalue) to highly permissive (a low value).
+thisallows the model to take advantage of the accu-rate predictions for ig(x) early in the ﬁne-tuningprocess without overﬁtting once those predictionsbecome less accurate later on..5 results.
+here we ﬁrst provide an empirical analysis sug-gesting that igf outperforms standard ﬁne-tuningacross different choices of datasets, ﬁne-tuningtasks, and neural architectures.
+we follow thisanalysis with an examination of why igf works,and an exploration into the statistical properties ofstandard ﬁne-tuning and of igf.
+we tested theseresults on a standard books dataset (zhu et al.,2015), a “mixed” dataset which is composed oftraining examples from two corpora (the bookscorpus and a corpus of scraped reddit comments(huth et al., 2016)), and the wikitext-103 dataset(merity et al., 2017).
+the books corpus allows usto fairly compare standard ﬁne-tuning against igf,whereas the mixed corpus allows us to analyze theeffectiveness of the method at separating informa-tive contexts from uninformative ones..in practice, our secondary learner, ˆq, repre-sents the input text x by embedding it with 768-dimensional byte-pair embeddings (gage, 1994).
+we then pass the input representations through aconvolution with kernel width 3, followed by max-pooling operation over the time axis and a 2-layerfeedforward network.
+this architecture was re-ﬁned through coordinate descent, and evaluated ona separate held-out set of measured ig(x) values.
+the choice of architecture does not strongly affectmethod performance (see appendix a, figure 11).
+additionally, a neural network is not necessary forthe learner, as simpler learning methods are sufﬁ-cient (see figure 5)..5.1 language model fine-tuning.
+we ﬁrst compare igf directly to standard ﬁne-tuning, which we deﬁne as basic batched stochas-tic gradient descent with adam (kingma andba, 2015) using random samples from the tar-get corpus.
+for initial tests, we chose the pre-trained gpt-2 small transformer model, a com-monly used unidirectional language model withroughly 124 million parameters.
+we used the pub-licly available gpt-2 small implementation of thetransformers package (wolf et al., 2020).
+weperformed 50 runs each of standard ﬁne-tuningon (1) training examples sampled from the mixedcorpus, and (2) from the easier books corpus.
+wethen performed 50 runs of igf using two thresh-olding schedules, one with a ﬁxed tskip and onewith shifting tskip.
+for both methods, batches ofsize 16 were used to train the language model with.
+1075by igf persist across several choices of dataset,ﬁne-tuning speciﬁcations, and model architecture.
+figure 2 shows the ﬁnal converged values forﬁne-tuning gpt-2 small on a different datasetfrom figure 1 (wikitext-103), a different archi-tecture (gpt2-medium), a different embeddingspace with different directionality (bert) (de-vlin et al., 2019), and a different overall ﬁne-tuning task (sst-2) (socher et al., 2013).
+in ev-ery case, igf exceeds the performance of standardﬁne-tuning.
+this suggests that igf is a resilientmethod that is broadly applicable to a variety ofﬁne-tuning modalities and domains..figure 2: igf is invariant to model variation: wecompare performance of igf and standard ﬁne-tuningacross a variety of choices of model speciﬁcation anddataset.
+box plots show results from 50 runs witheach method.
+top left: igf outperforms standard ﬁne-tuning with an average test perplexity of 67.8 comparedto 69.8 when ﬁne-tuning on gpt2-small.
+top right:when using the gpt2-medium pretrained model, igfconverges to 27.1 as opposed to 27.4 for standard ﬁne-tuning.
+bottom left: when ﬁne-tuning bert (a bi-directional language model trained to minimize maskedperplexity rather than next-word perplexity), maskedperplexity declines from 4.33 to 4.29. bottom right:when ﬁne-tuning instead to the stanford sentimenttreebank, a sentiment analysis task, igf improvesaccuracy from an average of 94.06 to 94.27. thewikitext-103 dataset was use for all comparisons ex-cept for sst-2.
+all other model parameters are asin figure 1 and use a shifting thresholding schedule.
+when ﬁne-tuning on bert and sst-2, the plotted met-rics (masked perplexity and accuracy) were used in-stead of next-word perplexity to compute ig(x).
+alldifferences are statistically signiﬁcant to p < 10−3..5.2 understanding igf.
+it is clear that igf is successful as a generalmethod for improving ﬁne-tuning performance,however why this is the case remains unexamined..figure 1: comparing igf to standard fine-tuning:igf with constant (p < 10−3, t-test) and shifting(p < 10−6, t-test) thresholding signiﬁcantly outper-form standard ﬁne-tuning.
+the left-hand ﬁgure showstest-set perplexity after each ﬁne-tuning batch, aver-aged over 50 runs (error bars denote ± one standard er-ror).
+the right-hand ﬁgure shows the perplexity of eachmethod after 60 batches.
+igf with shifting threshold-ing (red) clearly improves over standard batched ﬁne-tuning with adam.
+for the constant threshold, tskipwas set to 0.75. for the shifting threshold, tskip waschange from 1 to -1 after the tenth batch.
+in both igftests, the mixed corpus was used and a set of 160 exam-ple contexts of 32 tokens each from the books corpuswas used as the objective set..a learning rate of 5 × 10−5 and β1 = 0.9, β2 =0.999. the convolutional network that we usedfor our secondary learner was trained using sgdwith adam with a learning rate of 10−5 and β1 =0.9, β2 = 0.999. both types of igf runs wereperformed on the strictly more challenging mixedcorpus only.
+in all cases model perplexity wastested on a set drawn solely from the books cor-pus.
+figure 1 plots the averaged ﬁne-tuning curvesof these 4 different approaches over 60 batches.
+we see that igf signiﬁcantly improves ﬁnal testperplexity when compared to standard ﬁne-tuningon both the mixed corpus and the books corpus.
+standard ﬁne-tuning on books achieves a medianperplexity of 57.3, compared to 56.9 for igf witha constant threshold and 54.0 for igf with theshifting threshold schedule.2 all 50 runs of igfwith a shifting schedule outperformed all 50 stan-dard ﬁne-tuning runs.
+this means that the over-all improvements to data order that igf achievesthrough selective sampling of informative contextsare far in excess of what might be reasonablyachieved through random sampling of contexts..next, we show that the improvements offered.
+2demo.
+beandhttps://github.com/huthlab/igf..code.
+data.
+can.
+found.
+at.
+10760102030405060batches60708090100110120test perplexitystandard mixedstandard booksigf with constant thresholdigf with shifting threshold5354555657585960616263test perplexity at 60gpt2-small65.067.570.072.5perplexity gpt2-medium26.527.528.5perplexity standardigfbert4.204.354.50masked perp.
+sst-294.094.294.494.6accuracy a main assumption of igf is that it is possibleto approximate ig(x).
+if ig(x) is not approx-imable, then the secondary learner could not effec-tively ﬁlter out uninformative contexts and there-fore would be useless.
+in order to support this as-sumption, we will ﬁrst show that a given exampleis worth learning from even if it only possessesthe correct low-level features of informative con-texts, such as the correct unigram frequency dis-tribution.
+we performed an experiment in whichwe ﬁne-tuned a language model on either (1) realexample sequences from a corpus, (2) artiﬁcial se-quences that were constructed by independentlysampling each token from the frequency distribu-tion of the corpus, and (3) sequences constructedby uniformly sampling tokens from the set of allpossible tokens.
+we then measured the change inloss on a separate portion of the corpus.
+figure 4shows the results of this experiment.
+the averagereduction in loss for examples constructed usingthe unigram frequency distribution is signiﬁcantlybetter than random and roughly 70% as good asusing real examples from the corpus.
+thus, a sig-niﬁcant fraction of the beneﬁt of training on realcontexts can be estimated by merely knowing theunigram frequency distribution from which thosecontexts were derived, which is easily estimablewithout knowing the particular parameterizationof the language model itself.
+therefore, it makessense that igf can inexpensively estimate whethera given context generalizes well to the target cor-pus..the secondary learner only bases its estimateson the update to loss after the ﬁrst backpropoga-tion step.
+we might question whether early im-provement translates to long-term improvementover the course of ﬁne-tuning.
+if it did not, thenthe estimates that the secondary learner produceswould eventually disappear as ﬁne-tuning contin-ued.
+dodge et al.
+(2020) observed that the qual-ity of a ﬁne-tuning run could usually be estab-lished by looking at the trajectory of the loss curvevery early during training.
+in order to explain whythese early estimates are sufﬁcient for sample ﬁl-tration, we attempted to determine whether train-ing on good contexts early is an important elementof the variability in data order between ﬁne-tuningruns.
+figure 3 compares test perplexity after train-ing from a randomly sampled ﬁrst batch againstthe test perplexity after many randomly sampledbatches.
+good early batches improve the proba-.
+figure 3: reduction in perplexity in early steps is pre-dictive of total reduction: if the ﬁrst batch in a ﬁne-tuning run leads to a large reduction in perplexity, theﬁne-tuning run as a whole will tend to converge to alower value (r = 0.28).
+this is signiﬁcant to p < 0.01..figure 4: learning the new unigram frequency dis-tribution constitutes most of the beneﬁt of fine-tuning:these plots show the reduction in cross-entropy of agpt-2 language model, tested on a reddit corpus aftertraining on each 32 token contexts sampled from dif-ferent distributions.
+each example consisted of a wordalong with the preceding 32 words of context.
+positivevalues indicate that learning from that example resulted(left) actual se-in reduced loss on the test dataset.
+quence from corpus.
+the language model learns some-thing useful from every example when ﬁnetuned on textfrom the corpus.
+(middle) random sequence with pre-served word probabilities.
+for this sequence, 32 tokensare sampled to generate a context using the unigramprobabilities for the reddit corpus.
+here the modelalso learns something useful from every example, de-spite being ﬁnetuned on scrambled text.
+(right) ran-dom sequence with uniform word probabilities.
+whenthe unigram probability distribution is replaced with auniform probability distribution, the model no longerconsistently learns.
+all pairs of distributions are differ-ent with p < 10−6..here, we present an analysis of the statistical prop-erties of ﬁne-tuning that illuminates why igf isable to improve over standard ﬁne-tuning..1077105110115120perplexity after 1 batch5658606264perplexity after 50 batchesr = 0.280corpusunigram freq.uniformtraining distribution0.000.050.100.15reduction in lossfigure 5: comparing the ability of simple learners to estimate information gain: the above plots show theprediction accuracy (scatter plots on the left) and overall ﬁne-tuning performance of each learner when used duringigf (boxplot on the right) for a variety of secondary learners.
+each performs well in estimating ig(x) whentrained on a dataset of (x, ig(x)) pairs.
+the convolutional network (far left) which we chose as our secondarylearner moderately outperforms the other simple learners.
+as alternative learners, we also tested linear regressionwhere x is represented as its average embedded representation in the gpt-2 byte-pair embedding space (centerleft), linear regression where x is represented as a one-hot encoding over the token values (center), and a triviallearner which estimated the value of a context as average of the values of the tokens that compose it, whose valuesare in turn computed as the average value of the training contexts they occur in (center right).
+a comparison tostandard ﬁnetuning without igf (far right) is included.
+as a difference of means, the cnn is statistically different(p < 0.001) from the other types of learners.
+for the one-hot and average token value learners, contexts withtokens appearing in the training set and not in the test set were excluded.
+all learners were trained on a dataset of10,000 training examples..bility of converging to an ideal ﬁnal value.
+thecorrelation between the test perplexity after a sin-gle batch and the test perplexity after 50 batches,which is near convergence for most runs, is sta-tistically signiﬁcant (r = 0.28).
+while this valueappears somewhat low, it is signiﬁcant and there-fore can be exploited for improvements in perfor-mance..taken together, the pair of observations that (1)early data quality is important, and (2) that thequality of a context can be summarized by its low-level statistics serves to motivate our understand-ing of why igf is effective.
+speciﬁcally, if wecan carefully ensure that early batches are good,as igf does, then we will likely end up with a su-perior model after convergence..5.3 understanding the secondary learner.
+this raises the question of which contexts are con-sidered “informative” by the secondary learner.
+toanswer this question, we apply igf to the mixedcorpus containing both reddit and books.
+we cre-ated a dataset of 10,000 (x, ig(x)) pairs usingan objective set of 160 contexts with 32 tokenseach drawn solely from the books corpus.
+weused this dataset to train a secondary learner.
+next,the secondary learner was fed randomly sampledcontexts from the mixed corpus.
+because the ob-jective set contains only examples from one cor-pus, we expect the secondary learner to assignhigher ig(x) values to other examples from thesame corpus.
+figure 6 shows that there is indeed asigniﬁcant difference in the distributions of ˆq val-ues between the two corpora, demonstrating thatthe books and reddit corpora can be separated bythe secondary learner.
+almost all examples fromthe reddit corpus are expected by the secondarylearner to produce a reduction in perplexity that.
+figure 6: normalized predicted q’s by training cor-pus: in the mixed setting, a corpus composed of red-dit comments (25% of contexts) and a corpus of books(75% of contexts) were mixed into a single trainingdataset.
+using the predicted q-value generated fromour convolutional secondary learner, we can achievegood separation of the corpora using the informationgain metric despite computing the true q-value using asmall objective set.
+the percentage of examples fromthe books corpus that are higher than several frequentlyreferenced tskip values are given for our dataset..107850predicted64202actualr = 0.784conv.
+network50predicted64202r = 0.773embed.
+linear reg.50predicted64202r = 0.765one-hot linear reg.50predicted4202r = 0.707avg.
+token valuecnnelrohratvstdlearner type545658test perplexity2101predicted q-value0.00.20.40.60.8probability density95%59%4%booksredditis at least one standard deviation below the mean.
+this indicates that the secondary learner can iden-tify with strong conﬁdence that books corpus ex-amples are more informative for ﬁne-tuning to-wards the books objective than reddit corpus ex-amples.
+it is also worthwhile to note that the sec-ondary learner achieves dataset separation despitehaving access to just 160 labeled examples of 32tokens in our objective set, a total of just 5120 to-kens from the books corpus, and zero examplesfrom the reddit corpus..figure 7: comparison of the sample efﬁciency of sec-ondary learners: here we compare the relative sampleefﬁciency of the various secondary learners that weretested in the paper using contexts from the wikitext-103 dataset.
+we plot the correlation coefﬁcient of themodel prediction against ground truth as the numberof samples in the training set for that model increasesfrom 1000 to 10000. we see that the convolutional net-work, being the most highly regularized of the fourmodels owing to its architectural structure and rela-tively low parameter size, is also the most sample ef-ﬁcient of all of the models tested..5.4 efﬁciency of igf.
+for previous results we used a simple convolu-tional neural network described in section 3 as oursecondary learner.
+however, it may not be neces-sary to use a such a complex model for ig(x).
+alternative methods could provide similar perfor-mance at less cost.
+figure 5 shows predicted vs.actual normalized ig(x) values for several learn-ing methods.
+while the 45,000 parameter con-volutional neural network is most effective at ap-proximating ig(x), other learners perform al-most well.
+we encoded the contexts both by us-ing the standard gpt-2 small word embeddingand with a one-hot encoding of the token iden-tities.
+standard linear regression performed onboth encoding types (30k parameters for word.
+embeddings and 450,000 parameters for one-hotencoding) performs nearly as well at approximat-ing ig(x) with a convolutional model.
+we alsotested an even simpler learner with only 25,000parameters that assigned each token a value by av-eraging the ig(x) values for contexts that con-tained that token.
+values for new contexts are thencomputed as the average of token values containedin that context.
+even this model is a reasonableapproximator of ig(x).
+this underscores that,while ig(x) is an extremely complex functionto compute exactly, it can nevertheless be effec-tively approximated through simple unigram in-formation.
+figure 7 compares the performance ofthese secondary learners architectures across dif-ferent numbers of training examples.
+here theconvolutional network is the most sample efﬁcientmethod, as it can effectively learn ig(x) with asfew as 2,000 training examples..5.5 comparison to random seed search.
+we proposed igf as a prospective alternative tothe random seed search approach suggested bydodge et al.
+(2020).
+since igf aims to replacesrandom search with a directed search, we expectigf to be signiﬁcantly more efﬁcient.
+of coursethe methods can also be combined: igf can be runmany times with different data orders, and thenthe best model selected.
+in figure 8 we comparethe dodge et al.
+(2020) method, where the bestmodel is selected across 1, 5, or 50 runs of stan-dard ﬁnetuning, to a similar setup where the bestigf model is selected across 1, 5, or 50 runs.
+weﬁnd that even in a single run, igf signiﬁcantlyoutperforms choosing the best of 50 runs of stan-dard ﬁnetuning.
+still, igf performance can beimproved even further by choosing the best resultacross 5 or 50 runs.
+this suggests that while igfexploits some of the beneﬁts that could be gainedfrom ideal data ordering, there are still improve-ments to be made over igf for further improvingdata order during language model ﬁne-tuning..6 conclusion and future work.
+in the context of language model ﬁne-tuning, wehave shown that a secondary learner can efﬁcientlyand effectively distinguish between informativeand uninformative training examples.
+this sec-ondary learner can be used to select useful train-ing examples in a technique we call informationgain filtration, leading to better model perfor-.
+1079200040006000800010000number of samples0.550.600.650.700.750.800.85r (predicted v. actual)conv.
+networkone-hot linear reg.embed.
+linear reg.avg.
+token valueswering this question could lead to better opti-mization methods across many different ﬁelds..acknowledgments.
+we would like to thank all of the people whosecontributions, opinions and suggestions helpedwith the development of this project, especiallykaj bostrom, greg durrett, shailee jain, and vyvo.
+this project was funded by a generous giftfrom intel, and by the burroughs-wellcome ca-reer award at the scientiﬁc interface..references.
+l´eon bottou.
+1991. stochastic gradient learning inproceedings of neuro-nımes,.
+neural networks.
+91(8):12..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language under-standing.
+in proceedings of the 2019 conference ofthe north american chapter of the association forcomputational linguistics: human language tech-nologies, volume 1 (long and short papers), pages4171–4186..jesse dodge, gabriel ilharco, roy schwartz, alifarhadi, hannaneh hajishirzi, and noah smith.
+fine-tuning pretrained language models:2020.weight initializations, data orders, and early stop-ping..philip gage.
+1994. a new algorithm for data compres-.
+sion.
+c users journal, 12(2):23–38..jeremy howard and sebastian ruder.
+2018. universallanguage model ﬁne-tuning for text classiﬁcation.
+inproceedings of the 56th annual meeting of the as-sociation for computational linguistics..alexander g huth, wendy a de heer, thomas l grif-ﬁths, fr´ed´eric e theunissen, and jack l gallant.
+2016. natural speech reveals the semantic maps thattile human cerebral cortex.
+nature, 532(7600):453–458..diederik p. kingma and jimmy ba.
+2015. adam: ain 3rd inter-method for stochastic optimization.
+national conference on learning representations,iclr 2015..cheolhyoung lee, kyunghyun cho, and wanmo kang.
+2020. mixout: effective regularization to ﬁnetunelarge-scale pretrained language models.
+in interna-tional conference on learning representations..nelson f. liu, matt gardner, yonatan belinkov,matthew e. peters, and noah a. smith.
+2019. lin-guistic knowledge and transferability of contextual.
+figure 8: prospective igf is more efﬁcient than ret-rospective random seed search: we show boxplots ofthe best run from differently-sized sets of runs to visu-alize the expected beneﬁt of using random seed testing(dodge et al., 2020) and compare it to the beneﬁt ofusing igf.
+even one igf run is signiﬁcantly more ef-fective than 50 random seed tests using standard ﬁne-tuning, denoted here as sf.
+we further observe that theimprovements to data order that come from igf aresomewhat disjoint from the improvements to data or-der than come with random seed testing, so both ap-proaches can be applied simultaneously for further per-plexity reduction.
+sets of runs of each size were gen-erated by sampling without replacement from a pool ofindependent 50 runs for each method.
+for the 50 runcase, the minimum over the entire pool of runs for eachmethod is plotted instead..mance than standard ﬁne-tuning.
+we encourageresearchers to release pretrained secondary learn-ers for frequently used corpora, in order to en-able more effective ﬁnetuning and save energy.
+this would cut down the largest computationalcost of applying igf while retaining the perfor-mance improvements across the ﬁeld.
+we haveincluded several examples of open-sourced sec-ondary learners in the supplementary material topromote this paradigm..this work also raises several questions.
+sinceour focus was on developing a lightweight tech-nique, the most complex secondary learner wetested was a small convolutional network.
+dataefﬁciency during training could potentially be fur-ther improved by using a more complex model.
+the question of how far one could reasonably takea function approximator network for estimatinginformation gain remains unexplored..finally, we do not fully understand why improv-ing performance on early training batches resultsbetter performance at convergence.
+is this exclu-sively a property of language models, or do othernetworks and tasks exhibit this phenomenon?
+an-.
+1080sf-1sf-5sf-50igf-1igf-5igf-50method and number of runs545658test perplexityashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n gomez, łukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+in advances in neural information pro-cessing systems, pages 5998–6008..christopher jch watkins and peter dayan.
+1992. q-.
+learning.
+machine learning, 8(3-4):279–292..thomas wolf, lysandre debut, victor sanh, julienchaumond, clement delangue, anthony moi, pier-ric cistac, tim rault, remi louf, morgan funtow-icz, joe davison, sam shleifer, patrick von platen,clara ma, yacine jernite, julien plu, canwen xu,teven le scao, sylvain gugger, mariama drame,quentin lhoest, and alexander rush.
+2020. trans-formers: state-of-the-art natural language process-ing.
+in proceedings of the 2020 conference on em-pirical methods in natural language processing:system demonstrations, pages 38–45, online.
+as-sociation for computational linguistics..tianyi zhang, felix wu, arzoo katiyar, kilian qweinberger, and yoav artzi.
+2021. revisiting few-sample bert ﬁne-tuning.
+in international confer-ence on learning representations..yukun zhu, ryan kiros, richard zemel, ruslansalakhutdinov, raquel urtasun, antonio torralba,and sanja fidler.
+2015. aligning books and movies:towards story-like visual explanations by watchingmovies and reading books..representations.
+in proceedings of the 2019 confer-ence of the north american chapter of the associ-ation for computational linguistics: human lan-guage technologies, volume 1 (long and short pa-pers), pages 1073–1094, minneapolis, minnesota.
+association for computational linguistics..stephen merity, caiming xiong, james bradbury, andpointer sentinel mixturein international conference on learning.
+richard socher.
+2017.models.
+representations..volodymyr mnih, koray kavukcuoglu, david silver,alex graves, ioannis antonoglou, daan wierstra,and martin a. riedmiller.
+2013. playing atari withdeep reinforcement learning.
+corr, abs/1312.5602..robert c. moore and william lewis.
+2010. intelligentselection of language model training data.
+in pro-ceedings of the acl 2010 conference short papers,pages 220–224, uppsala, sweden.
+association forcomputational linguistics..marius mosbach, maksym andriushchenko, and diet-rich klakow.
+2021. on the stability of ﬁne-tuningbert: misconceptions, explanations, and strongbaselines.
+in international conference on learningrepresentations..jason phang, thibault f´evry, and samuel r bowman.
+2018. sentence encoders on stilts: supplementarytraining on intermediate labeled-data tasks.
+arxivpreprint arxiv:1811.01088..alec radford, jeffrey wu, rewon child, david luan,dario amodei, and ilya sutskever.
+2019. languagemodels are unsupervised multitask learners.
+openaiblog, 1(8)..richard socher, alex perelygin, jean wu, jasonchuang, christopher d manning, andrew y ng,and christopher potts.
+2013. recursive deep mod-els for semantic compositionality over a sentimenttreebank.
+in proceedings of the 2013 conference onempirical methods in natural language processing,pages 1631–1642..nitish srivastava, geoffrey hinton, alex krizhevsky,ilya sutskever, and ruslan salakhutdinov.
+2014.dropout: a simple way to prevent neural net-j. mach.
+learn.
+res.,works from overﬁtting.
+15(1):1929–1958..emma strubell, ananya ganesh, and andrew mccal-lum.
+2019. energy and policy considerations forin proceedings of the 57thdeep learning in nlp.
+conference of the association for computationallinguistics, pages 3645–3650.
+association for com-putational linguistics..ian tenney, patrick xia, berlin chen, alex wang,adam poliak, r thomas mccoy, najoung kim,benjamin van durme, sam bowman, dipanjan das,and ellie pavlick.
+2019. what do you learn fromcontext?
+probing for sentence structure in contextu-alized word representations.
+in international con-ference on learning representations..1081a supplementary material.
+a.1 miscellaneous figures.
+figure 9: cdf of predicted q’s: cdfs of the datasetsagainst the books objective set.
+note that a thresholdof tskip = −1 almost entirely excludes contexts in themixed corpus that originated from the reddit corpus.
+this allows igf with a constant threshold of -1 on themixed dataset to perform almost identically to standardﬁne-tuning on just the books corpus..figure 11: architecture invariance: the method per-forms similarly regardless of the convolutional setupof the model.
+allowing the convolutional secondarylearner to be informed by higher-order frequenciessuch as trigram and 10-gram do not signiﬁcantly affectperformance..figure 10: replication of performance improvementon wikitext-103: igf signiﬁcantly outperforms (p <10−4) standard ﬁne-tuning without context ﬁltering onthe wikitext-103 dataset.
+we plot the model perplexityover many batches as in figure 4 of the paper.
+this ﬁg-ure can be replicated by following the jupyter tutorialprovided along with the supplementary material..figure 12: improved ﬁne-tuning efﬁciency over stan-dard ﬁne-tuning: we plot the number of batches ittakes for each threshold schedule to exceed the perplex-ity of standard at each step.
+this serves as a barome-ter for comparing the relative efﬁciency of ﬁne-tuning.
+in the early stages of ﬁne-tuning, we can see that igfrequires 30%-40% fewer backpropagation steps overstandard ﬁne-tuning.
+this suggests that igf could beused as a more energy efﬁcient alternative to standardlanguage model ﬁne-tuning.
+note that since igf con-verges to a lower ﬁnal value than standard ﬁne-tuning,these values asymptote to a ﬁxed value..1082a.2 sample high ig(x) contexts.
+a few randomly sampled contexts from the bookscorpora with ig(x) > 1 are given below.
+notethat all are highly structured conversations whichare common of the narrative setting in the bookscorpus:.
+• ’t you..he forced your hand with max.
+”” we’re going to die, ” she said.
+” aren’t we?.
+• ” the world is ending.
+”.
+” no it’s not.
+”valerie snapped.
+” it’s a world war, that.
+• you?
+”” yep.
+did your dad leave?
+”she nodded.
+” they all said to tell you congratulations andthey’ll.
+a.3 sample low ig(x) contexts.
+a few sample contexts from the books corporawith ig(x) < −1 are given below.
+many ofthese contexts appear to be long, run-on sentencesthat are more challenging to follow:.
+• n order ; you’ve got to make friends, you’vegot to put on a united front and for the gov-ernments of earth that was no mean feat.
+• - headed eunuchs in crimson robes knelt in acluster to one side of the dais, resting on theirhaunches and gazing at the woman and.
+• don’t hold back, and by god, if i could belike you for even a moment, if i could haveyour strength, your courage, your.
+• frantically down one path, doubled back,and headed down another, like a frightenedmouse trying to outsmart a determined cat ina warren of false trails and.
+1083b iterated information gain filtration.
+instead of scheduling the selectivity of the sec-ondary learner to taper off as the ﬁne-tuningprocess continues, we might instead replace thelearner periodically with a new learner trained ona new dataset of (x, ig(x)) pairs generated us-ing the current parameterization of the languagemodel.
+this process, which we call iterated in-fomation gain ﬁltration (iigf), allows us to re-place the obsolete learner that was trained to pre-dict ig(x) for early examples with a learner thatis more relevant later in ﬁne-tuning.
+iigf has theadded advantage of allowing us to keep tskip highthroughout ﬁne-tuning, as secondary learner irrel-evance is no longer a concern.
+this procedureis very computationally expensive, as the over-head in generating the new dataset and learnerfar exceeds the computational cost of ﬁne-tuning.
+nonetheless, this enables ﬁner control of data or-der throughout the ﬁne-tuning process and furtherimprovements in ﬁnal perplexity over igf withscheduled thresholding.
+due to its computationalexpense, we ran a small set of 5 tests of iter-ated information gain ﬁltration by training a sec-ondary learner using a dataset built from example(x, ig(x)) pairs derived from a language modelthat had already been fully ﬁnetuned to the bookscorpus.
+iigf was able to improve these already-converged models by an average of 0.29 additionalperplexity points after reconverging, with a stan-dard deviation of 0.11 points..algorithm 2 iterated information gain filtrationinput: training (x ) and objective (o) dataset ofcontexts, (x , o) = {(x1, y1), ..., (xn, yn)}, andparameterization of initial pretrained lm, θparameters: size of learner dataset, s,threshold parameter, tskip, andnumber of batches per secondary learner reset, toutput: θ(cid:48), new parameterization for the lm1: initialize d, b = {}.
+2: for all i, 0 ≤ i ≤ num batches dowhile |b| < batch size do3:if i mod t = 0 then.
+4:.
+5:.
+6:.
+7:.
+8:.
+9:.
+10:.
+11:.
+12:.
+13:.
+n (0, 1)..for all i, 0 ≤ i ≤ s do.
+sample context (xi, yi) from x .
+append (xi, igo(xi, yi)) to d.normalize igo(x, y) values in d to.
+train learner ˆq, using d as a train set.
+sample context c = (x, y) from x .
+if ˆq(c) ≥ tskip then.
+append c to batch b..update θ by backpropagating over batch b,.
+and clear batch b..14: return θ..1084c relative informativeness of contexts.
+since our method uses a black box learner to es-timate the informativeness of a given context, onemight wonder what it is about these contexts thatmakes them more or less informative.
+to investi-gate this, we constructed test sets of 100 contextseach from the books corpus which were rated aseither highly informative (ig(x) > 1) or unin-formative (ig(x) < 1) by the secondary learner.
+we then ﬁnetuned gpt2-small using both stan-dard ﬁne-tuning and igf as in figure 1 and peri-odically evaluated the performance of the modelon the informative and uninformative contexts astraining proceeded.
+figure 13 shows that contextswhich were rated as highly informative experi-enced a signiﬁcantly greater reduction in perplex-ity over time as compared to contexts that wererated as uninformative.
+the poorly informativecontexts actually performed worse on average af-ter ﬁne-tuning than either standard ﬁne-tuning origf.
+this suggests that highly informative con-texts are also highly informed, or more easily pre-dicted after ﬁne-tuning on the target corpus.
+in-spection of highly informative contexts shows thatthey tend to employ simple diction and basic sen-tence structure that is representative of the cor-pus, whereas uninformative contexts tend to em-ploy complex sentence structure and atypical vo-cabulary.
+all highly rated contexts from the bookscorpus consisted of dialog, which suggests thatthe secondary learner prioritizes linguistic patternsthat are common to the ﬁne-tuning corpus but rarein general writing.
+since the books corpus iscomposed of narrative stories heavy on dialog, itmakes sense that conversations, which rarely ap-pear in non-narrative corpora, would be rated ashighly informative.
+the supplementary materialgives some examples of highly informative anduninformative contexts from the books corpus..figure 13: informative contexts are informed con-texts: shown above are plots of the evaluation perfor-mance of sets of 100 contexts rated as highly infor-mative (ig(x) > 1) and uninformative (ig(x) <−1) by the secondary learner, as the language modelis trained by either igf or standard ﬁne-tuning (sf).
+the contexts that the secondary learner rates as highlyinformative are also those contexts that the languagemodel learns to predict very accurately after ﬁne-tuningis complete.
+conversely, contexts that the learner ratesas poorly informative perform worse after ﬁne-tuning.
+examples of highly informative and poorly informa-tive contexts from the books corpus are presented inthe supplementary material and support the assertionthat the best contexts for ﬁne-tuning are those that arehighly predictable..10850204060batches20406080test perplexityuninformative, sfuninformative, igfinformative, sfinformative, igf

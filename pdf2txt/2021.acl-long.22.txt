@@ -1,0 +1,384 @@
+understanding the properties of minimum bayes risk decodingin neural machine translation.
+mathias m ¨uller1 and rico sennrich1,21department of computational linguistics, university of zurich2school of informatics, university of edinburgh.
+abstract.
+neural machine translation (nmt) currentlyexhibits biases such as producing translationsthat are too short and overgenerating frequentwords, and shows poor robustness to copynoise in training data or domain shift.
+re-cent work has tied these shortcomings to beamsearch – the de facto standard inference algo-rithm in nmt – and eikema and aziz (2020)propose to use minimum bayes risk (mbr)decoding on unbiased samples instead..in this paper, we empirically investigate theproperties of mbr decoding on a number ofpreviously reported biases and failure cases ofbeam search.
+we ﬁnd that mbr still exhibits alength and token frequency bias, owing to themt metrics used as utility functions, but thatmbr also increases robustness against copynoise in the training data and domain shift.1.
+1.introduction.
+neural machine translation (nmt) currently suf-fers from a number of issues such as underesti-mating the true length of translations (koehn andknowles, 2017; stahlberg and byrne, 2019; kumarand sarawagi, 2019), underestimating the probabil-ity of rare words and over-generating very frequentwords (ott et al., 2018), or being susceptible tocopy noise in the training data (khayrallah andkoehn, 2018).
+in out-of-domain translation, hallu-cinations (translations that are ﬂuent but unrelatedto the source) are common (koehn and knowles,2017; lee et al., 2018; m¨uller et al., 2020)..previous work has addressed these problemswith decoding heuristics such as length normal-ization (wu et al., 2016), data cleaning (junczys-dowmunt, 2018; ba˜n´on et al., 2020) or model reg-ularization (bengio et al., 2015; shen et al., 2016;.
+wiseman and rush, 2016; zhang et al., 2019; nget al., 2020)..recently, eikema and aziz (2020) have high-lighted the role of the decision rule, namely search-ing for the highest-scoring translation, and haveargued that it is at least partially to blame for someof these biases and shortcomings.
+they found thatsampling from an nmt model is faithful to thetraining data statistics, while beam search is not.
+they recommend the ﬁeld look into alternativeinference algorithms based on unbiased samples,such as minimum bayes risk (mbr) decoding..we believe mbr has potential to overcome sev-eral known biases of nmt.
+more precisely, if a biascan be understood as being caused by the mode-seeking nature of beam search then we hypothesizethat mbr could exhibit less bias.
+we view shorttranslations, copies of the source text and halluci-nations as hypotheses that are probable, but quitedifferent to other probable hypotheses.
+if suchpathological hypotheses are in a pool of samples,it is unlikely that mbr would select them as theﬁnal translation..while eikema and aziz (2020) compare the sta-tistical properties of samples and beam search out-puts, and show that mbr can perform favourablycompared to beam search according to automaticmetrics, our paper aims to perform a targeted studyof mbr and its properties, speciﬁcally its effectson the biases and shortcomings discussed previ-ously.
+in our experiments we ﬁnd that.
+• if used with a utility function that favoursshort translations, mbr inherits this bias;.
+• mbr still exhibits a token probability bias inthat it underestimates the probability of rare to-kens and overestimates very common tokens;.
+1code and documentation available at https://.
+github.com/zurichnlp/understanding-mbr.
+• compared to beam search, mbr decoding ismore robust to copy noise in the training data;.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages259–272august1–6,2021.©2021associationforcomputationallinguistics259• mbr exhibits higher domain robustness thanbeam search.
+we demonstrate that mbr re-duces the amount of hallucinated content intranslations..2 background.
+2.1 maximum-a-posteriori (map) decoding.
+the de facto standard decoding algorithm innmt is beam search (graves, 2012; boulanger-lewandowski et al., 2013; sutskever et al., 2014).
+beam search belongs to a broader class of inferenceprocedures called maximum-a-posteriori (map) al-gorithms.
+what map algorithms have in commonis that they attempt to ﬁnd the most probable trans-lation under a given model.
+essentially, they tryto recover the mode of the output distribution oversequences..an exact solution to this search problem is usu-ally intractable.
+beam search is an approximationthat is tractable, but it also frequently fails to ﬁndthe true mode of the distribution (stahlberg andbyrne, 2019)..2.2 known deﬁciencies of nmt systems.
+nmt systems are known to be deﬁcient in a num-ber of ways.
+we describe here only the ones rele-vant to our discussion and experiments..length bias: systems underestimate the truelength of translations.
+on average, their trans-lations are shorter than references (koehn andknowles, 2017; stahlberg and byrne, 2019; ku-mar and sarawagi, 2019)..skewed word frequencies: in translations, to-kens that occur frequently in the training data areoverrepresented.
+on the other hand, rare tokens oc-cur fewer times than their probability in the trainingdata would suggest (ott et al., 2018)..beam search curse: increasing the beam sizeleads to ﬁnding translations that are more probableunder the model.
+in theory, this should improvetranslation quality.
+paradoxically, empirical resultsshow that large beam sizes decrease quality (koehnand knowles, 2017; ott et al., 2018)..susceptibility to copy noise: copied content inthe training data disproportionately affects trans-lation quality.
+more speciﬁcally, the most detri-mental kind are copies of the source sentence onthe target side of the training data (khayrallah andkoehn, 2018).
+if such copies are present in thetraining data, copy hypotheses will be overrepre-sented in beam search (ott et al., 2018)..low domain robustness: systems are not ro-bust under distribution shifts such as domain shift.
+having a system translate in an unknown test do-main often does not gradually degrade transla-tion quality, but leads to complete failure casescalled hallucinations (lee et al., 2018; koehn andknowles, 2017; m¨uller et al., 2020)..much past research has attributed those deﬁcien-cies to model architectures or training algorithms,while treating beam search as a ﬁxed constant inexperiments.
+in contrast, eikema and aziz (2020)argue that the ﬁt of the model is reasonable, whichmeans that neither the model itself nor its trainingcan be at fault.
+rather, they argue that the underly-ing problem is beam search..inadequacy of the mode: stahlberg and byrne(2019) and eikema and aziz (2020) suggest thatthe mode of the distribution over output sequencesis in fact not the best translation.
+on the contrary,it seems that in many cases the mode is the emptysequence (stahlberg and byrne, 2019).
+in addition,it appears that the probability of the mode is notmuch different from very many other sequences, asthe output distribution is quite ﬂat in an extensiveregion of output space (eikema and aziz, 2020)..intuitively, it makes sense that such a situationcould arise in nmt training: maximum likelihoodestimation training does not constrain a model tobe characterized well by its mode only.
+if the modeis inadequate, then obviously that is problematicfor a mode-seeking procedure such as beam search,and map inference in general.
+in fact, map decod-ing should be used only if the mode of the outputdistribution can be trusted (smith, 2011)..an alternative is a decision rule that considershow different a translation is from other likely trans-lations..2.3 minimum bayes risk decoding.
+mbr decoding was used in speech recognition(goel and byrne, 2000) and statistical machinetranslation (kumar and byrne, 2004; tromble et al.,2008).
+more recently, mbr was also used to im-prove beam search decoding in nmt (stahlberget al., 2017; shu and nakayama, 2017; blain et al.,2017).
+eikema and aziz (2020) are the ﬁrst to testa variant of mbr that operates on samples insteadof an nbest list generated by beam search..we give here a simpliﬁed, accessible deﬁnitionof mbr in the context of nmt.
+essentially, thegoal of mbr is to ﬁnd not the most probable trans-.
+260lation, but the one that minimizes the expectedrisk for a given loss function and the true posteriordistribution.
+in practice, the set of all possible can-didate translations can be approximated by drawingfrom the model a pool of samples s of size n:.
+s = (s1, ..., sn) ∼ p(y|x, θ)..(1).
+the same set of samples can also be used to ap-proximate the true posterior distribution.
+then foreach sample si in s, its expected utility (the in-verse risk) is computed by comparing it to all othersamples in the pool.
+the sample with the highestexpected utility is selected as the ﬁnal translation:.
+y(cid:63) = argmax.
+si∈s.
+1n.n(cid:88).
+sj =1.
+u(si, sj).
+(2).
+the size of the pool n and the utility function uare hyperparameters of the algorithm.
+a particularutility function typically computes the similaritybetween a hypothesis and a reference translation.
+therefore, mbr “can be thought of as selecting aconsensus translation [...] that is closest on averageto all likely translations” (kumar and byrne, 2004)..3 motivation for experiments.
+we hypothesize that mbr decoding is useful fora certain class of failure cases encountered withbeam search.
+namely, if an incorrect translationfrom beam search can be characterized as a hy-pothesis that is likely but fairly different from otherhypotheses with similar probability, then mbr isexpected to improve over beam search..several known deﬁciencies of nmt systems out-lined in section 2.2 belong to this class of beamsearch failures.
+for instance, length bias occurswhen a beam search translation is shorter than otherhypotheses with comparable probability.
+likewise,translations that are copies of the input sentenceor hallucinations (translations that are ﬂuent, butunrelated to the input) can be avoided with mbr ifthey are not common in a pool of samples..finally, we study the skewedness of token fre-quencies in translations.
+eikema and aziz (2020)study lexical biases in nmt models, showing thatmodel samples have higher agreement with thetraining distribution than map output.
+we inves-tigate whether this is also true for mbr decoding,focusing on the well-known bias towards frequenttokens..4 experimental setup.
+4.1 data.
+we use data for a number of language pairs fromthe tatoeba challenge (tiedemann, 2020).
+indi-vidual language pairs are fairly different in termsof language families, scripts and training set sizes.
+see appendix a for details about our data sets..for one additional experiment on out-of-domainrobustness we use data from m¨uller et al.
+(2020).
+this data set is german-english and deﬁnes 5 dif-ferent domains of text (medical, it, koran, law andsubtitles).
+following m¨uller et al.
+(2020) we trainour model on the medical domain, and use data inother domains to test domain robustness..we hold out a random sample of the trainingdata for testing purposes.
+the size of this samplevaries between 1k and 5k sentences, depending onthe overall size of the training data..4.2 models.
+our preprocessing and model settings are inspiredby opus-mt (tiedemann and thottingal, 2020).
+we use sentencepiece (kudo, 2018) with subwordregularization as the only preprocessing step, whichtakes care of both tokenization and subword seg-mentation.
+the desired number of pieces in thevocabulary varies with the size of the data set..we train nmt models with sockeye 2 (domhanet al., 2020).
+the models are standard transformermodels (vaswani et al., 2017), except that somesettings (such as word batch size and dropout rate)vary with the size of the training set.
+followingeikema and aziz (2020) we disable label smooth-ing so as to get unbiased samples..4.3 decoding and evaluation.
+in all experiments, we compare beam search tombr decoding and in most cases also to singlesamples.
+for beam search, we always use a beamsize of 5. single samples are drawn at least 100times to show the resulting variance..if not stated otherwise, all results presented areon a test set held out from the training data, i.e.
+arecertainly in-domain, which avoids any unintendedout-of-domain effects..we evaluate automatic translation quality withbleu (papineni et al., 2002), chrf (popovi´c,2016) and meteor (denkowski and lavie, 2014).
+we compute bleu and chrf with sacrebleu(post, 2018).
+see appendix b for details..261figure 1: chrf1 scores of mbr decoding on two test corpora: the standard tatoeba test set (out-of-domain) anda test set of held-out training data (in-domain).
+plots show the difference between mbr and beam search, as afunction of the number of samples used for mbr..(cid:55)bleu(cid:51)bleu-ﬂoorbleu-add-k (cid:51)(cid:51)bleu-exp.
+chrf-0.5chrf-1chrf-2chrf-3.
+meteormeteor-0.5.
+(cid:55)(cid:55)(cid:55)(cid:55).
+(cid:55)(cid:55).
+smoothed?.
+α.β.γ.δ.
+----.
+----.
+----.
+----.
+----.
+----.
+----.
+0.51.02.03.0.
+0.20.2.
+0.850.50.
+0.60.6.
+0.750.75.table 1: utility functions used with mbr.
+thesmoothed variants of bleu correspond to the ones im-plemented in sacrebleu (post, 2018) and are deﬁnedin chen and cherry (2014)..mbr also depends on samples, so we repeateach mbr experiment twice to show the resultingvariance.
+we also vary the number of samples usedwith mbr, from 5 to 100 in increments of 5. fi-nally, we produce mbr translations with differentutility functions.
+all of the utility functions aresentence-level variants of our evaluation metrics:bleu, chrf or meteor.
+see table 1 for anoverview of utility functions.
+if not stated other-wise, mbr results are based on 100 samples anduse chrf-1 as the utility function..that mbr does not suffer from the beam searchcurse where single pathological hypotheses in alarge beam can jeopardize translation quality..we analyze the lengths of translations producedby different decoding methods in table 2 (see ap-pendix e for additional statistics).
+we ﬁnd thatin terms of mean length of translations, beamsearch underestimates the true length of transla-tions, even when hypotheses are normalized.
+hy-potheses generated by sampling better match thereference length.
+this is in line with the ﬁndingsof eikema and aziz (2020)..for mbr decoding, it is clear that the choice ofutility function has an impact on the mean length ofthe resulting translations.
+for instance, employingsentence-level bleu as the utility function leads totranslations that are too short.
+bleu is a precision-based metric known to prefer shorter translationson the sentence level (nakov et al., 2012)..chrf-2 and meteor emphasize recall more,and the resulting mbr translations overestimatethe true length of translations.2 on the other hand,chrf-0.5, a chrf variant with a bias for preci-sion, leads to the shortest translations overall..we test whether we can reduce length biases by.
+symmetrizing our utility functions u as follows:.
+5 length bias.
+usym(si, sj) = h(u(si, sj), u(sj, si)).
+(3).
+we evaluate mbr decoding with different utilityfunctions.
+there is no single utility function whichperforms best on all evaluation metrics.
+instead,any of our evaluation metrics can be optimizedby choosing a closely related utility function (seefigure 2 and appendix d).
+for instance, chrf-2as the utility function leads to the best chrf2evaluation scores..number of samples: we ﬁnd that the transla-tion quality of mbr increases steadily as the num-ber of samples grows (see figure 2).
+this means.
+where h is the harmonic mean.
+this should avoidfavouring either recall or precision, but in practiceeven symmetric utility functions lead to translationsthat are shorter than references on average..based on these observations we conclude thatmbr inherits length biases associated with itsutility function..2while popovi´c (2016) ﬁnd that the recall-biased chrf2achieves the highest correlation with human judgments as anevaluation metric, this does not entail that the same recall biasis optimal in the utility function for mbr..262figure 2: comparison of mbr utility functions.
+different columns show translation quality as measured by aparticular evaluation metric.
+line colors refer to different utility functions.
+shaded areas show standard deviation..dan-epo aze-eng bel-rus deu-fra.
+reference.
+samplebeam-normalizedbeam-unnormalized.
+bleu-ﬂoormeteorchrf-2.
+bleu-ﬂoor-symmetricmeteor-symmetricchrf-2-symmetric.
+chrf-0.5.
+11.91.
+11.7311.6111.21.
+11.5112.2312.50.
+11.5111.4711.48.
+10.63.
+15.54.
+15.1514.4513.62.
+14.4115.2915.88.
+14.3414.1214.16.
+12.99.
+8.41.
+8.298.238.20.
+8.188.268.31.
+8.198.208.18.
+8.08.
+20.19.
+19.9919.6219.08.
+19.5520.3820.89.
+19.5319.4019.40.
+18.02.table 2: lengths of hypotheses as mean number of tokens..263figure 3: probability of tokens in translations (x-axis) bucketed by frequency in training data (y-axis).
+verticalbars indicate standard deviation for methods that involve sampling..6 token frequency bias.
+beam search overgenerates tokens that are verycommon in the training data and undergeneratesrare tokens (see section 2.2).
+sampling on the otherhand assigns correct probabilities to common andrare tokens.
+given that mbr is based on samples,does it share this property with sampling?.
+in figure 3 we show that this is not the case.
+although the skewedness of probabilities is lesssevere for mbr than for beam search, mbr stillassigns too high a probability to frequent events.
+a reason for this is that our utility functions arebased on surface similarity between samples, sorare tokens, which will be sampled rarely, will thusalso have low utility..unfortunately, there is a trade-off between cor-rect probability statistics for very common andvery rare words and translation quality.
+themost faithful statistics can be obtained from sam-pling, but sampling leads to the worst overall trans-lation quality..7 domain robustness.
+in general, as the number of samples grows, mbrapproaches but does not outperform beam searchon our in-domain data (see figure 1).
+on our out-of-domain data, the gap between mbr and beamsearch is smaller.
+we hypothesize that mbr may.
+be useful for out-of-domain translation..we evaluate mbr on a domain robustness bench-mark by m¨uller et al.
+(2020).
+figure 4 shows thaton this benchmark mbr outperforms beam searchon 2 out of 4 unknown test domains.
+a possible rea-son why mbr is able to outperform beam searchin unknown domains is that it reduces hallucinatedtranslations.
+to test this hypothesis, we deﬁne ahallucination as a translation that has a chrf2score of less than 0.01 when compared to the refer-ence, inspired by lee et al.
+(2018)..given this deﬁnition of hallucination, figure 5shows that on average, mbr assigns a lower utilityscore to hypotheses that are hallucinations.
+sim-ilarly, mbr reduces the percentage of hallucina-tions found in the ﬁnal translations, compared tobeam search or sampling.
+to summarize, we ﬁndthat mbr decoding has a higher domain robust-ness than beam search..8.impact of copy noise in the trainingdata.
+if copies of source sentences are present on the tar-get side of training data, copies are overrepresentedin beam search (section 2.2).
+here we test whethermbr suffers from this copy bias as well..we create several versions of our training setswhere source copy noise is introduced with a proba-.
+264figure 4: chrf1 scores of mbr and beam search on the domain robustness benchmark of m¨uller et al.
+(2020).
+the medical test set is in-domain, the remaining sets are out-of-domain..figure 5: analysis of hallucinations in mbr and beam translations.
+left: average utility of hallucination hypothe-ses in pools of samples.
+right: how often hallucinations occur in ﬁnal translations..figure 6: susceptibility to copy noise in training data..265figure 7: analysis of copies in mbr and beam translations.
+left: average utility of copy hypotheses in pools ofsamples.
+right: how often copies occur in ﬁnal translations..bility between 0.1% and 50%.
+as shown in figure6, mbr and beam search are comparable if thereare few copies in the training data.
+however, ifbetween 5 and 25% of all training examples arecopies, then mbr outperforms beam search by alarge margin (> 10 bleu for arabic-german)..as further evidence for the ability of mbr totolerate copy noise we present an analysis of copiesin figure 7. we deﬁne a copy as a translation witha word overlap with the reference of more than 0.9.we show that mbr assigns a much lower utilityto copy hypotheses than to all hypotheses takentogether.
+in the ﬁnal translations, mbr manages toreduce copies substantially.
+for instance, if around10% of the training examples are copies, beamsearch produces around 50% copies, while mbrreduces this number to below 10%..we conclude from this experiment that mbr ismore robust to copy noise in the training data.
+we acknowledge that this setting is artiﬁcial be-cause copy noise can easily be removed from datasets.
+nonetheless, it is a striking example of aknown shortcoming of nmt systems usually at-tributed to the model or training procedure, whenin fact beam search is at least partially to blame..9 conclusion and future work.
+mbr decoding has recently regained attention inmt as a decision rule with the potential to over-come some of the biases of map decoding in nmt.
+we empirically study the properties of mbr decod-ing with common mt metrics as utility functions,.
+and ﬁnd it still exhibits a length bias and tokenfrequency bias similar to beam search.
+the lengthbias is closely tied to the utility function.
+however,we also observe that mbr decoding successfullymitigates a number of well-known failure modesof nmt, such as spurious copying, or hallucina-tions under domain shift.
+the mechanism by whichmbr achieves such robustness is that copies orhallucinated hypotheses in a pool of samples areassigned low utility and never selected as the ﬁnaltranslation..in our experiments, mbr did not generally out-perform beam search according to automatic met-rics, but we still deem it a promising alternative tomap decoding due to its robustness.
+for futurework, we are interested in exploring more sophisti-cated similarity metrics to be used as utility func-tions, including trainable metrics such as comet(rei et al., 2020), and investigating how these util-ity functions affect the overall quality and biases oftranslations..10 note on reproducibility.
+we will not only release the source code used totrain our models (as is common in nlp papers atthe moment), but a complete pipeline of code thatcan be run on any instance in a fully automatedfashion.
+this will allow to reproduce our results,including the graphs and tables shown in this paper,in a consistent way with minimal changes.
+weencourage the community to attempt to reproduceour results and publish the results..266acknowledgements.
+this work has received funding from the swissnational science foundation (grant numbers105212-169888 and 176727).
+also, we havebeen assisted by the computing services of the uni-versity of zurich (s3it)..we would like to thank bryan eikema for hishelp with our implementation of mbr.
+we alsothank j¨org tiedemann, annette rios and tannonkew for helpful comments and discussion..references.
+marta ba˜n´on, pinzhen chen, barry haddow, ken-neth heaﬁeld, hieu hoang, miquel espl`a-gomis,mikel l. forcada, amir kamran, faheem kirefu,philipp koehn, sergio ortiz rojas, leopoldopla sempere, gema ram´ırez-s´anchez, elsasarr´ıas, marek strelec, brian thompson, williamwaites, dion wiggins, and jaume zaragoza.
+2020.paracrawl: web-scale acquisition of parallel cor-in proceedings of the 58th annual meetingpora.
+ofthe association for computational linguis-tics, pages 4555–4567, online.
+association forcomputational linguistics..samy bengio, oriol vinyals, navdeep jaitly, andnoam shazeer.
+2015. scheduled sampling for se-quence prediction with recurrent neural networks.
+in proceedings of the 28th international conferenceon neural information processing systems - vol-ume 1, nips’15, page 1171–1179, cambridge, ma,usa.
+mit press..fr´ed´eric blain, pranava swaroop madhyastha, and lu-cia specia.
+2017. exploring hypotheses spaces inneural machine translation.
+asia-paciﬁc associationfor machine translation (aamt), editor, machinetranslation summit xvi.
+nagoya, japan..nicolas boulanger-lewandowski, yoshua bengio, andpascal vincent.
+2013. audio chord recognition within ismir, pages 335–recurrent neural networks.
+340. citeseer..boxing chen and colin cherry.
+2014. a systematiccomparison of smoothing techniques for sentence-level bleu.
+in proceedings of the ninth workshopon statistical machine translation, pages 362–367,baltimore, maryland, usa.
+association for compu-tational linguistics..michael denkowski and alon lavie.
+2014. meteor uni-versal: language speciﬁc translation evaluation forin proceedings of the ninthany target language.
+workshop on statistical machine translation, pages376–380, baltimore, maryland, usa.
+associationfor computational linguistics..tobias domhan, michael denkowski, david vilar,xing niu, felix hieber, and kenneth heaﬁeld.
+2020..the sockeye 2 neural machine translation toolkit atamta 2020. in proceedings of the 14th conferenceof the association for machine translation in theamericas (volume 1: research track), pages 110–115, virtual.
+association for machine translation inthe americas..bryan eikema and wilker aziz.
+2020. is map decod-ing all you need?
+the inadequacy of the mode in neu-ral machine translation.
+in proceedings of the 28thinternational conference on computational linguis-tics, pages 4506–4520, barcelona, spain (online).
+international committee on computational linguis-tics..vaibhava goel and william j byrne.
+2000. minimumbayes-risk automatic speech recognition.
+comput.
+speech lang., 14(2):115–135..alex graves.
+2012..recurrent neural networks.
+arxiv:1211.3711..sequence transduction witharxiv preprint.
+marcin junczys-dowmunt.
+2018. dual conditionalcross-entropy ﬁltering of noisy parallel corpora.
+inproceedings of the third conference on machinetranslation: shared task papers, pages 888–895,belgium, brussels.
+association for computationallinguistics..huda khayrallah and philipp koehn.
+2018. on theimpact of various types of noise on neural machinetranslation.
+in proceedings of the 2nd workshop onneural machine translation and generation, pages74–83, melbourne, australia.
+association for com-putational linguistics..philipp koehn and rebecca knowles.
+2017. six chal-in proceed-lenges for neural machine translation.
+ings of the first workshop on neural machine trans-lation, pages 28–39, vancouver.
+association forcomputational linguistics..taku kudo.
+2018. subword regularization: improvingneural network translation models with multiple sub-word candidates.
+in proceedings of the 56th annualmeeting of the association for computational lin-guistics (volume 1: long papers), pages 66–75, mel-bourne, australia.
+association for computationallinguistics..aviral kumar and sunita sarawagi.
+2019. calibrationof encoder decoder models for neural machine trans-lation.
+arxiv preprint arxiv:1903.00802..shankar kumar and william byrne.
+2004. minimumbayes-risk decoding for statistical machine transla-tion.
+in proceedings of the human language tech-nology conference of the north american chapterof the association for computational linguistics:hlt-naacl 2004, pages 169–176, boston, mas-sachusetts, usa.
+association for computationallinguistics..katherine lee, orhan firat, ashish agarwal, clarafannjiang, and david sussillo.
+2018. hallucinationsin neural machine translation..267mathias m¨uller, annette rios, and rico sennrich.
+2020. domain robustness in neural machine trans-lation.
+in proceedings of the 14th conference of theassociation for machine translation in the americas(amta 2020), pages 151–164, virtual.
+associationfor machine translation in the americas..preslav nakov, francisco guzman, and stephan vo-gel.
+2012. optimizing for sentence-level bleu+1in proceedings of col-yields short translations.
+ing 2012, pages 1979–1994, mumbai, india.
+thecoling 2012 organizing committee..nathan ng, kyunghyun cho, and marzyeh ghassemi.
+2020. ssmba: self-supervised manifold based dataaugmentation for improving out-of-domain robust-in proceedings of the 2020 conference onness.
+empirical methods in natural language process-ing (emnlp), pages 1268–1283, online.
+associa-tion for computational linguistics..myle ott, michael auli, david grangier,.
+andmarc’aurelio ranzato.
+2018. analyzing uncer-in interna-tainty in neural machine translation.
+tional conference on machine learning..kishore papineni, salim roukos, todd ward, and wei-jing zhu.
+2002. bleu: a method for automatic eval-in proceedings ofuation of machine translation.
+the 40th annual meeting of the association for com-putational linguistics, pages 311–318, philadelphia,pennsylvania, usa.
+association for computationallinguistics..maja popovi´c.
+2016. chrf deconstructed: beta param-in proceedings of theeters and n-gram weights.
+first conference on machine translation: volume2, shared task papers, pages 499–504, berlin, ger-many.
+association for computational linguistics..matt post.
+2018. a call for clarity in reporting bleuscores.
+in proceedings of the third conference onmachine translation: research papers, pages 186–191, brussels, belgium.
+association for computa-tional linguistics..ricardo rei, craig stewart, ana c farinha, and alonlavie.
+2020. comet: a neural framework for mtevaluation.
+in proceedings of the 2020 conferenceon empirical methods in natural language process-ing (emnlp), pages 2685–2702, online.
+associa-tion for computational linguistics..shiqi shen, yong cheng, zhongjun he, wei he, huawu, maosong sun, and yang liu.
+2016. minimumrisk training for neural machine translation.
+in pro-ceedings of the 54th annual meeting of the associa-tion for computational linguistics (volume 1: longpapers), pages 1683–1692, berlin, germany.
+asso-ciation for computational linguistics..noah a. smith.
+2011. linguistic structure prediction.
+synthesis lectures on human language technolo-gies.
+morgan and claypool..felix stahlberg and bill byrne.
+2019. on nmt searcherrors and model errors: cat got your tongue?
+inproceedings of the 2019 conference on empiricalmethods in natural language processing and the9th international joint conference on natural lan-guage processing (emnlp-ijcnlp), pages 3356–3362, hong kong, china.
+association for computa-tional linguistics..felix stahlberg, adri`a de gispert, eva hasler, andbill byrne.
+2017. neural machine translation byminimising the bayes-risk with respect to syntactictranslation lattices.
+in proceedings of the 15th con-ference of the european chapter of the associationfor computational linguistics: volume 2, short pa-pers, pages 362–368, valencia, spain.
+associationfor computational linguistics..ilya sutskever, oriol vinyals, and quoc v. le.
+2014.sequence to sequence learning with neural networks.
+in proceedings of the 27th international conferenceon neural information processing systems - vol-ume 2, nips’14, page 3104–3112, cambridge, ma,usa.
+mit press..j¨org tiedemann.
+2012. parallel data, tools and inter-in proceedings of the eighth in-faces in opus.
+ternational conference on language resources andevaluation (lrec’12), pages 2214–2218, istanbul,turkey.
+european language resources association(elra)..j¨org tiedemann and santhosh thottingal.
+2020.opus-mt — building open translation services forthe world.
+in proceedings of the 22nd annual con-ferenec of the european association for machinetranslation (eamt), lisbon, portugal..j¨org tiedemann.
+2020. the tatoeba translation chal-lenge – realistic data sets for low resource and mul-tilingual mt.
+in proceedings of the fifth conferenceon machine translation, pages 1172–1180, online.
+association for computational linguistics..roy tromble, shankar kumar, franz och, and wolf-gang macherey.
+2008. lattice minimum bayes-risk decoding for statistical machine translation.
+inproceedings of the 2008 conference on empiricalmethods in natural language processing, pages620–629, honolulu, hawaii.
+association for com-putational linguistics..ashish vaswani, noam shazeer, niki parmar, jakobuszkoreit, llion jones, aidan n gomez, łukaszkaiser, and illia polosukhin.
+2017. attention is allyou need.
+in advances in neural information pro-cessing systems 30, pages 5998–6008..raphael shu and hideki nakayama.
+2017. later-stageminimum bayes-risk decoding for neural machinetranslation.
+arxiv preprint arxiv:1704.03169..sam wiseman and alexander m. rush.
+2016.sequence-to-sequence learning as beam-search op-timization.
+in proceedings of the 2016 conference.
+268on empirical methods in natural language process-ing, pages 1296–1306, austin, texas.
+associationfor computational linguistics..yonghui wu, mike schuster, zhifeng chen, quoc vle, mohammad norouzi, wolfgang macherey,maxim krikun, yuan cao, qin gao, klausmacherey, et al.
+2016. google’s neural machinetranslation system: bridging the gap between hu-arxiv preprintman and machine translation.
+arxiv:1609.08144..wen zhang, yang feng, fandong meng, di you, andqun liu.
+2019. bridging the gap between trainingand inference for neural machine translation.
+in pro-ceedings of the 57th annual meeting of the asso-ciation for computational linguistics, pages 4334–4343, florence, italy.
+association for computationallinguistics..269a data set details.
+iso3 abbreviation language pair.
+size.
+scripts.
+dan-epoaze-engbel-rusdeu-fra.
+eng-marara-deu.
+deu-eng.
+danish-esperantoazerbaijani-englishbelarusian-russiangerman-french.
+110k roman-roman680k roman(cid:63)-roman70k cyrillic-cyrillic47m roman-roman.
+english-marathiarabic-german.
+370k roman-devanagari12m arabic-roman.
+german-english.
+1m roman-roman.
+table 3: details about data sets.
+size refers to the number of sentence pairs in the training data.
+roman(cid:63) = romanscript with some modiﬁcations..b evaluation details.
+for evaluation metrics that require tokenization (bleu and meteor), we use the standard mteval13atokenization implemented in sacrebleu.
+we do not use any language-speciﬁc tokenization rules even ifthey are available for the target language.
+the sacrebleu signatures for our chrf and bleu evaluationmetrics are listed in table 4..evaluation metric sacrebleu signature.
+chrf 1chrf 2chrf 3.bleu.
+chrf1+numchars.6+space.false+version.1.4.14chrf2+numchars.6+space.false+version.1.4.14chrf3+numchars.6+space.false+version.1.4.14.
+bleu+case.mixed+numrefs.1+smooth.exp+tok.13a+version.1.4.14.
+table 4: sacrebleu signatures of evaluation metrics..c comments on the development sets distributed with the tatoeba challenge.
+the tatoeba challenge (tiedemann, 2020) distributes training, development and test data for a largenumber of language pairs.
+what is peculiar about the challenge is that the training data is assembled fromvarious sources through opus (tiedemann, 2012), while the development and test data are contributed byusers of tatoeba3.
+this means that the development and test set can be considered out-of-domain material.
+we investigated this issue and conclude that it does not constitute a problem.
+when both the developmentand test data are sampled from the training data, the results are similar to the ones we present in this paper,except for a small overall shift..d additional comparisons between utility functions.
+figures 8 and 9 show additional results for mbr decoding with utility functions that are variants of chrfand bleu..e additional length tables.
+we provide additional length statistics for utility functions used with mbr in table 5..3https://tatoeba.org.
+270figure 8: comparison of utility functions that are variants of chrf..figure 9: comparison of utility functions that are variants of bleu..271dan-epo aze-eng bel-rus deu-fra.
+reference.
+samplebeam-normalizedbeam-unnormalized.
+bleubleu-ﬂoorbleu-add-kbleu-exp.
+bleu-symmetricbleu-ﬂoor-symmetricbleu-add-k-symmetricbleu-exp-symmetric.
+chrf-1chrf-2chrf-3.
+chrf-1-symmetricchrf-2-symmetricchrf-3-symmetric.
+chrf-0.5.
+meteormeteor-symmetric.
+11.91.
+11.7311.6111.21.
+11.5411.5111.4611.42.
+11.5511.5111.3911.41.
+11.4812.5013.01.
+11.4811.4811.48.
+10.63.
+12.2311.47.
+15.54.
+15.1514.4513.62.
+14.4514.4114.2914.29.
+14.3914.3414.1414.21.
+14.1615.8816.92.
+14.1614.1614.16.
+12.99.
+15.2914.12.
+8.41.
+8.298.238.20.
+8.178.188.208.18.
+8.198.198.198.18.
+8.188.318.45.
+8.188.188.18.
+8.08.
+8.268.20.
+20.19.
+19.9919.6219.08.
+19.5919.5519.4019.41.
+19.5819.5319.2519.37.
+19.4020.8921.93.
+19.4019.4019.40.
+18.02.
+20.3819.40.table 5: lengths of hypotheses as mean number of tokens..272

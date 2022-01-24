@@ -1,0 +1,596 @@
+coins: dynamically generating contextualized inference rules fornarrative story completion.
+debjit paulresearch training group aiphesinstitute for computational linguisticsheidelberg universitypaul@cl.uni-heidelberg.de.
+anette frankresearch training group aiphesinstitute for computational linguisticsheidelberg universityfrank@cl.uni-heidelberg.de.
+abstract.
+despite recent successes of large pre-trainedlanguage models in solving reasoning tasks,their inference capabilities remain opaque.
+weposit that such models can be made more inter-pretable by explicitly generating interim infer-ence rules, and using them to guide the gener-ation of task-speciﬁc textual outputs.
+in thispaper we present coins, a recursive inferenceframework that i) iteratively reads context sen-tences, ii) dynamically generates contextual-ized inference rules, encodes them, and iii)uses them to guide task-speciﬁc output gener-ation.
+we apply coins to a narrative storycompletion task that asks a model to completea story with missing sentences, to produce acoherent story with plausible logical connec-tions, causal relationships, and temporal de-pendencies.
+by modularizing inference andsentence generation steps in a recurrent model,we aim to make reasoning steps and their ef-fects on next sentence generation transparent.
+our automatic and manual evaluations showthat the model generates better story sentencesthan sota baselines, especially in terms ofcoherence.
+we further demonstrate improvedperformance over strong pre-trained lms ingenerating commonsense inference rules.
+therecursive nature of coins holds the potentialfor controlled generation of longer sequences..1.introduction.
+narrative story understanding, and similarly storygeneration, requires the ability to construe mean-ing that is not explicitly stated through common-sense reasoning over events in the story (rashkinet al., 2018a).
+previous work in modeling narrativestories has focused on learning scripts1 (schankand abelson, 1977; mooney and dejong, 1985)and learning narrative schemas using corpus statis-.
+1scripts are structured knowledge about stereotypical event.
+sequences together with their participants..figure 1: an example of the narrative story comple-tion task.
+top and bottom boxes show the context (top)and missing sentences (bottom).
+the chain of implicitinference rules explains the connection between begin-ning and end, and allows to infer the missing sentences..tics (chambers and jurafsky, 2009; balasubrama-nian et al., 2013; nguyen et al., 2015).
+recently,large pretrained language models (lms) such asgpt-2 have shown remarkable performance on var-ious generation tasks.
+while these pretrained lmslearn probabilistic associations between words andsentences, they still have difﬁculties in modelingcausality (mostafazadeh et al., 2020).
+also, innarrative story generation, models need to be con-sistent with everyday commonsense norms.
+hence,to address a story generation task, i) models needto be equipped with suitable knowledge, ii) theyneed effective knowledge integration and reasoningmethods, and ideally iii) we want to be able to makethe effectiveness of these methods transparent..in this work we focus on the aspects i) to iii),by investigating new methods that build on pre-trained lms to generate missing sentences from anincomplete narrative story.
+speciﬁcally, we focuson narrative story completion (nsc), a new tasksetting for story generation.
+given an incompletestory, speciﬁed only through its beginning and end-ing, the task is to generate the missing sentences tocomplete the story (see figure 1).
+our hypothesis isthat in order to obtaining a consistent and coherent.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages5086–5099august1–6,2021.©2021associationforcomputationallinguistics5086beginning:s1:janie was excitedto seeher sister'splayin theatre.s2: janie gota callfrom her bossaboutan emergencywork.
+•someoneawasn’t ableto go somewhereb(to see the play) end:s5: janie watcheda video of the playlater.•someoneawants to go to somewhereb(to theatre)•someoneapossess(es) a phone.•someonebwants someoneato work.implicit inference ruleseffecteffect and causecausecontext :s3: janie’s boss gave her new work.
+s4: janie couldn’t attend her sisters’ playmissing sentence: narrative story, the task requires a model’s abilityto perform commonsense inference about eventsand entities in a story.
+unlike other existing tasks,nsc requires: i) generating multiple sentences tocomplete a story, and ii) ensuring that the gener-ated sentences are coherent with respect to bothbeginning and ending of the story.
+hence, the nsctask offers a challenging setup for investigating thereasoning capacities of a story generation model..humans excel in drawing inferences and con-structing causal chains that explain the connectionbetween events (kintsch and dijk, 1978).
+figure1 illustrates this with an example from our nsctask.2 from janie was excited to see her sister’splay in theatre(s1).
+janie got a call from her bossabout new work(s2) and the outcome janie watcheda video of the play later.
+(s5) – we can constructinference rules in forward and backward direc-tion: forward via effect: someoneb (boss) gavework to someonea (janie); backward via cause:someonea (janie) wasn’t able to go somewhereb(to the theatre).
+by combining these inferences, wecan obtain a representation from which to generatea connection that completes the story, e.g., janie’sboss wanted her to look after the issue(s3).
+shemissed the theatre play(s4)..in this work, we propose coins: a recursivemodel that jointly learns to i) dynamically gener-ate commonsense inference rules3 grounded in thecontext and to ii) perform controled and coherentstory generation, using the generated inferences asa guide.
+we hypothesize that jointly learning togenerate contextualized inference rules from dy-namically predicted contextualized inference rulesand learning to generate story sentences incremen-tally while taking the inferences into account, willimprove the quality of both the predicted inferencerules and of generated story sentences.
+moreover,the recursive nature of the model and the individu-ation of the inference prediction and sentence gen-eration tasks make the process more interpretable:the generated inference rules can be viewed as inter-mediate representations, and can serve as explana-tions of how the dynamically produced inferencesinﬂuence the quality of generated story sentences..our main contributions are as follows:1) we propose a new setting for a narrative storycompletion task, which asks a system to completea narrative story given its beginning and ending,.
+with the aim of examining the reasoning capacitiesof a model that solves the task..2) we propose an integrated reasoning and nlgeneration model, coins, that based on its currentcontext generates contextualized commonsense in-ference rules and follow-up sentences, in a step-wise recurrent process..3) we conduct extensive experiments with au-tomatic and human evaluation.
+automatic evalu-ations show that coins outperforms strong base-lines (+2.2 bleu score).
+human evaluation showsthat compared to strong baselines, our model yieldsbetter sentence generations with respect to coher-ence (+50.5%) and grammaticality (+20.5%)..4) we show that coins generates better infer-ence rules (+2.3 bleu score) compared to a ﬁne-tuned gpt-2 model, and that jointly learning togenerate inferences and story sentences improvesthe quality of the generated inference rules.
+our code is made publicly available.4.
+2 related work.
+sentence-level commonsense inference and be-yond.
+recent research in this area has focused oncommonsense knowledge acquisition (sap et al.,2019; zhang et al., 2020; speer et al., 2017;malaviya et al., 2020) and commonsense reason-ing (zellers et al., 2019; talmor et al., 2018).
+inour work, we focus on inferential knowledge aboutevents, and entities participating in such events.
+rashkin et al.
+(2018b) introduced a knowledge re-source of commonsense inferences regarding peo-ple’s intents and reactions towards a diverse setof events.
+with comet, bosselut et al.
+(2019)have shown that pre-trained neural language mod-els can be ﬁne-tuned using large knowledge bases(such as atomic, sap et al.
+(2019)) to generateinferences for a given event or sentence.
+how-ever, the generated knowledge from comet is non-contextualized and hence, can be inconsistent.
+re-cently, mostafazadeh et al.
+(2020) proposed glu-cose, a new resource and dataset that offers semi-structured commonsense inference rules that aregrounded in sentences of speciﬁc stories.
+theyshow that ﬁne-tuning a pre-trained lm on theglucose dataset helps the model to better gener-ate inferrable commonsense explanations given acomplete story.
+in concurrent work, gabriel et al.
+(2021) proposed para-comet, a model that in-.
+4https://github.com/heidelberg-nlp/.
+2we use the rocstories dataset to frame the nsc task.
+3in this paper, similar to mostafazadeh et al.
+(2020), wewill use “inference rule” and “explanation” interchangeably..coins.
+5087corporates paragraph-level information to gener-ate coherent commonsense inferences from narra-tives.
+in this work, we investigate how well a neuralmodel can generate contextualized commonsenseinference rules for an incomplete story.
+learningto predict iterative inference steps for successiveevents in a narration using semi-structured knowl-edge rules is still a difﬁcult and underexplored task.
+we propose a model that learns to iteratively gen-erate a coherent completion of an incomplete nar-rative story utilizing semi-structured knowledge asoffered by the glucose framework..commonsense reasoning in narrative sto-ries.
+early work on narrative events focused onscript learning, by deﬁning stereotypical event se-quences together with their participants (schankand abelson, 1977).
+in later works, chambersand jurafsky (2008, 2009); balasubramanian et al.
+(2013); nguyen et al.
+(2015); pichotta and mooney(2014) proposed methods to learn narrative eventchains using a simpler event representation thatallows for efﬁcient learning and inference.
+cham-bers and jurafsky (2009) acquired narrative eventschemata from corpora and established the narra-tive cloze task (chambers and jurafsky, 2008) thatevaluates script knowledge by predicting a missingevent (verb and its arguments) in a sequence of ob-served events.
+more recently, mostafazadeh et al.
+(2016) proposed the story cloze task that selects aplausible (right) over an implausible (wrong) storyending.
+bhagavatula et al.
+(2020) proposed an ab-ductive reasoning task to test a model’s ability togenerate plausible explanations for an incompleteset of observations.
+paul and frank (2020) pro-posed a multi-head knowledge attention method todynamically incorporate non-contextualized infer-ential knowledge to address the abductive reason-ing task.
+qin et al.
+(2020) proposed an unsuper-vised decoding algorithm that can ﬂexibly incorpo-rate both the past and future contexts using onlyoff-the-shelf language models to generate plausibleexplanations.
+concurrent to our work, paul andfrank (2021) presented a method for addressingthe abductive reasoning task by explicitly learningwhat events could follow other events in a hypo-thetical scenario.
+in our work, we make use of therocstories dataset (mostafazadeh et al., 2016) tobuild a narrative story completion task that tests amodel’s ability of generating missing sentences ina story.
+we propose a model that aims to producecoherent narrative stories by performing iterative.
+commonsense inference steps..narrative story generation.
+much existingwork on story generation relied on symbolic plan-ning methods (lebowitz, 1987; p ´erez and sharples,2001; j´ozefowicz et al., 2016).
+with the advancesof seq2seq models, several works applied themin automatic story generation tasks (roemmele,2016; jain et al., 2017).
+fan et al.
+(2018) pro-posed a hierarchical approach to generate shortstories from initial prompts.
+recently, many workshave focused on integrating external commonsenseknowledge from large static knowledge bases likeatomic (sap et al., 2019) or conceptnet (speeret al., 2017) for different tasks such as story end-ing generation (ji et al., 2020; guan et al., 2019) orstory generation (guan et al., 2020; xu et al., 2020).
+in concurrent work, ammanabrolu et al.
+(2021)look into causality for a commonsense plot gener-ation task.
+in our work, we model the assumptionthat contextualized inference rules provide inferredinformation that can guide a system in generatingboth contextually grounded and coherent follow-upsentences in a story generation task..3 task deﬁnition.
+we formulate the narrative story completiontask (nsc) as follows: given an incompletestory (s= s1, s2, sn) as a sequence of tokens t ={t1, t2, ..., tsep , ..., tm} (with tsep a mask tokendelimiting s2 and sn), the goal is to generate themissing sentences (s3, ..., sn−1) as a sequence oftokens ysi={ysi2 , ..., ysiv } (with i = 3, ..., n−1and v the maximum length of each sentence)..1 , ysi.
+in the setting of the nsc task, we expect thecompleted story to be coherent.
+that is, the gen-erated sentences should exhibit reasonable logicalconnections, causal relationships, and temporal de-pendencies with each other and the given beginningand ending of the story.
+in this paper, we deﬁnea discourse to be coherent if successive sentencesthat are about the same entities, and the reportedevents involving them can be construed to reﬂectcommon knowledge about how events are typicallyconnected in a temporal sequence or by causal re-lations.
+similar to hobbs (1985), the criteria toconclude that discourse is coherent include requirethat there are reﬂections of causality in the text..our take on this task is to incrementally generatecontextualized inference rules from the given con-text, and to make use of this knowledge to generatemissing story sentences..5088relation type dimensionscause(dim 1-5).
+effect(dim 6-10).
+(1) event that directly causes or enables x; (2) emo-tion or basic human drive that motivates x; (3) loca-tion state that enables x; (4) a possession state thatenables x; (5) other attribute that enables x.
+(6) an event that is directly caused or enabled by x;(7) an emotion that is caused by x; (8) a change oflocation that x results in; (9) a change of possessionthat x results in; (10) other change in attribute thatx results in..table 1: causal relation types and their mapped rela-tions (mostafazadeh et al., 2020)..incompletestory:gold:.
+coins:.
+s1: jane loved cooking.
+s2: everyone else in her family did too.
+s5: eventually she learned everything there was to teach.
+someonea loves somethinga (thatis an activity )>causes/enables> someonea learns everything there isto learn.
+jane loves cooking >causes/enables> jane learns every-thing there is to learnsomeonea is a quick learner >causes/enables>someonea learns everything there is to learn.
+jane is a quick learner >causes/enables> jane learnseverything there is to learn..table 2: example of inference rules generated bycoins (compared to gold from glucose).
+grey:context-speciﬁc rules (sr); regular: general rules (gr).
+bolded sentence s5 is x, cause is the relation type r..4 discourse-aware inference rules.
+this section details how we construct training datafor the nsc task, by enriching stories with au-tomatically predicted contextualized inferences.5we utilize the glucose (mostafazadeh et al.,2020) dataset, which contains implicit common-sense knowledge in form of semi-structured generaland speciﬁc inference rules6 (cf.
+table 1) that aregrounded in the context of individual stories fromrocstories.
+in glucose, given a story s anda selected sentence x from the story, the authorsdeﬁne ten dimensions d of commonsense causalexplanations related to x, inspired by human cog-nitive psychology.
+only a small part of rocstoriesis annotated with glucose inferences (table 3).
+given the amount of commonsense knowledgeneeded for real-world tasks, a static knowledgeresource is always incomplete.
+thus, we ﬁne-tunea pre-trained gpt-2 model on the annotated partof glucose to dynamically generate inferencerules for each sentence xi of each story si fromthe underlying rocstories data.
+we ﬁne-tune twoseparate language models csigen and csispec forgeneral and speciﬁc rules, respectively (table 2)..the 10 dimensions d in glucose cover im-.
+5for testing we rely on glucose’s manually validatedinference rules on a small subset of the rocstories corpus..6speciﬁc means rules grounded in a given context and gen-eral corresponds to rules that are applicable to other contexts..dataset.
+relation type train.
+dev.
+test.
+nscglucose effectcause.
+88,34429492944.
+4,908849916.
+4,909––.
+table 3: dataset statistics: number of unique stories..plicit causes and effects of a sentence x in a givenstory.
+in our work, we are interested in inferencerules that explain a sentence’s causes and effects,to study the impact of such inferences on narrativestory completion.
+we therefore cluster all dimen-sions d into the two categories effect vs. cause(table 1) and aggregate all rules from the respectivecategories (preserving their dimensions).
+once ourmodels (csigen, csispec) are trained, we applythem to our nsc task training data, to enrich it withinference rules for each sentence and story..5 coins: contextualized inference andnarrative story completion model.
+in this section we introduce a recursively operatingreasoning and sentence generation model: coins.
+an overview is given in figure 2. in each iteration,the model applies two consecutive steps:(1) inference step: given an incomplete storycontext s(cid:48)= x ⊕ si and relation r, an inferencemodel csi (gen or spec) generates contextual-ized inference rules of type r.(2) generation step: a sentence generator readsthe generated inference rules concatenated withthe current context s(cid:48) and generates the next storysentence si+1.
+the context s(cid:48) is updated with si+1and steps (1) and (2) are repeated (cf.
+algorithm 1)..this formulation allows us to i) examine infer-ence and generation capabilities separately fromeach other, ii) helps determine the impact of infer-ential knowledge on story generation, and iii) cangive us insight into how knowledge can guide storygeneration in a recursive inference framework..inference step.
+we deﬁne the initial story con-text s(cid:48) = {s1, s2,[sep], sn}, a selected sentence assi, and relation type r ∈ {effect, cause}, wherei ∈ [2, .
+.
+.
+n-1], si={wsi1 , .., wsiv }.
+we adopt a pre-trained gpt-2 (base) (radford et al., 2019) trans-former model with multiple transformer blocks ofmulti-head self-attention and fully connected lay-ers.
+during training, in each iteration the input tothe model is a concatenation of the current source(s(cid:48), si, r) and target sequence i.e., the inference.
+5089algorithm 1 coinsinput: initial context (s(cid:48) = {s1, s2, [sep ], sn})1: m emir ← empty2: gens ← empty list3: for i ← 2 to n − 1 do4:5:6:7:8:9:10:11:12:13: end for14: return gens, m emir.
+ei = geninferencerules(s(cid:48), si, effect)ci = geninferencerules(s(cid:48), sn, cause)ii = ei ⊕ cisi+1 = gennewsentence(ii, s(cid:48))gens := gens + si+1m emir := m emir ⊕ iils += −logp(θ) (si+1|ii, s(cid:48)) −logp(β) (ii|s(cid:48))lir += −logp(θ) (si+1|ii, s(cid:48)) −logp(β) (ii|s(cid:48))s(cid:48) := {s1, s2, si+1, [sep ], sn}.
+similarly, we generate effect relations for si,assuming that an event, changes of emotion orchanges of attribute that are possible effects causedby si will be most relevant for generating the miss-ing follow-up sentences.
+in principle, however,for nsc and other story generation tasks, we mayconsider cause and effect relations for all sen-tences, letting the model freely choose from thefull space of inferences..we concatenate the generated inference rules(ii = ei ⊕ ci)7 and store the last hidden repre-sentation in m emir ∈ irn ×l×h , where n is thenumber of sentences, l the maximum inference se-quence length and h the hidden state dimensions.
+m emir is updated with the hidden representa-tions of inference rules in each iteration.
+hence,m emir could act as an intermediate representa-tion, and as a basis for providing explanations forobserved story sentence generations.
+m emir mayalso be used as a memory for long-form text gen-eration tasks, to keep track of implicit knowledgetriggered by previously generated text, and couldsupport ﬂexible discourse serialization patterns.8.
+generation step.
+given the generated inferencerules ii (in form of tokens) and the incompletestory context s(cid:48), we aim to generate the next miss-ing sentence.
+we pass the input through anotherpretrained gpt-2 (base) model (cf.
+equation 1).
+the loss function for the sentence generator is.
+ls(θ) = −.
+log p (ysi+1.
+k.|ii, [eok], s(cid:48)) (3).
+v(cid:88).
+k=1.
+where yk denotes the k-th token and v thethe generated sentence;maximum length of.
+7we use [sep ] token to delimit the individual ei and ci.
+when concatenating them..8we leave such extensions to future work..figure 2: architecture of the coins model..rules (ei or ci).
+eq.
+(1) deﬁnes the inference rule(ir) generation model:.
+h0p = ep + pp,p = block(hl−1hl<p ), l ∈ [1, l]p w t )p(yp|y<p, p) = sof tmax(hl.
+(1).
+where h0p is a summation of token embedding epand position embedding pp for the p-th token;hlp is the l-th layer’s output at position p, com-puted through transformer blocks with the maskedmulti-head self attention mechanism; hlp is the ﬁ-nal layer’s hidden state and y<p indicates the leftcontext of position p. the softmax layer deﬁnes themodel to output the most probable target sequence:the most likely inference rules (ei and ci) for eachrelation type (cf.
+algorithm line 4-5)..during training, we minimize the objective (2).
+li (β) = −.
+log p(ek.
+i |s(cid:48), si, effect).
+−.
+log p(ck.
+i |s(cid:48), sn, cause).
+(2).
+m+n(cid:88).
+k=mm+n(cid:88).
+k=m.
+where m, n denote the number of tokens in thesource (s(cid:48), si, r) and target sequence (inferencerules) respectively; β refers to model parameters..in this work, we focus on the nsc task, which re-quires our model to capture temporal dependenciesand causal relationships between events.
+while wedesigned our sentence generation model in sucha way that it can utilize inference rules from bothforward and backward directions for each sentence,we here trigger the generation of cause inferencerules for sn, since we expect that events, motiva-tions or attributes that cause sn will be relevant forgenerating the preceding sentences [s3, .
+.
+.
+sn−1]..5090contextualized inference rules (ii)sentence (si)output sentence (si+1)(gpt-2)(gpt-2)generate semi-structured inference rulesgenerate missing sentenceii+s’context (s’)update contexti ∈ [2, n − 1] ; [eok] denotes the end of knowl-edge rule tokens, and θ refers to model parameters.
+update story context.
+in the ﬁnal step we up-date the story context by inserting the generatedsentence si+1 into the previous story context (cf.
+algorithm 1, line 12)..training and inference.
+we add the losses lifor inference generation and ls for sentence gener-ation to make the models dependent on each other(algorithm 1, line.
+10-11).
+for both the inferenceand the generation step model, we minimize thenegative log likelihood loss of the respective targetsequence..6 experiments.
+6.1 dataset.
+we apply coins to the nsc and the story endinggeneration tasks.9 for data statistics see table 3.narrative story completion.
+we follow the taskdeﬁnition as introduced in §3.
+data collection.
+we construct the nsc dataset onthe basis of the rocstories corpus (mostafazadehet al., 2016), which contains 98,162 ﬁve-sentencestories with a clear beginning and ending, thusmaking it a good choice for this task.
+we choosethe ﬁrst two sentences (s1, s2) as beginning ratherthan just s1 because the ﬁrst sentence (s1) tends tobe short in length, and usually introduces charac-ters or sets the scene (mostafazadeh et al., 2016),wherease the second sentence (s2) provides moreinformation about the initial story..6.2 hyperparameter details.
+parameter size.
+for gpt-2 we use the gpt-2 smallcheckpoint (117m parameters) based on the imple-mentation of huggingface (wolf et al., 2020).
+decoding strategy.
+in the inference stage, we adoptbeam search decoding with a beam size of 5 for allour models and all baselines we produce.
+we used the following set of hyperparameters forour coins model: batch size: {2, 4}; epochs:{3, 5}; learning rate: {1e-5, 5e-6}.
+we use adamoptimizer, and dropout rate = 0.1. we ran ourexperiments with gpu sizes of 11gb and 24gb..(a) gpt-2 (radford et al., 2018) (with 12-layer,768-hidden, 12-heads), trained with an objectiveto predict the next word.
+the input to the gpt-2model is the concatenation of the source and thetarget story sequence.
+we follow the standard pro-cedure to ﬁne-tune gpt-2 on the nsc task duringtraining and minimize the loss function:.
+−log(s3, s4|[sos]s1, s2, [sep ], s5[eos]) (4).
+(b) knowledge-enhanced gpt-2 (ke) (guanet al., 2020) is the current sota for rocstoriesgeneration.
+it ﬁrst ﬁne-tunes a pre-trained gpt-2(small) model with knowledge triples from com-monsense datasets (conceptnet [cn] speer et al.
+(2017) and atomic [at] sap et al.
+(2020)).
+theknowledge triples were converted to sentences us-ing templates.
+a multitask learning framework fur-ther ﬁne-tunes this model on both the story endinggeneration task and classifying corrupted storiesfrom real ones.
+as our baseline we choose theversion without multi-tasking, since the corruptedstory setting is not applicable for the nsc task..(c) grf (ji et al., 2020) is the current sotafor the abductive reasoning and the story endinggeneration tasks.
+grf enables pre-trained models(gpt-2 small) with dynamic multi-hop reasoningon multi-relational paths extracted from the exter-nal conceptnet commonsense knowledge graph..(d) glucose-gpt-2 similar to guan et al.
+(2020), we ﬁne-tune pretrained gpt-2 (small) onthe glucose dataset using general rules (gr).
+wefollow the same procedure as guan et al.
+(2020)and (i) ﬁrst ﬁne-tune a pre-trained gpt-2 , but hereon the glucose dataset, with the following loss:.
+−log(ii|s, si, r),.
+(5).
+where r: cause/effect, ii: inference rules.
+(ii)then we ﬁne-tune the above model again on thensc dataset with the following loss:.
+−log(s3, s4|[sos]s1, s2, [sep ], s5[eos]) (6).
+the main difference between glucose-gpt-2and coins is: coins explicitly learns to generate(contextualized) inference rules on the ﬂy duringthe inference step and incorporates them in thestory generation step..6.3 baselines.
+6.4 automatic evaluation metric.
+we compare our coins model to the followingbaselines:.
+9the results for story ending generation will corroborate.
+our results for nsc.
+all details are given in the appendix..for automatic evaluation in the nsc task we use asmetrics perplexity (indicates ﬂuency of text genera-tion), bleu-1/2 (papineni et al., 2002) and rouge-l (lin, 2004).
+we report performance on the test.
+5091model.
+ppl (↓) bleu-1/2 (↑) rouge-l (↑).
+input.
+ppl (↓) bleu-1/2 (↑) rouge-l (↑).
+gpt-2ke [cn, at]glucose-gpt-2grf [cn]coins (sr)coins (gr)coins oracle (sr) (test-only)coins oracle (gr) (test-only)human.
+11.5612.6112.712.186.76.9–––.
+16.66/6.817.55/7.617.9/7.820.8/8.222.53/10.1022.82/10.5230.75/22.7626.37/17.0124.53/12.10.
+17.217.917.517.618.919.432.527.3820.2.table 4: automatic evaluation results for story com-pletion.
+best performance highlighted in bold; usedinference rule types: speciﬁc (sr), general (gr)..sets by averaging results obtained for 5 differentseeds.
+all improvements across all model variantsare statistically signiﬁcant at p < 0.05)..7 results.
+our experimental results are summarised in tables4 and 6.nsc task.
+table 4 shows the results for the modelsdescribed in §6.3 and evaluated as per §6.4.
+weobserve the following: (i) coins outperforms allstrong baseline models that utilize pre-trained lan-guage models and incorporate external common-sense knowledge with respect to all automatic eval-uation metrics.
+note that glucose-gpt2 andcoins are using the same knowledge resource,hence the clear performance increase of coins(+4.92 bleu score) indicates that jointly learn-ing to generate contextualized inferences rulesand missing sentences in a recursive manner canenhance generation quality.10(ii) similar to jiet al.
+(2020) we observe that ﬁne-tuning gpt-2 over knowledge triples ([cn], [at]omic or[gl]ucose) doesn’t improve the overall perfor-mance by much (table 4, line 2: [cn+at] vs. line3: [gl] vs. line 1: [no csk]).
+(iii) for coins,general rules (gr) boost performance more thanspeciﬁc rules, indicating that the sentence gener-ation model generalizes well.
+(iv) in the oraclesettings at inference time we provide the modelwith the silver inference rules (generated as per §4)that use the complete story context as background.
+the result indicates that sr performs better thangr when the model sees the full story context..in general we observe that story generation ben-eﬁts from higher-quality, contextualized inference.
+10since grf’s architecture is speciﬁc for conceptnet, wecannot exclude that the better performance of coins (+2.2bleu) is in part due to differences in the used knowledge..ir only (gr)ir only (sr)no ir + w/oseir (gr) + w/ose.
+13.058.0111.57.49.
+10.65/4.0115.65/6.0815.12/5.9521.50/9.78.
+6.3115.3112.4718.07.table 5: impact of different inputs to coins for storycompletion, sr: speciﬁc rules, gr: general rules, ir:inference rules, w/ose: w/o the story ending (sn)..rules from glucose (for coins).11 the improve-ment of coins over glucose-gpt-2 indicatesthat our model is well able to utilize and proﬁtfrom the inference rules.
+in the oracle setting, srperforms much better than gr.
+this is expected,since oracle rules with access to the full contextwill deliver more contextually-relevant inferences,while gr rules may diverge more from the storycontext.
+however, in the realistic nsc task set-ting (table 4, lines 5,6) gr outperforms sr, whichagain underlines the generalization capacities ofcoins..impact of different inputs for the generationstep.
+in table 5 we investigate the performanceof coins with different inputs to the sentence gen-eration component at inference time: (i) whenonly inference rules (from the inference step) aregiven to the model without any story context (s(cid:48)= {s1, s2,[sep], sn}) (ir only), sentence genera-tion beneﬁts when speciﬁc rules are used.
+thisis expected since the speciﬁc rules contain state-ments with concrete character names and para-phrased events from the story.
+(ii) when only thestory beginning (s1,2) is provided to the sentencegeneration model without the ending sentence sn(w/ose) nor inference rules (w/oir) we observethat the performance drops compared to modelsgiven the full incomplete context (s(cid:48)), indicatingthat knowing the story ending helps the model togenerate missing sentences that are coherent withthe story.
+however, (iii) when adding inferencerules ir (from the inference step i.e., ei + ci) tothe context (s1,2) without ending sentence (w/ose),performance again improves (+5.85 bleu scores).
+note that the inference rule contains the causerelation for sn.
+this indicates that the model is ableto utilize inference rules for story generation.12.
+11automatic (silver) glucose inference rules (cf.
+§4) oftype gr yield 60.8 bleu score i.e., performance of csigen(avg.
+of both relation types)..12here, we report the results with generalized rules as gr.
+works better than sr when context is given (cf.
+table.
+4)..5092performance of inference rule generation.
+wenow investigate how difﬁcult it is to generate con-textualized inference rules (speciﬁc and general)when multiple sentences are missing from a story.
+for this we compare coins to a gpt-2 modelﬁne-tuned on glucose data to generate inferencerules (cf.
+§4).
+we study the impact of jointly anddynamically learning sentence and inference rulegeneration (in coins) on the inference genera-tion task – while the ﬁne-tuned gpt-2 model onlylearns to generate inference rules conditioned onthe static story context.
+we speciﬁcally examinethe difﬁculty of generating inference rules for twoconsecutive sentences (s3 and s4) in a 5-sentencecontext, as opposed to shorter sequences, in threedifferent scenarios: i) when the complete story con-text s is given; ii) when the incomplete contexts(cid:48) (i.e., s1, s2 and s5) is given, plus either s3 ors4 (1-missing sentence), and iii) when s(cid:48) is given,but neither of the intermediate sentences s3 ands4 (2-missing sentences).
+in each setting, we gen-erate effect and cause rules for the targetedsentences s3, s4, and compare their quality.
+theresults are reported in table 6. we observe thatin the 2-missing sentences setting, coins outper-forms gpt-2 (by +2.3 bleu score on average).
+this indicates that learning to perform inferencerule generation jointly with sentence generation isbeneﬁcial for ﬁlling-in multiple story sentences.
+in-terestingly, for increasing numbers of missing sen-tences, performance drops drastically for cause(as opposed to effect), but less so for coins asopposed to gpt-2.
+a possible reason for this maybe the conditional, uni-directional nature of the un-derlying gpt-2 language model, which is trainedto predict follow-up words in forward direction.
+this may favor future-directed effect rules – asopposed to cause relations.
+the milder effect oncoins could indicate that the concurrent inferencemodel supports the sentence generation model toovercome this weakness.13.
+8 manual evaluation.
+automatic metrics can give us some indication ofnlg quality, however, these metrics do not nec-essarily reﬂect the coherence of generated storysentences.
+we thus conduct a human evaluationfocusing on the grammaticality and coherence ofthe generated sentences in their story context.
+we.
+model.
+full contexte.c.1-missing sentencee.c.2-missing sentencee.c.gpt-2† 58.3coins 59.9gpt-2† 57.7coins 57.8.
+63.362.959.560.1.
+56.558.655.556.3.
+58.360.355.358.2.
+55.457.553.455.1.
+53.956.851.455.2.table 6: automatic evaluation of the quality of infer-ence rules in different context settings.
+best results inbold.
+metric: bleu-1 scores, e: effect, c: cause,grey: context-speciﬁc rules (sr); regular: generalrules (gr), †: ﬁne-tuned on glucose dataset..conduct pairwise comparisons for randomly sam-pled 100 instances of our best model, i.e., coinswith gr (according to automatic metrics) withfour strong baseline models (gpt-2, glucose-gpt-2, grf, ke).
+for each pair of instances (onefrom coins, the other from a baseline model),we present the generated sentences in their storycontext, and asked three annotators to give a prefer-ence rating (win, tie, lose) according to the criteriagrammaticality and coherence.
+for grammaticality,we present each sentence in isolation and ask theannotators to rate which sentence is more ﬂuent,readable, and compliant with the english standardusage.
+for coherence, we ask the annotators to as-sess which of the two generated sentences are morelogically coherent with each other and the story be-ginning and ending, in terms of causal and temporaldependencies.
+we applied majority voting amongthe three annotators to obtain ﬁnal decisions.
+moredetails about the annotation are given in appendix.
+the human evaluation results are presented intable 7.14 the results show that our model pro-duces more coherent and more grammatically cor-rect sentences compared to all baselines.
+this in-dicates that with support of learned contextualizedinference rules based on glucose knowledge, ourmodel generates more coherent story sentences thatare causally and temporally well connected..relevance of generated inferences rules.
+wefurther conduct human evaluation to validate theeffectiveness and relevance of the generated infer-ence rules.
+we randomly select 50 instances fromthe nsc dev set.
+we asked three annotators toevaluate the (gr) inference rules15.
+we deﬁne aninference rule to be relevant if (a) it captures im-.
+14we report inter-annotator agreement scores calculatedwith fless’ kappa κ (fleiss, 1971), calculated for each com-parison.
+we ﬁnd moderate or fair agreement..15we report only coins (gr), our best model according.
+13in future work, we will test the above hypothesis by exper-imenting with a bi-directional transformer generation model..to automatic metrics..5093knowledge.
+coherence.
+grammaticality.
+modelscoins vs gpt-2coins vs gluc.-gpt-2coins vs kecoins vs grf.
+of base model win(%) tie(%) loss(%) κ win(%) tie(%) loss(%) κ.noneglucosecn + atomiccn.
+54.752.050.050.5.
+32.033.032.030.5.
+13.315.018.019.0.
+0.520.430.440.48.
+45.731.721.320.5.
+41.354.369.770.0.
+13.014.09.09.5.
+0.490.450.370.35.table 7: manual evaluation of sentence generation quality of coins (gr) for 100 stories.
+scores are percentagesof win, loss, or tie when comparing coins to baselines.
+fleiss’ kappa κ: fair agreement or moderate agreement..incompletestory:.
+missing sen-tences:coins (igr).
+coins (isr).
+s1: ken was driving around in the snow.
+s2: he needed toget home from work.
+s5: his tires lost traction and he hit atree.
+s3: he was driving slowly to avoid accidents.
+s4: unfortu-nately the roads were too slick and ken lost control.
+someonea is going somewhereb (cid:31)cause/enables(cid:31)someonea is at somewhereb, someonea is drivingsomethinga fast (cid:31)cause/enables(cid:31) somethinga hitssomethingb (thatis a tree), someonea possess(es)somethinga (that is a car ) (cid:31)enables(cid:31)> somethinga(tires) lost somethingb (traction)he posses(es) a car (cid:31)result in(cid:31) his tires lost traction, heneeded to get home (cid:31)enables(cid:31) he drove home, he wasdriving on ice (cid:31) causes/enables (cid:31) his tires lost traction,he was driving on ice (cid:31)causes/enables(cid:31) he lost controlof his vehicle..coins(msgr) he was driving too fast.
+he lost control of his car .
+coins(mssr) he was driving on ice.
+he lost control of his vehicle .
+gpt-2gpt-2 glu-coseke.
+he stopped at a gas station.
+he ﬁlled his tank.
+when he got to the house he realized he was stuck.
+ken hadto pull over to get help.
+when he got home, he noticed his tires were ﬂat.
+he decidedto pull over.
+he pulled over to see what was wrong.
+he saw that his carwas stuck in the snow.
+he was going very fast.
+the street was slippery from thesnow..human.
+grf.
+table 8: examples:inference rules and missing sen-tences generated by coins (compared to gold fromglucose, green), as well as baseline model genera-tions.
+gray: coins (sr); regular: coins (gr); ms:missing sentences, i: inference rules.
+uations show that the model outperforms strongcommonsense knowledge-based generation mod-els.
+by individuating the inference rule and sen-tence generation steps, coins can make the contri-bution of commonsense knowledge on story gen-eration transparent.
+the recursive nature of theinference-driven generation model holds potentialfor knowledge-driven control in the generation oflonger sequences.
+in future work we will explorehow an enhanced memory of generated inferencescan realize more complex narrative patterns thatdiverge from strictly ordered narrative sequences..figure 3: human evaluation of the relevance of infer-ence rules generated by coins..plicit causes and effects of a selected sentence xgiven an incomplete story s(cid:48), and (b) it is provid-ing useful explanations for the incomplete storys(cid:48).
+the result for this evaluation is shown in fig.3,for effect and cause relations.
+we ﬁnd thatin 36% and 34% of cases for effects and causes,respectively (computed on the basis of majorityagreement), our algorithm was able to generate rel-evant inference rules.
+our annotations yielded fairinter-annotator agreement of fleiss’ κ = 0.45..case study.
+we provide an example from nscwith different generation outputs (table 8).
+notethat the generated sentences are grounded to theinference rules obtained from the inference step.
+hence, the rules provide both an intermediate rep-resentation and explanations for how knowledgecan guide or inﬂuence story generation.
+we pro-vide more qualitative examples in the appendix..9 conclusion.
+acknowledgements.
+we addressed a narrative story completion taskthat allows us to probe the coherence capabili-ties of a neural generation model.
+we proposedcoins, a model that iteratively generates common-sense inference rules grounded in the context andgenerates story sentences, using the generated in-ferences as a guide.
+human and automatic eval-.
+this work has been supported by the german re-search foundation as part of the research traininggroup “adaptive preparation of information fromheterogeneous sources” (aiphes) under grant no.
+grk 1994/1.
+we thank our annotators for theirvaluable annotations.
+we also thank nvidia cor-poration for donating gpus used in this research..5094causereferences.
+prithviraj ammanabrolu, wesley cheung, williambroniec, and mark o. riedl.
+2021. automated sto-rytelling via causal, commonsense plot ordering.
+inproceedings of the aaai conference on artiﬁcial in-telligence..stephen.
+niranjan balasubramanian,.
+soderland,mausam, and oren etzioni.
+2013. generating co-herent event schemas at scale.
+in proceedings of the2013 conference on empirical methods in naturallanguage processing, pages 1721–1731, seattle,washington, usa.
+association for computationallinguistics..chandra bhagavatula, ronan le bras, chaitanyamalaviya, keisuke sakaguchi, ari holtzman, han-nah rashkin, doug downey, wen tau yih, and yejinchoi.
+2020. abductive commonsense reasoning.
+ininternational conference on learning representa-tions..antoine bosselut, hannah rashkin, maarten sap, chai-tanya malaviya, asli celikyilmaz, and yejin choi.
+2019. comet: commonsense transformers for au-tomatic knowledge graph construction.
+in proceed-ings of the 57th annual meeting of the associationfor computational linguistics, pages 4762–4779,florence, italy.
+association for computational lin-guistics..nathanael chambers and dan jurafsky.
+2008. unsuper-vised learning of narrative event chains.
+in proceed-ings of acl-08: hlt, pages 789–797, columbus,ohio.
+association for computational linguistics..nathanael chambers and dan jurafsky.
+2009. unsu-pervised learning of narrative schemas and their par-ticipants.
+in proceedings of the joint conference ofthe 47th annual meeting of the acl and the 4th in-ternational joint conference on natural languageprocessing of the afnlp, pages 602–610, suntec,singapore.
+association for computational linguis-tics..angela fan, mike lewis, and yann dauphin.
+2018. hi-in proceedingserarchical neural story generation.
+of the 56th annual meeting of the association forcomputational linguistics (volume 1: long papers),pages 889–898, melbourne, australia.
+associationfor computational linguistics..joseph l fleiss.
+1971. measuring nominal scale agree-ment among many raters.
+psychological bulletin,76(5):378..saadia gabriel, chandra bhagavatula, vered shwartz,ronan le bras, maxwell forbes, and yejin choi.
+2021. paragraph-level commonsense transformerswith recurrent memory.
+in aaai..jian guan, fei huang, zhihao zhao, xiaoyan zhu, andminlie huang.
+2020. a knowledge-enhanced pre-training model for commonsense story generation.
+transactions of the association for computationallinguistics, 8:93–108..jian guan, yansen wang, and minlie huang.
+2019.story ending generation with incremental encod-proceedingsing and commonsense knowledge.
+of the aaai conference on artiﬁcial intelligence,33(01):6473–6480..jerry r hobbs.
+1985. on the coherence and structure.
+of discourse..parag.
+jain,.
+priyanka agrawal,.
+a. mishra,m. sukhwani, anirban laha, and k. sankara-narayanan.
+2017. story generation from sequenceof independent short descriptions.
+abs/1707.05501..haozhe ji, pei ke, shaohan huang, furu wei, xiaoyanzhu, and minlie huang.
+2020. language generationwith multi-hop reasoning on commonsense knowl-edge graph.
+in proceedings of the 2020 conferenceon empirical methods in natural language process-ing (emnlp), pages 725–736, online.
+associationfor computational linguistics..r. j´ozefowicz, oriol vinyals, mike schuster, noamshazeer, and y. wu.
+2016. exploring the limits oflanguage modeling.
+arxiv, abs/1602.02410..w. kintsch and t. a. dijk.
+1978. toward a model oftext comprehension and production.
+psychologicalreview, 85:363–394..michael lebowitz.
+1987. planning stories.
+in proceed-ings of the 9th annual conference of the cognitivescience society, pages 234–242..jiwei li, michel galley, chris brockett, jianfeng gao,and william b dolan.
+2016. a diversity-promotingobjective function for neural conversation models.
+in proceedings of the 2016 conference of the northamerican chapter of the association for computa-tional linguistics: human language technologies,pages 110–119..chin-yew lin.
+2004. rouge: a package for auto-matic evaluation of summaries.
+in text summariza-tion branches out, pages 74–81, barcelona, spain.
+association for computational linguistics..minh-thang luong, hieu pham, and christopher dmanning.
+2015. effective approaches to attention-based neural machine translation.
+in proceedings ofthe 2015 conference on empirical methods in natu-ral language processing, pages 1412–1421..chaitanya malaviya, chandra bhagavatula, antoinebosselut, and yejin choi.
+2020. commonsenseknowledge base completion with structural and se-mantic context.
+proceedings of the 34th aaai con-ference on artiﬁcial intelligence..raymond j mooney and gerald dejong.
+1985. learn-ing schemata for natural language processing.
+in ij-cai, pages 681–687..nasrin mostafazadeh, nathanael chambers, xiaodonghe, devi parikh, dhruv batra, lucy vanderwende,.
+5095pushmeet kohli, and james allen.
+2016. a cor-pus and cloze evaluation for deeper understanding ofin proceedings of the 2016commonsense stories.
+conference of the north american chapter of theassociation for computational linguistics: humanlanguage technologies, pages 839–849, san diego,california.
+association for computational linguis-tics..nasrin mostafazadeh, aditya kalyanpur, lori moon,david buchanan, lauren berkowitz, or biran, andjennifer chu-carroll.
+2020. glucose: general-ized and contextualized story explanations.
+inproceedings of the 2020 conference on empiricalmethods in natural language processing (emnlp),pages 4569–4586, online.
+association for computa-tional linguistics..kiem-hieu nguyen, xavier tannier, olivier ferret,and romaric besanc¸on.
+2015. generative eventinschema induction with entity disambiguation.
+proceedings of the 53rd annual meeting of the asso-ciation for computational linguistics and the 7th in-ternational joint conference on natural languageprocessing (volume 1: long papers), pages 188–197..kishore papineni, salim roukos, todd ward, and wei-jing zhu.
+2002. bleu: a method for automatic eval-uation of machine translation.
+in proceedings of the40th annual meeting of the association for compu-tational linguistics, pages 311–318..debjit paul and anette frank.
+2020. social common-sense reasoning with multi-head knowledge atten-in findings of the association for computa-tion.
+tional linguistics: emnlp 2020, pages 2969–2980,online.
+association for computational linguistics..debjit paul and anette frank.
+2021. generating hy-in pro-pothetical events for abductive inference.
+ceedings of the tenth joint conference on lexicaland computational semantics, online.
+associationfor computational linguistics..karl pichotta and raymond mooney.
+2014. statisti-cal script learning with multi-argument events.
+inproceedings of the 14th conference of the europeanchapter of the association for computational lin-guistics, pages 220–229..alec radford, karthik narasimhan, tim salimans, andimproving language under-.
+ilya sutskever.
+2018.standing by generative pre-training..alec radford, jeff wu, rewon child, david luan,dario amodei, and ilya sutskever.
+2019. languagemodels are unsupervised multitask learners..hannah rashkin, antoine bosselut, maarten sap,kevin knight, and yejin choi.
+2018a.
+modelingnaive psychology of characters in simple common-in proceedings of the 56th annualsense stories.
+meeting of the association for computational lin-guistics (volume 1: long papers), pages 2289–2299..and yejin choi..hannah rashkin, maarten sap, emily allaway,noah a. smith,2018b.
+event2mind: commonsense inference on events,in proceedings of the 56thintents, and reactions.
+annual meeting of the association for computa-tional linguistics (volume 1: long papers), pages463–473, melbourne, australia.
+association forcomputational linguistics..melissa roemmele.
+2016. writing stories with helpfrom recurrent neural networks.
+in proceedings ofthe aaai conference on artiﬁcial intelligence, vol-ume 30..maarten sap, ronan le bras, emily allaway, chan-dra bhagavatula, nicholas lourie, hannah rashkin,brendan roof, noah a. smith, and yejin choi.
+2019.atomic: an atlas of machine commonsense forin the thirty-third aaai con-if-then reasoning.
+ference on artiﬁcial intelligence, aaai 2019, thethirty-first innovative applications of artiﬁcial in-telligence conference, iaai 2019, the ninth aaaisymposium on educational advances in artiﬁcial in-telligence, eaai 2019, honolulu, hawaii, usa, jan-uary 27 - february 1, 2019., pages 3027–3035..maarten sap, vered shwartz, antoine bosselut, yejinchoi, and dan roth.
+2020. commonsense reason-in proceed-ing for natural language processing.
+ings of the 58th annual meeting of the associationfor computational linguistics: tutorial abstracts,pages 27–33, online.
+association for computationallinguistics..rafael p ´erez ´y p ´erez and mike sharples.
+2001. mex-ica: a computer model of a cognitive account of cre-ative writing.
+journal of experimental & theoreti-cal artiﬁcial intelligence, 13(2):119–139..roger c. schank and robert p. abelson.
+1977. scripts,plans, goals, and understanding : an inquiry intohuman knowledge structures.
+:lawrence erlbaum associates..hillsdale, n.j..lianhui qin, vered shwartz, peter west, chandra bha-gavatula, jena d. hwang, ronan le bras, antoinebosselut, and yejin choi.
+2020. back to the future:unsupervised backprop-based decoding for counter-factual and abductive commonsense reasoning.
+inproceedings of the 2020 conference on empiricalmethods in natural language processing (emnlp),pages 794–805, online.
+association for computa-tional linguistics..robyn speer, joshua chin, and catherine havasi.
+2017.conceptnet 5.5: an open multilingual graph of gen-eral knowledge.
+in thirty-first aaai conference onartiﬁcial intelligence..alon talmor, jonathan herzig, nicholas lourie, andjonathan berant.
+2018. commonsenseqa: a ques-tion answering challenge targeting commonsenseknowledge.
+in naacl-hlt..5096thomas wolf, lysandre debut, victor sanh, julienchaumond, clement delangue, anthony moi, pier-ric cistac, tim rault, remi louf, morgan funtow-icz, joe davison, sam shleifer, patrick von platen,clara ma, yacine jernite, julien plu, canwen xu,teven le scao, sylvain gugger, mariama drame,quentin lhoest, and alexander rush.
+2020. trans-formers: state-of-the-art natural language process-ing.
+in proceedings of the 2020 conference on em-pirical methods in natural language processing:system demonstrations, pages 38–45, online.
+asso-ciation for computational linguistics..peng xu, mostofa patwary, mohammad shoeybi, raulpuri, pascale fung, anima anandkumar, and bryancatanzaro.
+2020. megatron-cntrl: control-lable story generation with external knowledge us-ing large-scale language models.
+in proceedings ofthe 2020 conference on empirical methods in nat-ural language processing (emnlp), pages 2831–2845, online.
+association for computational lin-guistics..rowan zellers, ari holtzman, yonatan bisk, alifarhadi, and yejin choi.
+2019. hellaswag: can ain proceed-machine really ﬁnish your sentence?
+ings of the 57th annual meeting of the associationfor computational linguistics, pages 4791–4800..hongming zhang, xin liu, haojie pan, yangqiu song,and cane wing-ki leung.
+2020. aser: a large-scale eventuality knowledge graph.
+in proceedingsof the web conference 2020, pages 201–211..5097a supplementary.
+a.1 manual evaluation..we perform an error analysis to better understandthe generation quality.
+we ask our annotators to as-sess whether the generated text contains any piecesof information that are contradicting the given in-complete story or not.
+our annotations were per-formed by three annotators with a linguistic back-ground.
+figure 5, shows a screenshot of the anno-tation guidelines.
+figure 4 depicts the result, weobserve the that our coins models produce lesscontradicting missing sentences compare to otherbaselines..a.2 hyperparameter details.
+small.
+size.
+for gpt-2 we use.
+parameterthegpt-2(117m parame-ters) based on the implementation of hug-gingface (wolf et al., 2020) at:https://github.com/huggingface/transformers/.
+checkpoint.
+tree/master/src/transformers/models/gpt2.
+decoding strategy.
+in the inference stage, weadopt beam search decoding with a beam size of 5for all our models and all baselines we produce.
+we used the following set of hyperparametersfor our coins model: batch size: {2, 4}; epochs:{3, 5}; learning rate: {1e-5, 5e-6}.
+we use adamoptimizer, and dropout rate = 0.1. we ran ourexperiments with gpu sizes of 11gb and 24gb..training details.
+our training time is ≈24hours.
+the original rocstories corpus canbe found at: https://cs.rochester.edu/nlp/rocstories/.
+a.3 story ending generation task.
+data.
+this task is to generate a reasonable end-ing given a four-sentence story context (guanet al., 2019).
+the stories are from rocstories(mostafazadeh et al., 2016).
+we use the same datasplits as guan et al.
+(2019)..figure 4: human evaluation on contradiction.
+model.
+bleu-1/2 (↑) distinct-2/3 (↑).
+seq2seq†ie+ga†gpt†gpt2-omcs†gpt2-glucosegrf†coins (gr)coins (oracle).
+19.1 / 5.520.8 / 6.425.5 / 10.225.5 / 10.425.6 / 10.226.1 / 11.027.4 / 12.341.80/28.40.
+0.181 / 0.3600.140 / 0.2800.304 / 0.5050.352 / 0.5890.361 / 0.6090.378 / 0.6220.428 / 0.7240.479/0.786.
+table 9: result: automatic evaluation results on thestory ending generation task, † (ji et al., 2020).
+dataset train.
+dev.
+test.
+seg.
+90,000.
+4,080.
+4,081.table 10: dataset statistics: nb.
+of unique stories.
+step it generates effect inference rules for sen-tence (s4).
+as seen in table 9, the coins modeloutperforms all previous strong baselines, includ-ing gpt2-glucose that uses the same knowl-edge resource.
+interestingly, we also observe thatﬁne-tuning on glucose or conceptnet knowl-edge improves the text generation diversity, indi-cating that the models leverage concepts and eventknowledge during generation (cf.
+table 9 line.4-8)..automatic metrics.
+for story ending genera-tion (seg) we follow the metrics used in guanet al.
+(2019); ji et al.
+(2020): they use bleu-1/2to measure n-gram overlap between generated andhuman-written story endings, and distinct-n (liet al., 2016) to measure the generation diversityusing maximum mutual information..seg task.
+we also investigate how coins per-forms when applied to the task of generating a storyending when given a 4-sentence story (seg).
+inthis task our model takes only one iteration step togenerate the story ending, where in the inference.
+baselines.
+for the story ending generation task,we compare coins to the ie+ga model (guanet al., 2019).
+it is based on incremental encod-ing and multi-source graph attention (guan et al.,.
+5098number of instance0102030coinskegrfgpt-2glucose-gpt2figure 5: a screenshot of the annotation guidelines formanual evaluation..incompletestory:missing sen-tences:coins (igr).
+coins (isr).
+s1: danielle dreamed of living in california.
+s2: after college shehad to decide where to live.
+[mask] s5: she loved it there.
+s3: she could move back home or move to california.
+s4: danielledecided to take a leap and move to california.
+someonea decide somethinga (where to live) >causes/enables>someonea decides to live in somewherea.
+she had to decide where to live >causes/enables> she chose tolive in california..coins(msgr) she decided to live in california.
+she settled in california.
+coins(mssr) she decided to live in california.
+she went to the beach.
+gpt-2gpt-2 glu-coseke.
+she ﬁnally settled in california.
+she loved it there.
+she decided to move to nh.
+she found a nice apartment there..when he got home, he noticed his tires were ﬂat.
+he decided topull over.
+she decided to move to california.
+she found a great place to live..grf.
+table 11: example1: generated inference rules andmissing sentences.
+2019).
+we also compare to a seq2seq model (lu-ong et al., 2015) based on gated recurrent units(gru) and attention mechanism..incompletestory:.
+s1: her favorite glasses were ruined.
+s2: the pink dye had gottenall over them.
+s5: she chose pink, and they both laughed at theirony.
+s3: her mother took her to get a new prescription.
+s4: it was timeto order a new pair..missing sen-tences:coins(msgr) she took her friend to get a new one.
+she took it and it was pink.
+gpt-2gpt-2 glu-coseke.
+she bought a new pair of glasses.
+she wore them to school.
+she couldn’t decide between two colors.
+she ﬁnally decided onpink.
+she was sad that she couldn’t see anymore.
+her boyfriend cameover to help.
+she decided to dye them pink instead.
+she went to the store andbought a pink one..grf.
+table 12: example2: generated missing sentences.
+incompletestory:.
+s1: susy was writing an essay by hand for class.
+s2: she handed itin and thought she would do well.
+s5: the teacher could not evengrade it.
+s3: but unfortunately the teacher could not even read it.
+s4: susywas humiliated..missing sen-tences:coins(msgr) but she could not.
+teacher didn’t read the essay.
+gpt-2gpt-2 glu-coseke.
+suddenly, her hand slipped.
+she fell and broke her wrist.
+but all the sudden she got an f. susy was so embarrassed..when she got her paper back she realized she had tylenol.
+she hadwritten the entire essay by hand.
+susy was very nervous about the essay.
+the teacher told her shewas not allowed to write..grf.
+table 13: example3: an example where all the modelsfailed to generated coherent sentences.
+incompletestory:.
+missingsen-tences:gold:.
+fine-tunedgpt-2:.
+coins:.
+s1: seth was at a party with his friends.
+s2: someone dared akid to climb on a wall.
+s5: he immediately began screamingthat his leg was broken.
+s3: the kid climbed to the top and everyone cheered.
+s4:suddenly he slipped and fell to the ground..some peoplea (who should not be there) start daring asomeonec to climb a somethingc (without safety gear)>causes/enables> someonec (who should not be theremakes it to the top then falls down and someonec (who isacting like monkey)).
+the kids start daring a kid to climb the wall >causes/enables>he makes it to the top then falls down and breaks his leg.
+some peopleb start daring a someonea to climb a somethingc>causes/enables> someonea quickly shouted that his legwas broken.
+someonea>causes/enables> he shouted that his leg was broken.
+some peopleb start daring a someonea to climb a somethingc>causes/enables> someonea is on top of somewhereaasomeone>causes/enables> he climbed at the top..the wall.
+the wall.
+daring.
+daring.
+climb.
+climb.
+start.
+start.
+kid.
+kid.
+to.
+to.
+table 14: example of inference rules generated bycoins and fine-tuned gpt-2 when 2-sentences aremissing (compared to gold from glucose).
+grey:context-speciﬁc rules (sr); regular: general rules (gr).
+bolded sentence s2 is x, effect is the relation typer..5099

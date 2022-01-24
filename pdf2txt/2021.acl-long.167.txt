@@ -1,0 +1,483 @@
+irene: interpretable energy prediction for transformers.
+qingqing cao, yash kumar lal, harsh trivedi,aruna balasubramanian, niranjan balasubramaniandepartment of computer sciencestony brook universitystony brook, ny 11794, usa{qicao,ylal,hjtrivedi,arunab,niranjan}@cs.stonybrook.edu.
+abstract.
+existing software-based energy measurementsof nlp models are not accurate because theydo not consider the complex interactions be-tween energy consumption and model execu-tion.
+we present irene, an interpretable andextensible energy prediction system that accu-rately predicts the inference energy consump-tion of a wide range of transformer-basednlp models.
+irene constructs a model treegraph that breaks down the nlp model intomodules that are further broken down intolow-level machine learning (ml) primitives.
+irene predicts the inference energy consump-tion of the ml primitives as a function ofgeneralizable features and ﬁne-grained run-irene then aggregatestime resource usage.
+these low-level predictions recursively to pre-dict the energy of each module and ﬁnally ofthe entire model.
+experiments across multipletransformer models show irene predicts infer-ence energy consumption of transformer mod-els with an error of under 7% compared to theground truth.
+in contrast, existing energy mod-els see an error of over 50%.
+we also showhow irene can be used to conduct energy bot-tleneck analysis and to easily evaluate the en-ergy impact of different architectural choices.
+we release the code and data at https://github.com/stonybrooknlp/irene..1.introduction.
+accurately measuring the energy consumption ofnlp models is becoming ever more important.
+models are growing exponentially, with billions,even approaching trillions, of parameters withcorrespondingly large resource consumption (e.g.
+gpt-3 (brown et al., 2020) has 175 billion param-eters and switch transformers can have 1.6 trillionparameters (fedus et al., 2021)).
+recent workshave sought to estimate energy consumption andsuggest ways to reduce the resulting costs and car-.
+bon impacts (strubell et al., 2019; schwartz et al.,2019; henderson et al., 2020; anthony et al., 2020)unfortunately, there are no easy-to-use and ac-curate solutions for measuring or predicting theenergy consumption.
+on the one hand, measur-ing energy consumption directly through hardwarepower monitors is not feasible as it requires ex-clusive access to the hardware and detailed instru-mentation.
+on the other hand, there are softwaremodels that predict energy as a function of resourceutilization (strubell et al., 2019; henderson et al.,2020) but these energy prediction models are in-accurate (cao et al., 2020).
+the inaccuracy stemsfrom the prediction models not accounting for thecomplex interactions between energy consumptionand resource utilization..in this work, we focus on inference energy whichcan incur substantial costs especially for modelsthat support high-volume web services.
+we askhow we can build an energy prediction method thatis accurate, interpretable, and extensible.
+we makethree contributions in answering this question..first, we frame the problem of interpretable en-ergy prediction over a model tree abstraction.
+thisabstraction represents the model as the root nodethat is composed from model-speciﬁc modules,which themselves are recursively composed fromlower-level machine learning (ml) primitives, onesthat are not model-speciﬁc.
+given a model, the en-ergy prediction problem is framed as the task ofpredicting the energy of all the nodes in its modeltree abstraction.
+the result is that irene can predictnot only the inference energy consumption of theentire model, but also of its components, makingthe energy prediction highly interpretable..second, we develop irene, that includes a multi-level prediction method that predicts energy in allnodes of the abstraction tree in a bottom-up fashionusing resource utilization and model descriptionfeatures.
+for each of the leaf-nodes that are re-used.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages2145–2157august1–6,2021.©2021associationforcomputationallinguistics2145in different models, the ml primitives, irene usesa separate regressor trained on ground-truth energymeasurements.
+one simple way to get energy forall other higher-level nodes is to recursively sum-up the values.
+while this works reasonably well(even better than a prior prediction model), directsumming of the raw predictions is sub-optimal be-cause the error can propagate through the modeltree thus making upper-level nodes estimation moreerroneous.
+instead, we learn a single regressor forall intermediate nodes, one that essentially adjuststhe sum of children’s predicted energy values basedon features of the children.
+since irene is built ontop of energy predictions of ml primitives that arenot model speciﬁc, it is generalizable and can beused to predict the energy for previously unseen(transformer-based) models..third, to evaluate irene, we create an evaluationdataset with ground-truth energy measurements formultiple transformer-based models at all levels inthe model tree abstraction.
+evaluations show thatirene is more accurate – with an average model-level energy error of 5 ∼ 7% compared againstthe ground-truth, while existing software-basedmethod (strubell et al., 2019) has over 55% error.
+the module-level energy errors are also substan-tially small showing that irene is both accurate andinterpretable.
+last, we also conduct multiple anal-yses that show the utility of irene for interpretableenergy predictions..2 related work.
+over the last couple of years, there has beenincreased interest in the energy consumption ofnlp models, starting with the work by strubellet al.
+(strubell et al., 2019).
+this work, and afollow up software framework called experiment-impact-tracker (henderson et al., 2020) tracks theresource (i.e., cpu, gpu, memory) utilization ofan nlp model and predicts energy consumptionas a function of resources.
+however, our previ-ous study shows that this type of resource utiliza-tion only modeling can be highly inaccurate (caoet al., 2020).
+this is in part due to the complexrelationship between resource utilization and en-ergy consumption.
+further, there are other activi-ties that are not accounted via resource utilizationsuch as data movement in gpu memory which canalso cause signiﬁcant energy footprint (chen et al.,2016; boroumand et al., 2018)..other works (zhou et al., 2020; schwartz et al.,.
+2019) report the energy numbers through alternatemetrics including dollar cost or in terms of ﬂoatingpoint operations.
+however, these do not directlymap to the energy consumption.
+energy predictionof applications on mobile devices is a well-studiedtopic in the systems community (pathak et al., 2011,2012; yoon et al., 2012; cao et al., 2017) but thesework require ﬁne-grained understanding of the ap-plication.
+none of the existing systems predictenergy for nlp applications..3.interpretable energy prediction.
+in this section we ﬁrst state our design goals, moti-vate the abstraction, and problem formulation forinterpretable energy prediction..3.1 design goals.
+we design the energy prediction model with threedesign goals: (i) accurate prediction while incur-ring low proﬁling overheads; high overheads whenmeasuring runtime resource utilization can hide thetrue energy costs of the nlp model, (ii) provideinterpretable energy analysis of the componentsinside the nlp model, especially for analyzing en-ergy bottlenecks; (iii) extensible and generalizable,in the sense that, they are trained once but canwork on unseen nlp models to remain useful asnew models emerge..3.2 model tree abstraction.
+to achieve the above goals, we ﬁrst need a repre-sentation of the nlp model that is at a suitableabstraction both from interpretability and general-ization standpoints..on the one hand, using only low-level abstrac-tions such as the math operations can help witheasy generalization to new models as their unitsare basic math (or other compute) operations thatare building blocks of any model.
+however, theylack interpretability since they don’t directly con-vey the model architecture semantics.
+for example,a bert (devlin et al., 2019) model has matrixmultiplications in both the self-attention and feedforward layers.
+only having the energy of each ma-trix multiplication alone, without knowing whichhigher level logic units (i.e., either self-attentionor feed forward layer) they belong to, does nothelp analyze if they are the bottlenecks for thatparticular unit.
+on the other hand, high-level ab-stractions preserve the architecture semantics andare interpretable for practitioners, but they don’t.
+2146figure 1: a tree view of a 1-layer bert model.
+the yellow rectangle nodes stand for basic machine learning (ml)level operations.
+the brown rectangle nodes are also ml level which are non-parametric (i.e., has no trainableparameters).
+the ml level operations are model-agnostic and provided by machine learning software framework.
+the light blue oval nodes denote model-speciﬁc operations that reﬂect the architectural semantics given by themodel developer, for example bertselfattention was designed to transform input sequence representations by‘attending" (weighted combination) to each position of the input sequence..easily generalize to unseen models that may nothave the same modules used for training..instead, we use a model tree abstraction that rep-resents the model nodes in three-levels: math level,machine learning (ml) level and module level.
+math level nodes are a ﬁnite set of mathematicaloperations (like addition, subtraction, matrix multi-plication etc); they form model-agnostic ml levelnodes (such as linear, layernorm etc.
+), which fur-ther can be used to construct complex module levelnodes.
+module level nodes are groups of lower mllevel node operations that reﬂect the logic unitsof the nlp algorithms deﬁned by model authors.
+the model tree abstraction is such that each parentnode captures computation of all of its childrennodes.
+figure 1 shows an example of a one-layerbert (devlin et al., 2019) model (omitted mathlevel nodes).
+the execution of the model tree nodescan be in parallel, but current systems have a ﬁxedsequential order for executing the sibling nodes.
+in this work, we only focus on sequential execu-tion.
+note that the model tree doesn’t capture theorder of execution.
+e.g., bertoutput appearsright after bertintermediate in bert’s com-putation graph, but here they’ll be representedas siblings of the same parent bertlayer:0,and their energy will be treated separately.
+the parent node bertlayer:0 encapsulatesits childrenthe energy and computation ofnode bertintermediate, bertoutput, andbertattention, in no particular order..3.3 problem deﬁnition.
+with this new model tree abstraction, we formallystate the problem of interpretable energy estimation.
+of a nlp model.
+given a model tree abstractionof a nlp model m consisting of a set of nodesn = {n|nml ∪ nmod} (nml is the set of ml levelnodes, nmod is the set of module level nodes), foran input size i (a pair of batch size b and sequencelength s) 1, we can predict the energy en for everynode n in the model tree.
+the energy of root nodeis the energy for the entire model..4.interpretable prediction with irene.
+figure 2 shows the irene architecture.
+irene takesthe user-speciﬁed model and builds an energy pre-dictor for a target hardware device.
+the modelis run once on the target hardware and the run-time resource utilization is logged.
+during this run,irene uses code instrumentation and just-in-time(jit) run-time tracing to break down the model intosub-components, and extracts a model tree repre-sentation (see details in §a)..irene then provides interpretable energy analy-sis by predicting the energy for every node in themodel tree in a bottom-up fashion.
+at the leaves,where the nodes correspond to the ml primitives,irene uses separate regression models for each typeof ml primitive (e.g., one regressor for linearlayer, another for layernorm etc.).
+for the inter-mediate nodes, their energy is predicted recursivelyusing a single regressor that makes a weighted com-bination of the predicted energy values from itschildren.
+for both types of regressors, they usefeatures that are derived from resource utilization(e.g.
+cpu utilization) and generalized node features.
+1the batch size and input sequence length together decidethe amount of input data to the model, therefore, they bothaffect the model energy consumption..2147module levelml levelbertmodelbertembeddingsbertencoderbertpoolerembedding:wordlayernormbertlayer:0bertattentionbertintermediatebertoutputbertselfattentionbertselfoutputlinear:querymatmulsoftmaxlinear:denselayernormlinear:denselinear:denselayernormlinear:densetanhfigure 2: irene works by taking model speciﬁcations (for example, model code) as inputs and extracting a modeltree representation using code instrumentation and run-time tracing.
+irene then runs the model once on a givenhardware and feeds resource proﬁles combined with the model computation features into a regressor to predict theenergy of the entire model tree representation.
+the root of the tree represents the energy of the entire nlp modeland each child node represents the energy of different modules/ml operators that make up the model..(e.g.
+size of inputs) enabling accurate multi-levelenergy prediction..irene represents higher-level modules via gener-alizable features and the ml primitives.
+even if theintermediate modules are model-speciﬁc (e.g.
+bert-selfattention), the features are general, allowingirene to predict energy of unseen models..the irene model is trained using ground-truthenergy measurements of ml primitives and a hand-ful of nlp models; we use a highly accurate hard-ware power monitor to measure ground truth energy(§a).
+of course, one can use the power monitor tomeasure energy directly at runtime.
+however, thisis cumbersome and requires physical access to thedevice which is not always feasible with cloud-based deployments.
+further, the hardware meteronly measures the total energy, which is not inter-pretable in terms of its components..our hierarchical tree representation gives a natu-rally interpretable way of propagating this predic-tion through the tree.
+since each node representstotal computation of its children nodes, the totalenergy from children nodes should also roughlycorrespond to that of the parent node.
+formally,.
+pe(n) =.
+pe(c) if n is non-leaf.
+(cid:88).
+c ∈ child(n).
+= p m lie.(n).
+if n is leaf.
+(2).
+we call this baseline prediction model predict-edsum.
+this model is interpretable but naivelysumming up the energy values accumulates errorgoing up the tree and results in noisy module-levelpredictions.
+to account for this, we use a weightedsum of child node energy, where the weights arelearnt using node features.
+formally,.
+4.1 multilevel energy prediction.
+pe(n) =.
+α(c) ∗ pe(c) if n is non-leaf.
+at the leaf-level, the energy prediction problemrequires predicting the energy of ml primitives.
+asan ofﬂine step, irene ﬁrst enumerates all relevantml primitives and builds a specialized regressorfor each primitive by training over ground truthdata.
+in some cases, model developers can deﬁnetheir own ml primitives.
+we extract informationabout such custom primitives from the jit trace..formally, for a leaf node n with ml primitive i,.
+we predict the energy of the node as:.
+p m lie.(n) = wi ∗ feat(n) + bi.
+(1)using primitive speciﬁc parameters witheweight vector and bi the bias.
+we learn these pa-rameters using a mean squared error loss betweenpredicted pe(n) and ground-truth energy ge(n)..(cid:88).
+c ∈ child(n)= p m lie.(n).
+if n is leafα(c) = 1 + tanh(w ∗ feat(c) + b)/τ.
+(3)where w and b are parameters and τ is a hyper-parameter.
+unlike ml primitives, here we have asingle regressor with one set of weight vector (w)and bias scalar (b) parameters across all non-leafnodes of any type.
+note that this single regres-sor doesn’t predict node’s energy directly, but de-termines how much the predicted energy from itschild node should be scaled before summing thechildren node energy.
+it does this recursively start-ing from the root, and hence encodes tree structurein its computation.
+we do not learn node-speciﬁcregressors because that does not allow generalizingto new models that may have different modules.
+2148resource featuresmodel featuresmodel specsbertmodelbertembeddingsbertencoderbertpoolerembedding:wordlayernormbertlayer:0bertattentionbertintermediatebertoutputbertselfattentionbertselfoutputlinear:querymatmulsoftmaxlinear:denselayernormlinear:denselinear:denselayernormlinear:densetanhjit tracingprofileestimation modelpredicted energy for each nodeireneenergy estimationthan the ones during training..since the method is essentially calibrating thesum of the energy values, regularizing the modelso that the computed weights on the energy valuesto be around 1 helps the learning.
+we do this byequation 3, which makes the range of computedweights, α(c) to be within 1 ± τ .
+to supervise thismodel, we use the ground-truth energy from all thenon-leaf nodes, and we train it in an end-to-endfashion.
+formally,.
+loss(n) =.
+(cid:88).
+s ∈ subtree(n).
+(cid:0)pe(s) − ge(s)(cid:1)2ge(s)2.
+(4).
+we scale the mean squared error with ground-truth energy, since scales of energy at differentlevels of the tree are vastly different.
+we refer tothis model as the end2end regressor, since theerror signal in energy prediction of any node back-propagates through the whole subtree.
+we use thistraining scheme in irene.
+in our evaluation (sec-tion 5), we perform an ablation study to show whythe tree structure and the end-to-end regressor iscrucial for accuracy..4.2 featurization.
+we design two categories of energy-relevant fea-tures in irene : (i) the model features that reﬂecthardware-independent compute and memory infor-mation, and (ii) the resource features that capturehow the models use hardware resources and causeenergy activities.
+table 1 shows the features usedin irene.
+for the model description related informa-tion, we use features that characterize the compute,memory, and size of input etc.
+these are featuresthat are independent of the underlying hardware.
+for resource features, we use utilization, usageand clock speed of hardware components includingcpu, memory and gpu.
+note that these two setsof features are extensible, meaning that one canadd more either hardware-speciﬁc features or newmodel features.
+see appendix sections a.2 anda.3 for details on how we obtain these features..5.irene evaluation.
+our evaluation is aimed at measuring the accuracyof irene relative to ground truth and the state-of-the-art.
+we show the irene only causes 5-7% errorfor the model energy prediction.
+we also showthat for a given transformer model, irene can beused to ﬁnd the energy bottlenecks and analyze theenergy versus task performance trade-offs..batch_size : batch sizeseq_len : # of input tokensﬂops : ﬂoating point operations (unit: million)mem_bytes : memory read and write (unit: mib).
+cpu_util : cpu utilization (unit: %)mem_usg : memory usage (unit: %)gpu_util : gpu processor utilization (unit: %)gm_usg : gpu memory usage (unit: %)g_clk : gpu processor clock speed (unit: mhz)gm_clk : gpu memory clock speed (unit: mhz)latency : inference latency (unit: s)gpu_energy : gpu driver energy (unit: joule).
+table 1: features used for energy estimation in irene..speciﬁcation pc1.
+pc2.
+intel i9-7900xcpu32 gibmemory2× gtx 1080 ti 2× gtx 1070gpugpu memory 11.2 gib per gpu 8 gib per gpustorage.
+intel i7-6800k32 gib.
+1 tib ssd.
+1 tib ssd.
+table 2: target hardware speciﬁcations..5.1 setup.
+target hardware: we use 2 gpu-equipped desk-top pcs as the target hardware for running ourmodels.
+see table 2 for details.
+software and models: we perform inference intransformer models using pytorch (paszke et al.,2019) v1.7 through the huggingface transform-ers (wolf et al., 2020) library.
+the six mod-els we study are — bert-base (devlin et al.,2019), roberta-base (liu et al., 2019), distill-bert (sanh et al., 2020), distilgpt2 (sanh et al.,2020; radford et al., 2019), openai gpt (radfordet al., 2018) and gpt2 (radford et al., 2019).
+software-based measurement baseline: forcomparisons, we use the software-based energymeasurements provided by the experiment-impact-tracker (henderson et al., 2020) which estimatesenergy as a function of the gpu, cpu, and mem-ory utilization.
+the method computes energy byaggregating resource usage as follows: etotal =p u e (cid:80)p(pdramedram + pcpuecpu + pgpuegpu),2 are the percentages of each sys-where presourcetem resource used by the attributable processesrelative to the total in-use resources and eresourceis the energy usage of that resource.
+the constant.
+2resources can be dram, cpu, gpu.
+2149for power usage effectiveness (pue) compensatesfor extra energy used to cool or heat data centers..use case.
+energy/1mqns (kwh).
+cost/1mqns (usd).
+5.2 dataset and evaluation methodology.
+for each model, we obtain the model tree and foreach node in it, we associate ground-truth energymeasurements using the power monitor and its re-source features using low-overhead logging (sec-tion a).
+for each node we run it repetitively for20 seconds, since it often takes a very short timefor one run (e.g.
+from 0.1 to 100 millisecond).
+werepeat this process for ﬁve rounds (the variationsare within <1%) and record the average energy asthe ground-truth for the node.
+we use 1 gpu torun all experiments.
+we record the start and endtimestamp of the model program, and extract theenergy values by comparing and aligning the times-tamps from the resource proﬁler logs and powermonitor logs.
+ground truth energy: we measure ground truthenergy using a emonpi power monitor (hudson,2021) which is open source.
+the emonpi uses aclip-on ct sensor to monitor the energy consumedby the computer which records the passthroughcurrent and voltage every 170 ms. this allowsus to accurately measure the power draw at a subsecond granularity.
+we obtain current, voltage,and timestamp values from the power meter’s built-in serial port.
+the energy (e) consumed during atime period is then calculated using the sampledcurrent (it) and voltage (vt) values in that period:e = (cid:80).
+t vtit..to guarantee the consistency and reliability ofthe hardware energy measurements, we cool downthe pcs after each experiment ﬁnishes to avoid po-tential overheating issue that can cause subsequentenergy distortions.
+we measure the standby powerconsumption (when the cpu load is < 0.1%) andensure before running the experiments that the pcdoes not draw more than the standby power.
+fur-ther, no other application is running during ourexperiments..to understand the scale of energy usage, table 3shows the estimated energy consumption (in kwh)using our ground truth measurement.
+we also showthe cost of answering one million queries (in usd)when using a bert-base model in a reading com-prehension (over one passage), and in an end-to-end setting (over 150 passages) ignoring retrievalcompute.
+for reference, google search handlesmillions of queries every minute (kenshoo, 2019)..qa over a single passageqa over 150 passages(ignore search/retrieval).
+161.
+24,000.
+21.24.
+3,165.table 3: example energy for bert-base qa modelsusing batch size 16 and sequence length 256 on pc1using one gpu.
+the cost is estimated at 13.19 centsper kwh.
+3.quantity.
+bert-base distilbert gpt2.
+3864# ml nodes# module nodes 2100# model nodes# tree depth.
+286.
+1932560285.
+2997972284.table 4: energy dataset statistics for bert-base, distil-bert and gpt2 model.
+for each model, we construct28 trees (model nodes) with batch sizes from 8 to 32with a step of 8, and input sequence lengths from 32to 256 with a step of 32. we associate features andground-truth energy for each node in these trees..energy dataset: to evaluate the energy predic-tion, we create a dataset that cover a wide rangeof input sizes for the six studied transformer mod-els and the 24 bert model variants (turc et al.,2019).
+each instance in the dataset can be of typeml, module or model level and is associated withfeatures shown in table 1 and hardware measuredenergy.
+we show the statistics of the dataset forbert-base, distilbert and gpt2 in table 4.energy error metric: we measure the energyerror percentage as 100 × |p e − ge|/ge, wherep e is the predicted energy and ge is the groundtruth energy..5.3 energy prediction results.
+we compare irene with the existing software mea-surement methods (strubell et al., 2019; hendersonet al., 2020).
+we apply their method directly for allthe models in our dataset.
+note that their methodis a fully-deﬁned estimation model with a ﬁxed setof parameters without any training.
+for irene ex-periments, we report cross-validated evaluation onthe energy prediction dataset — leaving data fromone model out of training set and evaluating on it,and then repeating the same for all the models..3based on the us national average as of may 2021according to https://www.electricchoice.com/electricity-prices-by-state..21505.4 feature ablations.
+table 8 shows the contribution of model and re-source features in irene energy prediction.
+weobserve that resource features provide most of thebeneﬁts for energy estimation irene for all levels,conﬁrming that resource information is importantfor energy prediction.
+model features do not reduceml level error because the error is already small,but they help further reduce the prediction errorsfor module and model levels and combining modeland resource features together brings the averageestimation errors further down to 8.5% and 5.5%..5.5 modeling ablations.
+to understand the impact of learning and the ar-chitectural choices of aggregating ml level energyinto module level energy in irene affect the modelaccuracy, we build three (ablated) models:is end-to-end learning necessary?
+to test this,we build a stepwise regressor that simply learns topredict the energy of parent node from the ground-truth energy of its child nodes at the training time.
+at the test time, it uses predicted energy generatingpredictions from ground up..pe(n) =.
+α(c) ∗ ge(c) training.
+pe(n) =.
+α(c) ∗ pe(c).
+testing (5).
+here, α(c) and loss are still as deﬁned in equa-tion 3 and 4 respectively.
+however, unlike the irene(end2end) regressor, the errors in the predictionof root node, do not backpropogate to its predic-tion of descendant nodes i.e.
+there is no end-to-endtraining.
+is tree-structure necessary?
+to test this, we buildan unstructured regressor that ignores the treestructure completely, and directly predicts the en-ergy from the feature representation of nodes (mod-ule and model level) using linear regression as inequation (1).
+unlike ml-level regressor though,here we need to use single set of parameters forcommon across the nodes.
+is learning necessary?
+to test this, we use thepredictedsum model (equation 2).
+recall thismodel also aggregates energy predictions over thetree-structure but has no parameters to train..table 9 shows the ablation of irene with respectto different algorithmic choices of the module levelenergy aggregation.
+first, we ﬁnd that the regres-sor that ignores the tree structure (unstructured).
+(cid:88).
+c ∈ child(n)(cid:88).
+c ∈ child(n).
+figure 3: the cdf of model’s predicted energy errors.
+we see that for 99% of the cases, the error is under 16%.
+irene is accurate table 5 shows the energy pre-diction errors at the model-level for all the modelson the two pcs.
+the existing software-based base-line method from strubell et al.
+(2019) incurs largeenergy prediction errors of over 50%..irene on the other hand incurs substantiallylower errors, with at most 7.6% errors across themodels, showing its value for reliable and accurateenergy analysis.
+as seen from the cumulative dis-tribution function for the model errors in figure 3,all of irene’s errors are below 17% and nearly halfof its errors are below 10%.
+we note here that ourleave-one-model-out cross validation speciﬁcallyevaluates the generalizability of irene..ml and module levels errors are also low.
+ta-ble 7, 6 show a break down of the irene errors atthe ml and module levels respectively.
+accuratelypredicting ml level energy is key to accurate pre-dictions for at the module level and higher, as theerrors will accumulate up the model tree in irene.
+it turns out that we can indeed predict ml levelenergy with high-levels of accuracy — errors arelower than 1%, providing reliable values for themodule level predictions.
+note that even unseenmodels (ie ones evaluated in the test partition) willbe made up of the same set of ml primitives (per-haps with different input and batch sizes).
+theresults here cannot be directly generalized to un-seen ml-primitives.
+module level errors are higherand vary in range (5.4% to 16.7%) across differentmodels.
+module level errors also turn out to behigher than the model level errors.
+this is mainlybecause the module level errors are averages acrossall intermediate module level nodes in the modeltree; some modules might have bigger errors, butthese get calibrated by our end2end energy re-gressor.
+we further characterize these effects inirene ablation and validation analysis..21515.07.510.012.515.0model error (%)0.00.20.40.60.81.0cumulative probabilitymachine system.
+bert-base distilbert roberta-base gpt2 distilgpt2 openaigpt average.
+pc1.
+pc2.
+strubell et al., 2019 57.95.8irene.
+strubell et al., 2019 55.110.0irene.
+56.311.6.
+52.69.4.
+62.57.1.
+58.97.1.
+62.63.5.
+54.66.1.
+55.92.2.
+49.84.9.
+61.82.7.
+60.65.9.
+57.85.5.
+55.67.2.table 5: energy prediction errors at model level: comparing irene and a software measurement baseline for thetwo pcs.
+irene is signiﬁcantly more accurate than strubell et al., 2019..machine.
+bert-base.
+distilbert.
+roberta-base.
+gpt2.
+distilgpt2.
+openaigpt.
+average.
+pc1pc2.
+5.376.78.
+5.937.96.
+5.446.69.
+14.9216.65.
+14.7316.41.
+13.9816.07.
+8.5410.16.table 6: energy prediction errors at module levels using irene on two pcs.
+note that in table 11 at the appendix,we also show a subset of the module level energy errors using strubell et al., 2019..machine.
+embedding.
+layernorm.
+linear.
+matmul.
+softmax.
+conv1d.
+average.
+pc1pc2.
+0.650.38.
+0.890.66.
+0.600.55.
+0.610.43.
+1.00.67.
+0.580.41.
+0.700.53.tanh.
+0.820.43.table 7: energy prediction errors at ml levels using irene on two pcs.
+note that the evaluation for these operation-speciﬁc (eg.
+embedding) regressors is done using the leave-one-model out setting as before..ml module model.
+5.6.interpretable energy analysis.
+irene.
+0.70.
+8.54.w/o resource features 5.76 11.548.87w/o model features.
+0.63.
+5.52.
+7.087.32.table 8: energy prediction errors of irene with ablatedfeatures.
+both model and resource features help theirene’s performance at model and module levels, whileresource features are sufﬁcient for ml-level..module.
+model.
+irene (end2end).
+stepwisepredictsumunstructured.
+8.54.
+9.2816.4278.0.
+5.52.
+14.8417.6939.79.table 9: energy prediction errors of irene using differ-ent module/model level regressors on pc1.
+tree struc-ture of the regressor crucial, and end-to-end optimisa-tion on tree helps irene to get lower errors..performs signiﬁcantly worse than all other regres-sors that do consider it.
+interestingly, learningwithout structure even performs worse than pre-dictedsum regressor that naively adds child en-ergy without any learning, highlighting the impor-tance of tree-structure.
+further, learnt weightedsum outperforms predictedsum regressor.
+in par-ticular, end2end regressor performs better thanstepwise regressor showing the importance of op-timizing on whole tree in an end-to-end fashion..in this section, we use the interpretable energy anal-ysis from irene to show energy bottlenecks forgiven transformer models, how energy varies fordifferent model architectures, and how it can beused to effectively pick accuracy-energy trade-offs.
+finding energy bottlenecks: we use irene to ana-lyze the energy bottlenecks in transformer models.
+for simplicity of analysis, we predict the energy formodules that are immediate parents of the ml levelnodes and use it calculate the percentage of energyit contributes to the model overall.
+table 10 showsthe energy breakdown of two models: roberta-base and gpt2.
+we observe that self-attentionlayers in roberta-base model consume 31% ofthe total energy while it is the feed forward layersin gpt2 that consume more than 59% of the energy.
+the module level energy breakdown of all modelsin table 12 in appendix c. we also present the fullenergy breakdown of the bert-base model and an-notate each node with predicted energy percentagein figure 5 in the appendix.
+task accuracy versus energy tradeoffs:.
+we ﬁne-tune bert-24 models (turc et al.,2019) on the stanford sentiment treebank v2(sst2) (socher et al., 2013) using the default exam-ples in the huggingface transformers (wolf et al.,2020) without any hyperparameter tuning.
+we eval-uate the accuracy on the dev set of sst2.
+these.
+2152module.
+energy %.
+module.
+energy %.
+robertaselfattentionrobertaintermediaterobertaoutputrobertaselfoutputrobertaembeddingsrobertapooler.
+31.2430.5728.6409.1100.4100.03.
+59.13mlpattention37.94layernorm 2.840.1embedding.
+(a) roberta-base.
+(b) gpt2.
+table 10: module level predicted energy breakdownof two transformer models.
+we average the energy ofthese modules across all input sizes for each model ar-chitecture.
+self-attention is the energy bottleneck inroberta-base, but for gpt2, the bottleneck is feedforward layers (mlp module)..figure 4: ground-truth and predicted energy vs accu-racy on sst2 task for bert-24 models.
+energy data iscollected with batch size 16 and sequence length 128.because our energy predictions are accurate, we canuse energy consumption vs nlp model accuracy trade-offs to select a model..models are not part of our energy prediction train-ing data.
+we additionally exclude bert-base fromtraining data to show the extensibility of irene..given an energy budget, irene allows for selec-tion of an optimal architecture that gets the highestaccuracy for a task.
+in figure 4, we see that it ispossible for models to use more energy but returnlower accuracy than other models which might useless energy.
+similarly, given an accuracy target, wecan choose an architecture with the lowest energyuse.
+for example, for a target of 88% accuracy orabove, there are many such models ranging from4j all the way to 12j.
+last, we point out that thetrade-off curve based on the predicted energy mir-rors that of the ground-truth well enough to be usedas an accurate proxy..6 discussion.
+this work focused on inference energy predic-tions of transformers on a target hardware device..the model tree abstraction is general and not tiedto transformer architectures nor to speciﬁc deeplearning frameworks, it is extensible to other neu-ral networks like lstm and frameworks like ten-sorflow.
+the abstraction is built from the com-putational graph and knowledge about the modelarchitecture and underlying software.
+as long asthese are available we can apply our methodologyto other architectures as well..predicting the training energy is an importantand a more challenging problem.
+we believe ourmethodology can be extended.
+however, it will re-quire tracking the energy of both forward and back-ward processes and even modeling other aspectstraining dynamics, for example, time to convergeto speciﬁc accuracy..scaling to unseen hardware is an important andchallenging area that needs further research.
+itrequires both measuring the ground truth energyfor a more diverse collection of hardware and de-signing proper hardware-speciﬁc features (i.e., l1cache size, cpu cores, etc.).
+we believe irene’smethodology can be extended to calibrate softwarereported energy as a way to scale how we collectground truths (as weak-supervision).
+in the future,we plan to study workloads on more hardware tochoose proper features that capture the hardwareenergy differences..7 conclusions.
+energy consumption of nlp models is an impor-tant consideration from a cost perspective and in-creasingly, from an environmental impact perspec-tive as well.
+designing energy efﬁcient and cost-effective models requires both accurate and inter-pretable energy modeling.
+in this work, we showedthat by carefully combining resource utilizationwith model description based features, we can de-velop a multi-level energy prediction model thatis not only highly accurate but is also able to pro-vide a break-down of how its different componentscontribute to its overall energy..8 acknowledgement.
+this material is based upon work supported bythe national science foundation under grant no2007362..2153sst2 accuracyenergy (j)05101520808284868890true energypredicted energyreferences.
+martín abadi, paul barham, jianmin chen, zhifengchen, andy davis, jeffrey dean, matthieu devin,sanjay ghemawat, geoffrey irving, michael isard,et al.
+2016. tensorﬂow: a system for large-scalein 12th {usenix} symposiummachine learning.
+on operating systems design and implementation({osdi} 16), pages 265–283..lasse f. wolff anthony, benjamin kanding, andraghavendra selvan.
+2020. carbontracker: track-ing and predicting the carbon footprint of trainingdeep learning models.
+icml workshop on "chal-lenges in deploying and monitoring machine learn-ing systems"..amirali boroumand, saugata ghose, youngsokkim, rachata ausavarungnirun, eric shiu, rahulthakur, daehyun kim, aki kuusela, allan knies,parthasarathy ranganathan, and onur mutlu.
+2018.google workloads for consumer devices: mitigat-ing data movement bottlenecks.
+in proceedings ofthe twenty-third international conference on archi-tectural support for programming languages andoperating systems, asplos ’18, pages 316–331,new york, ny, usa.
+association for computingmachinery..tom brown, benjamin mann, nick ryder, melaniesubbiah,jared d. kaplan, prafulla dhariwal,arvind neelakantan, pranav shyam, girish sastry,amanda askell, sandhini agarwal, ariel herbert-voss, gretchen krueger, tom henighan, rewonchild, aditya ramesh, daniel ziegler, jeffrey wu,clemens winter, chris hesse, mark chen, ericsigler, mateusz litwin, scott gray, benjamin chess,jack clark, christopher berner, sam mccandlish,alec radford, ilya sutskever, and dario amodei.
+2020. language models are few-shot learners.
+ad-vances in neural information processing systems,33..qingqing cao, aruna balasubramanian, and niranjanbalasubramanian.
+2020. towards accurate and reli-in pro-able energy measurement of nlp models.
+ceedings of sustainlp: workshop on simple andefﬁcient natural language processing, pages 141–148, online.
+association for computational linguis-tics..yi cao, javad nejati, muhammad wajahat, aruna bal-asubramanian, and anshul gandhi.
+2017. decon-structing the energy consumption of the mobilepage load.
+proceedings of the acm on measure-ment and analysis of computing systems, 1(1):6:1–6:25..yu-hsin chen, joel emer, and vivienne sze.
+2016.eyeriss: a spatial architecture for energy-efﬁcientdataﬂow for convolutional neural networks.
+in acmsigarch computer architecture news, volume 44,pages 367–379, new york, ny, usa.
+ieee..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training of.
+deep bidirectional transformers for language un-derstanding.
+in proceedings of the 2019 conferenceof the north american chapter of the associationfor computational linguistics: human languagetechnologies, volume 1 (long and short papers),pages 4171–4186, minneapolis, minnesota.
+associ-ation for computational linguistics..william fedus, barret zoph, and noam shazeer.
+2021.switch transformers: scaling to trillion parametermodels with simple and efﬁcient sparsity.
+arxiv..peter henderson, jieru hu, joshua romoff, emmabrunskill, dan jurafsky, and joelle pineau.
+2020.the en-towards the systematic reporting ofergy and carbon footprints of machine learning.
+arxiv:2002.05651 [cs]..glyn hudson.
+2021. emonpi - openenergymonitor..kenshoo.
+2019. how many google searches per day?.
+sem pros should know this!.
+diederik p kingma and jimmy ba.
+2014. adam: amethod for stochastic optimization.
+arxiv preprintarxiv:1412.6980..yinhan liu, myle ott, naman goyal, jingfei du, man-dar joshi, danqi chen, omer levy, mike lewis,luke zettlemoyer, and veselin stoyanov.
+2019.roberta: a robustly optimized bert pretrain-ing approach.
+arxiv:1907.11692 [cs]..nvidia.
+2021. nvml api reference guide..adam paszke, sam gross, francisco massa, adamlerer, james bradbury, gregory chanan, trevorkilleen, zeming lin, natalia gimelshein, lucaantiga, alban desmaison, andreas kopf, edwardyang, zachary devito, martin raison, alykhan te-jani, sasank chilamkurthy, benoit steiner, lu fang,junjie bai, and soumith chintala.
+2019. pytorch:an imperative style, high-performance deep learn-ing library.
+in h. wallach, h. larochelle,a. beygelzimer, f. d\textquotesingle alché-buc,e. fox, and r. garnett, editors, advances in neu-ral information processing systems 32, pages 8026–8037. curran associates, inc..abhinav pathak, y. charlie hu, and ming zhang.
+2012. where is the energy spent inside my app?
+ﬁne grained energy accounting on smartphones witheprof.
+in proceedings of the 7th acm european con-ference on computer systems, eurosys ’12, pages29–42, new york, ny, usa.
+association for com-puting machinery..abhinav pathak, y. charlie hu, ming zhang, paramvirbahl, and yi-min wang.
+2011. fine-grained powermodeling for smartphones using system call tracing.
+in proceedings of the sixth conference on computersystems, eurosys ’11, pages 153–168, new york,ny, usa.
+association for computing machinery..2154f. pedregosa, g. varoquaux, a. gramfort, v. michel,b. thirion, o. grisel, m. blondel, p. prettenhofer,r. weiss, v. dubourg, j. vanderplas, a. passos,d. cournapeau, m. brucher, m. perrot, and e. duch-esnay.
+2011a.
+scikit-learn: machine learning injournal of machine learning research,python.
+12:2825–2830..chanmin yoon, dongwon kim, wonwoo jung,chulkoo kang, and hojung cha.
+2012. appscope:application energy metering framework for androidsmartphones using kernel activity monitoring.
+inproceedings of the 2012 usenix conference onannual technical conference, usenix atc’12,page 36, usa.
+usenix association..xiyou zhou, zhiyu chen, xiaoyong jin,.
+andwilliam yang wang.
+2020. hulk: an energy efﬁ-ciency benchmark platform for responsible naturallanguage processing.
+arxiv:2002.05829 [cs]..fabian pedregosa, gaël varoquaux, alexandre gram-fort, vincent michel, bertrand thirion, oliviergrisel, mathieu blondel, peter prettenhofer, ronweiss, vincent dubourg, et al.
+2011b.
+scikit-learn:machine learning in python.
+the journal of machinelearning research, 12:2825–2830..alec radford, karthik narasimhan, tim salimans, andimproving language under-.
+ilya sutskever.
+2018.standing by generative pre-training.
+openai blog..alec radford, jeffrey wu, rewon child, david luan,dario amodei, and ilya sutskever.
+2019. languagemodels are unsupervised multitask learners.
+openaiblog..victor sanh, lysandre debut, julien chaumond, andthomas wolf.
+2020. distilbert, a distilled ver-sion of bert: smaller, faster, cheaper and lighter.
+arxiv:1910.01108 [cs]..roy schwartz, jesse dodge, noah a. smith, and orenetzioni.
+2019. green ai.
+arxiv:1907.10597 [cs,stat]..richard socher, alex perelygin, jean wu, jasonchuang, christopher d. manning, andrew ng, andchristopher potts.
+2013. recursive deep modelsfor semantic compositionality over a sentiment tree-in proceedings of the 2013 conference onbank.
+empirical methods in natural language processing,pages 1631–1642, seattle, washington, usa.
+asso-ciation for computational linguistics..emma strubell, ananya ganesh, and andrew mccal-lum.
+2019. energy and policy considerations fordeep learning in nlp.
+in proceedings of the 57thannual meeting of the association for computa-tional linguistics, pages 3645–3650, florence, italy.
+association for computational linguistics..iulia turc, ming-wei chang, kenton lee, and kristinatoutanova.
+2019. well-read students learn better:on the importance of pre-training compact models.
+arxiv:1908.08962 [cs].
+arxiv: 1908.08962..thomas wolf, lysandre debut, victor sanh, julienchaumond, clement delangue, anthony moi, pier-ric cistac, tim rault, rémi louf, morgan funtow-icz, joe davison, sam shleifer, patrick von platen,clara ma, yacine jernite, julien plu, canwen xu,teven le scao, sylvain gugger, mariama drame,quentin lhoest, and alexander m. rush.
+2020.huggingface’s transformers: state-of-the-art natu-ral language processing.
+arxiv:1910.03771 [cs]..2155a irene implementation details.
+in this section, we provide the implementation de-tails of irene.
+irene is implemented for pytorch(paszke et al., 2019), but can be extended to ten-sorflow (abadi et al., 2016) in future..a.1 constructing the model tree.
+the ﬁrst step to extracting the model tree is to runthe model on the target hardware.
+we run the ver-sion of the model on huggingface transformerslibrary v4.2.2 (wolf et al., 2020) for random dataof different input sizes.
+once run, we have both theexecution graph and the jit trace that provides run-time information.
+we use existing pytorch apisto obtain module level nodes, ml primitives, andthe relationships between them, from the execu-tion graph.
+in some cases, the nlp model mayuse customized ml primitives.
+to extract infor-mation about these custom primitives, we combineinformation from the jit trace and the executiongraph.
+once we obtain all the component, we canconstruct the model tree..the following ml primitives are used intransformers: linear, layernorm, embedding,batchnorm1d, conv1d, maxpool1d, avgpool1d,lstm, tanh, conv1d, logsigmoid, relu, sig-moid, gelu, and leakyrelu.
+two customprimitives: matrix multiplications (includingtorch.matmul, torch.bmm and torch.einsum), soft-max (torch.softmax)..machine.
+bert-basedistilbertroberta-basegpt2distilgpt2openaigptaverage.
+pc1.
+32.5462.8013.3624.9635.9342.3735.33.table 11: energy prediction errors at module levelsusing strubell et al., 2019 methodology on pc1....a.2 model features.
+the model features reﬂect hardware-independentcompute and memory information for a givenmodel.
+we use the model execution to extractmodel features used by irene for energy predic-tion.
+we add forward hooks to each node in the.
+model to track the shape and input data of eachmodule and ml primitive.
+pytorch hooks onlysupport tuple arguments, but we extend these toalso support keyword based arguments.
+the jittrace contains information about the number offlops and memory bytes for each module and mlprimitive.
+by combining jit information and theinformation obtained from our hooks, we get themodel features..a.3 resource features.
+resource features capture how the models use hard-ware resources and cause energy activities.
+exist-ing work (henderson et al., 2020) uses the osresource proﬁler to log the resource utilization ofcpu, memory and gpu events.
+however, this in-curs high proﬁling overhead, and proﬁling is onlydone at a low rate of once every second.
+instead, tomonitor resources, we obtain the cpu utilization bydirectly reading /proc/stat and memory usageby reading /proc/meminfo via a c program.
+we simultaneously log the gpu utilization, gpumemory usage, gpu streaming processor (sm)clock frequency and gpu memory frequency usingthe nvidia nvml api (nvidia, 2021).
+to main-tain low monitoring overhead, we log resourcesevery 170 ms, resulting in less than 0.5% increasein cpu utilization and < 15 mb memory footprint..note that both model and resource features areextensible, meaning that one can add more eitherhardware-speciﬁc features or new model featuresfor newer deep learning frameworks or emerginghardware like customized deep learning accelera-tors..a.4 regressor training procedures.
+we’ve implemented irene using scikit learn (pe-dregosa et al., 2011a) and pytorch (paszke et al.,2019).
+we learn linear regressors for ml-level inscikit learn (pedregosa et al., 2011b), and moduleand model level regressor in pytorch, which allowseasily optimizing on dynamic tree-structured com-putation graphs.
+we use adam optimizer (kingmaand ba, 2014) with 0.001 learning rate.
+in ourexperiments τ in equation 3 is ﬁxed value of 10.we normalize all the features to have 0 mean and1 standard deviation, learning mean and standarddeviation from the training set and applying it onthe test set..2156figure 5: abridged view of a bert-base-uncased model annotated with predicted energy from our predictionmethod.
+the root contains the absolute energy of the model while every other node is annotated with its respectiveenergy percentage share.
+darker colors represent nodes that consume a higher percentage of energy.
+there are 12bertlayer modules in the actual model.
+we show just one for brevity.
+the shown energy is an average of energyof the node across all (batch size, sequence length) models of bert-base-uncased type..b software measurements results.
+module.
+energy %.
+we use experiment-impact-tracker (hendersonet al., 2020) to estimate software-based energy mea-surements for the models at a module level as wellas ml level.
+table 11 shows the percentage er-ror in software based measurements for modulelevel operations.
+we calculate a model’s modulelevel error as average percentage error over runsfor batch sizes 24 and 38, and sequence length32 and 128. getting granular ml level softwareenergy corresponding to strubell et al.
+(2019) re-quires modifying the existing framework which isnon-trivial.
+we leave this to future work..c energy breakdowns.
+we show module level predicted energy breakdownof four transformer models in table 12, and showan abridged view of bert-base-uncased tree an-notated with predicted energy and distribution infigure 5..bertoutputbertselfattentionbertintermediatebertselfoutputbertembeddingsbertpooler.
+31.8929.2627.9709.7400.3400.11.
+(a) bert-base.
+module.
+energy %.
+mlpattentionlayernormembedding.
+61.4135.702.790.11.
+(b) openai-gpt.
+module name.
+energy %.
+ffnmultiheadselfattentionlayernormembeddings.
+57.2339.462.690.62.
+(c) distilbert.
+module name.
+energy %.
+ffnmultiheadselfattentionlayernormembeddings.
+57.5039.432.860.21.
+(d) distilgpt2.
+table 12: module level predicted energy breakdown offour transformer models.
+we average the energy ofthese modules across all available input sizes for eachmodel architecture.
+interestingly, we ﬁnd that evenmodels with similar architecture have different types ofenergy bottlenecks.
+for example, bert-base has simi-lar architecture to distilbert but has different energybottlenecks..2157bertmodel (54.8 j)bertembeddings (0.2%)bertencoder (99.6%)bertpooler (0.2%)embedding:word (0.1%)layernorm (0.1%)bertlayer (8.3%)bertattention (3.3%)bertintermediate (2.3%)bertoutput (2.2%)bertselfattention (2.3%)bertselfoutput (0.7%)linear:query (0.5%)matmul (0.2%)softmax (0.1%)linear:dense 0.5(%)layernorm (0.1%)linear:dense (2.1%)linear:dense (0.5%)layernorm (0.1%)linear:dense: (0.1%)tanh (0.1%)

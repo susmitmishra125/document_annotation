@@ -1,0 +1,509 @@
+adatag: multi-attribute value extraction from product proﬁleswith adaptive decoding.
+jun yan1∗ , nasser zalmout2, yan liang2, christan grant3,xiang ren1, xin luna dong2university of southern california1, amazon.com2, university of oklahoma3,{yanjun, xiangren}@usc.edu, {nzalmout, ynliang, lunadong}@amazon.com, cgrant@ou.edu.
+abstract.
+automatic extraction of product attribute val-ues is an important enabling technology ine-commerce platforms.
+this task is usu-ally modeled using sequence labeling archi-tectures, with several extensions to handlemulti-attribute extraction.
+one line of pre-vious work constructs attribute-speciﬁc mod-els, through separate decoders or entirely sep-arate models.
+however, this approach con-strains knowledge sharing across different at-tributes.
+other contributions use a single multi-attribute model, with different techniques toembed attribute information.
+but sharingthe entire network parameters across all at-tributes can limit the model’s capacity to cap-in thisture attribute-speciﬁc characteristics.
+paper we present adatag, which uses adap-tive decoding to handle extraction.
+we param-eterize the decoder with pretrained attributeembeddings, through a hypernetwork and amixture-of-experts (moe) module.
+this al-lows for separate, but semantically correlated,decoders to be generated on the ﬂy for differ-ent attributes.
+this approach facilitates knowl-edge sharing, while maintaining the speciﬁcityof each attribute.
+our experiments on a real-world e-commerce dataset show marked im-provements over previous methods..1.introduction.
+the product proﬁles on e-commerce platforms areusually comprised of natural texts describing prod-ucts and their main features.
+key product featuresare conveyed in unstructured texts, with limitedimpact on machine-actionable applications, likesearch (ai et al., 2017), recommendation (kula,2015), and question answering (kulkarni et al.,2019), among others.
+automatic attribute valueextraction aims to obtain structured product fea-tures from product proﬁles.
+the input is a textual.
+∗ most of the work was done during an internship at.
+amazon..figure 1: an example of the product proﬁle on an e-commerce platform.
+it consists of a title, several infor-mation bullets, and a product description..sequence from the product proﬁle, along with therequired attribute to be extracted, out of potentiallylarge number of attributes.
+the output is the corre-sponding extracted attribute values.
+figure 1 showsthe proﬁle of a moisturizing cream product as anexample, which consists of a title, several infor-mation bullets, and a product description.
+it alsoshows the attribute values that could be extracted..most existing studies on attribute value extrac-tion use neural sequence labeling architectures(zheng et al., 2018; karamanolakis et al., 2020;xu et al., 2019).
+to handle multiple attributes,one line of previous contributions develops a setof “attribute-speciﬁc” models (i.e., one model perattribute).
+the goal is to construct neural networkswith (partially) separate model parameters for dif-ferent attributes.
+for example, one can constructan independent sequence labeling model for eachattribute and make predictions with all the mod-els collectively (e.g., the vanilla opentag model(zheng et al., 2018)).
+instead of totally separatemodels, one can also use different tag sets corre-sponding to different attributes.
+these networkscan also share the feature encoder and use separate.
+proceedingsofthe59thannualmeetingoftheassociationforcomputationallinguisticsandthe11thinternationaljointconferenceonnaturallanguageprocessing,pages4694–4705august1–6,2021.©2021associationforcomputationallinguistics4694label decoders (yang et al., 2017).
+however, theexplicit network (component) separation in thesecontributions constrains knowledge-sharing acrossdifferent attributes.
+exposure to other attributes canhelp in disambiguating the values for each attribute.
+and having access to the entire training data for allattributes helps with the generic sequence taggingtask.
+another line for multi-attribute extractioncontributions learns a single model for all attributes.
+the model proposed by xu et al.
+(2019), for ex-ample, embeds the attribute name with the textualsequence, to achieve a single “attribute-aware” ex-traction model for all attributes.
+this approachaddresses the issues in the previous direction.
+how-ever, sharing all the network parameters with allattributes could limit the model’s capacity to cap-ture attribute-speciﬁc characteristics..in this paper we address the limitations of theexisting contribution lines, through adaptive de-coder parameterization.
+we propose to generatea decoder on the ﬂy for each attribute based onits embedding.
+this results in different but se-mantically correlated decoders, which maintainthe speciﬁc characteristics for each attribute, whilefacilitating knowledge-sharing across different at-tributes.
+to this end, we use conditional randomﬁelds (crf) (lafferty et al., 2001) as the decoders,and parameterize the decoding layers with the at-tribute embedding through a hypernetwork (haet al., 2017) and a mixture-of-experts (moe) mod-ule (jacobs et al., 1991).
+we further explore severalpretrained attribute embedding techniques, to adduseful attribute-speciﬁc external signals.
+we useboth contextualized and static embeddings for theattribute name along with its potential values tocapture meaningful semantic representations..we summarize our contributions as follows: (1)we propose a multi-attribute value extraction modelwith an adaptive crf-based decoder.
+our modelallows for knowledge sharing across different at-tributes, yet maintains the individual characteris-tics of each attribute.
+(2) we propose several at-tribute embedding methods, that provide importantexternal semantic signals to the model.
+(3) weconduct extensive experiments on a real-world e-commerce dataset, and show improvements overprevious methods.
+we also draw insights on thebehavior of the model and the attribute value ex-traction task itself..2 background.
+2.1 problem deﬁnition.
+the main goal of the task is to extract the cor-responding values for a given attribute, out of anumber of attributes of interest, from the text se-quence of a product proﬁle.
+formally, given atext sequence x = [x1, .
+.
+.
+, xn] in a product pro-ﬁle, where n is the number of words, and a queryattribute r ∈ r, where r is a predeﬁned set ofattributes, the model is expected to extract all textspans from x that could be valid values for at-tribute r characterizing this product.
+when thereare no corresponding values mentioned in x, themodel should return an empty set.
+for example,for the product in figure 1, given its title as x, themodel is expected to return (“dry”, “sensitive”) ifr =“skintype”, and an empty set if r =“color”..following standard approaches (zheng et al.,2018; xu et al., 2019; karamanolakis et al., 2020),under the assumption that different values for anattribute do not overlap in the text sequence, weformulate the value extraction task as a sequencetagging task with the bioe tagging scheme.
+thatis, given x and r, we want to predict a tag sequencey = [y1, .
+.
+.
+, yn], where yi ∈ {b, i, o, e} is thetag for xi.
+“b”/“e” indicates the correspondingword is the beginning/ending of an attribute value,“i” means the word is inside an attribute value, and“o” means the word is outside any attribute value.
+table 1 shows an example of the tag sequence forattribute “scent” of a shower gel collection, where“orchid”, “cherry pie”, “mango ice cream” could beextracted as the values..x orchid.
+cherry.
+pie.
+/ mango.
+ice.
+cream scent.
+y.b.b.e o.b.i.e.o.
+/.
+o.table 1: an example of the tag sequence for attribute“scent” annotated with the bioe scheme..2.2 bilstm-crf architecture.
+the bilstm-crf architecture (huang et al.,2015) consists of a bilstm-based text encoder,and a crf-based decoder.
+this architecture hasbeen proven to be effective for the attribute valueextraction task (zheng et al., 2018; xu et al., 2019;karamanolakis et al., 2020).
+we build our adatagmodel based on the bilstm-crf architecture aswe ﬁnd that the bilstm-crf-based models gen-erally perform better than their bilstm-based,.
+4695bert-based (devlin et al., 2019) and bert-crf-based counterparts, as shown in §5.
+we introducethe general attribute-agnostic bilstm-crf archi-tecture, which our model is based on, in this sub-section..given a text sequence x = [x1, .
+.
+.
+, xn].
+weobtain the sequence of word embeddings x =[x1, .
+.
+.
+, xn] using an embedding matrix wword.
+we get the hidden representation of each word byfeeding x into a bi-directional long-short termmemory (lstm) (hochreiter and schmidhuber,1997) layer with hidden size dh:.
+[h1, .
+.
+.
+, hn] = bilstm([x1, .
+.
+.
+, xn])..(1).
+we use a crf-based decoder to decode the se-quence of hidden representations while capturingthe dependency among tags (e.g., “i” can only befollowed by “e”).
+it consists of a linear layer anda transition matrix, which are used to calculatethe emission score and the transition score for thetag prediction respectively.
+let v = [b, i, o, e]be the vocabulary of all possible tags.
+we calcu-late an emission score matrix p = [p1, .
+.
+.
+, pn] ∈r4×n, where pij is the score for assigning thei-th tag in v to xj.
+this is computed by feed-ing [h1, .
+.
+.
+, hn] into a linear layer with parame-ters [w, b], speciﬁcally pi = whi + b ∈ r4,where w ∈ r4×dh and b ∈ r4.
+for a bioe tagsequence y = [y1, .
+.
+.
+, yn], we get its index se-quence z = [z1, .
+.
+.
+, zn] where zi ∈ {1, 2, 3, 4} isthe index of yi in v .
+the score for an input textsequence x to be assigned with a tag sequence yis calculated as:.
+s(x, y ) = s(x, z) =.
+tzizi+1 +.
+pzii,.
+n−1(cid:88).
+i=1.
+n(cid:88).
+i=1.
+(2)where t ∈ r4×4 is the transition matrix of crf,such that tij is the score of a transition from thei-th tag to the j-th tag in v ..3 method.
+3.1 model overview.
+the multi-attribute value extraction task can bethought of as a group of extraction subtasks, corre-sponding to different attributes.
+while all attributesshare the general knowledge about value extrac-tion, each has its speciﬁcity.
+the key idea in ourproposed model is to dynamically adapt the param-eters of the extraction model based on the speciﬁcsubtask corresponding to the given attribute.
+we.
+use a bilstm-crf (huang et al., 2015) archi-tecture, where different subtasks, correspondingto different attributes, share the same text encoderto derive a contextualized hidden representationfor each word.
+then the hidden representationsof the text sequence are decoded into a sequenceof tags with a crf-based decoder, the parametersof which are generated on the ﬂy based on the at-tribute embedding.
+in this setup, different subtasksare trained jointly, and different decoders are cor-related based on the attribute embedding.
+this fa-cilitates a knowledge-sharing scheme across differ-ent attributes.
+intuitively, this can help with learn-ing generic abilities like detecting value boundary,which is at the core of the extraction process of anyattribute.
+at the same time, our model provideseach subtask with a customized decoder parameter-ization, which improves the model’s capacity forcapturing attribute-speciﬁc knowledge..figure 2 presents our overall model architec-ture, where we equip the bilstm-crf architec-ture with an adaptive crf-based decoder.
+in §3.2,we will introduce our adaptive crf-based decoderwhich is parameterized with the attribute embed-ding.
+in §3.3, we will describe how to obtain pre-trained attribute embeddings that can capture thecharacteristics of different subtasks, so that “simi-lar” attributes get “similar” decoding layers..3.2 adaptive crf-based decoder.
+in attribute value extraction, the model takes thetext sequence x with a query attribute r as input,and is expected to predict y based on both x andr. to make the model aware of the query attribute,we need to incorporate the attribute informationinto some components of the bilstm-crf archi-tecture.
+the bilstm-based text encoder is respon-sible for encoding the text sequence and obtain acontextualized representation for each word, whichcan be regarded as “understanding” the sentence.
+the crf-based decoder then predicts a tag for eachword based on its representation.
+therefore, wepropose that all attributes share a uniﬁed text en-coder so that the representation can be enhancedthrough learning with different subtasks, and eachattribute has a decoder adapted to its correspond-ing subtask, the parameters of which are generatedbased on the attribute information..as introduced in §2.2, a crf-based decoder con-sists of a linear layer and a transition matrix.
+thelinear layer takes hidden representations as input,.
+4696figure 2: model architecture.
+adatag equips the bilstm-crf architecture with an adaptive crf-based decoder..and predicts a tag distribution for each word inde-pendently.
+it captures most of characteristics ofvalue extraction for a given attribute based on thetext understanding.
+more ﬂexibility is needed tomodel the speciﬁcity of different attributes.
+bycontrast, the transition matrix learns the depen-dency among tags to avoid predicting unlikely tagsequence.
+it only captures shallow characteristicsfor the attribute based on its value statistics.
+forexample, the transition scores form “b” to othertags largely depend on the frequent lengths of theattribute values.
+if single-word values are men-tioned more often, then “b” is more likely to befollowed by “o”.
+if two-word values dominate thevocabulary, then “b” is more likely to be followedby “e”.
+attributes could be simply clustered basedon these shallow characteristics..in this work we parameterize the crf-based de-coder with the attribute embedding r ∈ rdr , wheredr is the dimension of the attribute embedding.
+forthe linear layer, we adopt a hypernetwork (ha et al.,2017) due to its high ﬂexibility.
+for the transitionmatrix, we develop a mixture-of-experts (pahujaet al., 2019) module to leverage the latent clusteringnature of attributes.
+we nevertheless experimentwith all 4 combinations of these methods in §5.3,and this choice does the best..hypernetwork.
+the idea of hypernetworks (haet al., 2017) is to use one network to generate theparameters of another network.
+such approach hashigh ﬂexibility when no constraint is imposed dur-ing generation.
+we therefore use it to parameterizethe linear layer.
+in our model, we learn two dif-ferent linear transformations that map the attributeembedding to the parameters of the linear layer(w ∈ r4×dh, b ∈ r4) in the crf-based decoder:.
+w = reshape(wwb = reshape(wb.
+hyperr + bwhyperr + bb.
+hyper),hyper)..(3).
+hyper ∈ r4dh, wb.
+hyper ∈ r4dh×dr , bwhere wwhyper ∈r4×dr , bbhyper ∈ r4, and the reshape operatorreshapes a 1-d vector into a matrix with the samenumber of elements..mixture-of-experts.
+the idea of mixture-of-experts (jacobs et al., 1991) is to have a groupof networks (“experts”) that jointly make decisionswith dynamically determined weights.
+unlike pre-vious approaches that combine each expert’s pre-diction, we combine their parameters for gener-ating the transition matrix.
+let k be the numberof experts we use to parameterize the transitionmatrix t ∈ r4×4 where k is a hyperparameter.
+we introduce k learnable matrices t(1), .
+.
+.
+, t(k)for the k experts.
+each expert’s matrix can beunderstood as a cluster prototype and we employa linear gating network to compute the probabil-ity of assigning the given attribute to each expert:λ = softmax(wmoer + bmoe).
+here wmoe ∈rk×dr , bmoe ∈ rk, λ = [λ1, .
+.
+.
+, λk] ∈ rkand (cid:80)ki=1 λi = 1. the parameters for the tran-sition matrix for this attribute is calculated as:t = (cid:80)k.i=1 λit(i)..3.3 pretrained attribute embeddings.
+the attribute embedding r plays a key role in de-riving the attribute-speciﬁc decoding layers.
+there-fore, the quality of the attribute embeddings is cru-cial to the success of our parameterization method.
+good attribute embeddings are supposed to capturethe subtask similarities such that similar extractiontasks use decoders with similar parameters.
+in thiswork, we propose to use the attribute name and pos-sible values as a proxy to capture the characteristicsof the value extraction task for a given attribute.
+the attribute embeddings can therefore be directlyderived from the training data and loaded into theattribute embedding layer as initialization..for each attribute r, we ﬁrst collect all the sen-.
+4697tences from the training data that are annotated withat least one value for r. we denote the collectedsentences with values as dr = {(˜r, vi, xi)}nri=1where ˜r is the phrase representation of r (e.g., ˜r =“skin type” if r = “skintype”), vi is a span intext sequence xi that serves as the value for r, andnr is the number of collected sentences.
+for each(˜r, vi, xi), we can calculate an attribute name em-bedding rnameand an attribute value embeddingrvaluein either a contextualized way or an uncon-itextualized way, which are detailed later.
+we poolover all instances in dr to get the ﬁnal attributename embedding and attribute value embedding,which are concatenated as the attribute embedding:rname = 1i=1 rvalue,inrr = concat(rname, rvalue).., rvalue = 1nr.
+i=1 rnamei.
+(cid:80)nr.
+(cid:80)nr.
+i.contextualized embeddings.
+taking the con-text into consideration helps get embeddings thatcan more accurately represent the semantics of theword.
+here we use the contextualized representa-tions provided by bert (devlin et al., 2019) togenerate the embedding.
+we use bert to encodexi and get vi’s phrase embedding (the averagedembedding of each word in the phrase) as rvalue.
+byreplacing vi with “[boa] ˜r [eoa]”1 and encod-ing the modiﬁed sequence with bert, we get thephrase embedding for “[boa] ˜r [eoa]” as rname..i.i.uncontextualized embeddings.
+static embed-dings like word2vec (mikolov et al., 2013) andglove (pennington et al., 2014) can be more stableto use under noisy contexts.
+we use glove (50d)to get the phrase embedding for vi as rvalueand thephrase embedding for ˜r as rname.
+..i.i.
+3.4 model training.
+as we parameterize the crf-based decoderwith the attribute embedding through moe andhypernetwork, the learnable parameters in ourincludes θencoder = {wword, θbi-lstm},modelhyper, wbθhyper = {wwhyper, bwhyper}, θmoe ={wmoe, bmoe, {t(i)}ki=1}.
+we freeze the attributeembeddings watt as it gives better performance,which is also discussed in §5.3..hyper, bb.
+the whole model is trained end-to-end by max-imizing the log likelihood of (x, r, y ) triplets inthe training set, which is derived from equation 2.
+1[boa] and [eoa] are special tokens that are used to sepa-rate the attribute name from context in the synthetic sentence..as:.
+s(x, r, y ) =.
+tzizi+1 +.
+pzii,.
+n(cid:88).
+i=0.
+n(cid:88).
+i=1.
+(4).
+s(x, r, y )y (cid:48)∈v n s(x, r, y (cid:48)).
+,.
+(cid:80).
+log p(y | x, r) = log.
+where vn is the set of all tag sequences of length n.the log likelihood can be computed efﬁciently us-ing the forward algorithm (baum and eagon, 1967)for hidden markov models (hmms).
+at inference,we adopt viterbi algorithm (viterbi, 1967) to getthe most likely y given x and r in test set..4 experimental setup.
+4.1 dataset.
+to evaluate the effectiveness of our proposedmodel, we build a dataset by collecting productproﬁles (title, bullets, and description) from thepublic web pages at amazon.com.2.
+following previous works (zheng et al., 2018;karamanolakis et al., 2020; xu et al., 2019), we ob-tain the attribute-value pairs for each product usingthe product information on the webpages by distantsupervision.
+we select 32 attributes with differentfrequencies.
+for each attribute, we collect productproﬁles that are labeled with at least one value forthis attribute.
+we further split the collected datainto training (90%) and development (10%) sets..the annotations obtained by distant supervisionare often noisy so they cannot be considered as goldlabels.
+to ensure the reliability of the evaluationresults, we also manually annotated an additionaltesting set covering several attributes.
+we randomlyselected 12 attributes from the 32 training attributes,took a random sample from the relevant productproﬁles for each attribute, and asked human anno-tators to annotate the corresponding values.
+weensured that there is no product overlapping be-tween training/development sets and the test set..putting together the datasets built for each indi-vidual attribute, we end up with training and de-velopment sets for 32 attributes, covering 333,857and 40,008 products respectively.
+the test set has12 attributes and covers 11,818 products.
+table 2presents the statistics of our collected dataset.
+ta-ble 3 shows the attribute distribution of the training.
+2while xu et al.
+(2019) released a subset of their collecteddata from aliexpress.com, their data has a long-tailed attributedistribution (7650 of 8906 attributes occur less than 10 times).
+it brings major challenges for zero-/few-shot learning, whichare beyond our scope..4698set.
+it clearly demonstrates the data imbalance is-sue of the real-world attribute value extraction data.
+most of the attribute values are usually coveredin the title and bullets, since sellers would aim tohighlight the product features early on in the prod-uct proﬁle.
+the description, on the other hand,can provide few new values complementing thosementioned in the title and bullets, but signiﬁcantlyincreases the computational costs due to its length.
+therefore, we consider two settings for experi-ments: extracting from the title only (“title”) andextracting from the concatenation of the title andbullets (“title + bullets”)..split.
+# attributes.
+# products avg.
+# words.
+(title).
+avg.
+# words(title+bullets).
+traindevtest.
+323212.
+333,85740,00811,818.
+20.921.020.5.
+113.4113.7120.0.table 2: statistics of our collected dataset..# products.
+# att.
+examples.
+[10000, 50279][1000, 10000)[100, 1000)[15, 100).
+121064.color, flavor, skintype, hairtypeactiveingredients, caffeinecontentspecialingredients, dosageformpatterntype, itemshape.
+table 3: frequencies of different attributes in the train-ing set..4.2 evaluation metrics.
+for each attribute, we calculate precision/recall/f1based on exact string matching.
+that is, an ex-tracted value is considered correct only if it ex-actly matches one of the ground truth values for thequery attribute in the given text sequence.
+we usemacro-precision/macro-recall/macro-f1 (denotedas p/r/f1) as the aggregated metrics to avoid biastowards high-resource attributes.
+they are calcu-lated by averaging per-attribute metrics..4.3 compared methods.
+we compare our proposed model with a series ofstrong baselines for attribute value extraction.3.
+bilstm uses a bilstm-based encoder.
+eachhidden representation is decoded independentlyinto a tag with a linear layer followed by soft-max.
+bilstm-crf (huang et al., 2015) uses abilstm-based encoder and a crf-based decoder,as described in §2.2.
+zheng et al.
+(2018) proposeopentag, which uses a self-attention layer between.
+the bilstm-based encoder and crf-based de-coder for interpretable attribute value extraction.
+however, we ﬁnd the self-attention layer not help-ful for the performance.4 we therefore only presentthe results for bilstm-crf in §5.
+bert (devlinet al., 2019) and bert-crf replace the bilstm-based text encoder with bert.5.
+note that these four methods don’t take the queryattribute as input.
+to make them work in our morerealistic setting with multiple (n ) attributes, weconsider two variants for each of them.
+(1) “ntag sets”: we introduce one set of b/i/e tags foreach attribute, so that a tag sequence can be un-ambiguously mapped to the extraction results formultiple attributes.
+for example, the tag sequence“b-skintype e-skintype o b-scent” indicates thatthe ﬁrst two words constitutes a value for attributeskintype, and the last word is a value for scent.
+only one model is needed to handle the extractionfor all attributes.
+(2) “n models”: we build onevalue extraction model for each attribute — we’lltrain n models for this task..the “n models” variant isolates the learningof different attributes.
+to enable knowledge shar-ing, other methods share the model components orthe whole model among all attributes: bilstm-crf-sharedemb shares a word embedding layeramong all attributes.
+each attribute has its own bil-stm layer and crf-based decoder, which are in-dependent from each other.
+bilstm-multicrf(yang et al., 2017) shares a bilstm-based textencoder among all attributes.
+each attribute has itsown crf-based decoder.
+suopentag (xu et al.,2019) encodes both the text sequence and the queryattribute with bert and adopts a cross-attentionmechanism to get an attribute-aware representa-tion for each word.
+the hidden representations aredecoded into a tags with a crf-based decoder..we also include adatag (random attemb),which has the same architecture as our model butuses randomly initialized learnable attribute em-beddings of the same dimension..4.4.implementation details.
+we implement all models with pytorch (paszkeet al., 2019).
+for models involving bert, we usethe bert-base-cased version.
+other modelsuse pretrained 50d glove (pennington et al., 2014).
+4we hypothesize that the improvement brought by the self-.
+attention module is dataset-speciﬁc..5the hidden representation for each word is the average of.
+3we discuss the sizes of different models in appendix §a..its subword representations..4699methods.
+title.
+title + bullets.
+p(%) r(%).
+f1(%).
+p(%) r(%).
+f1(%).
+methods.
+high-resource att..low-resource att..p(%) r(%).
+f1(%).
+p(%) r(%).
+f1(%).
+group iii: shared components.
+standard ner..group i: n tag sets.
+bilstm (n tag sets)bilstm-crf (n tag sets)bert (n tag sets)bert-crf (n tag sets).
+35.1535.2333.5234.55.
+54.2853.9450.4851.96.group ii: n models.
+bilstm (n models)bilstm-crf (n models)bert (n models)bert-crf (n models).
+64.3763.9455.3454.29.
+71.7172.1472.8672.79.bilstm-crf-sharedembbilstm-multicrfsuopentagadatag (random attemb)adatag (our model).
+63.7764.4863.6264.8065.00.
+72.5072.0471.6771.9575.87.
+38.9238.8536.2937.45.
+64.6464.7858.4857.49.
+64.6264.8164.7665.7467.48.
+32.1734.0331.4132.63.
+34.3035.0130.6231.24.
+61.6162.0753.3549.25.
+60.2661.4661.2759.33.
+58.9560.6461.5760.1462.87.
+60.5862.7560.4862.1462.45.
+31.1832.1128.2628.89.
+58.5659.1954.3750.49.
+57.6659.7859.6260.0460.87.table 4: performance comparison on test set with 12attributes (best in boldface and second best underlined)..embeddings as the initialization of the word em-bedding matrix wword.
+we choose dh = 200 asthe hidden size of the bilstm layer and 32 asthe batch size.
+bert-based models are optimizedusing adamw (loshchilov and hutter, 2019) op-timizer with learning rate 2e−5.
+others use theadam (kingma and ba, 2015) optimizer with learn-ing rate 1e−3.
+we perform early stopping if noimprovement in (macro-) f1 is observed on the de-velopment set for 3 epochs.
+for our model, we usecontextualized attribute embeddings as describedin §3.2 and freeze them during training.
+we setk = 3 for moe.
+we made choices based on thedevelopment set performance..5 experimental results.
+5.1 overall results.
+table 4 presents the overall results using our datasetunder both “title” and “title + bullets” settings.
+our model demonstrates great improvements overbaselines on all metrics except getting second bestrecall under the “title + bullets” settings.
+thecomparisons demonstrate the overall effectivenessof our model and pretrained attribute embeddings.
+the “n tag sets” variants get much lower per-formance than other methods, probably due to thesevere data imbalance issue in the training set (seetable 3).
+all attributes share the same crf-baseddecoder, which could make learning biased towardshigh-resource attributes.
+note that introducing oneset of tags for each entity type is the standard ap-proach for the named entity recognition (ner)task.
+its low performance suggests that the attributevalue extraction task is inherently different from.
+bilstm-crf (n models)bilstm-multicrfsuopentagadatag (our model).
+54.0454.3855.3456.05.
+75.6674.4272.9476.07.
+61.5760.2360.4962.00.
+83.7284.7080.1682.90.
+65.0867.2969.1375.48.
+71.1973.9773.3178.45.table 5: performance comparison on high-resource andlow-resource attributes..variants of “shared components” generallyachieve higher performance than the independentmodeling methods (“n models”), which demon-strates the usefulness of enabling knowledge shar-ing among different subtasks..we also notice that bert and bert-crf mod-els get lower performance than their bilstm andbilstm-crf counterparts.
+the reason could bethe domain discrepancy between the corpora thatbert is pretrained on and the product title/bullets.
+the former consist of mainly natural language sen-tences, while the latter are made up of integrationof keywords and ungrammatical sentences..5.2 high- vs. low-resource attributes.
+to better understand the gain achieved by jointmodeling, we further split the 12 testing attributesinto 8 high-resource attributes and 4 low-resourceattributes, based on the size of the training data with1000 instances as the threshold.
+it is importantto point out that many factors (e.g., vocabularysize, value ambiguity, and domain diversity), otherthan the size of training data, can contribute to thedifﬁculty of modeling an attribute.
+therefore, theperformance for different attributes is not directlycomparable.6.
+from results in table 5, we can see thatour model gets a lot more signiﬁcant improve-ment from the independent modeling approach(bilstm-crf (n models)) on low-resource at-tributes compared to high-resource attributes.
+thissuggests that low-resource attributes beneﬁt morefrom knowledge sharing, making our model de-sirable in the real-world setting with imbalancedattribute distribution..5.3 ablation studies.
+attribute embeddings.
+we study differentchoices of adopting pretrained attribute embed-.
+6some low-resource attributes (e.g., batterycellcompo-sition) have small value vocabulary and simple mentioningpatterns.
+saturated performance on them pull up the metrics..4700dings.
+specially, we experiment with contextu-alized embeddings (bertname+value) and uncontex-tualized embeddings (glovename+value) under the“title” setting.
+for given attribute embeddings, wecan either ﬁnetune them during training or freezethem once loaded.
+we also experiment with at-tribute name embeddings rname and attribute valueembeddings rvalue only to understand which infor-mation is more helpful.
+the baseline is set as us-ing randomly initialized learnable attribute embed-dings.
+table 6 shows the results.
+comparing at-tribute embeddings with the same dimension, weﬁnd that freezing pretrained embeddings alwaysleads to performance gain over the random base-line.
+this is because our parameterization methodshave high ﬂexibility in generating the parametersfor the decoder.
+using pretrained embeddings andfreezing them provides the model with a good start-ing point and makes learning easier by reducingthe degree of freedom.
+bertname (freeze) out-performs bertvalue (freeze), suggesting that theattribute name is more informative in determiningthe characteristics of the value extraction task onour dataset, where the values labeled through dis-tant supervision are noisy..attribute embeddings dimension.
+p(%) r(%).
+f1(%).
+randomglovename+valueglovename+value (freeze).
+randombertnamebertname (freeze)bertvaluebertvalue (freeze).
+randombertname+valuebertname+value (freeze).
+100100100.
+768768768768768.
+153615361536.
+63.0564.1264.47.
+63.8362.0164.9065.0362.96.
+64.8063.5765.00.
+72.3570.5173.11.
+72.3973.9474.3172.3673.92.
+71.9573.5775.87.
+64.8263.8965.53.
+65.1264.8966.6065.5365.51.
+65.7465.8167.48.table 6: performance (title) with different choices forderiving and adopting attribute embeddings..linear layer transition matrix.
+p(%) r(%).
+moehypernetworkmoehypernetwork.
+moehypernetworkhypernetworkmoe.
+42.2865.5953.5265.00.
+65.8069.3966.4375.87.f1(%).
+47.9463.6655.1067.48.table 7: performance (title) with different parameteri-zation methods..decoder parameterization.
+we study differentdesign choices for parameterizing the crf-baseddecoder.
+for designs involving moe, we searchthe number of experts (k) in [1, 2, 3, 4, 5] and adopt.
+figure 3: performance (title) with different numbersof training attributes.
+we use broken y-axis due to thelarge gap in results between bilstm-crf (n tag sets)and other models..the best one to present the results.
+we experimentunder the “title” setting.
+from table 7, we ﬁndthat parameterizing the linear layer with moe leadsto much lower performance.
+this is reasonablebecause the linear layer plays a much more impor-tant role in the decoder while the transition matrixacts more like a regularization to avoid bad tag se-quences.
+moe uses k matrices as basis and expectsto represent the parameters for any attribute as alinear combination of the bases.
+that limits the ex-pressiveness to capture complicated characteristicsof different attributes and will thus severely hurt theperformance.
+as for the transition matrix, model-ing with moe is a better choice.
+this is because thetransition matrix is more “structured” in the sensethat each of it element is expected to be either a bignumber or a small number based on its semantics.
+for example, the transition score for i → e shouldbe much higher than i → b. hypernetwork is tooﬂexible to generate such “structured” parameters..5.4 effect of number of attributes.
+an important motivation of our model is that jointmodeling of different attributes can facilitate knowl-edge sharing and improve the performance.
+herewe study the performance of model improvementalong with increment of the number of jointly mod-eled attributes.
+we experiment under the “title”setting.
+we start with training our model on 12attributes that have test data.
+after that, we randomselect 5, 10, 15, 20 attributes from the remainingattributes, and add them to the joint training.
+theevaluation results on 12 test attributes are presentedin figure 3. while our model general demonstratesgreater improvement with joint modeling of moreattributes, other models’ performance ﬂuctuate orgoes down.
+that also demonstrates the scalability.
+4701of our model when new attributes keep emergingin real-world scenarios..7 conclusion.
+6 related work.
+attribute value extraction.
+opentag (zhenget al., 2018) formulates attribute value extraction asa sequence tagging task, and proposes a bilstm-selfattention-crf architecture to address the prob-lem.
+xu et al.
+(2019) propose an “attribute-aware”setup, by utilizing one set of bio tags and attributename embedding with an attention mechanism, toenforce the extraction network to be attribute com-prehensive.
+karamanolakis et al.
+(2020) addition-ally incorporate the product taxonomy into a multi-task learning setup, to capture the nuances acrossdifferent product types.
+zhu et al.
+(2020) intro-duce a multi-modal network to combine text andvisual information with a cross-modality attentionto leverage image rich information that is not con-veyed in text.
+wang et al.
+(2020) use a questionanswering formulation to tackle attribute value ex-traction.
+we adopt the extraction setup in our modelas most of previous contributions, using sequencelabeling architecture.
+but we utilize an adaptivedecoding approach, where the decoding network isparameterized with the attribute embedding..dynamic parameter generation.
+our modelproposes an adaptive-based decoding setup, pa-rameterized with attribute embeddings through amixture-of-experts module and a hypernetwork.
+jacobs et al.
+(1991) ﬁrst propose a system com-posed of several different “expert” networks anduse a gating network that decides how to as-sign different training instances to different “ex-perts”.
+alshaikh et al.
+(2020); guo et al.
+(2018);le et al.
+(2016); peng et al.
+(2019) all use do-main/knowledge experts, and combine the predic-tions of each expert with a gating network.
+un-like these works, we combine the weights of eachexpert to parameterize a network layer given aninput embedding.
+ha et al.
+(2017) propose the gen-eral idea of generating the parameters of a networkby another network.
+the proposed model in caiet al.
+(2019) generates the parameters of an encoder-decoder architecture by referring to the context-aware and topic-aware input.
+suarez (2017) usesa hypernetwork to scale the weights of the mainrecurrent network.
+platanios et al.
+(2018) tackleneural machine translation between multiple lan-guages using a universal model with a contextualparameter generator..in this work we propose a multi-attribute valueextraction model that performs joint modeling ofmany attributes using an adaptive crf-based de-coder.
+our model has a high capacity to deriveattribute-speciﬁc network parameters while facili-tating knowledge sharing.
+incorporated with pre-trained attribute embeddings, our model showsmarked improvements over previous methods..acknowledgments.
+this work has been supported in part by nsfsma 18-29268. we would like to thank jun ma,chenwei zhang, colin lockard, pascual mart´ınez-g´omez, binxuan huang from amazon, and all thecollaborators in usc ink research lab, for theirconstructive feedback on the work.
+we would alsolike to thank the anonymous reviewers for theirvaluable comments..references.
+qingyao ai, yongfeng zhang, keping bi, xu chen,and w. bruce croft.
+2017. learning a hierarchicalembedding model for personalized product search.
+in proceedings of the 40th international acm sigirconference on research and development in infor-mation retrieval, shinjuku, tokyo, japan, august 7-11, 2017, pages 645–654.
+acm..rana alshaikh, zied bouraoui, shelan jeawak, andsteven schockaert.
+2020. a mixture-of-expertsmodel for learning multi-facet entity embeddings.
+in proceedings of the 28th international conferenceon computational linguistics, pages 5124–5135,barcelona, spain (online).
+international committeeon computational linguistics..leonard e baum and john alonzo eagon.
+1967. aninequality with applications to statistical estimationfor probabilistic functions of markov processes andto a model for ecology.
+bulletin of the americanmathematical society, 73(3):360–363..hengyi cai, hongshen chen, cheng zhang, yonghaosong, xiaofang zhao, and dawei yin.
+2019. adap-tive parameterization for neural dialogue generation.
+in proceedings of the 2019 conference on empiricalmethods in natural language processing and the9th international joint conference on natural lan-guage processing (emnlp-ijcnlp), pages 1793–1802, hong kong, china.
+association for computa-tional linguistics..jacob devlin, ming-wei chang, kenton lee, andkristina toutanova.
+2019. bert: pre-training ofdeep bidirectional transformers for language under-in proceedings of the 2019 conferencestanding..4702of the north american chapter of the associationfor computational linguistics: human languagetechnologies, volume 1 (long and short papers),pages 4171–4186, minneapolis, minnesota.
+associ-ation for computational linguistics..jiang guo, darsh shah, and regina barzilay.
+2018.multi-source domain adaptation with mixture of ex-in proceedings of the 2018 conference onperts.
+empirical methods in natural language processing,pages 4694–4703, brussels, belgium.
+associationfor computational linguistics..david ha, andrew m. dai, and quoc v. le.
+2017.in 5th international conferencehypernetworks.
+on learning representations, iclr 2017, toulon,france, april 24-26, 2017, conference track pro-ceedings.
+openreview.net..sepp hochreiter and j¨urgen schmidhuber.
+1997.neural computation,.
+long short-term memory.
+9(8):1735–1780..zhiheng huang, wei xu, and kai yu.
+2015. bidi-rectional lstm-crf models for sequence tagging.
+corr, abs/1508.01991..robert a jacobs, michael i jordan, steven j nowlan,and geoffrey e hinton.
+1991. adaptive mixtures oflocal experts.
+neural computation, 3(1):79–87..giannis karamanolakis, jun ma, and xin luna dong.
+2020. txtract: taxonomy-aware knowledge extrac-in pro-tion for thousands of product categories.
+ceedings of the 58th annual meeting of the asso-ciation for computational linguistics, pages 8489–8502, online.
+association for computational lin-guistics..diederik p. kingma and jimmy ba.
+2015. adam: ain 3rd inter-method for stochastic optimization.
+national conference on learning representations,iclr 2015, san diego, ca, usa, may 7-9, 2015,conference track proceedings..maciej kula.
+2015. metadata embeddings for user andarxiv preprint.
+item cold-start recommendations.
+arxiv:1507.08439..ashish kulkarni, kartik mehta, shweta garg, viditbansal, nikhil rasiwasia, and srinivasan sen-gamedu.
+2019. productqna: answering user ques-tions on e-commerce product pages.
+in companionproceedings of the 2019 world wide web confer-ence, pages 354–360..john d. lafferty, andrew mccallum, and fernandoc. n. pereira.
+2001. conditional random ﬁelds:probabilistic models for segmenting and labeling se-quence data.
+in proceedings of the eighteenth inter-national conference on machine learning (icml2001), williams college, williamstown, ma, usa,june 28 - july 1, 2001, pages 282–289.
+morgankaufmann..phong le, marc dymetman, and jean-michel ren-ders.
+2016. lstm-based mixture-of-experts forin proceedings ofknowledge-aware dialogues.
+the 1st workshop on representation learning fornlp, pages 94–99, berlin, germany.
+association forcomputational linguistics..ilya loshchilov and frank hutter.
+2019. decou-in 7th inter-pled weight decay regularization.
+national conference on learning representations,iclr 2019, new orleans, la, usa, may 6-9, 2019.openreview.net..tomas mikolov, kai chen, greg corrado, and jef-efﬁcient estimation of wordarxiv preprint.
+frey dean.
+2013.representations in vector space.
+arxiv:1301.3781..vardaan pahuja, jie fu, and christopher j. pal.
+2019.learning sparse mixture of experts for visual ques-tion answering.
+corr, abs/1909.09192..adam paszke, sam gross, francisco massa, adamlerer, james bradbury, gregory chanan, trevorkilleen, zeming lin, natalia gimelshein, lucaantiga, alban desmaison, andreas k¨opf, edwardyang, zachary devito, martin raison, alykhan te-jani, sasank chilamkurthy, benoit steiner, lu fang,junjie bai, and soumith chintala.
+2019.py-torch: an imperative style, high-performance deepin advances in neural informa-learning library.
+tion processing systems 32: annual conferenceon neural information processing systems 2019,neurips 2019, december 8-14, 2019, vancouver,bc, canada, pages 8024–8035..hao peng, ankur parikh, manaal faruqui, bhuwandhingra, and dipanjan das.
+2019. text generationwith exemplar-based adaptive decoding.
+in proceed-ings of the 2019 conference of the north americanchapter of the association for computational lin-guistics: human language technologies, volume 1(long and short papers), pages 2555–2565, min-neapolis, minnesota.
+association for computationallinguistics..jeffrey pennington, richard socher, and christophermanning.
+2014. glove: global vectors for wordrepresentation.
+in proceedings of the 2014 confer-ence on empirical methods in natural languageprocessing (emnlp), pages 1532–1543, doha,qatar.
+association for computational linguistics..emmanouil antonios platanios, mrinmaya sachan,graham neubig, and tom mitchell.
+2018. contex-tual parameter generation for universal neural ma-chine translation.
+in proceedings of the 2018 con-ference on empirical methods in natural languageprocessing, pages 425–435, brussels, belgium.
+as-sociation for computational linguistics..joseph suarez.
+2017. language modeling with recur-in advances in neu-rent highway hypernetworks.
+ral information processing systems 30: annual con-ference on neural information processing systems.
+47032017, december 4-9, 2017, long beach, ca, usa,pages 3267–3276..andrew viterbi.
+1967. error bounds for convolutionalcodes and an asymptotically optimum decoding al-gorithm.
+ieee transactions on information theory,13(2):260–269..qifan wang, li yang, bhargav kanagal, sumit sang-hai, d. sivakumar, bin shu, zac yu, and jon elsas.
+2020. learning to extract attribute value from prod-uct via question answering: a multi-task approach.
+in kdd ’20: the 26th acm sigkdd conferenceon knowledge discovery and data mining, virtualevent, ca, usa, august 23-27, 2020, pages 47–55.
+acm..huimin xu, wenting wang, xin mao, xinyu jiang, andman lan.
+2019. scaling up open tagging from tensto thousands: comprehension empowered attributevalue extraction from product title.
+in proceedingsof the 57th annual meeting of the association forcomputational linguistics, pages 5214–5223, flo-rence, italy.
+association for computational linguis-tics..zhilin yang, ruslan salakhutdinov, and william w.cohen.
+2017. transfer learning for sequence tag-in 5thging with hierarchical recurrent networks.
+international conference on learning representa-tions, iclr 2017, toulon, france, april 24-26, 2017,conference track proceedings.
+openreview.net..guineng zheng, subhabrata mukherjee, xin lunadong, and feifei li.
+2018. opentag: open attributevalue extraction from product proﬁles.
+in proceed-ings of the 24th acm sigkdd international confer-ence on knowledge discovery & data mining, kdd2018, london, uk, august 19-23, 2018, pages 1049–1058. acm..tiangang zhu, yue wang, haoran li, youzheng wu,xiaodong he, and bowen zhou.
+2020. multimodaljoint attribute prediction and value extraction for e-commerce product.
+in proceedings of the 2020 con-ference on empirical methods in natural languageprocessing (emnlp), pages 2129–2139, online.
+as-sociation for computational linguistics..4704a number of model parameters.
+methods.
+# parameters.
+bilstm (n tag sets)bilstm-crf (n tag sets)bilstm/bilstm-crf (n models)bilstm-crf-sharedembbilstm-multicrfadatag.
+0.6k · n + 6m9 · n2 + 0.6k · n + 6m6m · n0.1m · n + 6m2k · n + 6m8m.
+table 8: numbers of parameters for bilstm-basedmodels with n attributes..in our main experiment (table 4), the numbersof parameters (m = 1, 000, 000; k = 1, 000) forbilstm-based models with n attributes are listedin table 8. bert (bert-base-cased) itselfhas 110m parameters, making bert-based mod-els generally much larger..for our adatag, the weights for the hypernet-hyper ∈ r4dh×dr ) have (4 × 200) × 1536work (wwparameters.
+the number can be reduced by insert-ing a middle layer with fewer neurons..4705
