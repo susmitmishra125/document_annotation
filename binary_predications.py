@@ -31,7 +31,7 @@ df = pd.DataFrame({'text': sentences, 'label': labels})
 # split train test
 train_df, test_df = df.iloc[:int(len(df)*0.8)], df.iloc[int(len(df)*0.8):]
 
-model = ClassificationModel('bert','bert-base-uncased',args={'fp16':False, 'learning_rate': 3e-5, 'n_gpu':1,'overwrite_output_dir':True,'train_batch_size':20,'test_batch_size':12,'use_cached_eval_features':True})
+model = ClassificationModel('bert','bert-base-uncased',args={'fp16':False, 'learning_rate': 3e-5, 'n_gpu':1,'overwrite_output_dir':True,'train_batch_size':32,'test_batch_size':32,'use_cached_eval_features':True,'num_train_epochs':3,'max_seq_length':100,'save_eval_checkpoints':True,'save_steps':1000})
 
 model.train_model(train_df)
 result, model_outputs, wrong_predictions = model.eval_model(test_df)
