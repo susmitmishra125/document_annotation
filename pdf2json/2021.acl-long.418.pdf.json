@@ -1,0 +1,668 @@
+{
+  "name" : "2021.acl-long.418.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Enabling Lightweight Fine-tuning for Pre-trained Language Model Compression based on Matrix Product Operators",
+    "authors" : [ "Peiyu Liu", "Ze-Feng Gao", "Wayne Xin Zhao", "Z.Y. Xie", "Zhong-Yi Lu", "Ji-Rong Wen" ],
+    "emails" : [ "liupeiyustu@ruc.edu.cn,", "zfgao@ruc.edu.cn,", "qingtaoxie@ruc.edu.cn,", "zlu@ruc.edu.cn,", "jrwen@ruc.edu.cn,", "batmanfly@gmail.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 5388–5398\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n5388"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Recently, pre-trained language models (PLMs) (Devlin et al., 2019; Peters et al., 2018; Radford et al., 2018) have made significant progress in various natural language processing tasks. Instead of training a model from scratch, one can fine-tune a PLM to solve some specific task through the paradigm of “pre-training and fine-tuning”.\nTypically, PLMs are constructed with stacked Transformer layers (Vaswani et al., 2017), involving a huge number of parameters to be learned. Though effective, the large model size makes it impractical for resource-limited devices. Therefore, there is an increasing number of studies focused\n∗Authors contributed equally. †Corresponding author.\non the parameter reduction or memory reduction of PLMs (Noach and Goldberg, 2020), including parameter sharing (Lan et al., 2020), knowledge distillation (Sanh et al., 2019), low-rank approximation (Ma et al., 2019) and data quantization (Hubara et al., 2017). However, these studies mainly apply parameter reduction techniques to PLM compression, which may not be intrinsically appropriate for the learning paradigm and architecture of PLMs. The compressed parameters are highly coupled so that it is difficult to directly manipulate different parts with specific strategies. For example, most PLM compression methods need to fine-tune the whole network architecture, although only a small proportion of parameters will significantly change during fine-tuning (Liu et al., 2020).\nIn this paper, we introduce a novel matrix product operator (MPO) technique from quantum manybody physics for compressing PLMs (Gao et al., 2020). The MPO is an algorithm that factorizes a matrix into a sequential product of local tensors (i.e., a multi way array). Here, we call the tensor right in the middle as central tensor and the rest as auxiliary tensors. An important merit of the MPO decomposition is structural in terms of information distribution: the central tensor with most of the parameters encode the core information of the original matrix, while the auxiliary tensors with only a small proportion of parameters play the role of complementing the central tensor. Such a property motivates us to investigate whether such an MPO can be applied to derive a better PLM compression approach: can we compress the central tensor for parameter reduction and update the auxiliary tensors for lightweight fine-tuning? If this could be achieved, we can derive a lighter network meanwhile reduce the parameters to be fine-tuned.\nTo this end, we propose an MPO-based compression approach for PLMs, called MPOP. It is developed based on the MPO decomposition tech-\nnique (Gao et al., 2020; Pirvu et al., 2010). We have made two critical technical contributions for compressing PLMs with MPO. First, we introduce a new fine-tuning strategy that only focuses on the parameters of auxiliary tensors, so the number of fine-tuning parameters can be largely reduced. We present both theoretical analysis and experimental verification for the effectiveness of the proposed fine-tuning strategy. Second, we propose a new optimization algorithm, called dimension squeezing, tailored for stacked neural layers. Since mainstream PLMs usually consist of multiple Transformer layers, this will produce accumulated reconstruction error by directly applying low-rank approximation with MPO at each layer. The dimension squeezing algorithm is able to gradually perform the dimension truncation in a more stable way so that it can dramatically alleviate the accumulation error in the stacked architecture.\nTo our knowledge, it is the first time that MPO is applied to the PLM compression, which is well suited for both the learning paradigm and the architecture of PLMs. We construct experiments to evaluate the effectiveness of the proposed compression approach for ALBERT, BERT, DistillBERT and MobileBERT, respectively, on GLUE benchmark. Extensive experiments have demonstrated the effectiveness of the proposed approach in model compression, especially dramatically reducing the finetuning parameters (91% reduction on average)."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "We review the related works in three aspects.\nPre-trained Language Model Compression. Since the advent of large-scale PLMs, several variants were proposed to alleviate its memory consumption. For example, DistilBERT (Sanh et al., 2019) and MobileBERT (Sun et al., 2020c) leveraged knowledge distillation to reduce the BERT network size. SqueezeBERT (Iandola et al., 2020) and Q8BERT (Zafrir et al., 2019) adopted special techniques to substitute the operations or quantize both weights and activations. ALBERT (Lan et al., 2020) introduced cross-layer parameter sharing and low-rank approximation to reduce the number of parameters. More studies (Jiao et al., 2020; Hou et al., 2020; Liu et al., 2020; Wang et al., 2020; Khetan and Karnin, 2020; Xin et al., 2020; Pappas et al., 2020; Sun et al., 2020a) can be found in the comprehensive survey (Ganesh et al., 2020).\nTensor-based Network Compression. Tensorbased methods have been successfully applied to neural network compression. For example, MPO has been utilized to compress linear layers of deep neural network (Gao et al., 2020). Sun et al. (2020b) used MPO to compress the LSTM model on acoustic data. Novikov et al. (2015) coined the idea of reshaping weights of fully-connected layers into high-dimensional tensors and representing them in Tensor Train (TT) (Oseledets, 2011) format, which was extended to other network architectures (Garipov et al., 2016; Yu et al., 2017; Tjandra et al., 2017; Khrulkov et al., 2019). Ma et al. (2019) adopted block-term tensor decomposition to compress Transformer layers in PLMs.\nLightweight Fine-tuning. In the past, lightweight fine-tuning was performed without considering parameter compression. As a typical approach, trainable modules are inserted into PLMs. For example, a “side” network is fused with PLM via summation in (Zhang et al., 2020), and adapter-tuning inserts task-specific layers (adapters) between each layer of PLMs (Houlsby et al., 2019; Lin et al., 2020; Rebuffi et al., 2017). On the contrary, several studies consider removing parameters from PLMs. For example, several model weights are ablated away by training a binary parameter mask (Zhao et al., 2020; Radiya-Dixit and Wang, 2020).\nOur work is highly built on these studies, while we have a new perspective by designing the PLM compression algorithm, which enables lightweight fine-tuning. It is the first time that MPO is applied to PLM compression, and we make two major technical contributions for achieving lightweight finetuning and stable optimization."
+    }, {
+      "heading" : "3 Preliminary",
+      "text" : "In this paper, scalars are denoted by lowercase letters (e.g., a), vectors are denoted by boldface lowercase letters (e.g., v), matrices are denoted by boldface capital letters (e.g., M), and high-order (order three or higher) tensors are denoted by boldface Euler script letters (e.g., T ). An n-order tensor Ti1,i2,...in can be considered as a multidimensional array with n indices {i1, i2, ..., in}.\nMatrix Product Operator. Originating from quantum many-body physics, matrix product operator (MPO) is a standard algorithm to factorize a matrix into a sequential product of multiple local tensors (Gao et al., 2020; Pirvu et al., 2010).\nMPO\n\uD835\uDC51! \uD835\uDC51\"#\n\uD835\uDC51$\n\uD835\uDC51$\uD835\uDC4E$\n\uD835\uDC4E# \uD835\uDC51# \uD835\uDC51# \uD835\uDC51!\uD835\uDC4E! \uD835\uDC4E% \uD835\uDC4E&\n\uD835\uDC51! \uD835\uDC51% \uD835\uDC51%\nTruncate dimension \uD835\uDC51# > \uD835\uDC51\"#\n\uD835\uDC51! \uD835\uDC51%\n\uD835\uDC51% \uD835\uDC51$\n\uD835\uDC51$ \uD835\uDC51\"#\n\uD835\uDC40$×&\n\uD835\uDC4E$\n\uD835\uDC4E# \uD835\uDC4E! \uD835\uDC4E% \uD835\uDC4E&\n\uD835\uDC34$ \uD835\uDC34# \uD835\uDC34! \uD835\uDC34%\n\uD835\uDC34%\uD835\uDC34!\uD835\uDC34#\"\uD835\uDC34$ \uD835\uDC36\"\n\uD835\uDC36\nFigure 1: MPO decomposition for matrix MI×J with five local tensors, where\n∏n k=1 ik = I, ∏n\nk=1 jk = J , and\nak = ik × jk (n = 5 here). Auxiliary tensors ({Ai}4i=1) and central tensor (C) are marked in blue and orange, respectively. Dash line linking adjacent tensors denotes virtual bonds.\nFormally, given a matrix M ∈ RI×J , its MPO decomposition into a product of n local tensors can be represented as:\nMPO (M) = n∏\nk=1\nT(k)[dk−1, ik, jk, dk], (1)\nwhere the T(k)[dk−1, ik, jk, dk] is a 4-order tensor with size dk−1× ik× jk× dk in which ∏n k=1 ik =\nI, ∏n\nk=1 jk = J and d0 = dn = 1. We use the concept of bond to connect two adjacent tensors (Pirvu et al., 2010). The bond dimension dk is defined by:\ndk = min ( k∏ m=1 im× jm, n∏ m=k+1 im× jm ) . (2)\nFrom Eq. (2), we can see that dk is going to be large in the middle and small on both sides. We present a detailed algorithm for MPO decomposition in Algorithm 1. In this case, we refer to the tensor right in the middle as central tensor, and the rest as auxiliary tensor. Figure 1 presents the illustration of MPO decomposition, and we use n = 5 in this paper.\nAlgorithm 1 MPO decomposition for a matrix. Input: matrix M, the number of local tensors n Output : MPO tensor list {T(k)}nk=1 1: for k = 1→ n− 1 do 2: M[I, J ] −→M[dk−1 × ik × jk,−1] 3: UλV> = SVD (M) 4: U[dk−1 × ik × jk, dk] −→ U [dk−1, ik, jk, dk] 5: T (k) := U 6: M := λV>\n7: end for 8: T (n) := M 9: Normalization\n10: return {T(k)}nk=1\nMPO-based Low-Rank Approximation. With the standard MPO decomposition in Eq. (1), we can exactly reconstruct the original matrix M through the product of the derived local tensors. Following (Gao et al., 2020), we can truncate the k-th bond dimension dk (see Eq. (1)) of local tensors to d′k for low-rank approximation: dk > d ′ k. We can set different values for {dk}nk=1 to control the expressive capacity of MPO-based reconstruction. The truncation error induced by the k-th bond dimension dk is denoted by k (called local truncation error) which can be efficiently computed as:\nk = dk∑ i=dk−d′k λi, (3)\nwhere {λi}dki=1 are the singular values of M[i1j1...ikjk, ik+1jk+1...injn].\nThen the total truncation error satisfies:\n‖M−MPO(M)‖F ≤ √√√√n−1∑ k=1 2k. (4)\nThe proof can be found in the supplementary materials 1. Eq. (1) indicates that the reconstruction error is bounded by the sum of the squared local truncation errors, which is easy to estimate in practice.\nSuppose that we have truncated the dimensions of local tensors from {dk}nk=1 to {d′k}nk=1, the compression ratio introduced by quantum many-body physics (Gao et al., 2020) can be computed as follows:\nρ =\n∑n k=1 d ′ k−1ikjkd\n′ k∏n\nk=1 ikjk . (5)\n1https://github.com/RUCAIBox/MPOP\nThe smaller the compression ratio is, the fewer parameters are kept in the MPO representation. On the contrary, the larger the compression ratio ρ is, and the more parameters there are, and the smaller the reconstruction error is. When ρ > 1, it indicates the decomposed tensors have more parameters than the original matrix."
+    }, {
+      "heading" : "4 Approach",
+      "text" : "So far, most of pre-trained language models (PLM) are developed based on stacked Transformer layers (Vaswani et al., 2017). Based on such an architecture, it has become a paradigm to first pre-train PLMs and then fine-tunes them on task-specific data. The involved parameters of PLMs can be generally represented in the matrix format. Hence, it would be natural to apply MPO-based approximation for compressing the parameter matrices in PLMs by truncating tensor dimensions.\nIn particular, we propose two major improvements for MPO-based PLM compression, which can largely reduce the fine-tuning parameters and effectively improve the optimization of stacked architecture, respectively."
+    }, {
+      "heading" : "4.1 Lightweight Fine-tuning with Auxiliary Tensors",
+      "text" : "Due to the high coupling of parameters, previous PLM compression methods usually need to finetune all the parameters. As a comparison, the MPO approach decomposes a matrix into a list of local tensors, which makes it potentially possible to consider fine-tuning different parts with specific strategies. Next, we study how to perform lightweight fine-tuning based on MPO properties.\nParameter Variation from Pre-Training. To apply our solution to lightweight fine-tuning, we first conduct an empirical experiment to check the variation degree of the parameters before and after finetuning. Here, we adopt the standard pre-trained BERT (Devlin et al., 2019) and then fine-tune it on the SST-2 task (Socher et al., 2013). We first compute the absolute difference of the variation for\neach parameter value and then compute the ratio of parameters with different variation levels. The statistical results are reported in Table 1. As we can see, most of parameters vary little, especially for the word embedding layer. This finding has also been reported in a previous studies (Khetan and Karnin, 2020). As discussed in Section 3, after MPO decomposition, the central tensor contains the majority of the parameters, while the auxiliary tensors only contain a small proportion of the parameters. Such merit inspires us to consider only fine-tuning the parameters in the auxiliary tensors while keeping the central tensor fixed during finetuning. If this approach was feasible, this will largely reduce the parameters to be fine-tuned.\nTheoretical Analysis. Here we introduce entanglement entropy from quantum mechanics (Calabrese and Cardy, 2004) as the metric to measure the information contained in MPO bonds, which is similar to the entropy in information theory but replaces probabilities by normalized singular values produced by SVD. This will be more suitable for measuring the information of a matrix as singular values often correspond to the important information implicitly encoded in the matrix, and the importance is positively correlated with the magnitude of the singular values. Following (Calabrese and Cardy, 2004), the entanglement entropy Sk corresponding to the k-th bond can be calculated by:\nSk = − dk∑ j=1 vj ln vj , k = 1, 2, ..., n− 1, (6)\nwhere {vj}dkj=1 denote the normalized SVD eigenvalues of M[i1j1...ikjk, ik+1jk+1...injn]. The entanglement entropy Sk is an increasing function of dimension dk as described in (Gao et al., 2020). Based on Eq. (2), the central tensor has the largest bond dimension, corresponding to the largest entanglement entropy. This indicates that most of the information in an original matrix will be concentrated in the central tensor. Furthermore, the larger a dimension is, the larger the updating effect will be. According to (Pirvu et al., 2010), it is also guaranteed in principle that any change on some tensor will be transmitted to the whole local tensor set. Thus, it would have almost the same effect after convergence by optimizing the central tensor or the auxiliary tensors for PLMs.\nBased on the above analysis, we speculate\nthat the affected information during fine-tuning is mainly encoded on the auxiliary tensors so that the overall variations are small. Therefore, for lightweight fine-tuning, we first perform the MPO decomposition for a parameter matrix, and then only update its auxiliary tensors according to the downstream task with the central tensor fixed. Experimental results in Section 5.2 will demonstrate that such an approach is indeed effective."
+    }, {
+      "heading" : "4.2 Dimension Squeezing for Stacked Architecture Optimization",
+      "text" : "Most of PLMs are stacked with multiple Transformer layers. Hence, a major problem with directly applying MPO to compressing PLMs is that the reconstruction error tends to be accumulated and amplified exponentially by the number of layers. It is thus urgent to develop a more stable optimization algorithm tailored to the stacked architecture.\nFast Reconstruction Error Estimation. Without loss of generality, we can consider a simple case in which each layer contains exactly one parameter matrix to be compressed. Assume that there are L layers, so we have L parameter matrices in total, denoted by {M(l)}Ll=1. Let C(l) denote the corresponding central tensor with a specific dimension d(l) after decomposing M(l) with MPO. Our idea is to select a central tensor to reduce its dimension by one at each time, given the selection criterion that this truncation will lead to the least reconstruction error. However, it is time-consuming to evaluate the reconstruction error of the original matrix. According to Eq. (3), we can utilize the\nerror bound √∑n−1\nk=1 2 k for a fast estimation of the\nyielded reconstruction error. In this case, only one k changes, and it can be efficiently computed via the pre-computed eigenvalues.\nFast Performance Gap Computation. At each time, we compute the performance gap before and after the dimension reduction (d(l) → d(l)−1) with the stop criterion. To obtain the performance p̃ after dimension reduction, we need to fine-tune the truncated model on the downstream task. We can also utilize the lightweight fine-tuning strategy in Section 4.1 to obtain p̃ by only tuning the auxiliary tensors. If the performance gap ‖ p − p̃ ‖ is smaller than a threshold ∆ or the iteration number exceeds the predefined limit, the algorithm will end. Such an optimization algorithm is more stable to\noptimize stacked architectures since it gradually reduces the dimension considering the reconstruction error and the performance gap. Actually, it is similar to the learning of variable matrix product states (Iblisdir et al., 2007) in physics, which optimizes the tensors one by one according to the sequence. As a comparison, our algorithm dynamically selects the matrix to truncate and is more suitable to PLMs.\nAlgorithm 2 presents a complete procedure for our algorithm. In practice, there are usually multiple parameter matrices to be optimized at each layer. This can be processed in a similar way: we select some matrices from one layer to optimize among all the considered matrices.\nAlgorithm 2 Training with dimension squeezing. Input: : L layers with corresponding central tensor C(l) and\ndimension d(l), threshold ∆ and iteration step iter 1: Evaluate loss p = model(Inputs) 2: Perform MPO decomposition for each layer 3: for step = 1→ iter do 4: Find the layer (l∗) with the least reconstruction error 5: Compress MPO tensor by truncating d(l ∗) 6: Fine-tuning auxiliary tensors with {C(l)}Ll=1 fixed 7: Evaluate loss p̃ = model(Inputs) 8: if ‖ p− p̃ ‖> ∆ then 9: break\n10: end if 11: end for 12: return Compressed model"
+    }, {
+      "heading" : "4.3 Overall Compression Procedure",
+      "text" : "Generally speaking, our approach can compress any PLMs with stacked architectures consisting of parameter matrices, even the compressed PLMs. In other words, it can work with the existing PLM compression methods to further achieve a better compression performance. Here, we select ALBERT (Lan et al., 2020) as a representative compressed PLM and apply our algorithm to ALBERT.\nThe procedure can be simply summarized as follows. First, we obtain the learned ALBERT model (complete) and perform the MPO-decomposition to the three major parameter matrices, namely word embedding matrix, self-attention matrix and feedforward matrix2. Each matrix will be decomposed into a central tensor and auxiliary tensors. Next, we perform the lightweight fine-tuning to update auxiliary tensors until convergence on downstream tasks. Then, we apply the dimension squeezing\n2It introduces a parameter sharing mechanism to keep only one copy for both self-attention and feed-forward matrices.\noptimization algorithm to the three central tensors, i.e., we select one matrix for truncation each time. After each truncation, we fine-tune the compressed model and further stabilize its performance. This process will repeat until the performance gap or the iteration number exceeds the pre-defined threshold.\nIn this way, we expect that ALBERT can be further compressed. In particular, it can be finetuned in a more efficient way, with only a small amount of parameters to be updated. Section 5.2 will demonstrate this."
+    }, {
+      "heading" : "4.4 Discussion",
+      "text" : "In mathematics, MPO-based approximation can be considered as a special low-rank approximation method. Now, we compare it with other low-rank approximation methods, including SVD (Henry and Hofrichter, 1992), CPD (Hitchcock, 1927) and Tucker decomposition (Tucker, 1966).\nWe present the categorization of these methods in Table 2. For PLM compression, low-rank decomposition is only performed once, while it repeatedly performs forward propagation computation. Hence, we compare their inference time complexities. Indeed, all the methods can be tensor-based decomposition (i.e., a list of tensors for factorization) or matrix decomposition, and we characterize their time complexities with common parameters. Indeed, MPO and Tucker represent two categories of low-rank approximation methods. Generally, the algorithm capacity is larger with the increase of n (more tensors). When n > 3, MPO has smaller time complexity than Tucker decomposition. It can be seen that SVD can be considered as a special case of MPO when tensor dimension n = 2 and CPD is a special case of Tucker when the core tensor is the super-diagonal matrix.\nIn practice, we do not need to strictly follow\nthe original matrix size. Instead, it is easy to pad additional zero entries to enlarge matrix rows or columns, so that we can obtain different MPO decomposition results. It has demonstrated that different decomposition plans always lead to almost the same results (Gao et al., 2020). In our experiments, we adopt an odd number of local tensors for MPO decomposition, i.e., five local tensors (see supplementary materials). Note that MPO decomposition can work with other compression methods: it can further reduce the parameters from the matrices compressed by other methods, and meanwhile largely reduce the parameters to be fine-tuned."
+    }, {
+      "heading" : "5 Experiments",
+      "text" : "In this section, we first set up the experiments, and then report the results and analysis."
+    }, {
+      "heading" : "5.1 Experimental Setup",
+      "text" : "Datasets. We evaluate the effectiveness of compressing and fine-tuning PLMs of our approach MPOP on the General Language Understanding Evaluation (GLUE) benchmark (Wang et al., 2019). GLUE is a collection of 9 datasets for evaluating natural language understanding systems. Following (Sanh et al., 2019), we report macro-score (average of individual scores, which is slightly different from official GLUE score, since Spearman correlations are reported for STS-B and accuracy scores are reported for the other tasks) on the development sets for each task by fine-tuning MPOP.\nBaselines. Our baseline methods include: • BERT (Devlin et al., 2019): The 12-layer BERT-base model was pre-trained on Wikipedia corpus released by Google. • ALBERT (Lan et al., 2020): It yields a highly compressed BERT variant with only 11.6M parameters, while maintains competitive performance, which serves as the major baseline. • DistilBERT (Sanh et al., 2019): It is trained via knowledge distillation with 6 layers. • MobileBERT (Sun et al., 2020c): It is equipped with bottleneck structures and a carefully designed balance between self-attentions and feedforward networks.\nAll these models are released by Huggingface 3. We select these baselines because they are widely adopted and have a diverse coverage of compression techniques. Note that we do not directly com-\n3https://huggingface.co/\npare our approach with other competitive methods (Tambe et al., 2020) that require special optimization tricks or techniques (e.g., hardware-level optimization).\nImplementation. The original paper of ALBERT only reported the results of SST-2 and MNLI in GLUE. So we reproduce complete results denoted as “ALBERTrep” with the Huggingface implementation (Wolf et al., 2020). Based on the pre-trained parameters provided by Huggingface, we also reproduce the results of BERT, DistilBERT and MobileBERT. To ensure a fair comparison, we adopt the same network architecture. For example, the number of self-attention heads, the hidden dimension of embedding vectors, and the max length of the input sentence are set to 12, 768 and 128, respectively."
+    }, {
+      "heading" : "5.2 Experimental Results",
+      "text" : "Note that our focus is to illustrate that our approach can improve either original (uncompressed) or compressed PLMs. In our main experiments, we adopt ALBERT as the major baseline, and report the comparison results in Table 3.\nComparison with ALBERT. As shown in Table 3, our approach MPOP is very competitive in the GLUE benchmark, and it outperforms ALBERT in all tasks (except MNLI) with a higher overall score of 79.7. Looking at the last column, compared with ALBERT, MPOP reduces total parameters by 22% (#To). In particular, it results in a significant reduction of pre-trained parameters by 91% (#Pr). Such a reduction is remarkable in lightweight fine-tuning, which dramatically improves the fine-tuning efficiency. By zooming in on specific tasks, the improvements over ALBERT are larger on CoLA, RTE and WNLI tasks. An interesting explanation is that RTE and WNLI tasks have small training sets (fewer than 4k samples). The lightweight fine-\ntuning strategy seems to work better with limited training data, which enhances the capacity of PLMs and prevents overfitting on downstream tasks.\nAblation Results. Our approach has incorporated two novel improvements: lightweight fine-tuning with auxiliary tensors and optimization with dimension squeezing. We continue to study their effect on the final performance. Here we consider three variants for comparison: (1) MPOPfull and MPOPfull+LFA are full-rank MPO representation (without reconstruction error), and fine-tune all the tensors and only auxiliary tensors, respectively. This comparison is to examine whether only fine-tuning auxiliary tensors would lead to a performance decrease. (2) MPOPdir directly optimizes the compressed model without the dimension squeezing algorithm. This variant is used to examine whether our optimization algorithm is more suitable for stacked architecture. Table 3 (last three rows) shows the results when we ablate these. In particular, the dimension squeezing algorithm plays a key role in improving our approach (a significant performance decrease for MPOPdir), since it is tailored to stacked architecture. Comparing MPOPfull with MPOPfull+LFA, it is noted that fine-tuning all the parameters seems to have a negative effect on performance. Compared with ALBERT, we speculate that fine-tuning a large model is more likely to overfit on small datasets (e.g., RTE and MRPC).\nThese results show that our approach is able to further compress ALBERT with fewer fine-tuning parameters. Especially, it is also helpful to improve the capacity and robustness of PLMs."
+    }, {
+      "heading" : "5.3 Detailed Analysis",
+      "text" : "In this section, we perform a series of detailed analysis experiments for our approach.\nEvaluation with Other BERT Variants. In general, our approach can be applied to either uncom-\npressed or compressed PLMs. We have evaluated its performance with ALBERT. Now, we continue to test it with other BERT variants, namely original BERT, DistilBERT and MobileBERT. The latter two BERT variants are knowledge distillation based methods, and the distilled models can also be represented in the format of parameter matrix. We apply our approach to the three variants. Table 4 presents the comparison of the three variants before and after the application of MPOP. As we can see, our approach can substantially reduce the network parameters, especially the parameters to be finetuned. Note that DistilBERT and MobileBERT are highly compressed models. These results show that our approach can further improve other compressed PLMs.\nEvaluation on Different Fine-Tuning Strategies. Experiments have shown that our approach is able to largely reduce the number of parameters to be fine-tuned. Here we consider a more simple method to reduce the fine-tuning parameters, i.e., only fine-tune the last layers of BERT. This experiment reuses the settings of BERT (12 layers) and our approach on BERT (i.e., MPOPB in Table 4). We fine-tune the last 1-3 layers of BERT, and compare the performance with our approach MPOPB. From Table 5, we can see that such a simple way is much worse than our approach, especially on the RTE task. Our approach provides a more principled way for lightweight fine-tuning. By updating auxiliary tensors, it can better adapt to task-specific loss, and thus achieve better performance.\nEvaluation on Low-Rank Approximation. As introduced in Section 4.4, MPO is a special lowrank approximation method, and we first compare its compression capacity with other low-rank approximation methods. As shown in Table 2, MPO and Tucker decomposition represent two main categories of low-rank approximation methods. We select CPD (Henry and Hofrichter, 1992)\nfor comparison because general Tucker decomposition (Tucker, 1966) cannot obtain results with reasonable memory. Our evaluation task is to compress the word embedding matrix of the released “bert-base-uncased” model4. As shown in Figure 2(a), MPO achieves a smaller reconstruction error with all compression ratios, which shows that MPO is superior to CPD. Another hyper-parameter in our MPO decomposition is the number of local tensors (n). We further perform the same evaluation with different numbers of local tensors (n = 3, 5, 7). From Figure 2(b), it can be observed that our method is relatively stable with respect to the number of local tensors. Overall, a larger n requires a higher time complexity and can yield flexible decomposition. Thus, we set n = 5 for making a trade-off between flexibility and efficiency."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "We proposed an MPO-based PLM compression method. With MPO decomposition, we were able to reorganize and aggregate information in central tensors effectively. Inspired by this, we designed a novel fine-tuning strategy that only needs to finetune the parameters in auxiliary tensors. We also developed a dimension squeezing training algorithm for optimizing low-rank approximation over\n4https://huggingface.co/bert-base-uncased\nstacked network architectures. Extensive experiments had demonstrated the effectiveness of our approach, especially on the reduction of fine-tuning parameters. We also empirically found that such a fine-tuning way was more robust to generalize on small training datasets. To our knowledge, it is the first time that MPO decomposition had been applied to compress PLMs. In future work, we will consider exploring more decomposition structures for MPO."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "This work was partially supported by the National Natural Science Foundation of China under Grants No. 61872369, 61832017 and 11934020, Beijing Academy of Artificial Intelligence (BAAI) under Grant No. BAAI2020ZJ0301, Beijing Outstanding Young Scientist Program under Grant No. BJJWZYJH012019100020098, the Fundamental Research Funds for the Central Universities and the Research Funds of Renmin University of China under Grant No. 18XNLG22, 19XNQ047, 20XNLG19 and 21XNH027. Xin Zhao and ZhongYi Lu are the corresponding authors."
+    } ],
+    "references" : [ {
+      "title" : "Entanglement entropy and quantum field theory",
+      "author" : [ "Pasquale Calabrese", "John Cardy." ],
+      "venue" : "Journal of Statistical Mechanics: Theory and Experiment, 2004(06):P06002.",
+      "citeRegEx" : "Calabrese and Cardy.,? 2004",
+      "shortCiteRegEx" : "Calabrese and Cardy.",
+      "year" : 2004
+    }, {
+      "title" : "BERT: pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Compressing large-scale transformer-based models: A case study on bert",
+      "author" : [ "Prakhar Ganesh", "Yao Chen", "Xin Lou", "Mohammad Ali Khan", "Yin Yang", "Deming Chen", "Marianne Winslett", "Hassan Sajjad", "Preslav Nakov." ],
+      "venue" : "arXiv preprint arXiv:2002.11985.",
+      "citeRegEx" : "Ganesh et al\\.,? 2020",
+      "shortCiteRegEx" : "Ganesh et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Compressing deep neural networks by matrix product operators",
+      "author" : [ "Ze-Feng Gao", "Song Cheng", "Rong-Qiang He", "ZY Xie", "Hui-Hai Zhao", "Zhong-Yi Lu", "Tao Xiang." ],
+      "venue" : "Physical Review Research, 2(2):023300.",
+      "citeRegEx" : "Gao et al\\.,? 2020",
+      "shortCiteRegEx" : "Gao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "8] singular value decomposition: Application to analysis of experimental data",
+      "author" : [ "ER Henry", "J Hofrichter." ],
+      "venue" : "Methods in enzymology, 210:129–192.",
+      "citeRegEx" : "Henry and Hofrichter.,? 1992",
+      "shortCiteRegEx" : "Henry and Hofrichter.",
+      "year" : 1992
+    }, {
+      "title" : "The expression of a tensor or a polyadic as a sum of products",
+      "author" : [ "Frank L Hitchcock." ],
+      "venue" : "Journal of Mathematics and Physics, 6(1-4):164–189.",
+      "citeRegEx" : "Hitchcock.,? 1927",
+      "shortCiteRegEx" : "Hitchcock.",
+      "year" : 1927
+    }, {
+      "title" : "Dynabert: Dynamic BERT with adaptive width and depth",
+      "author" : [ "Lu Hou", "Zhiqi Huang", "Lifeng Shang", "Xin Jiang", "Xiao Chen", "Qun Liu." ],
+      "venue" : "Advances in Neural Information Processing Systems 33: Annual Conference on Neural Information Processing",
+      "citeRegEx" : "Hou et al\\.,? 2020",
+      "shortCiteRegEx" : "Hou et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Parameter-efficient transfer learning for nlp",
+      "author" : [ "Neil Houlsby", "Andrei Giurgiu", "Stanislaw Jastrzebski", "Bruna Morrone", "Quentin De Laroussilhe", "Andrea Gesmundo", "Mona Attariyan", "Sylvain Gelly." ],
+      "venue" : "International Conference on Machine Learning,",
+      "citeRegEx" : "Houlsby et al\\.,? 2019",
+      "shortCiteRegEx" : "Houlsby et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Quantized neural networks: Training neural networks with low precision weights and activations",
+      "author" : [ "Itay Hubara", "Matthieu Courbariaux", "Daniel Soudry", "Ran El-Yaniv", "Yoshua Bengio." ],
+      "venue" : "The Journal of Machine Learning Research, 18(1):6869–6898.",
+      "citeRegEx" : "Hubara et al\\.,? 2017",
+      "shortCiteRegEx" : "Hubara et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Squeezebert: What can computer vision teach nlp about efficient neural networks? arXiv preprint arXiv:2006.11316",
+      "author" : [ "Forrest N Iandola", "Albert E Shaw", "Ravi Krishna", "Kurt W Keutzer" ],
+      "venue" : null,
+      "citeRegEx" : "Iandola et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Iandola et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Matrix product states algorithms and continuous systems",
+      "author" : [ "S Iblisdir", "R Orus", "JI Latorre." ],
+      "venue" : "Physical Review B, 75(10):104305.",
+      "citeRegEx" : "Iblisdir et al\\.,? 2007",
+      "shortCiteRegEx" : "Iblisdir et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "Tinybert: Distilling BERT for natural language understanding",
+      "author" : [ "Xiaoqi Jiao", "Yichun Yin", "Lifeng Shang", "Xin Jiang", "Xiao Chen", "Linlin Li", "Fang Wang", "Qun Liu." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Lan-",
+      "citeRegEx" : "Jiao et al\\.,? 2020",
+      "shortCiteRegEx" : "Jiao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "schuBERT: Optimizing elements of BERT",
+      "author" : [ "Ashish Khetan", "Zohar Karnin." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 2807–2818, Online. Association for Computational Linguistics.",
+      "citeRegEx" : "Khetan and Karnin.,? 2020",
+      "shortCiteRegEx" : "Khetan and Karnin.",
+      "year" : 2020
+    }, {
+      "title" : "Tensorized embedding layers for efficient model compression",
+      "author" : [ "Valentin Khrulkov", "Oleksii Hrinchuk", "Leyla Mirvakhabova", "Ivan Oseledets." ],
+      "venue" : "arXiv preprint arXiv:1901.10787.",
+      "citeRegEx" : "Khrulkov et al\\.,? 2019",
+      "shortCiteRegEx" : "Khrulkov et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "ALBERT: A lite BERT for self-supervised learning of language representations",
+      "author" : [ "Zhenzhong Lan", "Mingda Chen", "Sebastian Goodman", "Kevin Gimpel", "Piyush Sharma", "Radu Soricut." ],
+      "venue" : "8th International Conference on Learning Representations,",
+      "citeRegEx" : "Lan et al\\.,? 2020",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Exploring versatile generative language model via parameter-efficient transfer learning",
+      "author" : [ "Zhaojiang Lin", "Andrea Madotto", "Pascale Fung." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing: Findings,",
+      "citeRegEx" : "Lin et al\\.,? 2020",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Fastbert: a selfdistilling BERT with adaptive inference time",
+      "author" : [ "Weijie Liu", "Peng Zhou", "Zhiruo Wang", "Zhe Zhao", "Haotang Deng", "Qi Ju." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, ACL 2020,",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A tensorized transformer for language modeling",
+      "author" : [ "Xindian Ma", "Peng Zhang", "Shuai Zhang", "Nan Duan", "Yuexian Hou", "Ming Zhou", "Dawei Song." ],
+      "venue" : "Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Pro-",
+      "citeRegEx" : "Ma et al\\.,? 2019",
+      "shortCiteRegEx" : "Ma et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Compressing pre-trained language models by matrix decomposition",
+      "author" : [ "Matan Ben Noach", "Yoav Goldberg." ],
+      "venue" : "Proceedings of the 1st Conference of the Asia-Pacific Chapter of the Association for Computational Linguistics and the 10th Interna-",
+      "citeRegEx" : "Noach and Goldberg.,? 2020",
+      "shortCiteRegEx" : "Noach and Goldberg.",
+      "year" : 2020
+    }, {
+      "title" : "Tensorizing neural networks",
+      "author" : [ "Alexander Novikov", "Dmitry Podoprikhin", "Anton Osokin", "Dmitry P. Vetrov." ],
+      "venue" : "Advances in Neural Information Processing Systems 28: Annual Conference on Neural Information Processing Systems 2015, Decem-",
+      "citeRegEx" : "Novikov et al\\.,? 2015",
+      "shortCiteRegEx" : "Novikov et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Tensor-train decomposition",
+      "author" : [ "Ivan V Oseledets." ],
+      "venue" : "SIAM Journal on Scientific Computing, 33(5):2295– 2317.",
+      "citeRegEx" : "Oseledets.,? 2011",
+      "shortCiteRegEx" : "Oseledets.",
+      "year" : 2011
+    }, {
+      "title" : "Grounded compositional outputs for adaptive language modeling",
+      "author" : [ "Nikolaos Pappas", "Phoebe Mulcaire", "Noah A Smith." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1252–1267.",
+      "citeRegEx" : "Pappas et al\\.,? 2020",
+      "shortCiteRegEx" : "Pappas et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deep contextualized word representations",
+      "author" : [ "Matthew E. Peters", "Mark Neumann", "Mohit Iyyer", "Matt Gardner", "Christopher Clark", "Kenton Lee", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Associ-",
+      "citeRegEx" : "Peters et al\\.,? 2018",
+      "shortCiteRegEx" : "Peters et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Matrix product operator representations",
+      "author" : [ "Bogdan Pirvu", "Valentin Murg", "J Ignacio Cirac", "Frank Verstraete." ],
+      "venue" : "New Journal of Physics, 12(2):025012.",
+      "citeRegEx" : "Pirvu et al\\.,? 2010",
+      "shortCiteRegEx" : "Pirvu et al\\.",
+      "year" : 2010
+    }, {
+      "title" : "Improving language understanding by generative pre-training",
+      "author" : [ "Alec Radford", "Karthik Narasimhan", "Tim Salimans", "Ilya Sutskever" ],
+      "venue" : null,
+      "citeRegEx" : "Radford et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "How fine can fine-tuning be? learning efficient language models",
+      "author" : [ "Evani Radiya-Dixit", "Xin Wang." ],
+      "venue" : "International Conference on Artificial Intelligence and Statistics, pages 2435–2443. PMLR.",
+      "citeRegEx" : "Radiya.Dixit and Wang.,? 2020",
+      "shortCiteRegEx" : "Radiya.Dixit and Wang.",
+      "year" : 2020
+    }, {
+      "title" : "Learning multiple visual domains with residual adapters",
+      "author" : [ "Sylvestre-Alvise Rebuffi", "Hakan Bilen", "Andrea Vedaldi." ],
+      "venue" : "Advances in Neural Information Processing Systems 30: Annual Conference on Neural Information Processing Systems 2017,",
+      "citeRegEx" : "Rebuffi et al\\.,? 2017",
+      "shortCiteRegEx" : "Rebuffi et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter",
+      "author" : [ "Victor Sanh", "Lysandre Debut", "Julien Chaumond", "Thomas Wolf." ],
+      "venue" : "arXiv preprint arXiv:1910.01108.",
+      "citeRegEx" : "Sanh et al\\.,? 2019",
+      "shortCiteRegEx" : "Sanh et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Recursive deep models for semantic compositionality over a sentiment treebank",
+      "author" : [ "Richard Socher", "Alex Perelygin", "Jean Wu", "Jason Chuang", "Christopher D Manning", "Andrew Y Ng", "Christopher Potts." ],
+      "venue" : "Proceedings of the 2013 conference on",
+      "citeRegEx" : "Socher et al\\.,? 2013",
+      "shortCiteRegEx" : "Socher et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Contrastive distillation on intermediate representations for language model compression",
+      "author" : [ "Siqi Sun", "Zhe Gan", "Yuwei Fang", "Yu Cheng", "Shuohang Wang", "Jingjing Liu." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Lan-",
+      "citeRegEx" : "Sun et al\\.,? 2020a",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A model compression method with matrix product operators for speech enhancement",
+      "author" : [ "Xingwei Sun", "Ze-Feng Gao", "Zhong-Yi Lu", "Junfeng Li", "Yonghong Yan." ],
+      "venue" : "IEEE/ACM Transactions on Audio, Speech, and Language Processing, 28:2837–2847.",
+      "citeRegEx" : "Sun et al\\.,? 2020b",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Mobilebert: a compact task-agnostic BERT for resource-limited devices",
+      "author" : [ "Zhiqing Sun", "Hongkun Yu", "Xiaodan Song", "Renjie Liu", "Yiming Yang", "Denny Zhou." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Sun et al\\.,? 2020c",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Edgebert: Optimizing on-chip inference for multitask nlp",
+      "author" : [ "Thierry Tambe", "Coleman Hooper", "Lillian Pentecost", "En-Yu Yang", "Marco Donato", "Victor Sanh", "Alexander M Rush", "David Brooks", "Gu-Yeon Wei." ],
+      "venue" : "arXiv preprint arXiv:2011.14203.",
+      "citeRegEx" : "Tambe et al\\.,? 2020",
+      "shortCiteRegEx" : "Tambe et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Compressing recurrent neural network with tensor train",
+      "author" : [ "Andros Tjandra", "Sakriani Sakti", "Satoshi Nakamura." ],
+      "venue" : "2017 International Joint Conference on Neural Networks (IJCNN), pages 4451– 4458. IEEE.",
+      "citeRegEx" : "Tjandra et al\\.,? 2017",
+      "shortCiteRegEx" : "Tjandra et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Some mathematical notes on three-mode factor analysis",
+      "author" : [ "Ledyard R Tucker." ],
+      "venue" : "Psychometrika, 31(3):279–311.",
+      "citeRegEx" : "Tucker.,? 1966",
+      "shortCiteRegEx" : "Tucker.",
+      "year" : 1966
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Lukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems 30: Annual Conference on Neural",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "GLUE: A multi-task benchmark and analysis platform for natural language understanding",
+      "author" : [ "Alex Wang", "Amanpreet Singh", "Julian Michael", "Felix Hill", "Omer Levy", "Samuel R. Bowman." ],
+      "venue" : "7th International Conference on Learning Representa-",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Linformer: Selfattention with linear complexity",
+      "author" : [ "Sinong Wang", "Belinda Li", "Madian Khabsa", "Han Fang", "Hao Ma." ],
+      "venue" : "arXiv preprint arXiv:2006.04768.",
+      "citeRegEx" : "Wang et al\\.,? 2020",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Transformers: State-of-theart natural language processing",
+      "author" : [ "Thomas Wolf", "Julien Chaumond", "Lysandre Debut", "Victor Sanh", "Clement Delangue", "Anthony Moi", "Pierric Cistac", "Morgan Funtowicz", "Joe Davison", "Sam Shleifer" ],
+      "venue" : null,
+      "citeRegEx" : "Wolf et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Wolf et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deebert: Dynamic early exiting for accelerating bert inference",
+      "author" : [ "Ji Xin", "Raphael Tang", "Jaejun Lee", "Yaoliang Yu", "Jimmy Lin." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 2246–2251.",
+      "citeRegEx" : "Xin et al\\.,? 2020",
+      "shortCiteRegEx" : "Xin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Long-term forecasting using tensor-train rnns",
+      "author" : [ "Rose Yu", "Stephan Zheng", "Anima Anandkumar", "Yisong Yue." ],
+      "venue" : "Arxiv.",
+      "citeRegEx" : "Yu et al\\.,? 2017",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Q8bert: Quantized 8bit bert",
+      "author" : [ "Ofir Zafrir", "Guy Boudoukh", "Peter Izsak", "Moshe Wasserblat." ],
+      "venue" : "arXiv preprint arXiv:1910.06188.",
+      "citeRegEx" : "Zafrir et al\\.,? 2019",
+      "shortCiteRegEx" : "Zafrir et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Bertscore: Evaluating text generation with BERT",
+      "author" : [ "Tianyi Zhang", "Varsha Kishore", "Felix Wu", "Kilian Q. Weinberger", "Yoav Artzi." ],
+      "venue" : "8th International Conference on Learning Representations, ICLR 2020, Addis Ababa, Ethiopia, April 26-30,",
+      "citeRegEx" : "Zhang et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Masking as an efficient alternative to finetuning for pretrained language models",
+      "author" : [ "Mengjie Zhao", "Tao Lin", "Fei Mi", "Martin Jaggi", "Hinrich Schütze." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing, EMNLP",
+      "citeRegEx" : "Zhao et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 1,
+      "context" : "Recently, pre-trained language models (PLMs) (Devlin et al., 2019; Peters et al., 2018; Radford et al., 2018) have made significant progress in various natural language processing tasks.",
+      "startOffset" : 45,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 22,
+      "context" : "Recently, pre-trained language models (PLMs) (Devlin et al., 2019; Peters et al., 2018; Radford et al., 2018) have made significant progress in various natural language processing tasks.",
+      "startOffset" : 45,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 24,
+      "context" : "Recently, pre-trained language models (PLMs) (Devlin et al., 2019; Peters et al., 2018; Radford et al., 2018) have made significant progress in various natural language processing tasks.",
+      "startOffset" : 45,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 35,
+      "context" : "Typically, PLMs are constructed with stacked Transformer layers (Vaswani et al., 2017), involving a huge number of parameters to be learned.",
+      "startOffset" : 64,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 18,
+      "context" : "on the parameter reduction or memory reduction of PLMs (Noach and Goldberg, 2020), including parameter sharing (Lan et al.",
+      "startOffset" : 55,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 14,
+      "context" : "on the parameter reduction or memory reduction of PLMs (Noach and Goldberg, 2020), including parameter sharing (Lan et al., 2020), knowledge distillation (Sanh et al.",
+      "startOffset" : 111,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 27,
+      "context" : ", 2020), knowledge distillation (Sanh et al., 2019), low-rank approximation (Ma et al.",
+      "startOffset" : 32,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 17,
+      "context" : ", 2019), low-rank approximation (Ma et al., 2019) and data quantization (Hubara",
+      "startOffset" : 32,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 3,
+      "context" : "In this paper, we introduce a novel matrix product operator (MPO) technique from quantum manybody physics for compressing PLMs (Gao et al., 2020).",
+      "startOffset" : 127,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 27,
+      "context" : "For example, DistilBERT (Sanh et al., 2019) and MobileBERT (Sun et al.",
+      "startOffset" : 24,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 9,
+      "context" : "SqueezeBERT (Iandola et al., 2020) and Q8BERT (Zafrir et al.",
+      "startOffset" : 12,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 41,
+      "context" : ", 2020) and Q8BERT (Zafrir et al., 2019) adopted special techniques to substitute the operations or quantize both weights and activations.",
+      "startOffset" : 19,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 14,
+      "context" : "ALBERT (Lan et al., 2020) introduced cross-layer parameter sharing and low-rank approximation to reduce the number of parameters.",
+      "startOffset" : 7,
+      "endOffset" : 25
+    }, {
+      "referenceID" : 11,
+      "context" : "More studies (Jiao et al., 2020; Hou et al., 2020; Liu et al., 2020; Wang et al., 2020; Khetan and Karnin, 2020; Xin et al., 2020; Pappas et al., 2020; Sun et al., 2020a) can be found in the comprehensive survey (Ganesh et al.",
+      "startOffset" : 13,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 6,
+      "context" : "More studies (Jiao et al., 2020; Hou et al., 2020; Liu et al., 2020; Wang et al., 2020; Khetan and Karnin, 2020; Xin et al., 2020; Pappas et al., 2020; Sun et al., 2020a) can be found in the comprehensive survey (Ganesh et al.",
+      "startOffset" : 13,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 16,
+      "context" : "More studies (Jiao et al., 2020; Hou et al., 2020; Liu et al., 2020; Wang et al., 2020; Khetan and Karnin, 2020; Xin et al., 2020; Pappas et al., 2020; Sun et al., 2020a) can be found in the comprehensive survey (Ganesh et al.",
+      "startOffset" : 13,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 37,
+      "context" : "More studies (Jiao et al., 2020; Hou et al., 2020; Liu et al., 2020; Wang et al., 2020; Khetan and Karnin, 2020; Xin et al., 2020; Pappas et al., 2020; Sun et al., 2020a) can be found in the comprehensive survey (Ganesh et al.",
+      "startOffset" : 13,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 12,
+      "context" : "More studies (Jiao et al., 2020; Hou et al., 2020; Liu et al., 2020; Wang et al., 2020; Khetan and Karnin, 2020; Xin et al., 2020; Pappas et al., 2020; Sun et al., 2020a) can be found in the comprehensive survey (Ganesh et al.",
+      "startOffset" : 13,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 39,
+      "context" : "More studies (Jiao et al., 2020; Hou et al., 2020; Liu et al., 2020; Wang et al., 2020; Khetan and Karnin, 2020; Xin et al., 2020; Pappas et al., 2020; Sun et al., 2020a) can be found in the comprehensive survey (Ganesh et al.",
+      "startOffset" : 13,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 21,
+      "context" : "More studies (Jiao et al., 2020; Hou et al., 2020; Liu et al., 2020; Wang et al., 2020; Khetan and Karnin, 2020; Xin et al., 2020; Pappas et al., 2020; Sun et al., 2020a) can be found in the comprehensive survey (Ganesh et al.",
+      "startOffset" : 13,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 29,
+      "context" : "More studies (Jiao et al., 2020; Hou et al., 2020; Liu et al., 2020; Wang et al., 2020; Khetan and Karnin, 2020; Xin et al., 2020; Pappas et al., 2020; Sun et al., 2020a) can be found in the comprehensive survey (Ganesh et al.",
+      "startOffset" : 13,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 2,
+      "context" : ", 2020a) can be found in the comprehensive survey (Ganesh et al., 2020).",
+      "startOffset" : 50,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 3,
+      "context" : "For example, MPO has been utilized to compress linear layers of deep neural network (Gao et al., 2020).",
+      "startOffset" : 84,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 20,
+      "context" : "(2015) coined the idea of reshaping weights of fully-connected layers into high-dimensional tensors and representing them in Tensor Train (TT) (Oseledets, 2011) format, which was extended to other network architectures (Garipov et al.",
+      "startOffset" : 143,
+      "endOffset" : 160
+    }, {
+      "referenceID" : 40,
+      "context" : "(2015) coined the idea of reshaping weights of fully-connected layers into high-dimensional tensors and representing them in Tensor Train (TT) (Oseledets, 2011) format, which was extended to other network architectures (Garipov et al., 2016; Yu et al., 2017; Tjandra et al., 2017; Khrulkov et al., 2019).",
+      "startOffset" : 219,
+      "endOffset" : 303
+    }, {
+      "referenceID" : 33,
+      "context" : "(2015) coined the idea of reshaping weights of fully-connected layers into high-dimensional tensors and representing them in Tensor Train (TT) (Oseledets, 2011) format, which was extended to other network architectures (Garipov et al., 2016; Yu et al., 2017; Tjandra et al., 2017; Khrulkov et al., 2019).",
+      "startOffset" : 219,
+      "endOffset" : 303
+    }, {
+      "referenceID" : 13,
+      "context" : "(2015) coined the idea of reshaping weights of fully-connected layers into high-dimensional tensors and representing them in Tensor Train (TT) (Oseledets, 2011) format, which was extended to other network architectures (Garipov et al., 2016; Yu et al., 2017; Tjandra et al., 2017; Khrulkov et al., 2019).",
+      "startOffset" : 219,
+      "endOffset" : 303
+    }, {
+      "referenceID" : 42,
+      "context" : "For example, a “side” network is fused with PLM via summation in (Zhang et al., 2020), and adapter-tuning inserts task-specific layers (adapters) between each layer of PLMs (Houlsby et al.",
+      "startOffset" : 65,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 43,
+      "context" : "For example, several model weights are ablated away by training a binary parameter mask (Zhao et al., 2020; Radiya-Dixit and Wang, 2020).",
+      "startOffset" : 88,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 25,
+      "context" : "For example, several model weights are ablated away by training a binary parameter mask (Zhao et al., 2020; Radiya-Dixit and Wang, 2020).",
+      "startOffset" : 88,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 3,
+      "context" : "Originating from quantum many-body physics, matrix product operator (MPO) is a standard algorithm to factorize a matrix into a sequential product of multiple local tensors (Gao et al., 2020; Pirvu et al., 2010).",
+      "startOffset" : 172,
+      "endOffset" : 210
+    }, {
+      "referenceID" : 23,
+      "context" : "Originating from quantum many-body physics, matrix product operator (MPO) is a standard algorithm to factorize a matrix into a sequential product of multiple local tensors (Gao et al., 2020; Pirvu et al., 2010).",
+      "startOffset" : 172,
+      "endOffset" : 210
+    }, {
+      "referenceID" : 23,
+      "context" : "We use the concept of bond to connect two adjacent tensors (Pirvu et al., 2010).",
+      "startOffset" : 59,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 3,
+      "context" : "Following (Gao et al., 2020), we can truncate the k-th bond dimension dk (see Eq.",
+      "startOffset" : 10,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 3,
+      "context" : "Suppose that we have truncated the dimensions of local tensors from {dk}k=1 to {dk}k=1, the compression ratio introduced by quantum many-body physics (Gao et al., 2020) can be computed as follows:",
+      "startOffset" : 150,
+      "endOffset" : 168
+    }, {
+      "referenceID" : 35,
+      "context" : "So far, most of pre-trained language models (PLM) are developed based on stacked Transformer layers (Vaswani et al., 2017).",
+      "startOffset" : 100,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 1,
+      "context" : "Here, we adopt the standard pre-trained BERT (Devlin et al., 2019) and then fine-tune it on the SST-2 task (Socher et al.",
+      "startOffset" : 45,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 28,
+      "context" : ", 2019) and then fine-tune it on the SST-2 task (Socher et al., 2013).",
+      "startOffset" : 48,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 12,
+      "context" : "This finding has also been reported in a previous studies (Khetan and Karnin, 2020).",
+      "startOffset" : 58,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 0,
+      "context" : "Here we introduce entanglement entropy from quantum mechanics (Calabrese and Cardy, 2004) as the metric to measure the information contained in MPO bonds, which",
+      "startOffset" : 62,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 0,
+      "context" : "Following (Calabrese and Cardy, 2004), the entanglement entropy Sk corresponding to the k-th bond can be calculated",
+      "startOffset" : 10,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 3,
+      "context" : "The entanglement entropy Sk is an increasing function of dimension dk as described in (Gao et al., 2020).",
+      "startOffset" : 86,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 23,
+      "context" : "According to (Pirvu et al., 2010), it is also guaranteed in principle that any change on some tensor will be transmitted to the whole local tensor set.",
+      "startOffset" : 13,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 10,
+      "context" : "Actually, it is similar to the learning of variable matrix product states (Iblisdir et al., 2007) in physics, which optimizes the tensors one by one according to the sequence.",
+      "startOffset" : 74,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 14,
+      "context" : "Here, we select ALBERT (Lan et al., 2020) as a representative compressed PLM and apply our algorithm to ALBERT.",
+      "startOffset" : 23,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 4,
+      "context" : "Now, we compare it with other low-rank approximation methods, including SVD (Henry and Hofrichter, 1992), CPD (Hitchcock, 1927) and Tucker decomposition (Tucker, 1966).",
+      "startOffset" : 76,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 5,
+      "context" : "Now, we compare it with other low-rank approximation methods, including SVD (Henry and Hofrichter, 1992), CPD (Hitchcock, 1927) and Tucker decomposition (Tucker, 1966).",
+      "startOffset" : 110,
+      "endOffset" : 127
+    }, {
+      "referenceID" : 34,
+      "context" : "Now, we compare it with other low-rank approximation methods, including SVD (Henry and Hofrichter, 1992), CPD (Hitchcock, 1927) and Tucker decomposition (Tucker, 1966).",
+      "startOffset" : 153,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 3,
+      "context" : "It has demonstrated that different decomposition plans always lead to almost the same results (Gao et al., 2020).",
+      "startOffset" : 94,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 36,
+      "context" : "We evaluate the effectiveness of compressing and fine-tuning PLMs of our approach MPOP on the General Language Understanding Evaluation (GLUE) benchmark (Wang et al., 2019).",
+      "startOffset" : 153,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 27,
+      "context" : "Following (Sanh et al., 2019), we report macro-score (average of individual scores, which is slightly different from official GLUE score, since Spearman correla-",
+      "startOffset" : 10,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 1,
+      "context" : "Our baseline methods include: • BERT (Devlin et al., 2019): The 12-layer BERT-base model was pre-trained on Wikipedia corpus released by Google.",
+      "startOffset" : 37,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 14,
+      "context" : "• ALBERT (Lan et al., 2020): It yields a highly compressed BERT variant with only 11.",
+      "startOffset" : 9,
+      "endOffset" : 27
+    }, {
+      "referenceID" : 27,
+      "context" : "• DistilBERT (Sanh et al., 2019): It is trained via knowledge distillation with 6 layers.",
+      "startOffset" : 13,
+      "endOffset" : 32
+    }, {
+      "referenceID" : 31,
+      "context" : "• MobileBERT (Sun et al., 2020c): It is equipped with bottleneck structures and a carefully",
+      "startOffset" : 13,
+      "endOffset" : 32
+    }, {
+      "referenceID" : 14,
+      "context" : "“ALBERTpub” and “ALBERTrep” denote the results from the original paper (Lan et al., 2020) and reproduced by ours, respectively.",
+      "startOffset" : 71,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 32,
+      "context" : "pare our approach with other competitive methods (Tambe et al., 2020) that require special optimization tricks or techniques (e.",
+      "startOffset" : 49,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 38,
+      "context" : "So we reproduce complete results denoted as “ALBERTrep” with the Huggingface implementation (Wolf et al., 2020).",
+      "startOffset" : 92,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 4,
+      "context" : "We select CPD (Henry and Hofrichter, 1992) Models SST-2 MRPC RTE Avg.",
+      "startOffset" : 14,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 34,
+      "context" : "sition (Tucker, 1966) cannot obtain results with reasonable memory.",
+      "startOffset" : 7,
+      "endOffset" : 21
+    } ],
+    "year" : 2021,
+    "abstractText" : "This paper presents a novel pre-trained language models (PLM) compression approach based on the matrix product operator (short as MPO) from quantum many-body physics. It can decompose an original matrix into central tensors (containing the core information) and auxiliary tensors (with only a small proportion of parameters). With the decomposed MPO structure, we propose a novel fine-tuning strategy by only updating the parameters from the auxiliary tensors, and design an optimization algorithm for MPO-based approximation over stacked network architectures. Our approach can be applied to the original or the compressed PLMs in a general way, which derives a lighter network and significantly reduces the parameters to be fine-tuned. Extensive experiments have demonstrated the effectiveness of the proposed approach in model compression, especially the reduction in finetuning parameters (91% reduction on average). The code to reproduce the results of this paper can be found at https://github.com/ RUCAIBox/MPOP.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

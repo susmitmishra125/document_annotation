@@ -1,0 +1,288 @@
+{
+  "name" : "2021.acl-long.309.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "A unified approach to sentence segmentation of punctuated text in many languages",
+    "authors" : [ "Rachel Wicks", "Matt Post" ],
+    "emails" : [ "rewicks@jhu.edu,", "post@cs.jhu.edu" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 3995–4007\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n3995\nWe introduce a modern context-based modeling approach that provides a solution to the problem of segmenting punctuated text in many languages, and show how it can be trained on noisily-annotated data. We also establish a new 23-language multilingual evaluation set. Our approach exceeds high baselines set by existing methods on prior English corpora (WSJ and Brown corpora), and also performs well on average on our new evaluation set. We release our tool, ERSATZ, as open source."
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "In many ways, the sentence is the fundamental unit of text in natural language processing (NLP). From the user perspective, tasks such as sentiment analysis, POS tagging, or machine translation consume sentences and emit classifications, annotations, or transductions of those inputs. Even tasks that operate at the paragraph or document level, such as coreference resolution or summarization, often make use of sentences internally. Yet at the same time, sentences in the wild rarely exist with marked sentence boundaries. For many languages, punctuation serves as a cue for these\nboundaries, but this punctuation is ambiguous— as we might see with acronyms or abbreviations in English. When segmented sentences are required, they must be split using a sentence segmentation technique that can resolve these ambiguities. Despite its importance and early position in the NLP pipeline, sentence segmentation is the subject of relatively little research. Widely-used tools such as that in Moses (Koehn et al., 2007) are implemented with ad-hoc, manually-designed, language-specific rules, leaving them vulnerable to the long tail of languages and language phenomena. The little comparative work that does exist generally focuses on techniques that work in English or other Indo-European languages (Palmer and Hearst, 1997; Gillick, 2009).\nSecondly, there is not a well-understood methodology for training segmenters that do not make narrow assumptions about the features or characteristics of the languages they support. At the heart of this is the lack of labeled training data. Manually-split datasets that accompany annotation projects tend to be small, and larger datasets are typically (imperfectly) segmented by the very tools whose performance is under question. Tools such\nas NLTK (Bird and Loper, 2004), which packages Punkt (Kiss and Strunk, 2006), provide an unsupervised method to train a model, but it is unclear what the effect is when switching to non-Latin-script languages, or how a more supervised approach would handle such noisy data.\nFinally, and perhaps most importantly, there are no standard test sets or even metrics for evaluating segmenter performance, leaving researchers and engineers with no objective way to determine which one is best.\nThe work described in this paper is aimed at these problems. We propose a simple window-based model and semi-supervised training paradigm for the segmentation of punctuated text (§3). We frame the task as binary classification applied to a set of candidate punctuation locations defined by a regular expression. Leveraging the similarity of the task across languages (Table 1), we show that our model is able to successfully bootstrap from multilingual data that has been imperfectly segmented. We define a common metric that works across different tools (§4), and assemble a multilingual test suite by semi-automatically splitting existing (undersegmented) test sets (§5), providing a basis for proper comparison. We release these data splits along with our tool, ERSATZ, as open source.1"
+    }, {
+      "heading" : "2 Background",
+      "text" : "A sentence is a sequence of grammatically linked words that conveys a complete thought. The term can be difficult to define in a precise manner that will not admit any exceptions, and in applications like machine translation, there are many times where the basic input unit is not a sentence, but a sentence fragment, such as a headline or an item from a list. In this work, we skirt these complexities, choosing instead to focus on the most common scenario, in which we are dealing with standard written language. For this, we adopt a functional definition: a sentence is a group of words that ends with a sentence-ending punctuation mark, such as (for many languages) a period, question mark, or exclamation point. Since punctuation is often used for non-sentence-ending purposes as well, the primary challenge for sentence segmentation is resolving this ambiguity for each segmentation candidate.\n1https://github.com/rewicks/ersatz or pip install ersatz.\nResearch in sentence segmentation2 has been limited in scope. Prior work either introduces methods that work under a set of assumptions unique to Latin-script languages (the existence and importance of casing, word length, or whitespace), or tackles new languages ad hoc, making adaptation to new languages and domains difficult.\nStatistical methods use text-based features such as casing, punctuation, or length of surrounding words to make decisions around punctuation. The earliest work we found (Riley, 1989) considered all sentence boundaries and used decision trees based on these features. Gillick (2009) trained two statistical models in the form of an SVM and Naive Bayes classifier. Palmer and Hearst (1997) introduced Satz and shifted the approach by only focusing potential sentence boundaries being near sentence-ending punctuation, using part-of-speech distribution vectors as input to a feed-forward neural network and additionally applied their technique to German and French.\nIn order to work without labeled data, Kiss and Strunk (2006) used heuristics to craft scores based on likelihood values of occurrences of tokens, punctuation, casing and token length, and then manually tune a threshold of score to indicate a sentence boundary. This work expanded the most multilingually, considering 10 Indo-European languages as well as Estonian and Turkish.\nOther work has focused on specific non-English languages. Xue and Yang (2011) study Chinese and dissect the theoretical reasons behind segmenting Chinese sentences to match their English equivalents. To segment Thai, which lacks punctuation, Zhou et al. (2016) use POS-taggers. Some work has tackled the problem of domains. Sanchez (2019) approaches the problem of legal text, which has a set structure without punctuation; other approaches (Wang et al., 2019; Rehbein et al., 2020) have investigated speech, which lacks both punctuation and written textual structure.\nA popular splitter is packaged in the Moses toolkit (Koehn et al., 2007),3 which works by splitting on all sentence-final punctuation unless the preceding context is a “non-breaking prefix”—a hand-built, language-specific list of acronyms and abbreviations. This approach cannot resolve the ambiguity where punctuation legitimately exists at the end of a sentence and is indifferent to novel\n2Alternately called sentence boundary detection. 3We use the repackaged Python module at https://\npypi.org/project/sentence-splitter/.\nabbreviations at inference time. It produces a conservative segmenter that is high precision (unlikely to oversegment) but low recall (prone to undersegmenting). This raises the question of what effect reliance on this tool has had on construction of recent massive bitexts, such as CCMatrix (Schwenk et al., 2019b, §4.3). Gillick (2009) credit a 0.75% increase in accuracy to reduction of summarization error by a factor of four. Errors in segmentation may therefore affect the top matches for a sentence when doing bitext construction. Another popular splitter is SpaCy, which has not been described or evaluated anywhere, as far as we could tell.\nWith sentence splitting being a crucial piece of modern corpus creation for machine translation and other tasks, the lack of approaches and rigorous comparisons between tools limits the field. Additionally, the research field moving towards (often massively) multilingual settings, the need to build multilingual tools compare them in a proper scientific framework is both important and evident."
+    }, {
+      "heading" : "3 Approach",
+      "text" : "Our general approach is to treat sentence segmentation as a binary classification problem, predicting sentence-internal (⊗) or sentence-ending (X) positions. The input to the model (§3.1), shown in Figure 1, is the concatenated left and right token contexts, as depicted in Table 1. Predictions for both training and inference are done only at predefined candidate sites, which are determined by a regular expression (§3.2). We then train in a semisupervised setting where many of the labels may be missing (§3.3)."
+    }, {
+      "heading" : "3.1 Models",
+      "text" : "Our basic model is depicted in Figure 1. The encoder is a two-layer Transformer (Vaswani et al., 2017). Our hyperparameter search incorporates vocabulary size (V ), embedding size (e), and left and right context sizes (l and r). We also experiment with simpler architectures (§8.4), including single blocks of fully-connected linear layers with a TanH activation.4 These simpler models typically traded increased throughput for slight degradations in F1. Our training objective is binary cross-entropy loss.\n4We initially experimented with various functions and layers (Sigmoid, ReLU, Pooling layers, etc) but found that TanH performs best."
+    }, {
+      "heading" : "3.2 Candidate sites",
+      "text" : "Our model works with segmentation candidate sites for both training and inference. This can be done in a fairly general, language-agnostic way. Let P be the set of all punctuation, and Pe ⊂ P be the set of sentence-ending punctuation. For a given input, we examine every character boundary and match based on two regular expressions for the left and right context, respectively:\n• (.*PeP*) : The left context ends with sentence-final punctuation, optionally followed by any amount of punctuation; and\n• ([^0-9].*) : The right context does not start with a number.\nRaw text examples can be found in Table 1 and tokenized examples with fixed context sizes are shown in Table 2.\nInput to the model is in the form of documents. A linear pass over the data identifies all candidates sites and assembles them into a batch, with their associated left and right contexts. At training time, instances are extracted with their labels: ⊗ for lineinternal sites, and X for sites that occur between input lines. At inference time, the trained classifier is applied, and newlines are inserted where X is predicted.\nThis general definition carries benefits and risks. On the positive side, it allows us to work with many languages without having to develop language-\nspecific rules. It also speeds up training and inference, boosting both training speed and inference performance. On the downside, this loose definition can permit oversegmentation, since it permits, for example, word-internal segmentation in English and other languages. The criteria for identifying candidate sites can be easily altered to be more constrained or more general depending upon use case, and the list of punctuation to support more languages, if necessary. Our default list covers many languages.5"
+    }, {
+      "heading" : "3.3 Training data",
+      "text" : "As noted in our motivation, sentences in the wild are often not segmented but are part of paragraphs and documents. It is therefore unsurprising to find many segmentation errors in existing corpora. A particular problem one can observe is that of undersegmentation, perhaps resulting from application of conservative segmentation tools. This means the raw training data may contain many false negatives (X sites mistakenly labeled as ⊗). Training a sentence segmentation model therefore presents a chicken-and-egg problem. We aim to train directly on existing data created for MT purposes, despite its having been either segmented by imperfect segmenters, or never segmented.\nWhile some data is undersegmented, the vast majority of the end-of-line contexts should be correct, since they are either (a) natural existing boundaries at the end of a paragraph or document or (b) the result of applying a conservative segmenter. We therefore hope to train classifiers even despite this noise. Because we are considering a binary classification problem (and using the associated binary cross entropy loss), we additionally consider\n5Our punctuation set (by unicode name): Full Stop, Question Mark, Exclamation Mark, Ellipsis, Ideographic Full Stop, Devanagari Danda, Arabic Question Mark, Arabic Full Stop, Khmer Sign Khan\nadding a weighted λ value to the X class in order to give more credence to these contexts.6\nFor punctuation at the end of a line, the rightcontext is taken from the tokens at the beginning of the next sentence. In Section §7.3, we look into whether it matters if this right context is the true document context, or whether a random sentence will serve."
+    }, {
+      "heading" : "4 Evaluation: Metric",
+      "text" : "For evaluation, we begin by removing sentences that do not end in punctuation, since none of the tools are able to segment these. We then concatenate the test set into a single line, joining sentences with a space.\nEvaluation among different tools contains subtle complexities. First, some tools normalize or tokenize the input text, complicating alignment between the input and the output. Second, different tools may attempt to segment at different subsets of input string locations, which might unfairly bias the results in favor of conservative tools. Finally, if we permit segmentation at any point of the input, there is a large class imbalance between ⊗ and X.\nThe class imbalance advocates for F1 as a natural metric. The use of F1 also addresses the second issue, since only the gold positive class (X) factors into the score. The first two issues also require that we align a segmenter’s output with the gold standard segmented text. Since the texts are largely similar, we can do this efficiently using a modified Levenshtein distance7 that only considers a fixed maximum distance between any two characters. Once the text is aligned, we compute F1 against the set of X symbols in the gold text. An example is depicted in Figure 2."
+    }, {
+      "heading" : "5 Evaluation: Data",
+      "text" : "We have noted the difficulty with making use of imperfect training data, and how we hope to work around it (§3.3). Unfortunately, this workaround cannot be used for evaluation, where we need goldstandard data.\nWe construct test sets from the WMT News Translation test sets (Barrault et al., 2020), which\n6Generally, we find no weight (λ = 1.0) is sufficient in punctuated English, but increasing the weight (λ = 20) improved performance in some languages and the multilingual setting where the data is noisier.\n7While the distance itself can also be considered in comparing tools, we do not report these distances, and instead use the technique to align text within the window.\nprovides for decent-size test sets in many languages. We manually corrected all sentence segmentations. While some sets were already wellsegmented, some more recent years were extremely under-segmented. In Table 5, we show the test sets’ line counts before and after manual correction.8 Additionally, we report the % of candidate sites with a true X label, which provides a measure of the ambiguity of the punctuation. Many ⊗ positions occur in acronyms, such as “U.S.A.\", embedded quotes, ellipsis, or in company names such as “Yahoo!\"."
+    }, {
+      "heading" : "6 Experimental Setup",
+      "text" : "We consider three language settings: (i) monolingual English, (ii) a multilingual setting that includes the set of recent WMT languages plus Arabic, and (iii) a much larger multilingual setting that includes the previous languages plus all languages with at least 10k lines in the WikiMatrix (Schwenk et al., 2019a) dataset.\nStarting with the English setting, we investigate the performance of a basic model and vary parameters such as context size, embedding size, and vocabulary size. After finding an optimal setting, we expand to the first multilingual setting and repeat. We train a single multilingual model that is agnostic of language and does not need language specification as input. Similar to the monolingual setting, we vary the aforementioned parameters, and compare the best model to baselines (§6.3). In order to test expandability, we then train with the same parameters on the largest set of languages (using the additional WikiMatrix data), and compare to the previous model’s performance.\nWhile we do not widely experiment with additional monolingual settings, we train monolingual models in each language to compare against the multilingual models’ performance. We report the\n8iu was left uncorrected due to the fact that available bitext often aligned “sentences\" with singular or compound sentences in English and a lack of automatic translation corresponding to sentences.\ncomparison of these three settings to baselines in Table 5."
+    }, {
+      "heading" : "6.1 Datasets",
+      "text" : "We train our English model on a subset of the WSJ9 and the English News Commentary datasets provided by WMT.10\nTo expand to a multilingual setting, we consider the set of all WMT Task languages and Arabic (23 in total) allowing us to leverage the various monolingual datasets (Joanis et al., 2020) released as part of the WMT workshops—often using News Commentary datasets, as well as WikiMatrix (Schwenk et al., 2019a), CCMatrix (Schwenk et al., 2019b), and Global Voices (Nguyen and Daumé III, 2019). For validation data, we use WMT test sets when available, and IWSLT (Cettolo et al., 2017) for Arabic.\nWe experimented with (i) balancing the data so each language has equal amounts of data, (ii) normalizing the amount of data per language based on the relative ambiguity (measured by percent of candidate sites labeled as true X), and (iii) using all available data. We find that the third method performs the best and thus report under this setting.\nIn the larger multilingual setting, we consider all WikiMatrix languages with more than 10k unique lines (64 additional languages) and do not expand the validation set. For a complete list of datasets, please see Table 7 in Appendix A."
+    }, {
+      "heading" : "6.2 Training",
+      "text" : "For each vocabulary size, we train a SentencePiece (Kudo and Richardson, 2018) model over the training data.\nWe use a binary cross-entropy loss over the labels, Adam optimizer with a learning rate of 0.0001, and a λ of 1.0 (English) and 20.0 (multilingual)\n9Sections 1-2, 7-23 for training; section 24 for validation, and sections 03-06 for test in order to mirror the splits in Bird and Loper (2004)\n10http://data.statmt.org/ news-commentary/v15/\non the X class (with the exception of the experiments in §7.4). We use a batch size of 25k instances, and compute F1 over the validation data every 500 batches, saving the model with the highest inference-time F1 score. This is the collective F1 score across all languages in the multilingual settings. If the model has not improved in 15 validations, training terminates.\nThe models were trained on a Tesla V100 GPU. The monolingual models took approximately 2 hours to train while the multilingual models took approximately 10-15 hours."
+    }, {
+      "heading" : "6.3 Baselines",
+      "text" : "We use the following existing tools as baselines:\nAlways split on every candidate site. This serves as a lower-bound for our precision metric.\nSplitta (Gillick, 2009) ships with both SVM and Naive Bayes models. It targets English texts. We found similar performance and only report the Naive Bayes scores.\nNLTK Punkt Kiss and Strunk (2006) introduce an unsupervised training method for this task which uses frequency of occurences of input features such as casing, punctuation, and length in order to segment. Pretrained models for 18 languages (labeled as PUNKT in Table 5) are packaged with NLTK. NLTK additionally provides the framework to train a new model. We use this to train an additional model on all data (to simulate a multilingual model) and report the results in Table 5 as PUNKTML. PUNKT (and thus PUNKTML) does not segment around non-Latin punctuation.\nMoses Sentence Splitter uses a list of predefined acronyms and abbreviations for each language. If left token is in this list, it does not split. This circumvents the whole point behind the ambiguity \"in the U.S.\"\nSpaCy Sentencizer is a “rule-based system\" without specific details and varies from language to language."
+    }, {
+      "heading" : "7 Monolingual Experiments",
+      "text" : "We first explore common questions and concerns while focusing on English data and results. We have three main parameters to study: context size, embedding size, and vocabulary size. We additionally consider how the training data affects results– both in relative noise in class labels in addition to\ntraining on shuffled sentences instead of documents. In general, we find our technique creates a monolingual English model (Table 3) that outperforms the baselines."
+    }, {
+      "heading" : "7.1 Exploring context size",
+      "text" : "Starting with a minimal model with an embedding size of 32, and a vocabulary size of 125, we investigate whether such a small model can solve this problem. Our method is rooted in a contextual encoding of the subword tokens inside its context windows, and may benefit from increasing the size of these windows. At the operating point with a very small embedding and vocabulary size, the window size is the determining factor on performance. The results on English in Figure 3 show that a minimal amount of left and right context is necessary; however, left context is more beneficial than right\ncontext."
+    }, {
+      "heading" : "7.2 How large of a model is necessary?",
+      "text" : "We consider whether increasing the size of the model by doubling the embedding size and quadrupling the vocabulary size can produce better results. While varying the context windows (as seen in Figure 3) can result in increasingly higher scores, varying embedding size and vocabulary size did not produce the same effect. Keeping a fixed context window, we find that any given change in embedding size or vocabulary size increases F1 score by no more than 0.6%. While necessary to find the optimal model, it is clear that the context size is more important to experimentation. We note that a vocabulary size of 2000 tends to perform worse than smaller sizes while vocabulary sizes of 125 and 500 perform equally well when paired with any embedding size. Each of our monolingual models reported in Table 5 is the result of a grid search over various vocab sizes, and lambda weight (§3.3). We keep context sizes of left (6) and right (4) and embedding size (128) constant."
+    }, {
+      "heading" : "7.3 Is document context necessary?",
+      "text" : "Because released monolingual data is often cleaned with sentences being removed and shuffled, it is unreasonable to assume that a set of consecutive sentences will always be available for training.\nIn order to justify using this data, we repeat a subset of the previous English experiment—testing context and embedding sizes by training the model on the same data that has been shuffled. We test on the same validation data that has not been shuffled and retain its document order. In Table 4, we show that shuffling the training data has little impact on performance and document context is unnecessary in this punctuated setting.\n7.4 Can we train on undersegmented data?\nUncleaned, unfiltered Wikipedia dumps do not have sentence boundaries in them. The smallest unit is the paragraph. Data scraped from internet sites is likely to have a similar form and much of our monolingual data is not guaranteed to be segmented. In order to justify that this approach works without already having segmented data, we show that we can achieve similar results as our previous English results in this setting. We train on one million randomly-selected paragraphs from an English Wikipedia dump. While many ⊗ labels are now incorrect due to paragraphs being unsegmented, we assume the X class is relatively noise-free.\nBecause we already established that shuffling the data does not affect performance in this setting, the random selection is sufficient. While maintaining previously chosen hyper-parameters—such as context sizes, learning rate, and dropout—we search among potential λ values to use as a weight for the X label. We find that increasing the λ value to 200.0 achieves the highest F1 of 97.5. An unweighted model performs poorly. While still distant from the cleanly-trained models, it performs significantly better than the poorer baselines. Comparison to our other English models can be seen in Table 4."
+    }, {
+      "heading" : "8 Multilingual Experiments",
+      "text" : "After outperforming current baselines in a monolingual English setting, we generalized our approach to work multilingually. The multilingual model can segment text irrespective of input language.\nIn parallel to the monolingual conditions, we train two-layer transformer models with 6 tokens of left context, and 4 tokens of right context with 128 embedding size. While we did experiment with scaling these for the multilingual model, we found little effect. We additionally scale the vocabulary size to 12,000 to accommodate the larger character sets in Chinese and Japanese. Because more of the additional languages have undersegmented data, we searched over potential lambda weights for the X class and report the best configuration (λ = 20.0) in Table 5."
+    }, {
+      "heading" : "8.1 Discussion",
+      "text" : "Results of ERSATZ and baselines can be found in Table 5. In all cases, ERSATZ is at least competitive with baselines, if not outperforming them. Although most differences are small it outperforms\nSpaCy in all languages and often outperforms both Punkt and Moses.\nThe Moses splitter is an interesting case. It identifies split points via a mix of general and languagespecific regular expressions, which are then filtered against a curated list of “non-breaking prefixes”. This results in a conservative segmenter that will not (for example) allow a sentence to end with the token U.S.. As such, its high performance is notable. However, the comparison is likely unfair, since it was likely built and refined against the news datasets that constitute our WMT test sets. This approach is therefore effective in this domain, but may not generalize. Our single multilingual model, trained on noisy data, performs nearly identically."
+    }, {
+      "heading" : "8.2 Performance across languages",
+      "text" : "Sentence segmentation is not equally difficult in all languages or with respect to all punctuation. The ‘.’\nis by far the most ambiguous form of punctuation and is frequently used as an abbreviation marker. Other scripts using their own punctuation, such as Hindi, have specified a particular marker (the Devanagari Danda) as a sentence-ending punctuation that is rarely used sentence-internally. In these cases, ambiguity is introduced when alternative punctuation (such as ‘.’ or ‘...’) is used. Additionally, even languages with the same scripts may not have the same level of ambiguity. French has the smallest number of punctuated contexts occurring sentence-internally within our test set, while English has the most.\nWe note that the multilinguality of our model hurts the near-perfect performance that we see in the monolingual English models. We additionally note that some monolingual models perform worse than the multilingual model (see pl in Table 5). We hypothesize that this may be due to a lack of\ndata, and the additional languages contain similar contexts, so the model may learn more about casing, punctuation, and length with additional data."
+    }, {
+      "heading" : "8.3 Scaling to more languages",
+      "text" : "While we note that it is difficult to evaluate many of the world’s languages due to a lack of gold standard test data, we test for scalability by including additional languages (as described in §6) during training and noting any changes in performance on the evaluable languages. We include 64 additional languages (see Table 7 in the Appendix for comprehensive list) to bring us to a total of 87 languages. Table 5 also includes scores from a larger multilingual model (ERSATZWM) that was built with these 64 additional languages. Overall, we find very little change between these two settings. With en, we actually see some improvement in performance from the smaller multilingual model. Generally, there is not significant degradation of scores, implying this technique can generalize to additional languages."
+    }, {
+      "heading" : "8.4 How does size affect the speed?",
+      "text" : "With our context construction method, we benefit from batching to decrease runtime, since the decision at each candidate point is dependent only on its immediate window. We benchmark our models as well as the baselines (Table 6). While our models are slower than some baselines, we find that increasing the size of the model does not dramatically increase the runtime. Additionally, the rate (in tokens per second) is roughly constant."
+    }, {
+      "heading" : "9 Summary",
+      "text" : "As one of the earliest steps in NLP pipelines, sentence segmentation is an important task. However, it has not to this date received proper experimental attention, relying instead on ad hoc methods. It is a good time to correct this oversight, as NLP moves to the use of larger and larger corpora covering more and more languages. Even as the field moves towards processing text at the paragraph or document level directly, it is likely that sentence processing will be with us for some time.\nWe show here that a simple context-based model can produce state-of-the-art results with a modest hyperparameter search, trained on noisy annotations from imperfectly-segmented data. Together with a straightforward multilingual approach to identifying candidate split points and training on noisy segmented data, our single model performs well across a range of languages. More fundamentally, we have defined an experimental framework for benchmarking and future comparative work.\nMissing from our paper is an evaluation of the effect of these tools on downstream tasks. An obvious candidate for future work is to conduct this evaluation. It is possible that some tasks will not be affected by small differences among the best performing models, but this work at least sheds light on those differences. Another obvious direction is to look at approaches that would work for unpunctuated text (e.g., Wang et al. (2019)). This would expand the functionality of segmenters into other important areas, such as speech translation, and to languages, like Thai, that do not mark ends of sentences."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "The authors wish to thank Elizabeth Salesky, Carlos Aguirre, Jacob Bremerman and the anonymous reviewers for helpful technical discussions and feedback."
+    } ],
+    "references" : [ {
+      "title" : "Findings of the 2020 conference on machine translation (WMT20)",
+      "author" : [ "Monz", "Makoto Morishita", "Masaaki Nagata", "Toshiaki Nakazawa", "Santanu Pal", "Matt Post", "Marcos Zampieri." ],
+      "venue" : "Proceedings of",
+      "citeRegEx" : "Monz et al\\.,? 2020",
+      "shortCiteRegEx" : "Monz et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "NLTK: The natural language toolkit",
+      "author" : [ "Steven Bird", "Edward Loper." ],
+      "venue" : "Proceedings of the ACL Interactive Poster and Demonstration Sessions, pages 214–217, Barcelona, Spain. Association for Computational Linguistics.",
+      "citeRegEx" : "Bird and Loper.,? 2004",
+      "shortCiteRegEx" : "Bird and Loper.",
+      "year" : 2004
+    }, {
+      "title" : "Overview of the iwslt 2017 evaluation campaign",
+      "author" : [ "Mauro Cettolo", "Marcello Federico", "Luisa Bentivogli", "Jan Niehues", "Sebastian Stüker", "Katsuitho Sudoh", "Koichiro Yoshino", "Christian Federmann." ],
+      "venue" : "14th International Workshop on Spoken Language",
+      "citeRegEx" : "Cettolo et al\\.,? 2017",
+      "shortCiteRegEx" : "Cettolo et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Sentence boundary detection and the problem with the U.S",
+      "author" : [ "Dan Gillick" ],
+      "venue" : "In Proceedings of Human Language Technologies: The 2009 Annual Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Gillick.,? \\Q2009\\E",
+      "shortCiteRegEx" : "Gillick.",
+      "year" : 2009
+    }, {
+      "title" : "The Nunavut hansard Inuktitut–English parallel corpus 3.0 with preliminary machine translation results",
+      "author" : [ "Eric Joanis", "Rebecca Knowles", "Roland Kuhn", "Samuel Larkin", "Patrick Littell", "Chi-kiu Lo", "Darlene Stewart", "Jeffrey Micher" ],
+      "venue" : null,
+      "citeRegEx" : "Joanis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Joanis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Unsupervised multilingual sentence boundary detection",
+      "author" : [ "Tibor Kiss", "Jan Strunk." ],
+      "venue" : "Computational Linguistics, 32(4):485–525.",
+      "citeRegEx" : "Kiss and Strunk.,? 2006",
+      "shortCiteRegEx" : "Kiss and Strunk.",
+      "year" : 2006
+    }, {
+      "title" : "SentencePiece: A simple and language independent subword tokenizer and detokenizer for neural text processing",
+      "author" : [ "Taku Kudo", "John Richardson." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing: System",
+      "citeRegEx" : "Kudo and Richardson.,? 2018",
+      "shortCiteRegEx" : "Kudo and Richardson.",
+      "year" : 2018
+    }, {
+      "title" : "Global Voices: Crossing borders in automatic news summarization",
+      "author" : [ "Khanh Nguyen", "Hal Daumé III." ],
+      "venue" : "Proceedings of the 2nd Workshop on New Frontiers in Summarization, pages 90–97, Hong Kong, China. Association for Computational",
+      "citeRegEx" : "Nguyen and III.,? 2019",
+      "shortCiteRegEx" : "Nguyen and III.",
+      "year" : 2019
+    }, {
+      "title" : "Adaptive multilingual sentence boundary disambiguation",
+      "author" : [ "David D. Palmer", "Marti A. Hearst." ],
+      "venue" : "Computational Linguistics, 23(2):241–267.",
+      "citeRegEx" : "Palmer and Hearst.,? 1997",
+      "shortCiteRegEx" : "Palmer and Hearst.",
+      "year" : 1997
+    }, {
+      "title" : "Improving sentence boundary detection for spoken language transcripts",
+      "author" : [ "Ines Rehbein", "Josef Ruppenhofer", "Thomas Schmidt." ],
+      "venue" : "Proceedings of the 12th Language Resources and Evaluation Conference, pages 7102–7111, Marseille, France.",
+      "citeRegEx" : "Rehbein et al\\.,? 2020",
+      "shortCiteRegEx" : "Rehbein et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Some applications of treebased modelling to speech and language",
+      "author" : [ "Michael D. Riley." ],
+      "venue" : "Speech and Natural Language: Proceedings of a Workshop Held at Cape Cod, Massachusetts, October 15-18, 1989.",
+      "citeRegEx" : "Riley.,? 1989",
+      "shortCiteRegEx" : "Riley.",
+      "year" : 1989
+    }, {
+      "title" : "Sentence boundary detection in legal text",
+      "author" : [ "George Sanchez." ],
+      "venue" : "Proceedings of the Natural Legal Language Processing Workshop 2019, pages 31–38, Minneapolis, Minnesota. Association for Computational Linguistics.",
+      "citeRegEx" : "Sanchez.,? 2019",
+      "shortCiteRegEx" : "Sanchez.",
+      "year" : 2019
+    }, {
+      "title" : "Wikimatrix: Mining 135m parallel sentences in 1620 language pairs from wikipedia",
+      "author" : [ "Holger Schwenk", "Vishrav Chaudhary", "Shuo Sun", "Hongyu Gong", "Francisco Guzmán." ],
+      "venue" : "CoRR, abs/1907.05791.",
+      "citeRegEx" : "Schwenk et al\\.,? 2019a",
+      "shortCiteRegEx" : "Schwenk et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Ccmatrix: Mining billions of high-quality parallel sentences on the WEB",
+      "author" : [ "Holger Schwenk", "Guillaume Wenzek", "Sergey Edunov", "Edouard Grave", "Armand Joulin." ],
+      "venue" : "CoRR, abs/1911.04944.",
+      "citeRegEx" : "Schwenk et al\\.,? 2019b",
+      "shortCiteRegEx" : "Schwenk et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Ł ukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 30. Curran Associates, Inc.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Online sentence segmentation for simultaneous interpretation using multi-shifted recurrent neural network",
+      "author" : [ "Xiaolin Wang", "Masao Utiyama", "Eiichiro Sumita." ],
+      "venue" : "Proceedings of Machine Translation Summit XVII Volume 1: Research Track, pages 1–11,",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Chinese sentence segmentation as comma classification",
+      "author" : [ "Nianwen Xue", "Yaqin Yang." ],
+      "venue" : "Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: Human Language Technologies, pages 631–635, Portland, Ore-",
+      "citeRegEx" : "Xue and Yang.,? 2011",
+      "shortCiteRegEx" : "Xue and Yang.",
+      "year" : 2011
+    }, {
+      "title" : "A word labeling approach to Thai sentence boundary detection and POS tagging",
+      "author" : [ "Nina Zhou", "AiTi Aw", "Nattadaporn Lertcheva", "Xuancong Wang." ],
+      "venue" : "Proceedings of COLING 2016, the 26th International Conference on Computational Linguistics:",
+      "citeRegEx" : "Zhou et al\\.,? 2016",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2016
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 8,
+      "context" : "The little comparative work that does exist generally focuses on techniques that work in English or other Indo-European languages (Palmer and Hearst, 1997; Gillick, 2009).",
+      "startOffset" : 130,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 3,
+      "context" : "The little comparative work that does exist generally focuses on techniques that work in English or other Indo-European languages (Palmer and Hearst, 1997; Gillick, 2009).",
+      "startOffset" : 130,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 1,
+      "context" : "3996 as NLTK (Bird and Loper, 2004), which packages Punkt (Kiss and Strunk, 2006), provide an unsupervised method to train a model, but it is unclear what the effect is when switching to non-Latin-script languages, or how a more supervised approach would handle such noisy data.",
+      "startOffset" : 13,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 5,
+      "context" : "3996 as NLTK (Bird and Loper, 2004), which packages Punkt (Kiss and Strunk, 2006), provide an unsupervised method to train a model, but it is unclear what the effect is when switching to non-Latin-script languages, or how a more supervised approach would handle such noisy data.",
+      "startOffset" : 58,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 10,
+      "context" : "The earliest work we found (Riley, 1989) considered all sentence boundaries and used decision trees based on these features.",
+      "startOffset" : 27,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 15,
+      "context" : "Sanchez (2019) approaches the problem of legal text, which has a set structure without punctuation; other approaches (Wang et al., 2019; Rehbein et al., 2020) have investigated speech, which lacks both punctuation and written textual structure.",
+      "startOffset" : 117,
+      "endOffset" : 158
+    }, {
+      "referenceID" : 9,
+      "context" : "Sanchez (2019) approaches the problem of legal text, which has a set structure without punctuation; other approaches (Wang et al., 2019; Rehbein et al., 2020) have investigated speech, which lacks both punctuation and written textual structure.",
+      "startOffset" : 117,
+      "endOffset" : 158
+    }, {
+      "referenceID" : 14,
+      "context" : "The encoder is a two-layer Transformer (Vaswani et al., 2017).",
+      "startOffset" : 39,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 12,
+      "context" : "with at least 10k lines in the WikiMatrix (Schwenk et al., 2019a) dataset.",
+      "startOffset" : 42,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 4,
+      "context" : "To expand to a multilingual setting, we consider the set of all WMT Task languages and Arabic (23 in total) allowing us to leverage the various monolingual datasets (Joanis et al., 2020) released as part of the WMT workshops—often using News Commentary datasets, as well as WikiMatrix (Schwenk et al.",
+      "startOffset" : 165,
+      "endOffset" : 186
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2020) released as part of the WMT workshops—often using News Commentary datasets, as well as WikiMatrix (Schwenk et al., 2019a), CCMatrix (Schwenk et al.",
+      "startOffset" : 106,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2019a), CCMatrix (Schwenk et al., 2019b), and Global Voices (Nguyen and Daumé III, 2019).",
+      "startOffset" : 19,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 2,
+      "context" : "For validation data, we use WMT test sets when available, and IWSLT (Cettolo et al., 2017) for Arabic.",
+      "startOffset" : 68,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 6,
+      "context" : "For each vocabulary size, we train a SentencePiece (Kudo and Richardson, 2018) model over the training data.",
+      "startOffset" : 51,
+      "endOffset" : 78
+    }, {
+      "referenceID" : 3,
+      "context" : "Splitta (Gillick, 2009) ships with both SVM and Naive Bayes models.",
+      "startOffset" : 8,
+      "endOffset" : 23
+    } ],
+    "year" : 2021,
+    "abstractText" : "The sentence is a fundamental unit of text processing. Yet sentences in the wild are commonly encountered not in isolation, but unsegmented within larger paragraphs and documents. Therefore, the first step in many NLP pipelines is sentence segmentation. Despite its importance, this step is the subject of relatively little research. There are no standard test sets or even methods for evaluation, leaving researchers and engineers without a clear footing for evaluating and selecting models for the task. Existing tools have relatively small language coverage, and efforts to extend them to other languages are often ad hoc. We introduce a modern context-based modeling approach that provides a solution to the problem of segmenting punctuated text in many languages, and show how it can be trained on noisily-annotated data. We also establish a new 23-language multilingual evaluation set. Our approach exceeds high baselines set by existing methods on prior English corpora (WSJ and Brown corpora), and also performs well on average on our new evaluation set. We release our tool, ERSATZ, as open source.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

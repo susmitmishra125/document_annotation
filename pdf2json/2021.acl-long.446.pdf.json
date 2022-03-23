@@ -1,0 +1,755 @@
+{
+  "name" : "2021.acl-long.446.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Transfer Learning for Sequence Generation: from Single-source to Multi-source",
+    "authors" : [ "Xuancheng Huang", "Jingfang Xu", "Maosong Sun", "Yang Liu" ],
+    "emails" : [ ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 5738–5750\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n5738"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Thanks to the continuous representations widely used across text, speech, and image, neural networks that accept multiple sources as input have gained increasing attention in the community (Ive et al., 2019; Dupont and Luettin, 2000). For example, multi-modal inputs that are complementary have proven to be helpful for many sequence generation tasks such as question answering (Antol et al.,\n∗Corresponding author: Yang Liu 1The source code is available at https://github.\ncom/THUNLP-MT/TRICE\n2015), machine translation (Huang et al., 2016), and speech recognition (Dupont and Luettin, 2000). In natural language processing, multiple textual inputs have also been shown to be valuable for sequence generation tasks such as multi-source translation (Zoph and Knight, 2016), automatic postediting (Chatterjee et al., 2017), multi-document summarization (Haghighi and Vanderwende, 2009), system combination for NMT (Huang et al., 2020), and document-level machine translation (Wang et al., 2017). We refer to this kind of tasks as multi-source sequence generation (MSG).\nUnfortunately, MSG tasks face a severe challenge: there are no sufficient data to train MSG models. For example, multi-source translation requires parallel corpora involving multiple languages, which are usually restricted in quantity and coverage. Recently, as pretraining language models that take advantage of massive unlabeled data have proven to improve natural language understanding (NLU) and generation tasks substantially (Devlin et al., 2019; Liu et al., 2019; Lewis et al., 2020), a number of researchers have proposed to leverage pretrained language models to enhance MSG tasks (Correia and Martins, 2019; Lee et al., 2020; Lee, 2020). For example, Correia and Martins (2019) show that pretrained autoencoding (AE) models\nlike BERT (Devlin et al., 2019) can improve automatic post-editing.\nAs most recent pretrained sequence-to-sequence (Seq2Seq) models (Song et al., 2019; Lewis et al., 2020; Liu et al., 2020) have demonstrated their effectiveness in improving single-source sequence generation (SSG) tasks, we believe that pretrained Seq2Seq models can potentially bring more benefits to MSG than pretrained AE models. Although it is easy to transfer Seq2Seq models to SSG tasks, transferring them to MSG tasks is challenging because MSG takes multiple sources as the input, leading to severe pretrain-finetune discrepancies in terms of both architectures and objectives.\nA straightforward solution is to concatenate the representations of multiple sources as suggested by Correia and Martins (2019). However, we believe this approach suffers from two major drawbacks. First, due to the discrepancy between pretraining and MSG, directly transferring pretrained models to MSG tasks might lead to catastrophic forgetting (McCloskey and Cohen, 1989; Kirkpatrick et al., 2017) that results in reduced performance. Second, the pretrained self-attention layers might not fully learn the representations of the concatenation of multiple sources because they do not make full use of the cross-source information.\nInspired by adding intermediate tasks for NLU (Pruksachatkun et al., 2020; Vu et al., 2020), we conjecture that inserting a proper intermediate task between them can alleviate the discrepancy. In this paper, we propose a two-stage finetuning method named gradual finetuning. Different from prior studies, our work aims to transfer pretrained Seq2Seq models to MSG (see Table 1). Our approach first transfers from pretrained models to\nSSG and then transfers from SSG to MSG (see Figure 1). Furthermore, we propose a novel MSG model with coarse and fine encoders to differentiate sources and learn better representations. On top of a coarse encoder (i.e., the pretrained encoder), a fine encoder equipped with cross-attention layers (Vaswani et al., 2017) is added. We refer to our approach as TRICE (a task-agnostic Transferring fRamework for multI-sourCe sEquence generation), which achieves new state-of-the-art results on the WMT17 APE task and the multi-source translation task using the WMT14 test set. When adapted to document-level translation, our framework outperforms strong baselines significantly."
+    }, {
+      "heading" : "2 Approach",
+      "text" : "Figure 1 shows an overview of our framework. First, the problem statement is described in Section 2.1. Second, we propose to use the gradual finetuning method (Section 2.2) to reduce the pretrainfinetune discrepancy. Third, we introduce our MSG model, which consists of the coarse encoder (Section 2.3), the fine encoder (Section 2.4), and the decoder (Section 2.5)."
+    }, {
+      "heading" : "2.1 Problem Statement",
+      "text" : "As shown in Figure 1, there are three kinds of dataset: (1) the unlabeled multilingual dataset Dp containing monolingual corpora in various languages, (2) the single-source parallel dataset Ds involving multiple language pairs, and (3) the multisource parallel dataset Dm. The general objective is to leverage these three kinds of dataset to improve multi-source sequence generation tasks.\nFormally, let x1:K = x1 . . .xK be K source sentences, where xk is the k-th sentence. We use xk,i\nto denote the i-th word in the k-th source sentence and y = y1 . . . yJ to denote the target sentence with J words. The MSG model is given by\nPm(y|x1:K ;θ) = J∏\nj=1\nP (yj |x1:K ,y<j ;θ), (1)\nwhere yj is the j-th word in the target, y<j = y1 . . . yj−1 is a partial target sentence, P (yj |x1:K ,y<j ;θ) is a word-level generation probability, and θ are the parameters of the MSG model."
+    }, {
+      "heading" : "2.2 Gradual Finetuning",
+      "text" : "As training neural models on large-scale unlabeled datasets is time-consuming, it is a common practice to utilize pretrained models to improve downstream tasks by using transfer learning methods (Devlin et al., 2019). As a result, we focus on leveraging single-source and multi-source parallel datasets to transfer pretrained Seq2Seq models to MSG tasks.\nCurriculum learning (Bengio et al., 2009) aims to learn from examples organized in an easy-tohard order, and intermediate tasks (Pruksachatkun et al., 2020; Vu et al., 2020) are introduced to alleviate the pretrain-finetune discrepancy for NLU. Inspired by these studies, we expect that changing the training objective from pretraining to MSG gradually can reduce the difficulty of transferring pretrained models to MSG tasks. Therefore, we propose a two-stage finetuning method named gradual finetuning. The transferring process is divided into two stages (see Figure 1). In the first stage, the SSG model is transferred from denoising autoencoding to the single-source sequence generation task, and the model architecture is kept unchanged. In the second stage, an additional fine encoder (see Section 2.4) is introduced to transform the SSG model to the MSG model, and the MSG model is optimized on the multi-source parallel corpus.\nFormally, we use φp to denote the parameters of the SSG model. Without loss of generality, the pretraining process can be described as follows:\nLp(φp) = 1 |Dp| ∑ z∈Dp ( − logPs(z|z̃;φp) ) , (2)\nφ̂p = argmin φp\n{ Lp(φp) } , (3)\nwhere z is a sentence that could be in many languages, z̃ is the corrupted sentence obtained from z, Ps is the probability modeled by the SSG model,\nand φ̂p are the learned parameters. In this way, a powerful multilingual model is obtained by pretraining on the unlabeled multilingual dataset Dp.\nThen, in the first finetuning stage, let φs be the parameters of the SSG model, which are initialized by φ̂p. As the single-source parallel dataset Ds is not always available, we can build it from the K-source parallel dataset Dm. Assume 〈x1:K ,y〉 is a training example in Dm, a training example 〈x,y〉 in Ds can be constructed by sampling one source from each K-source training example with a probability of 1/K. The first finetuning process is given by\nLs(φs) = 1 |Ds| ∑\n〈x,y〉∈Ds\n( − logPs(y|x;φs) ) ,\n(4)\nφ̂s = argmin φs\n{ Ls(φs) } , (5)\nwhere φ̂s are the learned parameters. The learned SSG model is capable of taking inputs in multiple languages.\nIn the second finetuning stage, φm, the parameters of the coarse encoder, the decoder, and the embeddings, are initialized by φ̂s while γ are the randomly initialized parameters of the fine encoder. Thus, θ = φm ∪ γ are the parameters of the MSG model. The second finetuning process can be described as\nLm(θ)\n= 1 |Dm| ∑\n〈x1:K ,y〉∈Dm\n( − logPm(y|x1:K ;θ) ) ,\n(6)\nθ̂ = argmin θ\n{ Lm(θ) } , (7)\nwhere Pm is given by Eq. (1). As a result, the model is expected to learn from abundant unlabeled data and perform well on the MSG task. In the following subsections, we will describe the MSG model architecture (see Figure 2) applied in the second finetuning stage."
+    }, {
+      "heading" : "2.3 Input Representation and the Coarse Encoder",
+      "text" : "In general, pretrained encoders are considered as strong feature extractors to learn meaningful representations (Zhu et al., 2019). For this reason, Correia and Martins (2019) propose to use the pretrained multilingual encoder to encode the bilingual input pair of APE. Since MSG tasks usually\nhave multiple sources involving different languages and pretrained multilingual Seq2Seq models like mBART (Liu et al., 2020) usually rely on special tokens (e.g., <en>) to differentiate languages, concatenating multiple sources into a single long sentence will make the model confused about the language of the concatenated sentence (see Table 6). Therefore, we propose to add additional segment embedding to differentiate sentences in different languages and encode source sentences jointly by a single pretrained multilingual encoder.\nFormally, the input representation can be denoted by\nXk,i = E tok[xk,i] +E pos[i] +Eseg[k], (8)\nwhere Xk,i is the input representation of the ith word in the k-th source sentence, and Etok, Epos, and Eseg are the token, position, and segment/language embedding matrices, respectively. Etok and Epos are initialized by pretrained embedding matrices. Eseg is implemented as constant sinusoidal embeddings (Vaswani et al., 2017), which is denoted by Eseg[k]2i = sin(1000∗k/100002i/d), where Eseg[k]2i+1 is similar to Eseg[k]2i and i is the dimension index while d is model dimension.2\n2If the pretrained model already contains the segment/language embedding matrix, then the pretrained one is used.\nThen, the pretrained encoder is utilized to encode multiple sources:\nR (i) 1:K = FFN\n( SelfAtt ( R\n(i−1) 1:K\n)) , (9)\nwhere SelfAtt(·) and FFN(·) are the self-attention and feed-forward networks, respectively. R(i)1:K is the representation output by the i-th encoder layer, and R(0)1:K refers to X1 . . .XK , where Xk is equivalent to Xk,1 . . .Xk,Ik and Ik is the number of tokens in the k-th source sentence.\nHowever, we conjecture that indiscriminately modeling dependencies between words by the pretrained self-attention layers cannot capture crosssource information adequately. To this end, we regard the pretrained encoder as the coarse encoder and introduce a novel fine encoder to learn better multi-source representations."
+    }, {
+      "heading" : "2.4 The Fine Encoder",
+      "text" : "To alleviate the pretrain-finetune discrepancy, we adopt the gradual finetuning method to better transfer from single-source to multi-source. In the first finetuning step, the coarse encoder is used to encode different sources individually. As multiple sources are concatenated as a single source in which words interact by pretrained self-attentions, we conjecture that the cross-source information\ncannot be fully captured. Hence, we propose to add a randomly initialized fine encoder, which consists of self-attentions, cross-attentions, and FFNs, on top of the pretrained coarse encoder to learn meaningful multi-source representations. Specifically, the cross-attention sublayer is an essential part of the fine encoder because they perform fine-grained interaction between sources (see Table 5).\nFormally, the architecture of the fine encoder can be described as follows. First, the representations of multiple sources output by the coarse encoder are divided according to the boundaries of sources:\nR (Nc) 1 , . . . ,R (Nc) K = Split\n( R\n(Nc) 1:K\n) , (10)\nwhere Nc is the number of the coarse encoder layers, Split(·) is the split operation. Second, for each fine encoder layer, the representations are fed into a self-attention sublayer:\nB (i) k = SelfAtt\n( A\n(i−1) k\n) , (11)\nwhere A(i−1)k is the representation corresponding to the k-th source sentence output by the (i− 1)-th layer of the fine encoder, in other words, A(0)k = R\n(Nc) k . B (i) k is the representation output by the self-attention sublayer of the i-th layer. Third, representations of source sentences interact through a cross-attention sublayer:\nO (i) \\k = Concat\n( B\n(i) 1 , . . . ,B (i) k−1,B (i) k+1, . . . ,B (i) K\n) ,\n(12)\nC (i) k = CrossAtt\n( B\n(i) k ,O (i) \\k ,O (i) \\k\n) , (13)\nwhere Concat(·) is the concatenation operation, O\n(i) \\k is the concatenated representation except B (i) k , CrossAtt(Q,K, V ) is the cross-attention sublayer, C\n(i) k is the representation output by the crossattention sublayer of the i-th layer. Finally, the last sublayer is a feedforward network:\nA (i) k = FFN\n( C\n(i) k\n) . (14)\nAfter the Nf -layer fine encoder, the representations corresponding to multiple sources are given to the decoder."
+    }, {
+      "heading" : "2.5 The Decoder",
+      "text" : "Given that representations of multiple sources are different from that of a single source, to better leverage representations of multiple sources, we let the\ncross-attention sublayer take each source’s representation as key/value separately and then combine the outputs by mean pooling.3 Formally, the differences between our decoder and the traditional Transformer decoder are described below.\nFirst, the input representations of the i-th decoder layer are fed into the self-attention sublayer to obtain G(i)j . Second, a separated cross-attention sublayer is adopted by our framework to replace the traditional cross-attention sublayer:\nP (i) j,k = CrossAtt\n( G\n(i) j ,A (Nf ) k ,A (Nf ) k\n) , (15)\nH (i) j = MeanPooling\n( P\n(i) j,1, . . . ,P (i) j,K\n) , (16)\nwhere A(Nf )k is the output of the fine encoder derived by Eq. (14), P(i)j,k is the representation corresponding to the k-th source, H(i)j is the combined result of the separated cross-attention sublayer, and the parameters of separated cross-attentions to leverage each source are shared. Finally, a feedforward network is the last sublayer of a decoder layer. In this way, the decoder in our framework can better handle representations of multiple sources."
+    }, {
+      "heading" : "3 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Setup",
+      "text" : ""
+    }, {
+      "heading" : "Datasets",
+      "text" : "We evaluated our framework on three MSG tasks: (1) automatic post-editing (APE), (2) multi-source translation, and (3) document-level translation.\nFor the APE task, following Correia and Martins (2019), we used the data from the WMT17 APE task (English-German SMT) (Chatterjee et al., 2019). The dataset contains 23K dual-source examples (e.g., 〈English source sentence, German translation, German post-edit〉) for training in an extremely low-resource setting. We also followed Correia and Martins (2019) to adopt pseudo data (Junczys-Dowmunt and Grundkiewicz, 2016; Negri et al., 2018), which contains about 8M pseudo training examples, to evaluate our framework in a high-resource setting. We adopted the dev16 for development and used test16 and test17 for testing.\nFor the multi-source translation task, following Zoph and Knight (2016), we used a subset of the WMT14 news dataset (Bojar et al., 2014),\n3There is little difference between the “parallel attention combination strategy” proposed by Libovickỳ et al. (2018) and our method.\nwhich contains 2.4M dual-source examples (e.g., 〈German source sentence, French source sentence, English translation〉) for training, 3,000 from test13 for development, and 1,503 from test14 for testing.4 It can be seen as a medium-resource setting.\nFor the document-level translation task, we used the dataset provided by Maruf et al. (2019) from IWSLT2017 (TED) and News Commentary (News), both including about 200K EnglishGerman training examples, which can be seen as low-resource settings. For IWSLT2017, test16 and test17 were combined as the test set, and the rest served as the development set. For News Commentary, test15 and test16 in WMT16 were used for development and testing, respectively. We took the nearest preceding sentence as the context, and then constructed the dual-source example like 〈German context, German current sentence, English translation〉."
+    }, {
+      "heading" : "Hyper-parameters",
+      "text" : "We adopted mBART (Liu et al., 2020) as the pretrained Seq2Seq model. We set both Nc and Nd to 12, and Nf to 1. The model dimension, the filter size, and the number of heads are the same as mBART. We adopted the vocabulary of mBART, which contains 250K tokens. We used minibatch sizes of 256, 1,024, 4,096, and 16,384 tokens for extremely low-, low-, medium-, and high-resource settings, respectively. We used the development set to tune the hyper-parameters and select the best model. In inference, the beamsize was set to 4. Please refer to Appendix A.1 for more details."
+    }, {
+      "heading" : "Evaluation Metrics",
+      "text" : "We used case-sensitive BLEU (multi-bleu.perl) and TER for automatic post-editing. For multi-source translation and document-level translation, SACREBLEU5 (Post, 2018) and METEOR6 was adopted for evaluation. We used the paired bootstrap resampling (Koehn, 2004) for statistical significance tests."
+    }, {
+      "heading" : "3.2 Main Results",
+      "text" : "Table 2 shows the results on the automatic postediting task. Our framework outperforms previous methods without pretraining (i.e., FORCEDATT,\n4A dual-source example can be obtained by matching two single-source examples.\n5The signature is “BLEU+case.mixed+numrefs.1+smooth .exp+tok.13a+version.1.4.14”.\n6https://www.cs.cmu.edu/˜alavie/ METEOR/"
+    }, {
+      "heading" : "Variants #Para. BLEU",
+      "text" : "DUALTRANS, and L2COPY) by a large margin and surpasses strong baselines with pretraining (i.e., DUALBERT and DUALBART), which concatenate multiple sources into a single source, significantly in both extremely low- and high-resource settings. Notably, the performances of our framework in the extremely low-resource setting are comparable to results of strong baselines without pretraining in the high-resource setting and we achieve new state-of-the-art results on this benchmark.\nTable 3 demonstrates the results on the multisource translation task. Our framework substantially outperforms both baselines without pretraining (i.e., MULTIRNN and DUALTRANS) and with pretraining (i.e., single-source model MBARTTRANS and dual-source model DUALBART). Surprisingly, the single-source models with pretraining are inferior to the multi-source model without pretraining, which indicates that multiple sources play an important role in the translation task.\nTable 4 shows the results on the document-level translation task. Our framework achieves significant improvements over all strong baselines. Unusually, the previous method for handling multiple sources (i.e., DUALBART) fails to consistently outperform simple sentence- and document-level Transformer (i.e., MBART-TRANS and MBARTDOCTRANS) while our framework outperforms these strong baselines significantly.\nIn general, our framework shows a strong generalizability across three different MSG tasks and four different data scales, which indicates that it is useful to alleviate the pretrain-finetune discrepancy by gradual finetuning and learn multi-source representations by fully capturing cross-source information."
+    }, {
+      "heading" : "3.3 Analyses",
+      "text" : "In this subsection, we further conduct studies regarding the variants of the fine encoder, ablations of the other proposed components, and effect of freezing parameters. Experiments are conducted on the APE task in the extremely low-resource setting. The BLEU scores calculated on the development set are adopted as the evaluation metric.\nComparisons with the variants of the fine encoder. Table 5 demonstrates comparisons with the variants of the fine encoder. We find that the fine encoder (see Section 2.4) is effective (compared to “None”), the cross-attention sublayer is important (compared to the one without cross-attention), and our approach outperforms “FFN adapter”, which is proposed by Zhu et al. (2019) to incorporate BERT into sequence generation tasks by inserting FFNs into each encoder layer. We find that stacking more fine encoder layers even harms the performance (see the last three rows in Table 5) which rules out the option that the improvements owe to increasing of parameters.\nAblations on the other proposed components. Table 6 shows the results of the ablation study. We find that gradual finetuning method (see Section 2.2) is significantly beneficial. Lines “- segment embedding” and “- concatenated encoding” show that concatenating multiple sources into a long sequence and adding sinusoidal segment embedding for the coarse encoder are helpful (see Section 2.3). The line “- separated cross-attention” reveals that taking each source’s representation as key/value separately and then combine the outputs is better than concatenating all the representations and do the cross-attention jointly (see Section 2.5).\nEffect of freezing pretrained parameters. As shown in Table 7, finetuning all parameters includ-"
+    }, {
+      "heading" : "Components to Finetune BLEU",
+      "text" : "ing parameters initialized by pretrained models and parameters initialized randomly is essential for achieving good performance on MSG tasks."
+    }, {
+      "heading" : "3.4 Adversarial Evaluation",
+      "text" : "We adopt adversarial evaluation similar to Libovickỳ et al. (2018) which replaces one source with a randomly selected sentence. As shown in Table 8, both sources play important parts and the French side is more important than the German side (Randomized Fr vs. Randomized De)."
+    }, {
+      "heading" : "3.5 Case Study",
+      "text" : "An example in multi-source translation task is shown in Table 9. The four outputs at the bottom of the table are generated by the last four models in Table 3. We find that single-source models have different errors (e.g., “each hospitals” and “travelling clinics”) and multi-source models fix some errors because of taking two sources. Additionally, DualBart still output erroneous “weekly”, while TRICE outputs “weekend” successfully. We believe TRICE is better than baselines because multiple sources are complementary and the fine encoder could capture finer cross-source information, which helps correct translation errors."
+    }, {
+      "heading" : "4 Related Work",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Multi-source Sequence Generation",
+      "text" : "Multi-source sequence generation includes multisource translation (Zoph and Knight, 2016), automatic post-editing (Chatterjee et al., 2017), multidocument summarization (Haghighi and Vanderwende, 2009), system combination for NMT (Huang et al., 2020), and document-level machine translation (Wang et al., 2017), etc. For these tasks, researchers usually leverage multi-encoder architectures to achieve better performance (Zoph and Knight, 2016; Zhang et al., 2018; Huang et al., 2019). To address the data scarcity problem in MSG, some researchers generate pseudo corpora (Negri et al., 2018; Nishimura et al., 2020) to augment the corpus size while others try to make use of pretrained autoencoding models (e.g., BERT\n(Devlin et al., 2019) and XLM-R (Conneau et al., 2020)) to enhance specific MSG tasks (Correia and Martins, 2019; Lee et al., 2020; Lee, 2020). Different from these works, we propose a task-agnostic framework to transfer pretrained Seq2Seq models to multi-source sequence generation tasks and demonstrate the generalizability of our framework."
+    }, {
+      "heading" : "4.2 Pretraining",
+      "text" : "In recent years, self-supervised methods have achieved remarkable success in a wide range of NLP tasks (Devlin et al., 2019; Liu et al., 2019; Conneau et al., 2020; Radford et al., 2019; Song et al., 2019; Lewis et al., 2020; Liu et al., 2020). The architectures of pretrained models can be roughly divided into three categories: autoencoding (Devlin et al., 2019; Liu et al., 2019; Conneau et al., 2020), autoregressive (Radford et al., 2019), Seq2Seq (Song et al., 2019; Raffel et al., 2020; Lewis et al., 2020; Liu et al., 2020). Some researchers propose to use pretrained autoencoding models to improve sequence generation tasks (Zhu et al., 2019; Guo et al., 2020) and the APE task (Correia and Martins, 2019). For pretrained Seq2Seq models, it is convenient to use them to ini-\ntialize single-source sequence generation models without further modification. Different from these works, we transfer pretrained Seq2Seq models to multi-source sequence generation tasks."
+    }, {
+      "heading" : "5 Conclusion",
+      "text" : "We propose a novel task-agnostic framework, TRICE, to conduct transfer learning from single-source sequence generation including selfsupervised pretraining and supervised generation to multi-source sequence generation. With the help of the proposed gradual finetuning method and the novel MSG model equipped with coarse and fine encoders, our framework outperforms all baselines on three different MSG tasks in four different data scales, which shows the effectiveness and generalizability of our framework."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "This work was supported by the National Key R&D Program of China (No. 2017YFB0202204), National Natural Science Foundation of China (No.61925601, No. 61772302). We thank all anonymous reviewers for their valuable comments and suggestions on this work."
+    }, {
+      "heading" : "A Experiment Setup",
+      "text" : ""
+    }, {
+      "heading" : "A.1 Model Configurations",
+      "text" : "We adopted mBART (mBART-cc25) (Liu et al., 2020) as the pretrained Seq2Seq model. mBART is a Seq2Seq model obtained by multilingual denoising pretraining on a subset of Common Crawl corpus. Following mBART, we set the number of layers of the Coarse-Encoder (i.e., Nc) and the number of the Decoder layers (i.e., Nd) to 12. Especially, the number of the Fine-Encoder layers (i.e., Nf ) was set to 1. The model dimension, the filter size, and the number of heads are the same as mBART. We adopted the sentencepiece model provided by mBART for tokenization and adopted the vocabulary of mBART, which contains 250K tokens."
+    }, {
+      "heading" : "A.2 Hyper-parameters and Evaluation",
+      "text" : "We used minibatch sizes of 256, 1,024, 4,096, and 16,384 tokens for extremely low-, low-, medium-, and high-resource settings, respectively. In each stage of finetuning, we used Adam (Kingma and Ba, 2015) for optimization and used the learning rate decay policy described by Vaswani et al.\n(2017). We used the development set to tune the hyper-parameters and select the best model. In inference, the beamsize was set to 4 and the length penalty was set to 1.0 , 0.6 and 0 for APE, multisource translation, and document-level translation, respectively. We used four GeForce RTX 2080Ti GPUs for training. We used case-sensitive BLEU (multi-bleu.perl) and TER7 for automatic postediting. For multi-source translation and documentlevel translation, SACREBLEU8 (Post, 2018) and METEOR9 was used for evaluation. We used the paired bootstrap resampling (Koehn, 2004) for statistical significance tests."
+    }, {
+      "heading" : "A.3 Baselines",
+      "text" : "The asterisks (“*”) below denote that we report results of these baseline in our implementations in the same hyper-parameter settings as our approach."
+    }, {
+      "heading" : "Automatic Post-Editing",
+      "text" : "In the automatic post-editing task, we compare our approach with the following baselines:\n1. FORCEDATT (Berard et al., 2017): a monosource model with a task-specific attention mechanism.\n2. DUALTRANS (Junczys-Dowmunt and Grundkiewicz, 2018): a dual-source Transformer based model for APE.\n3. L2COPY (Huang et al., 2019): a dualsource model enabling cross-source interaction, which focuses on modeling copying mechanism in APE.\n4. DUALBERT (Correia and Martins, 2019): the first method to use pretrained models to enhance APE, which concatenates multiple sources as a single source and uses two BERT models to initialize the encoder and decoder separately.\n5. DUALBART* (Correia and Martins, 2019): adapting DUALBERT to leverage pretrained Seq2Seq models by concatenating multiple sources as a single source and feeding it to Seq2Seq models.\n7http://www.cs.umd.edu/˜snover/tercom/ 8The signature is “BLEU+case.mixed+numrefs.1+smooth\n.exp+tok.13a+version.1.4.14” 9https://www.cs.cmu.edu/˜alavie/ METEOR/"
+    }, {
+      "heading" : "Multi-source Translation",
+      "text" : "In the multi-source translation task, we compare our approach with the following baselines:\n1. MULTIRNN (Zoph and Knight, 2016): a multisource encoder-decoder model based on RNN for machine translation.\n2. DUALTRANS* (Junczys-Dowmunt and Grundkiewicz, 2018): a dual-source Transformer based model.\n3. MBART-TRANS* (Liu et al., 2020): a transferring method that directly finetunes the pretrained single-source sequence generation model on the downstream task and takes single-source input during both training and inference.\n4. DUALBART* (Correia and Martins, 2019): adapting DUALBERT to leverage pretrained Seq2Seq models by concatenating multiple sources as a single source and feeding it to the Seq2Seq model."
+    }, {
+      "heading" : "Document-level Translation",
+      "text" : "In the document-level translation task, we compare our approach with the following baselines:\n1. SAN (Maruf et al., 2019): a context-aware NMT model with selective attentions.\n2. QCN (Yang et al., 2019): a context-aware NMT model using a query-guided capsule network.\n3. MCN (Zheng et al., 2020): a general-purpose NMT model that is supposed to deal with anylength text.\n4. MBART-TRANS* (Liu et al., 2020): a transferring method that directly finetunes the pretrained single-source sequence generation model on the downstream task and takes single-source input during both training and inference.\n5. MBART-DOCTRANS* (Liu et al., 2020): a method for document-level translation, which takes K (not more than the number of sentences in a document) source sentences as input and translates K target sentences through a SSG model all at once. For fair comparison, we set K to 2 for both MBART-DOCTRANS and our approach.\n6. DUALBART* (Correia and Martins, 2019): adapting DUALBERT to leverage pretrained Seq2Seq models by concatenating multiple sources as a single source and feeding it to the Seq2Seq model."
+    } ],
+    "references" : [ {
+      "title" : "Vqa: Visual question answering",
+      "author" : [ "Stanislaw Antol", "Aishwarya Agrawal", "Jiasen Lu", "Margaret Mitchell", "Dhruv Batra", "C Lawrence Zitnick", "Devi Parikh." ],
+      "venue" : "Proceedings of ICCV.",
+      "citeRegEx" : "Antol et al\\.,? 2015",
+      "shortCiteRegEx" : "Antol et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Curriculum learning",
+      "author" : [ "Yoshua Bengio", "Jérôme Louradour", "Ronan Collobert", "Jason Weston." ],
+      "venue" : "Proceedings of ICML.",
+      "citeRegEx" : "Bengio et al\\.,? 2009",
+      "shortCiteRegEx" : "Bengio et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Lig-cristal submission for the wmt 2017 automatic post-editing task",
+      "author" : [ "Alexandre Berard", "Laurent Besacier", "Olivier Pietquin." ],
+      "venue" : "Proceedings of WMT.",
+      "citeRegEx" : "Berard et al\\.,? 2017",
+      "shortCiteRegEx" : "Berard et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Proceedings of the ninth workshop on statistical machine translation",
+      "author" : [ "Ondřej Bojar", "Christian Buck", "Christian Federmann", "Barry Haddow", "Philipp Koehn", "Christof Monz", "Matt Post", "Lucia Specia." ],
+      "venue" : "Proceedings of the Ninth Workshop on Statistical",
+      "citeRegEx" : "Bojar et al\\.,? 2014",
+      "shortCiteRegEx" : "Bojar et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Multi-source neural automatic post-editing: Fbk’s participation in the wmt 2017 ape shared task",
+      "author" : [ "Rajen Chatterjee", "M Amin Farajian", "Matteo Negri", "Marco Turchi", "Ankit Srivastava", "Santanu Pal." ],
+      "venue" : "Proceedings of WMT.",
+      "citeRegEx" : "Chatterjee et al\\.,? 2017",
+      "shortCiteRegEx" : "Chatterjee et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Findings of the wmt 2019 shared task on automatic post-editing",
+      "author" : [ "Rajen Chatterjee", "Christian Federmann", "Matteo Negri", "Marco Turchi." ],
+      "venue" : "Proceedings of WMT.",
+      "citeRegEx" : "Chatterjee et al\\.,? 2019",
+      "shortCiteRegEx" : "Chatterjee et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unsupervised cross-lingual representation learning at scale",
+      "author" : [ "Alexis Conneau", "Kartikay Khandelwal", "Naman Goyal", "Vishrav Chaudhary", "Guillaume Wenzek", "Francisco Guzmán", "Édouard Grave", "Myle Ott", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "In",
+      "citeRegEx" : "Conneau et al\\.,? 2020",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A simple and effective approach to automatic postediting with transfer learning",
+      "author" : [ "Gonçalo M Correia", "André FT Martins." ],
+      "venue" : "Proceedings of ACL.",
+      "citeRegEx" : "Correia and Martins.,? 2019",
+      "shortCiteRegEx" : "Correia and Martins.",
+      "year" : 2019
+    }, {
+      "title" : "Bert: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of NAACL-HLT.",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Audiovisual speech modeling for continuous speech recognition",
+      "author" : [ "Stéphane Dupont", "Juergen Luettin." ],
+      "venue" : "IEEE transactions on multimedia, 2(3):141– 151.",
+      "citeRegEx" : "Dupont and Luettin.,? 2000",
+      "shortCiteRegEx" : "Dupont and Luettin.",
+      "year" : 2000
+    }, {
+      "title" : "Incorporating bert into parallel sequence decoding with adapters",
+      "author" : [ "Junliang Guo", "Zhirui Zhang", "Linli Xu", "Hao-Ran Wei", "Boxing Chen", "Enhong Chen." ],
+      "venue" : "Proceedings of NeurIPS.",
+      "citeRegEx" : "Guo et al\\.,? 2020",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Exploring content models for multi-document summarization",
+      "author" : [ "Aria Haghighi", "Lucy Vanderwende." ],
+      "venue" : "Proceedings of NAACL-HLT.",
+      "citeRegEx" : "Haghighi and Vanderwende.,? 2009",
+      "shortCiteRegEx" : "Haghighi and Vanderwende.",
+      "year" : 2009
+    }, {
+      "title" : "Attention-based multimodal neural machine translation",
+      "author" : [ "Po-Yao Huang", "Frederick Liu", "Sz-Rung Shiang", "Jean Oh", "Chris Dyer." ],
+      "venue" : "Proceedings of WMT.",
+      "citeRegEx" : "Huang et al\\.,? 2016",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Learning to copy for automatic post-editing",
+      "author" : [ "Xuancheng Huang", "Yang Liu", "Huanbo Luan", "Jingfang Xu", "Maosong Sun." ],
+      "venue" : "Proceedings of EMNLP.",
+      "citeRegEx" : "Huang et al\\.,? 2019",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Modeling voting for system combination in machine translation",
+      "author" : [ "Xuancheng Huang", "Jiacheng Zhang", "Zhixing Tan", "Derek F. Wong", "Huanbo Luan", "Jingfang Xu", "Maosong Sun", "Yang Liu." ],
+      "venue" : "Proceedings of IJCAI.",
+      "citeRegEx" : "Huang et al\\.,? 2020",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Distilling translations with visual awareness",
+      "author" : [ "Julia Ive", "Pranava Swaroop Madhyastha", "Lucia Specia." ],
+      "venue" : "Proceedings of ACL.",
+      "citeRegEx" : "Ive et al\\.,? 2019",
+      "shortCiteRegEx" : "Ive et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Log-linear combinations of monolingual and bilingual neural machine translation models for automatic post-editing",
+      "author" : [ "Marcin Junczys-Dowmunt", "Roman Grundkiewicz." ],
+      "venue" : "Proceedings of WMT.",
+      "citeRegEx" : "Junczys.Dowmunt and Grundkiewicz.,? 2016",
+      "shortCiteRegEx" : "Junczys.Dowmunt and Grundkiewicz.",
+      "year" : 2016
+    }, {
+      "title" : "Ms-uedin submission to the wmt2018 ape shared task: Dual-source transformer for automatic post-editing",
+      "author" : [ "Marcin Junczys-Dowmunt", "Roman Grundkiewicz." ],
+      "venue" : "Proceedings of WMT.",
+      "citeRegEx" : "Junczys.Dowmunt and Grundkiewicz.,? 2018",
+      "shortCiteRegEx" : "Junczys.Dowmunt and Grundkiewicz.",
+      "year" : 2018
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P Kingma", "Jimmy Ba." ],
+      "venue" : "Proceedings of ICLR.",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "Overcoming catastrophic forgetting in neural networks",
+      "author" : [ "James Kirkpatrick", "Razvan Pascanu", "Neil Rabinowitz", "Joel Veness", "Guillaume Desjardins", "Andrei A Rusu", "Kieran Milan", "John Quan", "Tiago Ramalho", "Agnieszka Grabska-Barwinska" ],
+      "venue" : null,
+      "citeRegEx" : "Kirkpatrick et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Kirkpatrick et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Statistical significance tests for machine translation evaluation",
+      "author" : [ "Philipp Koehn." ],
+      "venue" : "Proceedings of EMNLP.",
+      "citeRegEx" : "Koehn.,? 2004",
+      "shortCiteRegEx" : "Koehn.",
+      "year" : 2004
+    }, {
+      "title" : "Cross-lingual transformers for neural automatic post-editing",
+      "author" : [ "Dongjun Lee." ],
+      "venue" : "Proceedings of WMT.",
+      "citeRegEx" : "Lee.,? 2020",
+      "shortCiteRegEx" : "Lee.",
+      "year" : 2020
+    }, {
+      "title" : "Postech-etri’s submission to the wmt2020 ape shared task: Automatic post-editing with crosslingual language model",
+      "author" : [ "Jihyung Lee", "WonKee Lee", "Jaehun Shin", "Baikjin Jung", "Young-Kil Kim", "Jong-Hyeok Lee." ],
+      "venue" : "Proceedings of WMT.",
+      "citeRegEx" : "Lee et al\\.,? 2020",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bart: Denoising sequence-to-sequence pretraining for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Input combination strategies for multi-source transformer decoder",
+      "author" : [ "Jindrich Libovickỳ", "Jindrich Helcl", "David Marecek." ],
+      "venue" : "Proceedings of WMT.",
+      "citeRegEx" : "Libovickỳ et al\\.,? 2018",
+      "shortCiteRegEx" : "Libovickỳ et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Multilingual denoising pre-training for neural machine translation",
+      "author" : [ "Yinhan Liu", "Jiatao Gu", "Naman Goyal", "Xian Li", "Sergey Edunov", "Marjan Ghazvininejad", "Mike Lewis", "Luke Zettlemoyer." ],
+      "venue" : "TACL, 8:726–742.",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Roberta: A robustly optimized bert pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "arXiv preprint arXiv:1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Selective attention for context-aware neural machine translation",
+      "author" : [ "Sameen Maruf", "André FT Martins", "Gholamreza Haffari." ],
+      "venue" : "Proceedings of NAACL-HLT.",
+      "citeRegEx" : "Maruf et al\\.,? 2019",
+      "shortCiteRegEx" : "Maruf et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Catastrophic interference in connectionist networks: The sequential learning problem",
+      "author" : [ "Michael McCloskey", "Neal J Cohen." ],
+      "venue" : "Psychology of learning and motivation, volume 24, pages 109–165. Elsevier.",
+      "citeRegEx" : "McCloskey and Cohen.,? 1989",
+      "shortCiteRegEx" : "McCloskey and Cohen.",
+      "year" : 1989
+    }, {
+      "title" : "Escape: a large-scale synthetic corpus for automatic post-editing",
+      "author" : [ "Matteo Negri", "Marco Turchi", "Rajen Chatterjee", "Nicola Bertoldi." ],
+      "venue" : "Proceedings of LREC.",
+      "citeRegEx" : "Negri et al\\.,? 2018",
+      "shortCiteRegEx" : "Negri et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Multi-source neural machine translation with missing data",
+      "author" : [ "Y. Nishimura", "K. Sudoh", "G. Neubig", "S. Nakamura." ],
+      "venue" : "TASLP, 28:569–580.",
+      "citeRegEx" : "Nishimura et al\\.,? 2020",
+      "shortCiteRegEx" : "Nishimura et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A call for clarity in reporting bleu scores",
+      "author" : [ "Matt Post." ],
+      "venue" : "Proceedings of WMT.",
+      "citeRegEx" : "Post.,? 2018",
+      "shortCiteRegEx" : "Post.",
+      "year" : 2018
+    }, {
+      "title" : "Intermediate-task transfer learning with pretrained language models: When and why",
+      "author" : [ "Yada Pruksachatkun", "Jason Phang", "Haokun Liu", "Phu Mon Htut", "Xiaoyi Zhang", "Richard Yuanzhe Pang", "Clara Vania", "Katharina Kann", "Samuel Bowman" ],
+      "venue" : null,
+      "citeRegEx" : "Pruksachatkun et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Pruksachatkun et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "Alec Radford", "Jeffrey Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever." ],
+      "venue" : "OpenAI blog, 1(8):9.",
+      "citeRegEx" : "Radford et al\\.,? 2019",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Exploring the limits of transfer learning with a unified text-to-text transformer",
+      "author" : [ "Colin Raffel", "Noam Shazeer", "Adam Roberts", "Katherine Lee", "Sharan Narang", "Michael Matena", "Yanqi Zhou", "Wei Li", "Peter J Liu." ],
+      "venue" : "Journal of Machine Learning Research,",
+      "citeRegEx" : "Raffel et al\\.,? 2020",
+      "shortCiteRegEx" : "Raffel et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Mass: Masked sequence to sequence pre-training for language generation",
+      "author" : [ "Kaitao Song", "Xu Tan", "Tao Qin", "Jianfeng Lu", "TieYan Liu." ],
+      "venue" : "Proceedings of ICLR.",
+      "citeRegEx" : "Song et al\\.,? 2019",
+      "shortCiteRegEx" : "Song et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Proceedings of NeurIPS.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Exploring and predicting transferability across nlp tasks",
+      "author" : [ "Tu Vu", "Tong Wang", "Tsendsuren Munkhdalai", "Alessandro Sordoni", "Adam Trischler", "Andrew MattarellaMicke", "Subhransu Maji", "Mohit Iyyer." ],
+      "venue" : "Proceedings of EMNLP.",
+      "citeRegEx" : "Vu et al\\.,? 2020",
+      "shortCiteRegEx" : "Vu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Exploiting cross-sentence context for neural machine translation",
+      "author" : [ "Longyue Wang", "Zhaopeng Tu", "Andy Way", "Qun Liu." ],
+      "venue" : "Proceedings of EMNLP.",
+      "citeRegEx" : "Wang et al\\.,? 2017",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Enhancing context modeling with a query-guided capsule network for document-level translation",
+      "author" : [ "Zhengxin Yang", "Jinchao Zhang", "Fandong Meng", "Shuhao Gu", "Yang Feng", "Jie Zhou." ],
+      "venue" : "Proceedings of EMNLP.",
+      "citeRegEx" : "Yang et al\\.,? 2019",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Improving the transformer translation model with document-level context",
+      "author" : [ "Jiacheng Zhang", "Huanbo Luan", "Maosong Sun", "Feifei Zhai", "Jingfang Xu", "Min Zhang", "Yang Liu." ],
+      "venue" : "Proceedings of EMNLP.",
+      "citeRegEx" : "Zhang et al\\.,? 2018",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Towards making the most of context in neural machine translation",
+      "author" : [ "Zaixiang Zheng", "Xiang Yue", "Shujian Huang", "Jiajun Chen", "Alexandra Birch." ],
+      "venue" : "Proceedings of IJCAI.",
+      "citeRegEx" : "Zheng et al\\.,? 2020",
+      "shortCiteRegEx" : "Zheng et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Incorporating bert into neural machine translation",
+      "author" : [ "Jinhua Zhu", "Yingce Xia", "Lijun Wu", "Di He", "Tao Qin", "Wengang Zhou", "Houqiang Li", "Tieyan Liu." ],
+      "venue" : "Proceedings of ICLR.",
+      "citeRegEx" : "Zhu et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Multi-source neural translation",
+      "author" : [ "Barret Zoph", "Kevin Knight." ],
+      "venue" : "Proceedings of NAACL-HLT.",
+      "citeRegEx" : "Zoph and Knight.,? 2016",
+      "shortCiteRegEx" : "Zoph and Knight.",
+      "year" : 2016
+    }, {
+      "title" : "2019): adapting DUALBERT to leverage pretrained Seq2Seq models by concatenating multiple sources as a single source and feeding it to the Seq2Seq model",
+      "author" : [ "DUALBART* (Correia", "Martins" ],
+      "venue" : null,
+      "citeRegEx" : "4",
+      "shortCiteRegEx" : "4",
+      "year" : 2019
+    }, {
+      "title" : "2019): adapting DUALBERT to leverage pretrained Seq2Seq models by concatenating multiple sources as a single source and feeding it to the Seq2Seq model",
+      "author" : [ "DUALBART* (Correia", "Martins" ],
+      "venue" : null,
+      "citeRegEx" : "6",
+      "shortCiteRegEx" : "6",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 15,
+      "context" : "Thanks to the continuous representations widely used across text, speech, and image, neural networks that accept multiple sources as input have gained increasing attention in the community (Ive et al., 2019; Dupont and Luettin, 2000).",
+      "startOffset" : 189,
+      "endOffset" : 233
+    }, {
+      "referenceID" : 9,
+      "context" : "Thanks to the continuous representations widely used across text, speech, and image, neural networks that accept multiple sources as input have gained increasing attention in the community (Ive et al., 2019; Dupont and Luettin, 2000).",
+      "startOffset" : 189,
+      "endOffset" : 233
+    }, {
+      "referenceID" : 42,
+      "context" : ", BERT) (Zhu et al., 2019) (Correia and Martins, 2019)",
+      "startOffset" : 8,
+      "endOffset" : 26
+    }, {
+      "referenceID" : 12,
+      "context" : "2015), machine translation (Huang et al., 2016), and speech recognition (Dupont and Luettin, 2000).",
+      "startOffset" : 27,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 43,
+      "context" : "In natural language processing, multiple textual inputs have also been shown to be valuable for sequence generation tasks such as multi-source translation (Zoph and Knight, 2016), automatic postediting (Chatterjee et al.",
+      "startOffset" : 155,
+      "endOffset" : 178
+    }, {
+      "referenceID" : 4,
+      "context" : "In natural language processing, multiple textual inputs have also been shown to be valuable for sequence generation tasks such as multi-source translation (Zoph and Knight, 2016), automatic postediting (Chatterjee et al., 2017), multi-document summarization (Haghighi and Vanderwende, 2009), system combination for NMT (Huang et al.",
+      "startOffset" : 202,
+      "endOffset" : 227
+    }, {
+      "referenceID" : 11,
+      "context" : ", 2017), multi-document summarization (Haghighi and Vanderwende, 2009), system combination for NMT (Huang et al.",
+      "startOffset" : 38,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2017), multi-document summarization (Haghighi and Vanderwende, 2009), system combination for NMT (Huang et al., 2020), and document-level machine translation (Wang et al.",
+      "startOffset" : 99,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 38,
+      "context" : ", 2020), and document-level machine translation (Wang et al., 2017).",
+      "startOffset" : 48,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 8,
+      "context" : "Recently, as pretraining language models that take advantage of massive unlabeled data have proven to improve natural language understanding (NLU) and generation tasks substantially (Devlin et al., 2019; Liu et al., 2019; Lewis et al., 2020), a number of researchers have proposed to leverage pretrained language models to enhance MSG tasks (Correia and Martins, 2019; Lee et al.",
+      "startOffset" : 182,
+      "endOffset" : 241
+    }, {
+      "referenceID" : 26,
+      "context" : "Recently, as pretraining language models that take advantage of massive unlabeled data have proven to improve natural language understanding (NLU) and generation tasks substantially (Devlin et al., 2019; Liu et al., 2019; Lewis et al., 2020), a number of researchers have proposed to leverage pretrained language models to enhance MSG tasks (Correia and Martins, 2019; Lee et al.",
+      "startOffset" : 182,
+      "endOffset" : 241
+    }, {
+      "referenceID" : 23,
+      "context" : "Recently, as pretraining language models that take advantage of massive unlabeled data have proven to improve natural language understanding (NLU) and generation tasks substantially (Devlin et al., 2019; Liu et al., 2019; Lewis et al., 2020), a number of researchers have proposed to leverage pretrained language models to enhance MSG tasks (Correia and Martins, 2019; Lee et al.",
+      "startOffset" : 182,
+      "endOffset" : 241
+    }, {
+      "referenceID" : 7,
+      "context" : ", 2020), a number of researchers have proposed to leverage pretrained language models to enhance MSG tasks (Correia and Martins, 2019; Lee et al., 2020; Lee, 2020).",
+      "startOffset" : 107,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2020), a number of researchers have proposed to leverage pretrained language models to enhance MSG tasks (Correia and Martins, 2019; Lee et al., 2020; Lee, 2020).",
+      "startOffset" : 107,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2020), a number of researchers have proposed to leverage pretrained language models to enhance MSG tasks (Correia and Martins, 2019; Lee et al., 2020; Lee, 2020).",
+      "startOffset" : 107,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 8,
+      "context" : "like BERT (Devlin et al., 2019) can improve automatic post-editing.",
+      "startOffset" : 10,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 35,
+      "context" : "As most recent pretrained sequence-to-sequence (Seq2Seq) models (Song et al., 2019; Lewis et al., 2020; Liu et al., 2020) have demonstrated their effectiveness in improving single-source sequence generation (SSG) tasks, we believe that pretrained Seq2Seq models can potentially bring more benefits to MSG than pretrained AE models.",
+      "startOffset" : 64,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 23,
+      "context" : "As most recent pretrained sequence-to-sequence (Seq2Seq) models (Song et al., 2019; Lewis et al., 2020; Liu et al., 2020) have demonstrated their effectiveness in improving single-source sequence generation (SSG) tasks, we believe that pretrained Seq2Seq models can potentially bring more benefits to MSG than pretrained AE models.",
+      "startOffset" : 64,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 25,
+      "context" : "As most recent pretrained sequence-to-sequence (Seq2Seq) models (Song et al., 2019; Lewis et al., 2020; Liu et al., 2020) have demonstrated their effectiveness in improving single-source sequence generation (SSG) tasks, we believe that pretrained Seq2Seq models can potentially bring more benefits to MSG than pretrained AE models.",
+      "startOffset" : 64,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 28,
+      "context" : "First, due to the discrepancy between pretraining and MSG, directly transferring pretrained models to MSG tasks might lead to catastrophic forgetting (McCloskey and Cohen, 1989; Kirkpatrick et al., 2017) that results in reduced performance.",
+      "startOffset" : 150,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 19,
+      "context" : "First, due to the discrepancy between pretraining and MSG, directly transferring pretrained models to MSG tasks might lead to catastrophic forgetting (McCloskey and Cohen, 1989; Kirkpatrick et al., 2017) that results in reduced performance.",
+      "startOffset" : 150,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 32,
+      "context" : "Inspired by adding intermediate tasks for NLU (Pruksachatkun et al., 2020; Vu et al., 2020), we conjecture that inserting a proper intermediate task between them can alleviate the discrepancy.",
+      "startOffset" : 46,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 37,
+      "context" : "Inspired by adding intermediate tasks for NLU (Pruksachatkun et al., 2020; Vu et al., 2020), we conjecture that inserting a proper intermediate task between them can alleviate the discrepancy.",
+      "startOffset" : 46,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 36,
+      "context" : ", the pretrained encoder), a fine encoder equipped with cross-attention layers (Vaswani et al., 2017) is added.",
+      "startOffset" : 79,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 8,
+      "context" : "As training neural models on large-scale unlabeled datasets is time-consuming, it is a common practice to utilize pretrained models to improve downstream tasks by using transfer learning methods (Devlin et al., 2019).",
+      "startOffset" : 195,
+      "endOffset" : 216
+    }, {
+      "referenceID" : 1,
+      "context" : "Curriculum learning (Bengio et al., 2009) aims to learn from examples organized in an easy-tohard order, and intermediate tasks (Pruksachatkun et al.",
+      "startOffset" : 20,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 32,
+      "context" : ", 2009) aims to learn from examples organized in an easy-tohard order, and intermediate tasks (Pruksachatkun et al., 2020; Vu et al., 2020) are introduced to alleviate the pretrain-finetune discrepancy for NLU.",
+      "startOffset" : 94,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 37,
+      "context" : ", 2009) aims to learn from examples organized in an easy-tohard order, and intermediate tasks (Pruksachatkun et al., 2020; Vu et al., 2020) are introduced to alleviate the pretrain-finetune discrepancy for NLU.",
+      "startOffset" : 94,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 42,
+      "context" : "In general, pretrained encoders are considered as strong feature extractors to learn meaningful representations (Zhu et al., 2019).",
+      "startOffset" : 112,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 25,
+      "context" : "have multiple sources involving different languages and pretrained multilingual Seq2Seq models like mBART (Liu et al., 2020) usually rely on special tokens (e.",
+      "startOffset" : 106,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 36,
+      "context" : "Eseg is implemented as constant sinusoidal embeddings (Vaswani et al., 2017), which is denoted by E[k]2i = sin(1000∗k/100002i/d), where E[k]2i+1 is similar to E[k]2i and i is the dimension index while d is model dimension.",
+      "startOffset" : 54,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 5,
+      "context" : "For the APE task, following Correia and Martins (2019), we used the data from the WMT17 APE task (English-German SMT) (Chatterjee et al., 2019).",
+      "startOffset" : 118,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 16,
+      "context" : "We also followed Correia and Martins (2019) to adopt pseudo data (Junczys-Dowmunt and Grundkiewicz, 2016; Negri et al., 2018), which contains about 8M pseudo training examples, to evaluate our framework in a high-resource setting.",
+      "startOffset" : 65,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 29,
+      "context" : "We also followed Correia and Martins (2019) to adopt pseudo data (Junczys-Dowmunt and Grundkiewicz, 2016; Negri et al., 2018), which contains about 8M pseudo training examples, to evaluate our framework in a high-resource setting.",
+      "startOffset" : 65,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 3,
+      "context" : "For the multi-source translation task, following Zoph and Knight (2016), we used a subset of the WMT14 news dataset (Bojar et al., 2014),",
+      "startOffset" : 116,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 25,
+      "context" : "We adopted mBART (Liu et al., 2020) as the pretrained Seq2Seq model.",
+      "startOffset" : 17,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 31,
+      "context" : "For multi-source translation and document-level translation, SACREBLEU5 (Post, 2018) and METEOR6 was adopted for evaluation.",
+      "startOffset" : 72,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 20,
+      "context" : "We used the paired bootstrap resampling (Koehn, 2004) for statistical significance tests.",
+      "startOffset" : 40,
+      "endOffset" : 53
+    }, {
+      "referenceID" : 43,
+      "context" : "Multi-source sequence generation includes multisource translation (Zoph and Knight, 2016), automatic post-editing (Chatterjee et al.",
+      "startOffset" : 66,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 4,
+      "context" : "Multi-source sequence generation includes multisource translation (Zoph and Knight, 2016), automatic post-editing (Chatterjee et al., 2017), multidocument summarization (Haghighi and Vanderwende, 2009), system combination for NMT (Huang et al.",
+      "startOffset" : 114,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 11,
+      "context" : ", 2017), multidocument summarization (Haghighi and Vanderwende, 2009), system combination for NMT (Huang et al.",
+      "startOffset" : 37,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2017), multidocument summarization (Haghighi and Vanderwende, 2009), system combination for NMT (Huang et al., 2020), and document-level machine translation (Wang et al.",
+      "startOffset" : 98,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 38,
+      "context" : ", 2020), and document-level machine translation (Wang et al., 2017), etc.",
+      "startOffset" : 48,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 43,
+      "context" : "For these tasks, researchers usually leverage multi-encoder architectures to achieve better performance (Zoph and Knight, 2016; Zhang et al., 2018; Huang et al., 2019).",
+      "startOffset" : 104,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 40,
+      "context" : "For these tasks, researchers usually leverage multi-encoder architectures to achieve better performance (Zoph and Knight, 2016; Zhang et al., 2018; Huang et al., 2019).",
+      "startOffset" : 104,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 13,
+      "context" : "For these tasks, researchers usually leverage multi-encoder architectures to achieve better performance (Zoph and Knight, 2016; Zhang et al., 2018; Huang et al., 2019).",
+      "startOffset" : 104,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 29,
+      "context" : "To address the data scarcity problem in MSG, some researchers generate pseudo corpora (Negri et al., 2018; Nishimura et al., 2020) to augment the corpus size while others try to make use of pretrained autoencoding models (e.",
+      "startOffset" : 86,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 30,
+      "context" : "To address the data scarcity problem in MSG, some researchers generate pseudo corpora (Negri et al., 2018; Nishimura et al., 2020) to augment the corpus size while others try to make use of pretrained autoencoding models (e.",
+      "startOffset" : 86,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 6,
+      "context" : ", 2019) and XLM-R (Conneau et al., 2020)) to enhance specific MSG tasks (Correia and Martins, 2019; Lee et al.",
+      "startOffset" : 18,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 7,
+      "context" : ", 2020)) to enhance specific MSG tasks (Correia and Martins, 2019; Lee et al., 2020; Lee, 2020).",
+      "startOffset" : 39,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2020)) to enhance specific MSG tasks (Correia and Martins, 2019; Lee et al., 2020; Lee, 2020).",
+      "startOffset" : 39,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2020)) to enhance specific MSG tasks (Correia and Martins, 2019; Lee et al., 2020; Lee, 2020).",
+      "startOffset" : 39,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 8,
+      "context" : "In recent years, self-supervised methods have achieved remarkable success in a wide range of NLP tasks (Devlin et al., 2019; Liu et al., 2019; Conneau et al., 2020; Radford et al., 2019; Song et al., 2019; Lewis et al., 2020; Liu et al., 2020).",
+      "startOffset" : 103,
+      "endOffset" : 243
+    }, {
+      "referenceID" : 26,
+      "context" : "In recent years, self-supervised methods have achieved remarkable success in a wide range of NLP tasks (Devlin et al., 2019; Liu et al., 2019; Conneau et al., 2020; Radford et al., 2019; Song et al., 2019; Lewis et al., 2020; Liu et al., 2020).",
+      "startOffset" : 103,
+      "endOffset" : 243
+    }, {
+      "referenceID" : 6,
+      "context" : "In recent years, self-supervised methods have achieved remarkable success in a wide range of NLP tasks (Devlin et al., 2019; Liu et al., 2019; Conneau et al., 2020; Radford et al., 2019; Song et al., 2019; Lewis et al., 2020; Liu et al., 2020).",
+      "startOffset" : 103,
+      "endOffset" : 243
+    }, {
+      "referenceID" : 33,
+      "context" : "In recent years, self-supervised methods have achieved remarkable success in a wide range of NLP tasks (Devlin et al., 2019; Liu et al., 2019; Conneau et al., 2020; Radford et al., 2019; Song et al., 2019; Lewis et al., 2020; Liu et al., 2020).",
+      "startOffset" : 103,
+      "endOffset" : 243
+    }, {
+      "referenceID" : 35,
+      "context" : "In recent years, self-supervised methods have achieved remarkable success in a wide range of NLP tasks (Devlin et al., 2019; Liu et al., 2019; Conneau et al., 2020; Radford et al., 2019; Song et al., 2019; Lewis et al., 2020; Liu et al., 2020).",
+      "startOffset" : 103,
+      "endOffset" : 243
+    }, {
+      "referenceID" : 23,
+      "context" : "In recent years, self-supervised methods have achieved remarkable success in a wide range of NLP tasks (Devlin et al., 2019; Liu et al., 2019; Conneau et al., 2020; Radford et al., 2019; Song et al., 2019; Lewis et al., 2020; Liu et al., 2020).",
+      "startOffset" : 103,
+      "endOffset" : 243
+    }, {
+      "referenceID" : 25,
+      "context" : "In recent years, self-supervised methods have achieved remarkable success in a wide range of NLP tasks (Devlin et al., 2019; Liu et al., 2019; Conneau et al., 2020; Radford et al., 2019; Song et al., 2019; Lewis et al., 2020; Liu et al., 2020).",
+      "startOffset" : 103,
+      "endOffset" : 243
+    }, {
+      "referenceID" : 8,
+      "context" : "The architectures of pretrained models can be roughly divided into three categories: autoencoding (Devlin et al., 2019; Liu et al., 2019; Conneau et al., 2020), autoregressive (Radford et al.",
+      "startOffset" : 98,
+      "endOffset" : 159
+    }, {
+      "referenceID" : 26,
+      "context" : "The architectures of pretrained models can be roughly divided into three categories: autoencoding (Devlin et al., 2019; Liu et al., 2019; Conneau et al., 2020), autoregressive (Radford et al.",
+      "startOffset" : 98,
+      "endOffset" : 159
+    }, {
+      "referenceID" : 6,
+      "context" : "The architectures of pretrained models can be roughly divided into three categories: autoencoding (Devlin et al., 2019; Liu et al., 2019; Conneau et al., 2020), autoregressive (Radford et al.",
+      "startOffset" : 98,
+      "endOffset" : 159
+    }, {
+      "referenceID" : 33,
+      "context" : ", 2020), autoregressive (Radford et al., 2019), Seq2Seq (Song et al.",
+      "startOffset" : 24,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 42,
+      "context" : "Some researchers propose to use pretrained autoencoding models to improve sequence generation tasks (Zhu et al., 2019; Guo et al., 2020) and the APE task (Correia and Martins, 2019).",
+      "startOffset" : 100,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 10,
+      "context" : "Some researchers propose to use pretrained autoencoding models to improve sequence generation tasks (Zhu et al., 2019; Guo et al., 2020) and the APE task (Correia and Martins, 2019).",
+      "startOffset" : 100,
+      "endOffset" : 136
+    } ],
+    "year" : 2021,
+    "abstractText" : "Multi-source sequence generation (MSG) is an important kind of sequence generation tasks that takes multiple sources, including automatic post-editing, multi-source translation, multi-document summarization, etc. As MSG tasks suffer from the data scarcity problem and recent pretrained models have been proven to be effective for low-resource downstream tasks, transferring pretrained sequenceto-sequence models to MSG tasks is essential. Although directly finetuning pretrained models on MSG tasks and concatenating multiple sources into a single long sequence is regarded as a simple method to transfer pretrained models to MSG tasks, we conjecture that the direct finetuning method leads to catastrophic forgetting and solely relying on pretrained selfattention layers to capture cross-source information is not sufficient. Therefore, we propose a two-stage finetuning method to alleviate the pretrain-finetune discrepancy and introduce a novel MSG model with a fine encoder to learn better representations in MSG tasks. Experiments show that our approach achieves new state-of-the-art results on the WMT17 APE task and multi-source translation task using the WMT14 test set. When adapted to documentlevel translation, our framework outperforms strong baselines significantly.1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

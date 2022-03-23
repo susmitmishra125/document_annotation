@@ -1,0 +1,539 @@
+{
+  "name" : "2021.acl-long.19.pdf",
+  "metadata" : {
+    "source" : "CRF",
+    "title" : "UNIRE: A Unified Label Space for Entity Relation Extraction",
+    "authors" : [ "Yijun Wang", "Changzhi Sun", "Yuanbin Wu", "Hao Zhou", "Lei Li", "Junchi Yan" ],
+    "emails" : [ "yanjunchi}@sjtu.edu.cn", "ybwu@cs.ecnu.edu.cn", "lileilab}@bytedance.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 220–231\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n220"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Extracting structured information from plain texts is a long-lasting research topic in NLP. Typically, it aims to recognize specific entities and relations for profiling the semantic of sentences. An example is shown in Figure 1, where a person entity “David Perkins” and a geography entity “California” have a physical location relation PHYS.\nMethods for detecting entities and relations can be categorized into pipeline models or joint models. In the pipeline setting, entity models and relation models are independent with disentangled feature spaces and output label spaces. In the joint setting, on the other hand, some parameter sharing of feature spaces (Miwa and Bansal, 2016; Katiyar and\n∗Equal contribution. †Corresponding Author.\nCardie, 2017) or decoding interactions (Yang and Cardie, 2013; Sun et al., 2019) are imposed to explore the common structure of the two tasks. It was believed that joint models could be better since they can alleviate error propagations among sub-models, have more compact parameter sets, and uniformly encode prior knowledge (e.g., constraints) on both tasks.\nHowever, Zhong and Chen (2020) recently show\nthat with the help of modern pre-training tools (e.g., BERT), separating the entity and relation model (with independent encoders and pipeline decoding) could surpass existing joint models. They argue that, since the output label spaces of entity and relation models are different, comparing with shared encoders, separate encoders could better capture distinct contextual information, avoid potential conflicts among them, and help decoders making a more accurate prediction, that is, separate label spaces deserve separate encoders.\nIn this paper, we pursue a better joint model for entity relation extraction. After revisiting existing methods, we find that though entity models and relation models share encoders, usually their label spaces are still separate (even in models with joint decoders). Therefore, parallel to (Zhong and Chen, 2020), we would ask whether joint encoders (decoders) deserve joint label spaces?\nThe challenge of developing a unified entityrelation label space is that the two sub-tasks are usually formulated into different learning problems (e.g., entity detection as sequence labeling, relation classification as multi-class classification), and their labels are placed on different things (e.g., words v.s. words pairs). One prior attempt (Zheng et al., 2017) is to handle both sub-tasks with one sequence labeling model. A compound label set was devised to encode both entities and relations. However, the model’s expressiveness is sacrificed: it can detect neither overlapping relations (i.e., entities participating in multiple relation) nor isolated entities (i.e., entities not appearing in any relation).\nOur key idea of defining a new unified label space is that, if we think Zheng et al. (2017)’s solution is to perform relation classification during entity labeling, we could also consider the reverse direction by seeing entity detection as a special case of relation classification. Our new input space is a two-dimensional table with each entry corresponding to a word pair in sentences (Figure 1). The joint model assign labels to each cell from a unified label space (union of entity type set and relation type set). Graphically, entities are squares on the diagonal, and relations are rectangles off the diagonal. This formulation retains full model expressiveness regarding existing entity-relation extraction scenarios (e.g., overlapped relations, directed relations, undirected relations). It is also different from the current table filling settings for entity relation extraction (Miwa and Sasaki, 2014;\nGupta et al., 2016; Zhang et al., 2017; Wang and Lu, 2020), which still have separate label space for entities and relations, and treat on/off-diagonal entries differently.\nBased on the tabular formulation, our joint entity relation extractor performs two actions, filling and decoding. First, filling the table is to predict each word pair’s label, which is similar to arc prediction task in dependency parsing. We adopt the biaffine attention mechanism (Dozat and Manning, 2016) to learn interactions between word pairs. We also impose two structural constraints on the table through structural regularizations. Next, given the table filling with label logits, we devise an approximate joint decoding algorithm to output the final extracted entities and relations. Basically, it efficiently finds split points in the table to identify squares and rectangles (which is also different with existing table filling models which still apply certain sequential decoding and fill tables incrementally).\nExperimental results on three benchmarks (ACE04, ACE05, SciERC) show that the proposed joint method achieves competitive performances comparing with the current state-of-the-art extractors (Zhong and Chen, 2020): it is better on ACE04 and SciERC, and competitive on ACE05.1 Meanwhile, our new joint model is fast on decoding (10x faster than the exact pipeline implementation, and comparable to an approximate pipeline, which attains lower performance). It also has a more compact parameter set: the shared encoder uses only half the number of parameters comparing with the separate encoder (Zhong and Chen, 2020)."
+    }, {
+      "heading" : "2 Task Definition",
+      "text" : "Given an input sentence s = x1, x2, . . . , x|s| (xi is a word), this task is to extract a set of entities E and a set of relationsR. An entity e is a span (e.span) with a pre-defined type e.type ∈ Ye (e.g., PER, GPE). The span is a continuous sequence of words. A relation r is a triplet (e1, e2, l), where e1, e2 are two entities and l ∈ Yr is a pre-defined relation type describing the semantic relation among two entities (e.g., the PHYS relation between PER and GPE mentioned before). Here Ye,Yr denote the set of possible entity types and relation types respectively.\nWe formulate the joint entity relation extraction\n1Source code and models are available at https://github. com/Receiling/UniRE.\nas a table filling task (multi-class classification between each word pair in sentence s), as shown in Figure 1. For the sentence s, we maintain a table T |s|×|s|. For each cell (i, j) in table T , we assign a label yi,j ∈ Y , where Y = Ye ∪ Yr ∪ {⊥} ( ⊥ denotes no relation). For each entity e, the label of corresponding cells yi,j(xi ∈ e.span, xj ∈ e.span) should be filled in e.type. For each relation r = (e1, e2, l), the label of corresponding cells yi,j(xi ∈ e1.span, xj ∈ e2.span) should be filled in l.2 While others should be filled in ⊥. In the test phase, decoding entities and relations becomes a rectangle finding problem. Note that solving this problem is not trivial, and we propose a simple but effective joint decoding algorithm to tackle this challenge."
+    }, {
+      "heading" : "3 Approach",
+      "text" : "In this section, we first introduce our biaffine model for table filling task based on pre-trained language models (Section 3.1). Then we detail the main objective function of the table filling task (Section 3.2) and some constraints which are imposed on the table in training stage (Section 3.3). Finally we present the joint decoding algorithm to extract entities and relations (Section 3.4). Figure 2 shows an overview of our model architecture.3"
+    }, {
+      "heading" : "3.1 Biaffine Model",
+      "text" : "Given an input sentence s, to obtain the contextual representation hi for each word, we use a pre-trained language model (PLM) as our sentence encoder (e.g., BERT). The output of the encoder is\n{h1, . . . ,h|s|} = PLM({x1, . . . ,x|s|}),\nwhere xi is the input representation of each word xi. Taking BERT as an example, xi sums the corresponding token, segment and position embeddings. To capture long-range dependencies, we also employ cross-sentence context following (Zhong and Chen, 2020), which extends the sentence to a fixed window size W (W = 200 in our default settings).\nTo better encode direction information of words in table T , we use the deep biaffine attention mechanism (Dozat and Manning, 2016), which achieves impressive results in the dependency parsing task. Specifically, we employ two dimension-reducing\n2Assuming no overlapping entities in one sentence. 3We only show three labels of Y in Figure 2 for simplicity\nand clarity.\nMLPs (multi-layer perceptron), i.e., a head MLP and a tail MLP, on each hi as\nhheadi = MLPhead(hi), h tail i = MLPtail(hi),\nwhere hheadi ∈ Rd and htaili ∈ Rd are projection representations, allowing the model to identify the head or tail role of each word. Next, we calculate the scoring vector gi,j ∈ R|Y| of each word pair with biaffine model,\ngi,j = Biaff(h head i ,h tail j ),\nBiaff(h1,h2) = h T 1 U1h2 +U2(h1 ⊕ h2) + b,\nwhere U1 ∈ R|Y|×d×d and U2 ∈ R|Y|×2d are weight parameters, b ∈ R|Y| is the bias, ⊕ denotes concatenation."
+    }, {
+      "heading" : "3.2 Table Filling",
+      "text" : "After obtaining the scoring vector gi,j , we feed gi,j into the softmax function to predict corresponding label, yielding a categorical probability distribution over the label space Y as\nP (yi,j |s) = Softmax(dropout(gi,j)).\nIn our experiments, we observe that applying dropout in gi,j , similar to de-noising autoencoding, can further improve the performance. 4. We refer this trick to logit dropout And the training objective is to minimize\nLentry=− 1\n|s|2 |s|∑ i=1 |s|∑ j=1 logP (yi,j = yi,j |s), (1)\nwhere the gold label yi,j can be read from annotations, as shown in Figure 1."
+    }, {
+      "heading" : "3.3 Constraints",
+      "text" : "In fact, Equation 1 is based on the assumption that each label is independent. This assumption simplifies the training procedure, but ignores some structural constraints. For example, entities and relations correspond to squares and rectangles in the table. Equation 1 does not encode this constraint explicitly. To enhance our model, we propose two intuitive constraints, symmetry and implication, which are detailed in this section. Here we introduce a new notation P ∈ R|s|×|s|×|Y|, denoting the stack of P (yi,j |s) for all word pairs in sentence s.5\n4We set dropout rate p = 0.2 by default. 5P without logit dropout mentioned in Section 3.2 to pre-\nserve learned structure.\nSymmetry We have several observations from the table in the tag level. Firstly, the squares corresponding to entities must be symmetrical about the diagonal. Secondly, for symmetrical relations, the relation triples (e1, e2, l) and (e2, e1, l) are equivalent, thus the rectangles corresponding to two counterpart relation triples are also symmetrical about the diagonal. As shown in Figure 1, the rectangles corresponding to (“his”, “wife”, PER-SOC) and (“wife”, “his”, PER-SOC) are symmetrical about the diagonal. We divide the set of labels Y into a symmetrical label set Ysym and an asymmetrical label set Yasym. The matrix P:,:,t should be symmetrical about the diagonal for each label t ∈ Ysym. We formulate this tag-level constraint as symmetrical loss,\nLsym = 1\n|s|2 |s|∑ i=1 |s|∑ j=1 ∑ t∈Ysym |Pi,j,t − Pj,i,t|.\nWe list all Ysym in Table 1 for our adopted datasets.\nImplication A key intuition is that if a relation exists, then its two argument entities must also exist. In other words, it is impossible for a relation to exist without two corresponding entities. From the\nperspective of probability, it implies that the probability of relation is not greater than the probability of each argument entity. Since we model entity and relation labels in a unified probability space, this idea can be easily used in our model as the implication constraint. We impose this constraint on P: for each word in the diagonal, its maximum possibility over the entity type space Ye must not be lower than the maximum possibility for other words in the same row or column over the relation type space Yr. We formulate this table-level constraint as implication loss,\nLimp= 1\n|s| |s|∑ i=1 [ max l∈Yr {Pi,:,l,P:,i,l} −max t∈Ye {Pi,i,t} ] ∗\nwhere [u]∗ = max(u, 0) is the hinge loss. It is worth noting that we do not add margin in this loss function. Since the value of each item is a probability and might be relatively small, it is meaningless to set a large margin.\nFinally, we jointly optimize the three objectives in the training stage as Lentry + Lsym + Limp.6"
+    }, {
+      "heading" : "3.4 Decoding",
+      "text" : "In the testing stage, given the probability tensor P ∈ R|s|×|s|×|Y| of the sentence s, 7 how to decode all rectangles (including squares) corresponding to entities or relations remains a non-trivial problem. Since brute force enumeration of all rectangles is intractable, a new joint decoding algorithm is needed. We expect our decoder to have,\n6We directly sum the three losses to avoid introducing more hyper-parameters.\n7For the symmetrical label t ∈ Ysym, we set Pi,j,t = Pj,i,t = (Pi,j,t + Pj,i,t)/2.\n• Simple implementation and fast decoding. We permit slight decoding accuracy drops for scalability.\n• Strong interactions between entities and relations. When decoding entities, it should take the relation information into account, and vice versa.\nInspired by the procedures of (Sun et al., 2019), We propose a three-steps decoding algorithm: decode span first (entity spans or spans between entities), and then decode entity type of each span, and at last decode relation type of each entity pair (Figure 3). We consider each cell’s probability scores on all labels (including entity labels and relation labels) and predict spans according to a threshold. Then, we predict entities and relations with the highest score. Our heuristic decoding algorithm could be very efficient. Next we will detail the entire decoding process, and give a formal description in the Appendix A.\nSpan Decoding One crucial observation of a ground-truth table is that, for an arbitrary entity, its corresponding rows (or columns) are exactly the same in the table (e.g., row 1 and row 2 of Figure 1 are identical), not only for the diagonal entries (entities are squares), but also for the off-diagonal entries (if it participates in a relation with another entity, all its rows (columns) will spot that relation label in the same way). In other words, if the adjacent rows/columns are different, there must be an entity boundary (i.e., one belonging to the entity and the other not belonging to the entity). Therefore, if our biaffine model is reasonably trained, given a model predicted table, we could use this property to find split positions of entity boundary. As expected, experiments (Figure 4) verify our assumption. We adapt this idea to the 3-dimensional probability tensor P .\nSpecifically, we flatten P ∈ R|s|×|s|×|Y| as a matrix Prow ∈ R|s|×(|s|·|Y|) from row perspective, and then calculate the Euclidean distances (l2 distances) of adjacent rows. Similarly, we calculate the other Euclidean distances of adjacent columns according to a matrix Pcol ∈ R(|s|·|Y|)×|s| from column perspective, and then average the two distances as the final distance. If the distance is larger than the threshold α (α = 1.4 in our default settings), this position is a split position. In this way, we can decode all the spans in O(|s|) time complexity.\nEntity Type Decoding Given a span (i, j) by span decoding,8 we decode the entity type t̂ according to the corresponding square symmetric about the diagonal: t̂ = argmaxt∈Ye∪{⊥}Avg(Pi:j,i:j,t). If t̂ ∈ Ye, we decode an entity. If t̂ = ⊥, the span (i, j) is not an entity.\nRelation Type Decoding After entity type decoding, given an entity e1 with the span (i, j) and another entity e2 with the span (m,n), we decode the relation type l̂ between e1 and e2 according to the corresponding rectangle. Formally, l̂ = argmaxl∈Yr∪{⊥}Avg(Pi:j,m:n,l). If l̂ ∈ Yr, we decode a relation (e1, e2, l̂). If l̂ = ⊥, e1 and e2 have no relation."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : "Datasets We conduct experiments on three entity relation extraction benchmarks: ACE04 (Doddington et al., 2004),9 ACE05 (Walker et al., 2006),10 and SciERC (Luan et al., 2018).11 Table 2 shows the dataset statistics. Besides, we provide detailed dataset specifications in the Appendix B.\nEvaluation Following suggestions in (Taillé et al., 2020), we evaluate Precision (P), Recall (R), and F1 scores with micro-averaging and adopt the Strict Evaluation criterion. Specifically, a predicted entity is correct if its type and boundaries are correct, and a predicted relation is correct if its\n8i and j denote start and end indices of the span. 9https://catalog.ldc.upenn.edu/LDC2005T09\n10https://catalog.ldc.upenn.edu/LDC2006T06 11http://nlp.cs.washington.edu/sciIE/\nrelation type is correct, as well as the boundaries and types of two argument entities are correct.\nImplementation Details We tune all hyperparameters based on the averaged entity F1 and relation F1 on ACE05 development set, then keep the same settings on ACE04 and SciERC. For fair comparison with previous works, we use three pre-trained language models: bert-base-uncased (Devlin et al., 2019), albert-xxlarge-v1 (Lan et al., 2019) and scibert-scivocab-uncased (Beltagy et al., 2019) as the sentence encoder and fine-tune them in training stage.12\nFor the MLP layer, we set the hidden size as d = 150 and use GELU as the activation function. We use AdamW optimizer (Loshchilov and Hutter, 2017) with β1 = 0.9 and β2 = 0.9, and observe a phenomenon similar to (Dozat and Manning, 2016) in that setting β2 from 0.9 to 0.999 causes a significant drop on final performance. The batch size is 32, and the learning rate is 5e-5 with weight decay 1e-5. We apply a linear warm-up learning rate scheduler with a warm-up ratio of 0.2. We train our model with a maximum of 200 epochs (300 epochs for SciERC) and employ an early stop strategy. We\n12The first two are for ACE04 and ACE05, and the last one is for SciERC.\nperform all experiments on an Intel(R) Xeon(R) W-3175X CPU and a NVIDIA Quadro RTX 8000 GPU."
+    }, {
+      "heading" : "4.1 Performance Comparison",
+      "text" : "Table 3 summarizes previous works and our UNIRE on three datasets.13 In general, UNIRE achieves the best performance on ACE04 and SciERC and a comparable result on ACE05. Comparing with the previous best joint model (Wang and Lu, 2020), our model significantly advances both entity and relation performances, i.e., an absolute F1 of +0.9 and +0.7 for entity as well as +3.4 and +1.7 for relation, on ACE04 and ACE05 respectively. For the best pipeline model (Zhong and Chen, 2020) (current SOTA), our model achieves superior performance on ACE04 and SciERC and comparable performance on ACE05. Comparing with ACE04/ACE05, SciERC is much smaller, so entity performance on SciERC drops sharply. Since (Zhong and Chen, 2020) is a pipeline method, its relation performance is severely influenced by the poor entity performance. Nevertheless, our model is less influenced in this case and\n13Since (Luan et al., 2019a; Wadden et al., 2019) neglect the argument entity type in relation evaluation and underperform our baseline (Zhang et al., 2020), we do not compare their results here.\nachieves better performance. Besides, our model can achieve better relation performance even with worse entity results on ACE04. Actually, our base model (BERTBASE) has achieved competitive relation performance, which even exceeds prior models based on BERTLARGE (Li et al., 2019) and ALBERTXXLARGE (Wang and Lu, 2020). These results confirm the proposed unified label space is effective for exploring the interaction between entities and relations. Note that all subsequent experiment results on ACE04 and ACE05 are based on BERTBASE for efficiency."
+    }, {
+      "heading" : "4.2 Ablation Study",
+      "text" : "In this section, we analyze the effects of components in UNIRE with different settings (Table 4). Particularly, we implement a naive decoding algorithm for comparison, namely “hard decoding”, which takes the “intermediate table” as input. The “intermediate table” is the hard form of probability tensor P output by the biaffine model, i.e., choosing the class with the highest probability as the label of each cell. To find entity squares on the diagonal, it first tries to judge whether the largest square (|s| × |s|) is an entity. The criterion is simply counting the number of different entity labels appearing in the square and choosing the most frequent one. If the most frequent label is ⊥, we shrink the size of square by 1 and do the same work on two (|s| − 1) × (|s| − 1) squares and so on. To avoid entity overlapping, an entity will be discarded if it overlaps with identified entities. To find relations, each entity pair is labeled by the most frequent relation label in the corresponding rectangle.\nFrom the ablation study, we get the following observations.\n• When one of the additional losses is removed, the performance will decline with varying de-\nModel Parameters W ACE05 SciERCRel (F1) Speed (sent/s) Rel (F1) Speed (sent/s)\nZ&C(2020) 219M 100 64.6 14.7 36.7 19.9 Z&C(2020)† 219M 100 - 237.6 - 194.7\nUNIRE 110M 100 63.6 340.6 34.0 314.8 UNIRE 110M 200 64.3 194.2 36.9 200.1\nhard decoding 110M 200 34.6 139.1 17.8 113.0"
+    }, {
+      "heading" : "4.3 Inference Speed",
+      "text" : "Following (Zhong and Chen, 2020), we evaluate the inference speed of our model (Table 5) on ACE05 and SciERC with the same batch size and pre-trained encoders (BERTBASE for ACE05 and SciBERT for SciERC). Comparing with the pipeline method (Zhong and Chen, 2020), we obtain a more than 10× speedup and achieve a comparable or even better relation performance with W = 200. As for their approximate version, our inference speed is still competitive but with better performance. If the context window size is set the same as (Zhong and Chen, 2020) (W = 100), we can further accelerate model inference with slight performance drops. Besides, “hard decoding” is\nmuch slower than UNIRE, which demonstrates the efficiency of the proposed decoding algorithm."
+    }, {
+      "heading" : "4.4 Impact of Different Threshold α",
+      "text" : "In Figure 4, the distance between adjacent rows not at entity boundary (“Non-Ent-Bound”) mainly concentrates at 0, while that at entity boundary (“Ent-Bound”) is usually greater than 1. This phenomenon verifies the correctness of our span decoding method. Then we evaluate the performances, with regard to the threshold α in Figure 5.14 Both span and entity performances sharply decrease when α increases from 1.4 to 1.5, while the relation performance starts to decline slowly from α = 1.5. The major reason is that relations are so sparse that many entities do not participate in any relation, so the threshold of relation is much higher than that of entity. Moreover, we observe a similar phenomenon on ACE04 and SciERC, and α = 1.4 is a general best setting on three datasets. It shows the stability and generalization of our model.\n14We use an additional metric to evaluate span performance, “Span F1”, is Micro-F1 of predicted split positions."
+    }, {
+      "heading" : "4.5 Context Window and Logit Dropout Rate",
+      "text" : "In Table 4, both cross-sentence context and logit dropout can improve the entity and relation performance. Table 6 shows the effect of different context window size W and logit dropout rate p. The entity and relation performances are significantly improved from W = 100 to W = 200, and drop sharply fromW = 200 toW = 300. Similarly, we achieve the best entity and relation performances when p = 0.2. So we use W = 200 and p = 0.2 in our final model."
+    }, {
+      "heading" : "4.6 Error Analysis",
+      "text" : "We further analyze the remaining errors for relation extraction and present the distribution of five errors: span splitting error (SSE), entity not found (ENF), entity type error (ETE), relation not found (RNF), and relation type error (RTE) in Figure 6. The proportion of “SSE” is relatively small, which proves the effectiveness of our span decoding method. Moreover, the proportion of “not found error” is significantly larger than that of “type error” for both entity and relation. The primary reason is that the table filling suffers from the class imbalance issue, i.e., the number of ⊥ is much larger than that of other classes. We reserve this imbalanced classification problem in the future.\nFinally, we give some concrete examples in Figure 7 to verify the robustness of our decoding algorithm. There are some errors in the biaffine model’s prediction, such as cells in the upper left corner (first example) and upper right corner (second example) in the intermediate table. However, these errors are corrected after decoding, which demonstrates that our decoding algorithm not only recover all entities and relations but also corrects errors leveraging table structure and neighbor cells’ information."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "Entity relation extraction has been extensively studied over the decades. Existing methods can be roughly divided into two categories according to the adopted label space.\nSeparate Label Spaces This category study this task as two separate sub-tasks: entity recognition and relation classification, which are defined in two separate label spaces. One early paradigm is the pipeline method (Zelenko et al., 2003; Miwa et al., 2009) that uses two independent models for two sub-tasks respectively. Then joint method handles this task with an end-to-end model to explore more interaction between entities and relations. The most basic joint paradigm, parameter sharing (Miwa and Bansal, 2016; Katiyar and Cardie, 2017), adopts two independent decoders based on a shared encoder. Recent span-based models (Luan et al., 2019b; Wadden et al., 2019) also use this paradigm. To enhance the connection of two decoders, many joint decoding algorithms are proposed, such as ILP-based joint decoder (Yang and Cardie, 2013), joint MRT (Sun et al., 2018), GCN-based joint inference (Sun et al., 2019). Actually, table filling method (Miwa and Sasaki, 2014; Gupta et al., 2016; Zhang et al., 2017; Wang et al., 2020) is a special case of parameter sharing in table structure. These joint models all focus on various joint algorithms but ignore the fact that they are essentially based on separate label spaces.\nUnified Label Space This family of methods aims to unify two sub-tasks and tackle this task in a unified label space. Entity relation extraction has been converted into a tagging problem (Zheng et al., 2017), a transition-based parsing problem (Wang et al., 2018), and a generation problem with\nSeq2Seq framework (Zeng et al., 2018; Nayak and Ng, 2020). We follow this trend and propose a new unified label space. We introduce a 2D table to tackle the overlapping relation problem in (Zheng et al., 2017). Also, our model is more versatile as not relying on complex expertise like (Wang et al., 2018), which requires external expert knowledge to design a complex transition system."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "In this work, we extract entities and relations in a unified label space to better mine the interaction between both sub-tasks. We propose a novel table that presents entities and relations as squares and rectangles. Then this task can be performed in two simple steps: filling the table with our biaffine model and decoding entities and relations with our joint decoding algorithm. Experiments on three benchmarks show the proposed method achieves not only state-of-the-art performance but also promising efficiency."
+    }, {
+      "heading" : "Acknowledgement",
+      "text" : "The authors wish to thank the reviewers for their helpful comments and suggestions. This work was (partially) supported by National Key Research and Development Program of China (2018AAA0100704), NSFC (61972250, 62076097), STCSM (18ZR1411500), Shanghai Municipal Science and Technology Major Project (2021SHZDZX0102), and the Fundamental Research Funds for the Central Universities."
+    }, {
+      "heading" : "A Decoding Algorithm",
+      "text" : "A formal description are shown in Algorithm 1."
+    }, {
+      "heading" : "B Datasets",
+      "text" : "The ACE04 and ACE05 corpora are collected from various domains, such as newswire and online forums. Both corpora annotate 7 entity types and 6 relation types. we use the same data splits and preprocessing as (Li and Ji, 2014; Miwa and Bansal, 2016), i.e., 5-fold cross-validation for ACE04, and 351 training, 80 validating, and 80 testing for ACE05.15 Besides, we randomly sample 10% of training set as the development set for ACE04.\nThe SciERC corpus collects 500 scientific abstracts taken from AI conference/workshop proceedings. This dataset annotates 6 entity types and 7 relation types. We adopt the same data split protocol as in (Luan et al., 2019b) (350 training, 50 validating, and 100 testing). Detailed dataset specifications are shown in Table 2.\n15We use the pre-processing scripts provided by (Wang and Lu, 2020) at https://github.com/LorrinWWW/ two-are-better-than-one/tree/master/datasets.\nMoreover, we correct the annotations of undirected relations for three datasets, regarding each undirected relation as two directed relation instances, e.g., for the undirected relation PER-SOC, only one relation triplet (“his”, wife”, PER-SOC) is annotated in the original dataset, we will add another relation triplet (“wife”, “his”, PER-SOC) in our corrected datasets for symmetry. In this case, each undirected relation corresponds to two rectangles, which are symmetrical about the diagonal."
+    } ],
+    "references" : [ {
+      "title" : "Scibert: A pretrained language model for scientific text",
+      "author" : [ "Iz Beltagy", "Kyle Lo", "Arman Cohan." ],
+      "venue" : "arXiv preprint arXiv:1903.10676.",
+      "citeRegEx" : "Beltagy et al\\.,? 2019",
+      "shortCiteRegEx" : "Beltagy et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The automatic content extraction (ACE) program – tasks, data, and evaluation",
+      "author" : [ "George Doddington", "Alexis Mitchell", "Mark Przybocki", "Lance Ramshaw", "Stephanie Strassel", "Ralph Weischedel." ],
+      "venue" : "Proceedings of the Fourth International Conference",
+      "citeRegEx" : "Doddington et al\\.,? 2004",
+      "shortCiteRegEx" : "Doddington et al\\.",
+      "year" : 2004
+    }, {
+      "title" : "Deep biaffine attention for neural dependency parsing",
+      "author" : [ "Timothy Dozat", "Christopher D Manning." ],
+      "venue" : "arXiv preprint arXiv:1611.01734.",
+      "citeRegEx" : "Dozat and Manning.,? 2016",
+      "shortCiteRegEx" : "Dozat and Manning.",
+      "year" : 2016
+    }, {
+      "title" : "Table filling multi-task recurrent neural network for joint entity and relation extraction",
+      "author" : [ "Pankaj Gupta", "Hinrich Schütze", "Bernt Andrassy." ],
+      "venue" : "Proceedings of COLING 2016, the 26th International Conference on Computational Linguistics: Technical",
+      "citeRegEx" : "Gupta et al\\.,? 2016",
+      "shortCiteRegEx" : "Gupta et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Going out on a limb: Joint extraction of entity mentions and relations without dependency trees",
+      "author" : [ "Arzoo Katiyar", "Claire Cardie." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 917–928,",
+      "citeRegEx" : "Katiyar and Cardie.,? 2017",
+      "shortCiteRegEx" : "Katiyar and Cardie.",
+      "year" : 2017
+    }, {
+      "title" : "Albert: A lite bert for self-supervised learning of language representations",
+      "author" : [ "Zhenzhong Lan", "Mingda Chen", "Sebastian Goodman", "Kevin Gimpel", "Piyush Sharma", "Radu Soricut." ],
+      "venue" : "arXiv preprint arXiv:1909.11942.",
+      "citeRegEx" : "Lan et al\\.,? 2019",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Incremental joint extraction of entity mentions and relations",
+      "author" : [ "Qi Li", "Heng Ji." ],
+      "venue" : "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 402–412, Baltimore, Maryland. Association",
+      "citeRegEx" : "Li and Ji.,? 2014",
+      "shortCiteRegEx" : "Li and Ji.",
+      "year" : 2014
+    }, {
+      "title" : "Entityrelation extraction as multi-turn question answering",
+      "author" : [ "Xiaoya Li", "Fan Yin", "Zijun Sun", "Xiayu Li", "Arianna Yuan", "Duo Chai", "Mingxin Zhou", "Jiwei Li." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 1340–",
+      "citeRegEx" : "Li et al\\.,? 2019",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Decoupled weight decay regularization",
+      "author" : [ "Ilya Loshchilov", "Frank Hutter." ],
+      "venue" : "arXiv preprint arXiv:1711.05101.",
+      "citeRegEx" : "Loshchilov and Hutter.,? 2017",
+      "shortCiteRegEx" : "Loshchilov and Hutter.",
+      "year" : 2017
+    }, {
+      "title" : "Multi-task identification of entities, relations, and coreference for scientific knowledge graph construction",
+      "author" : [ "Yi Luan", "Luheng He", "Mari Ostendorf", "Hannaneh Hajishirzi." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language",
+      "citeRegEx" : "Luan et al\\.,? 2018",
+      "shortCiteRegEx" : "Luan et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A general framework for information extraction using dynamic span graphs",
+      "author" : [ "Yi Luan", "Dave Wadden", "Luheng He", "Amy Shah", "Mari Ostendorf", "Hannaneh Hajishirzi." ],
+      "venue" : "arXiv preprint arXiv:1904.03296.",
+      "citeRegEx" : "Luan et al\\.,? 2019a",
+      "shortCiteRegEx" : "Luan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A general framework for information extraction using dynamic span graphs",
+      "author" : [ "Yi Luan", "Dave Wadden", "Luheng He", "Amy Shah", "Mari Ostendorf", "Hannaneh Hajishirzi." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the",
+      "citeRegEx" : "Luan et al\\.,? 2019b",
+      "shortCiteRegEx" : "Luan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "End-to-end relation extraction using LSTMs on sequences and tree structures",
+      "author" : [ "Makoto Miwa", "Mohit Bansal." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1105–1116, Berlin,",
+      "citeRegEx" : "Miwa and Bansal.,? 2016",
+      "shortCiteRegEx" : "Miwa and Bansal.",
+      "year" : 2016
+    }, {
+      "title" : "A rich feature vector for protein-protein interaction extraction from multiple corpora",
+      "author" : [ "Makoto Miwa", "Rune Sætre", "Yusuke Miyao", "Jun’ichi Tsujii" ],
+      "venue" : "In Proceedings of the 2009 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Miwa et al\\.,? \\Q2009\\E",
+      "shortCiteRegEx" : "Miwa et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Modeling joint entity and relation extraction with table representation",
+      "author" : [ "Makoto Miwa", "Yutaka Sasaki." ],
+      "venue" : "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1858–1869.",
+      "citeRegEx" : "Miwa and Sasaki.,? 2014",
+      "shortCiteRegEx" : "Miwa and Sasaki.",
+      "year" : 2014
+    }, {
+      "title" : "Effective modeling of encoder-decoder architecture for joint entity and relation extraction",
+      "author" : [ "Tapas Nayak", "Hwee Tou Ng." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, volume 34, pages 8528–8535.",
+      "citeRegEx" : "Nayak and Ng.,? 2020",
+      "shortCiteRegEx" : "Nayak and Ng.",
+      "year" : 2020
+    }, {
+      "title" : "Joint type inference on entities and relations via graph convolutional networks",
+      "author" : [ "Changzhi Sun", "Yeyun Gong", "Yuanbin Wu", "Ming Gong", "Daxin Jiang", "Man Lan", "Shiliang Sun", "Nan Duan." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Com-",
+      "citeRegEx" : "Sun et al\\.,? 2019",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Let’s stop incorrect comparisons in end-to-end relation extraction",
+      "author" : [ "Bruno Taillé", "Vincent Guigue", "Geoffrey Scoutheeten", "Patrick Gallinari" ],
+      "venue" : "In Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP),",
+      "citeRegEx" : "Taillé et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Taillé et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Entity, relation, and event extraction with contextualized span representations",
+      "author" : [ "David Wadden", "Ulme Wennberg", "Yi Luan", "Hannaneh Hajishirzi." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Wadden et al\\.,? 2019",
+      "shortCiteRegEx" : "Wadden et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Ace 2005 multilingual training corpus",
+      "author" : [ "Christopher Walker", "Stephanie Strassel", "Julie Medero", "Kazuaki Maeda." ],
+      "venue" : "Linguistic Data Consortium, Philadelphia, 57:45.",
+      "citeRegEx" : "Walker et al\\.,? 2006",
+      "shortCiteRegEx" : "Walker et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "Two are better than one: Joint entity and relation extraction with tablesequence encoders",
+      "author" : [ "Jue Wang", "Wei Lu." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1706–1721, Online. As-",
+      "citeRegEx" : "Wang and Lu.,? 2020",
+      "shortCiteRegEx" : "Wang and Lu.",
+      "year" : 2020
+    }, {
+      "title" : "Joint extraction of entities and relations based on a novel graph scheme",
+      "author" : [ "Shaolei Wang", "Yue Zhang", "Wanxiang Che", "Ting Liu." ],
+      "venue" : "IJCAI, pages 4461–4467.",
+      "citeRegEx" : "Wang et al\\.,? 2018",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Pre-training entity relation encoder with intra-span and inter-span information",
+      "author" : [ "Yijun Wang", "Changzhi Sun", "Yuanbin Wu", "Junchi Yan", "Peng Gao", "Guotong Xie." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Process-",
+      "citeRegEx" : "Wang et al\\.,? 2020",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Joint inference for fine-grained opinion extraction",
+      "author" : [ "Bishan Yang", "Claire Cardie." ],
+      "venue" : "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1640–1649.",
+      "citeRegEx" : "Yang and Cardie.,? 2013",
+      "shortCiteRegEx" : "Yang and Cardie.",
+      "year" : 2013
+    }, {
+      "title" : "Kernel methods for relation extraction",
+      "author" : [ "Dmitry Zelenko", "Chinatsu Aone", "Anthony Richardella." ],
+      "venue" : "Journal of machine learning research, 3(Feb):1083–1106.",
+      "citeRegEx" : "Zelenko et al\\.,? 2003",
+      "shortCiteRegEx" : "Zelenko et al\\.",
+      "year" : 2003
+    }, {
+      "title" : "Extracting relational facts by an end-to-end neural model with copy mechanism",
+      "author" : [ "Xiangrong Zeng", "Daojian Zeng", "Shizhu He", "Kang Liu", "Jun Zhao." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume",
+      "citeRegEx" : "Zeng et al\\.,? 2018",
+      "shortCiteRegEx" : "Zeng et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Minimize exposure bias of seq2seq models in joint entity and relation extraction",
+      "author" : [ "Haoran Zhang", "Qianying Liu", "Aysa Xuemo Fan", "Heng Ji", "Daojian Zeng", "Fei Cheng", "Daisuke Kawahara", "Sadao Kurohashi." ],
+      "venue" : "arXiv preprint arXiv:2009.07503.",
+      "citeRegEx" : "Zhang et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "End-to-end neural relation extraction with global optimization",
+      "author" : [ "Meishan Zhang", "Yue Zhang", "Guohong Fu." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 1730–1740, Copenhagen, Denmark. Associa-",
+      "citeRegEx" : "Zhang et al\\.,? 2017",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Joint extraction of entities and relations based on a novel tagging scheme",
+      "author" : [ "Suncong Zheng", "Feng Wang", "Hongyun Bao", "Yuexing Hao", "Peng Zhou", "Bo Xu." ],
+      "venue" : "arXiv preprint arXiv:1706.05075.",
+      "citeRegEx" : "Zheng et al\\.,? 2017",
+      "shortCiteRegEx" : "Zheng et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "A frustratingly easy approach for joint entity and relation extraction",
+      "author" : [ "Zexuan Zhong", "Danqi Chen." ],
+      "venue" : "arXiv preprint arXiv:2010.12812.",
+      "citeRegEx" : "Zhong and Chen.,? 2020",
+      "shortCiteRegEx" : "Zhong and Chen.",
+      "year" : 2020
+    }, {
+      "title" : "2016), i.e., 5-fold cross-validation for ACE04, and 351 training, 80 validating, and 80 testing for ACE05.15 Besides, we randomly sample 10% of training set as the development set for ACE04",
+      "author" : [ "Li", "Ji", "Miwa", "Bansal" ],
+      "venue" : null,
+      "citeRegEx" : "Li et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2016
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 24,
+      "context" : "Cardie, 2017) or decoding interactions (Yang and Cardie, 2013; Sun et al., 2019) are imposed to explore the common structure of the two tasks.",
+      "startOffset" : 39,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 17,
+      "context" : "Cardie, 2017) or decoding interactions (Yang and Cardie, 2013; Sun et al., 2019) are imposed to explore the common structure of the two tasks.",
+      "startOffset" : 39,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 30,
+      "context" : "Therefore, parallel to (Zhong and Chen, 2020), we would ask whether joint encoders (decoders) deserve joint label spaces?",
+      "startOffset" : 23,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 29,
+      "context" : "One prior attempt (Zheng et al., 2017) is to handle both sub-tasks with one sequence labeling model.",
+      "startOffset" : 18,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 15,
+      "context" : "It is also different from the current table filling settings for entity relation extraction (Miwa and Sasaki, 2014; Gupta et al., 2016; Zhang et al., 2017; Wang and Lu, 2020), which still have separate label space for entities and relations, and treat on/off-diagonal entries differently.",
+      "startOffset" : 92,
+      "endOffset" : 174
+    }, {
+      "referenceID" : 4,
+      "context" : "It is also different from the current table filling settings for entity relation extraction (Miwa and Sasaki, 2014; Gupta et al., 2016; Zhang et al., 2017; Wang and Lu, 2020), which still have separate label space for entities and relations, and treat on/off-diagonal entries differently.",
+      "startOffset" : 92,
+      "endOffset" : 174
+    }, {
+      "referenceID" : 28,
+      "context" : "It is also different from the current table filling settings for entity relation extraction (Miwa and Sasaki, 2014; Gupta et al., 2016; Zhang et al., 2017; Wang and Lu, 2020), which still have separate label space for entities and relations, and treat on/off-diagonal entries differently.",
+      "startOffset" : 92,
+      "endOffset" : 174
+    }, {
+      "referenceID" : 21,
+      "context" : "It is also different from the current table filling settings for entity relation extraction (Miwa and Sasaki, 2014; Gupta et al., 2016; Zhang et al., 2017; Wang and Lu, 2020), which still have separate label space for entities and relations, and treat on/off-diagonal entries differently.",
+      "startOffset" : 92,
+      "endOffset" : 174
+    }, {
+      "referenceID" : 3,
+      "context" : "We adopt the biaffine attention mechanism (Dozat and Manning, 2016) to learn interactions between word pairs.",
+      "startOffset" : 42,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 30,
+      "context" : "Experimental results on three benchmarks (ACE04, ACE05, SciERC) show that the proposed joint method achieves competitive performances comparing with the current state-of-the-art extractors (Zhong and Chen, 2020): it is better on ACE04 and SciERC, and competitive on ACE05.",
+      "startOffset" : 189,
+      "endOffset" : 211
+    }, {
+      "referenceID" : 30,
+      "context" : "It also has a more compact parameter set: the shared encoder uses only half the number of parameters comparing with the separate encoder (Zhong and Chen, 2020).",
+      "startOffset" : 137,
+      "endOffset" : 159
+    }, {
+      "referenceID" : 30,
+      "context" : "To capture long-range dependencies, we also employ cross-sentence context following (Zhong and Chen, 2020), which extends the sentence to a fixed window size W (W = 200 in our default settings).",
+      "startOffset" : 84,
+      "endOffset" : 106
+    }, {
+      "referenceID" : 3,
+      "context" : "To better encode direction information of words in table T , we use the deep biaffine attention mechanism (Dozat and Manning, 2016), which achieves impressive results in the dependency parsing task.",
+      "startOffset" : 106,
+      "endOffset" : 131
+    }, {
+      "referenceID" : 17,
+      "context" : "Inspired by the procedures of (Sun et al., 2019), We propose a three-steps decoding algorithm: decode span first (entity spans or spans between entities), and then decode entity type of each span, and at last decode relation type of each entity pair (Figure 3).",
+      "startOffset" : 30,
+      "endOffset" : 48
+    }, {
+      "referenceID" : 2,
+      "context" : "Datasets We conduct experiments on three entity relation extraction benchmarks: ACE04 (Doddington et al., 2004),9 ACE05 (Walker et al.",
+      "startOffset" : 86,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2004),9 ACE05 (Walker et al., 2006),10 and SciERC (Luan et al.",
+      "startOffset" : 16,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 18,
+      "context" : "Evaluation Following suggestions in (Taillé et al., 2020), we evaluate Precision (P), Recall (R), and F1 scores with micro-averaging and adopt the Strict Evaluation criterion.",
+      "startOffset" : 36,
+      "endOffset" : 57
+    }, {
+      "referenceID" : 1,
+      "context" : "For fair comparison with previous works, we use three pre-trained language models: bert-base-uncased (Devlin et al., 2019), albert-xxlarge-v1 (Lan et al.",
+      "startOffset" : 101,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 6,
+      "context" : ", 2019), albert-xxlarge-v1 (Lan et al., 2019) and scibert-scivocab-uncased (Beltagy et al.",
+      "startOffset" : 27,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2019) and scibert-scivocab-uncased (Beltagy et al., 2019) as the sentence encoder and fine-tune them in training stage.",
+      "startOffset" : 37,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 9,
+      "context" : "We use AdamW optimizer (Loshchilov and Hutter, 2017) with β1 = 0.",
+      "startOffset" : 23,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 3,
+      "context" : "9, and observe a phenomenon similar to (Dozat and Manning, 2016) in that setting β2 from 0.",
+      "startOffset" : 39,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 21,
+      "context" : "Comparing with the previous best joint model (Wang and Lu, 2020), our model significantly advances both entity and relation performances, i.",
+      "startOffset" : 45,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 30,
+      "context" : "For the best pipeline model (Zhong and Chen, 2020) (current SOTA), our model achieves superior performance on ACE04 and SciERC and comparable performance on ACE05.",
+      "startOffset" : 28,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 30,
+      "context" : "Since (Zhong and Chen, 2020) is a pipeline method, its relation performance is severely influenced by the poor entity performance.",
+      "startOffset" : 6,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 11,
+      "context" : "Since (Luan et al., 2019a; Wadden et al., 2019) neglect the argument entity type in relation evaluation and underperform our baseline (Zhang et al.",
+      "startOffset" : 6,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 19,
+      "context" : "Since (Luan et al., 2019a; Wadden et al., 2019) neglect the argument entity type in relation evaluation and underperform our baseline (Zhang et al.",
+      "startOffset" : 6,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 27,
+      "context" : ", 2019) neglect the argument entity type in relation evaluation and underperform our baseline (Zhang et al., 2020), we do not compare their results here.",
+      "startOffset" : 94,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 8,
+      "context" : "Actually, our base model (BERTBASE) has achieved competitive relation performance, which even exceeds prior models based on BERTLARGE (Li et al., 2019) and ALBERTXXLARGE (Wang and Lu, 2020).",
+      "startOffset" : 134,
+      "endOffset" : 151
+    }, {
+      "referenceID" : 30,
+      "context" : "Following (Zhong and Chen, 2020), we evaluate the inference speed of our model (Table 5) on ACE05 and SciERC with the same batch size and pre-trained encoders (BERTBASE for ACE05 and SciBERT for SciERC).",
+      "startOffset" : 10,
+      "endOffset" : 32
+    }, {
+      "referenceID" : 30,
+      "context" : "Comparing with the pipeline method (Zhong and Chen, 2020), we obtain a more than 10× speedup and achieve a comparable or even better relation performance with W = 200.",
+      "startOffset" : 35,
+      "endOffset" : 57
+    }, {
+      "referenceID" : 30,
+      "context" : "If the context window size is set the same as (Zhong and Chen, 2020) (W = 100), we can further accelerate model inference with slight performance drops.",
+      "startOffset" : 46,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 25,
+      "context" : "One early paradigm is the pipeline method (Zelenko et al., 2003; Miwa et al., 2009) that uses two independent models for two sub-tasks respectively.",
+      "startOffset" : 42,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 14,
+      "context" : "One early paradigm is the pipeline method (Zelenko et al., 2003; Miwa et al., 2009) that uses two independent models for two sub-tasks respectively.",
+      "startOffset" : 42,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 13,
+      "context" : "The most basic joint paradigm, parameter sharing (Miwa and Bansal, 2016; Katiyar and Cardie, 2017), adopts two independent decoders based on a shared encoder.",
+      "startOffset" : 49,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 5,
+      "context" : "The most basic joint paradigm, parameter sharing (Miwa and Bansal, 2016; Katiyar and Cardie, 2017), adopts two independent decoders based on a shared encoder.",
+      "startOffset" : 49,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 12,
+      "context" : "Recent span-based models (Luan et al., 2019b; Wadden et al., 2019) also use this paradigm.",
+      "startOffset" : 25,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 19,
+      "context" : "Recent span-based models (Luan et al., 2019b; Wadden et al., 2019) also use this paradigm.",
+      "startOffset" : 25,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 24,
+      "context" : "To enhance the connection of two decoders, many joint decoding algorithms are proposed, such as ILP-based joint decoder (Yang and Cardie, 2013), joint MRT (Sun et al.",
+      "startOffset" : 120,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 17,
+      "context" : ", 2018), GCN-based joint inference (Sun et al., 2019).",
+      "startOffset" : 35,
+      "endOffset" : 53
+    }, {
+      "referenceID" : 15,
+      "context" : "Actually, table filling method (Miwa and Sasaki, 2014; Gupta et al., 2016; Zhang et al., 2017; Wang et al., 2020) is a special case of parameter sharing in table structure.",
+      "startOffset" : 31,
+      "endOffset" : 113
+    }, {
+      "referenceID" : 4,
+      "context" : "Actually, table filling method (Miwa and Sasaki, 2014; Gupta et al., 2016; Zhang et al., 2017; Wang et al., 2020) is a special case of parameter sharing in table structure.",
+      "startOffset" : 31,
+      "endOffset" : 113
+    }, {
+      "referenceID" : 28,
+      "context" : "Actually, table filling method (Miwa and Sasaki, 2014; Gupta et al., 2016; Zhang et al., 2017; Wang et al., 2020) is a special case of parameter sharing in table structure.",
+      "startOffset" : 31,
+      "endOffset" : 113
+    }, {
+      "referenceID" : 23,
+      "context" : "Actually, table filling method (Miwa and Sasaki, 2014; Gupta et al., 2016; Zhang et al., 2017; Wang et al., 2020) is a special case of parameter sharing in table structure.",
+      "startOffset" : 31,
+      "endOffset" : 113
+    }, {
+      "referenceID" : 29,
+      "context" : "Entity relation extraction has been converted into a tagging problem (Zheng et al., 2017), a transition-based parsing problem (Wang et al.",
+      "startOffset" : 69,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2017), a transition-based parsing problem (Wang et al., 2018), and a generation problem with Gold Table Intermediate Table Decoded Table",
+      "startOffset" : 44,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 29,
+      "context" : "We introduce a 2D table to tackle the overlapping relation problem in (Zheng et al., 2017).",
+      "startOffset" : 70,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 22,
+      "context" : "Also, our model is more versatile as not relying on complex expertise like (Wang et al., 2018), which requires external expert knowledge to design a complex transition system.",
+      "startOffset" : 75,
+      "endOffset" : 94
+    } ],
+    "year" : 2021,
+    "abstractText" : "Many joint entity relation extraction models setup two separated label spaces for the two sub-tasks (i.e., entity detection and relation classification). We argue that this setting may hinder the information interaction between entities and relations. In this work, we propose to eliminate the different treatment on the two sub-tasks’ label spaces. The input of our model is a table containing all word pairs from a sentence. Entities and relations are represented by squares and rectangles in the table. We apply a unified classifier to predict each cell’s label, which unifies the learning of two sub-tasks. For testing, an effective (yet fast) approximate decoder is proposed for finding squares and rectangles from tables. Experiments on three benchmarks (ACE04, ACE05, SciERC) show that, using only half the number of parameters, our model achieves competitive accuracy with the best extractor, and is faster.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

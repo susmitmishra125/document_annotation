@@ -1,0 +1,916 @@
+{
+  "name" : "2021.acl-long.417.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Alignment Rationale for Natural Language Inference",
+    "authors" : [ "Zhongtao Jiang", "Yuanzhe Zhang", "Zhao Yang", "Jun Zhao", "Kang Liu" ],
+    "emails" : [ "kliu}@nlpr.ia.ac.cn" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 5372–5387\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n5372"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Natural Language Inference (NLI) is a fundamental task in Natural Language Processing (NLP) which is to determine if a hypothesis entails a premise. Recently, with the introduction of large-scale annotated datasets (Bowman et al., 2015; Williams et al., 2018), deep learning models are adopted to solve the task in a supervised manner (Conneau et al., 2017; Chen et al., 2017; Devlin et al., 2019) and achieve great success, while inner mechanisms of these methods are still opaque due to high computational complexities.\nTowards interpretability, explaining the model behavior has gained increasing attention. Lots of approaches are based on feature attribution which\n1Our code is available at https://github.com/ changmenseng/arec\nassigns saliency scores for input features (Bahdanau et al., 2015; Lundberg and Lee, 2017; Thorne et al., 2019; Kim et al., 2020), and feature selection or rationale that keeps a subset of features sufficient for the prediction (Lei et al., 2016; Bastings et al., 2019; De Cao et al., 2020; DeYoung et al., 2020). Figure 1 (a) and (b) present a text attribution explanation by LIME (Ribeiro et al., 2016) and a text rationale explanation from Li et al. (2016) of an NLI sentence pair. Both explanations provide insights of which input words are responsible for the prediction. However, NLI is a cross-sentence task requiring a system to reason over alignments2 (MacCartney and Manning, 2009). Intuitively, it is more sensible to explain NLI systems in the way of\n2In machine translation, alignments refer to bilingual text pairs with identical meanings. But for NLI, the semantics of two sentences may be different, it is more suitable to define alignments as any text pairs related lexically or logically, etc.\nalignments instead of isolated words/phrases. For the example in Figure 1, the contradicted phrase pair street – store is one of the key alignments responsible for the correct prediction.\nTo explain NLI models over alignments, the literature usually looks at co-attention weights (Parikh et al., 2016; Pang et al., 2016; Chen et al., 2017), which is a dominant way to implicitly align word pairs (Wang et al., 2017; Gong et al., 2018; Devlin et al., 2019). However, attention is argued not as explainable as expected (Jain and Wallace, 2019; Serrano and Smith, 2019; Bastings and Filippova, 2020). Moreover, co-attention assigns scores among words thus forbids us to observe phraselevel alignments, which is a flaw that generally exists for attribution explanations as shown in Figure 1 (c). Other works build hard alignments resorting sparse attention (Yu et al., 2019; Bastings et al., 2019; Swanson et al., 2020). But their selfexplanatory architectures pay for the interpretability at a cost of performance dropping on accuracy (Molnar, 2020). Meanwhile, these techniques are unable to analyze well-trained models.\nTo resolve above problems, this paper proposes AREC, a post-hoc local approach to generate Alignment Rationale Explanation for Co-attention based models. Analogous with Lei et al. (2016), our alignment rationale is a set that contains text pairs from the NLI sentence pair with two requirements. First, the explanation is supposed to be faithful to the predictive model, where selected text pairs must alone suffice for the original prediction. Second, the explanation should be humanfriendly or readable (Miller, 2019), which means the pairs are few to promote compact rationales, and extracted continuously to make phrase-level rationales as far as possible (Lei et al., 2016; Bastings et al., 2019). Figure 1 (d) presents an example of AREC explanation. It shows that the model reaches the right prediction reasonably: it identifies People – Passengers, walk through– car driving and store – street to make up the alignment rationale. AREC is flexible to apply on any co-attention architectures, allowing us for deep investigations of well-trained models.\nWith the proposed AREC, we study three typical co-attention based models Decomposable Attention (DA) (Parikh et al., 2016), Enhanced LSTM (ESIM) (Chen et al., 2017) and BERT (Devlin et al., 2019) on four benchmarks including SNLI (Bowman et al., 2015), ESNLI (Camburu et al., 2018),\nBNLI (Glockner et al., 2018) and HANS (McCoy et al., 2019). Experimental results show that our method could generate more faithful and readable explanations. Moreover, we employ our proposed AREC to analyze these models deeply from the aspect of alignments. Based on our explanations, we further present a simple improvement strategy that greatly increases robustness of different models without modifying their architectures or retraining. This proves that our method could factually reflect how models work.\nOur contributions are summarized as follows: 1) We come up with AREC, a post-hoc local explanation method to extract the alignment rationale for co-attention based models. We compare AREC with other explanation methods, illustrating its advantages on faithfulness and readability.\n2) We diagnose three typical co-attention based models using AREC by re-evaluating them in a more fine-grained alignment level beyond accuracy. Experimental results could reveal potential improvement solutions. To the best of our knowledge, we are the first to study existing models with alignment exhaustively."
+    }, {
+      "heading" : "2 Related Works",
+      "text" : "Natural Language Inference\nNatural Language Inference has been studied for years. Despite lots of works construct representations for the input two sentences individually (Bowman et al., 2015; Mueller and Thyagarajan, 2016; Conneau et al., 2017), the task actually requires a system to recognize alignments (MacCartney and Manning, 2009). In early days, alignment detection is sometimes formed as an independent task (Chambers et al., 2007; MacCartney et al., 2008), or a component of a pipeline system (MacCartney et al., 2006). Currently deep learning methods seek to model alignments implicitly through co-attention mechanism (Parikh et al., 2016; Pang et al., 2016; Chen et al., 2017; Wang et al., 2017; Gong et al., 2018; Joshi et al., 2019; Devlin et al., 2019). The technique is first proposed in machine translation (Bahdanau et al., 2015), and soon dominates in many applications including NLI. However why models with co-attention layers are effective is still called for answers.\nExplaining Models in NLP\nExplaining model behaviors has attracted much interests. Existing studies include opening the com-\nponent of models (Murdoch et al., 2018), assigning word importance scores (Ribeiro et al., 2016; Li et al., 2016; Kim et al., 2020), extracting predictive related input pieces, referred as sufficient input subset (Carter et al., 2019) or rationale (Lei et al., 2016; Bastings et al., 2019), building hierarchical explanations (Chen et al., 2020; Zhang et al., 2020), and generating natural language explanations (Camburu et al., 2018; Kumar and Talukdar, 2020). However, they usually explain the model on the granularity of words/phrases. Such ways are sufficient for text classification but not suitable for NLI, since atom features in the task are alignments.\nCo-attention itself is often viewed as an explanation. Indeed, co-attention is a key proxy to model alignments, where perturbing its weights has a significant impact (Vashishth et al., 2019). Yet recently, attention is argued to be not explainable as expected (Jain and Wallace, 2019; Serrano and Smith, 2019; Grimsley et al., 2020; Bastings and Filippova, 2020). Secondly, co-attention along with feature attribution explanations just assigns scores among words, which is infeasible to observe phrase-level alignments. Furthermore, for models with multiple attentions (Vaswani et al., 2017), it’s hard to acquire a global understanding of alignments. Other approaches include Yu et al. (2019), who adopts generator-encoder architecture (Lei et al., 2016) to generate corresponded rationales. But their approach is unable to extract more fine-grained alignments (e.g., one-to-one continuous alignments). Bastings et al. (2019); Swanson et al. (2020) design sparse attention for hard alignments. However, these methods trade performance for interpretability, and are immutable to analyze well-trained models."
+    }, {
+      "heading" : "3 Method",
+      "text" : "In this section, we describe our AREC in details. As mentioned before, AREC is a post-hoc approach for explaining co-attention based models. Thus we first introduce the co-attention layer, then depict the propose AREC."
+    }, {
+      "heading" : "3.1 Background: Co-Attention in NLI Models",
+      "text" : "In our notation, we have an instance including a premise P = [p1, · · · ,p|p|] ∈ Rd×|p| and a hypothesis H = [h1, · · · ,h|h|] ∈ Rd×|h|, where |p|/|h| is the length of the premise/hypothesis, and pi/hj ∈ Rd denotes corresponding word embed-\nding (fixed or contextual). Co-attention layer accepts P and H as input and outputs alignment enhanced word representations P̄ ∈ Rd×|p| and H̄ ∈ Rd×|h|. At the first step, we compute a similarity matrix S ∈ R|p|×|h|\nSi,j = φ(pi,hj) (1)\nwhere φ is a similarity function, ordinarily a vector dot product (Chen et al., 2017). Then S is normalized to compute soft alignment scores for every word in a sentence w.r.t all the words in its partner\nAPi,: = softmax(Si,:)\nAH:,j = softmax(S:,j) (2)\nHere AP and AH are so-called co-attention matrices, each element inside indicates the matching degree of the corresponding word pair. Next, we obtain soft alignments features for every word in the premise/hypothesis by averaging word embeddings in the hypothesis/premise weighted by the soft alignment scores\nP̄ = H ·APT H̄ = P ·AH (3)\nNow P̄/H̄ is a richer representation of P/H enhanced by H/P and fed to following modules, such as a classifier which outputs probabilities of candidate categories, i.e., entailment, contradiction and neutral in NLI task."
+    }, {
+      "heading" : "3.2 Problem Formation",
+      "text" : "The proposed AREC relies on feature selection, keeping few but sufficient alignments while maintaining the original prediction. Thus to restrict the model to only consider some specific alignments, we intuitively mask co-attention matrices AP and AH following Serrano and Smith (2019); Pruthi et al. (2020). Let Z ∈ {0, 1}|p|×|h| be a binary mask indicating the presence or absence of every word pair alignment, and M be a model with co-attention layers. Then the masking process is simply Hadamard product between mask Z and co-attention matrices AP and AH. An alignment rationale is obtained by an optimistic problem\nZ̃ = arg min Z λ0L0 + λ1L1 + λ2L2 (4)\nThe loss contains three terms (L0, L1 and L2) to satisfy faithfulness and readability as mentioned in Section 1. λ0, λ1 and λ2 are hyper-parameters\nstanding for loss weights. Every rectangular region in Z̃ represents a text alignment in the alignment rationale.\nWe now describe loss terms. The first term L0 is about fidelity, asking that the model prediction is maintained after masking (Molnar, 2020). Fidelity ensures faithfulness, making the derived explanation depict the true profile of how the model works. We choose the euclidean distance between logits as this loss term, i.e.,\nL0 := ‖Ml(P,H)−MZl (P,H)‖2 (5)\nwhere Ml(P,H) and MZl (P,H) ∈ R3 are original output logits and output logits when applying the mask Z respectively. Compared to commonly used KL divergence (De Cao et al., 2020) or label equality (Feng et al., 2018), the euclidean distance between logits is a stricter constraint that narrows down the solution space and would lead to more faithful explanations3.\nSecondly, an explanation ought to be readable (Molnar, 2020). That requirement contains compactness and contiguity under the context of alignment explanation. Compactness draws intuition from the philosophy that a good explanation should be short or selective (Miller, 2019), which encourages fewer alignments to be selected. Compactness loss is simply the L1 norm of the mask Z\nL1 := |Z|1 = ∑ i,j zi,j (6)\nwhere zi,j is an element in Z. Contiguity encourages continuous phrase-level alignments4 (Zenkel et al., 2020), which is helpful for human understandings. Concretely, contiguity prefers Z with rectangular clusters. Thus, we have\nL2 := ∑ i,j 1  ∑ z∈Wzi,j z = 3  (7) where 1(·) is the indicator function and Wzi,j = {zi,j , zi,j+1, zi+1,j , zi+1,j+1} is a 2× 2 window at the position. The loss is based on the observation that if there are three 1s in the window, there must be a non-rectangle region nearby, as marked by red boxes in Figure 2.\n3If we use label equality (Feng et al., 2018), which the prediction is only maintained in terms of the label, there are many explanations satisfying the constraint. Using a strict fidelity constraint ensures uniqueness or less variety, making the explanation more faithful.\n4Following Lei et al. (2016) and Bastings et al. (2019), a phrase could be any continuous span in a sentence, which may not be a syntactical phrase."
+    }, {
+      "heading" : "3.3 Optimization",
+      "text" : "Searching the exponential huge (2|p||h|) solution space of Z straightforwardly is impracticable. To use the gradient-based method, we relax binary Z to be a stochastic matrix Z, and optimize loss expectation over it. Specifically, we assume that every element Zi,j in Z is an independent random variable satisfying HardConcrete distribution (Louizos et al., 2018a). HardConcrete variables are allowed to be exactly discrete 0 and 1, while having continuous and differential probability densities on the open interval (0, 1). Additionally, HardConcrete distribution accommodates reparameterization, permitting us to obtain a HardConcrete sample z by transforming a parameter-less unit uniform sample u, i.e., z = g(u;α), where g is differential. Details are shown in Appendix A.\nUnder this setting, we turn to optimize the expectation of the objective. For L0, we have\nL0 = EU [‖Ml(P,H)−M g(U ;α) l (P,H)‖2]\n' 1 n n∑ i=1 ‖Ml(P,H)−M g(Ui;α) l (P,H)‖2\n(8) Here, U is a random matrix filled with i.i.d unit uniform variables, α ∈ R|p|×|h|+ is the parameter of Z. The second line is a Monte-Carlo approximation of the expectation, where n is the sample size, and Ui is the i-th sample of U .\nFor L1 and L2, we have\nL1 = ∑ i,j E(Zi,j) ≤ ∑ i,j P(Zi,j 6= 0;αi,j) L2 = ∑ i,j E 1  ∑ Z∈WZi,j dZe = 3  \n= ∑ i,j ∑ Z∈WZi,j P(Z = 0;α)\n∏ Z′∈WZi,j\\{Z} P(Z ′ > 0;α′)\n(9)\nwhere dZe is the up round of Z and P(·;α) is the probability over the parameter α. Now, all the losses are differential over α, making gradient descent feasible. Derivation details are presented in Appendix B.\nAfter training, we obtain the alignment rationale as follows\nz̃i,j = arg max v∈{0,1} P(Zi,j = v;αi,j) (10)"
+    }, {
+      "heading" : "4 Experiments",
+      "text" : "Our experiments include two parts. First, we quantitatively compare the proposed AREC with several typical explanation methods (Section 4.1) to prove the effectiveness of our method. Second, by means of AREC, we study and re-evaluate different models from the aspect of alignment beyond accuracy, revealing potential improvements (Section 4.2).\nDatasets We use four datasets SNLI (Bowman et al., 2015), ESNLI (Camburu et al., 2018), BNLI (Glockner et al., 2018) and HANS as our testbeds. SNLI is a traditional NLI benchmark, while ESNLI extends it by annotating text rationales. BNLI and HANS are stress testing sets to test lexical inference and overlap heuristics respectively.\nModels We choose three typical co-attention based NLI models DA5 (Parikh et al., 2016), ESIM (Chen et al., 2017) and BERT (base version) (Devlin et al., 2019) for our discussion. DA applies the co-attention directly on word embeddings. ESIM further incorporates order information by putting\n5Following Glockner et al. (2018), in our implementation, we discard the optional intra-sentence attention and achieve simlar and comparable accuracy performance.\ntwo LSTMs before and after the co-attention layer (Hochreiter and Schmidhuber, 1997) to boost the performance. Differently, BERT concatenates the input sentence pair with a template “[CLS] p [SEP] h [SEP]” and uses global self-attention (Vaswani et al., 2017). All the models are trained on SNLI training set and tested across datasets.\nImplementation We mask attention matrices for DA and ESIM as described in Section 3.2 since they are directly formed by co-attention. For BERT, we use a single mask to mask co-attention corresponded sub-matrices6 of all the attention matrices identically, no matter of their layers or attention heads.\nWe consider that faithfulness has a higher priority than readability. Correspondingly, we adjust weights in the loss dynamically, based on fidelity of current mask. To this end, weights are set as\nλ0 = 1, λ1 = λ2 = 0.15× SpAc (11)\nwhere SpAc is the accuracy of current sampled masks\nSpAc = 1\nn n∑ i=1 1[My(P,H) = M g(Ui;α) y (P,H)]\n(12) Here, MZy is the model predicted label under mask Z. Thus terms related to readability are controlled by the explanation faithfulness. This simple dynamic weight strategy is similar to the approach in Platt and Barr (1988) and highly improves the explanation quality and the algorithm stability."
+    }, {
+      "heading" : "4.1 Explanation Evaluation",
+      "text" : "In this section, we aim to evaluate the faithfulness and readability of different explanations."
+    }, {
+      "heading" : "4.1.1 Baselines",
+      "text" : "We select feature attribution baselines including co-attention itself, perturbation-based approaches LEAVEONEOUT (Li et al., 2016), LIME (Ribeiro et al., 2016), BACKSELECT (Carter et al., 2019), gradient-based approaches GRADIENT (Simonyan et al., 2014) and INTEGRATGRAD (Sundararajan et al., 2017) and a feature selection method DIFFMASK (De Cao et al., 2020). The original DIFFMASK is applied on text level, we derive an alignment variant for comparison in Appendix C.\n6For a BERT attention map A ∈ R(|p|+|h|+3)×(|p|+|h|+3), A2:|p|+1,|p|+3:|p|+|h|+2 and A|p|+3:|p|+|h|+2,2:|p|+1 are coattention corresponded sub-matrices."
+    }, {
+      "heading" : "4.1.2 Metrics",
+      "text" : "Inspired by DeYoung et al. (2020), we use Area Over Reservation Curve (AORC) to evaluate faithfulness7 as follows\nAORC = K∑ k=0 ‖Ml(P,H)−MZ (k) l (P,H)‖2\n(13) where Z(k) is the mask that reserves top k% coattention weights from an attribution explanation. Though AREC belongs to feature selection explanations, its parameter α also provides importance scores. We also report fidelity defined in Equation (5) as a measure of faithfulness.\nFor readability evaluation, we report compactness and contiguity defined in Equation (6) and Equation (7) respectively. We also conduct human evaluations on random sampled 300 examples from SNLI testing test to directly measure readability. We let 2 annotators to rate how easy the explanation is to read and understand the model’s decision-making process along alignments from 1 to 5 points and report the average scores8.\nWe admit that metrics including fidelity, compactness and contiguity are that AREC optimizes. Actually it’s hard to unitedly evaluate different explanations since their contexts and techniques are usually completely different. If we only follow definitions of those metrics, we consider they are reasonable. Note that these metrics are not compatible for feature attribution explanations. For fair comparison, we follow Carter et al. (2019) to induce alignment rationales by thresholding9 for feature attribution baselines. That is, we sequentially remain co-attention weights according to attribution scores until the fidelity loss is lower than the pre-defined threshold."
+    }, {
+      "heading" : "4.1.3 Results",
+      "text" : "Automatic evaluation and readability human evaluation results are shown in Table 1 and Table 2 respectively. We obtain the following findings:\n7We don’t use Area Over Perturbation Curve (AOPC) (DeYoung et al., 2020) because our method is to reserve features (i.e., alignments) that keep the prediction, it is fitter to utilize reservation curve.\n8Both annotators are well-educated postgraduates major in computer science. We conduct human evaluation on randomly sampled 300 examples in SNLI testing set.\n9The threshold is set to L0 + 0.1 of AREC to obtain alignment rationales with similar fidelity for fair comparison. We don’t use fix size constraint to construct rationales as done in Jain et al. (2020) because we think the size of a rationale depends on the instance.\n1) AREC is quite faithful with the lowest AORC and fidelity value in most cases. Perturbation-based methods are equally matched with moderate performances, while gradient-based ones have the least faithfulness. Surprisingly, co-attention is a very strong baseline to indicate important alignments for NLI, surpassing most other baselines on AORC, extremely for ESIM. This result is of accordance with Vashishth et al. (2019) that attention is more faithful in cross-sentence tasks compared with singlesentence tasks.\n2) AREC is quite readable which achieves the lowest compactness value and contiguity value in most cases for automatic evaluation. AREC is also the most readable explanation according to human evaluation. As a contrast, feature attribution methods are unable to induce readable alignment rationales. They reserve too much co-attention weights, usually half of which, to ensure similar fidelity with AREC rather than satisfying compactness and contiguity. Appendix E shows some examples for intuitive feelings of different explanations’ readabilities.\n3) Compared to rationale explanation DIFFMASK, AREC is far more promising that outperforms it with huge gaps on fidelity while maintains equivalent or better compactness and contiguity. In our knowledge, DIFFMASK is to globally learn to explain local instances: the explainer is trained on a training set which may contain artifacts and biases (Gururangan et al., 2018; Tsuchiya, 2018; Poliak et al., 2018). Therefore this architecture leverages data information. It is susceptible to over-fitting and generate data-relevant biased explanations as a result, leading to poor fidelity when facing heldout data (BNLI and HANS) as shown in Table 1. Moreover, we believe that a faithful explanation is a profile of a model. Correspondingly, an explanation method should only access knowledge from the model instead of from the data. That is an appealing theoretical advantage of our method."
+    }, {
+      "heading" : "4.2 Beyond Accuracy: Behavior Testing of NLI Models with AREC",
+      "text" : "Diverse evaluations are pursued to understand models profoundly (Ribeiro et al., 2020). Beyond accuracy, in this section, we analyze DA, ESIM and BERT resorting to our proposed AREC by re-evaluating them from the more fined-grained aspect of alignment. For a model, we first generate its alignment rationales using AREC, then\nwe evaluate its alignment plausibility (Jacovi and Goldberg, 2020): how well do its alignment rationales agree with human judgments (DeYoung et al., 2020). Since it is established in Section 4.1 that our method is faithful, thus alignment plausibility reflects a model’s power of alignment detection, i.e., whether it makes a prediction with right alignments. Figure 3 illustrates the evaluation process.\nFirstly, let’s have a look at Table 3 that shows the accuracy performances of various models across datasets. Both DA, ESIM and BERT achieve high and tied accuracy performances on SNLI. However, they are distinguished on lexical reasoning, where BERT surpasses others significantly on BNLI. Additionally, neither of them is robust against overlap heuristic, as their performances are extremely poor\non non-entailment instances. We seek to uncover the behind reasons (Section 4.2.2) and try to make improvements (Section 4.2.3) using our AREC."
+    }, {
+      "heading" : "4.2.1 Metrics",
+      "text" : "We define different metrics to measure alignment plausibility (or equally speaking, alignment rationale agreements with humans) in various datasets.\nFor ESNLI, since it’s annotated in the text level, we simply collect corresponding words to convert an alignment rationale to a text rationale for comparison. We adopt IOU-F1 and Token-F1 from DeYoung et al. (2020), and only use a subset of ESNLI whose instances are labeled contradiction for our evaluation10.\nIn BNLI, each sentence pair differs by a single word or phrase. Naturally this pair forms up an annotation, which should be counted in a golden alignment rationale. Further, We reasonably presume this pair is the most essential alignment in its corresponding alignment rationale. Thus, three metrics are defined: 1) Max-F1: we remain the alignment with max score from the alignment rationale outputted by AREC according to LEAVEONEOUT. Max-F1 is the F1 measure comparing remaining ones and annotations. 2) Exact-Inc: The\n10In ESNLI, every contradiction instance selects words in both the premise and the hypothesis to make up text rationale, fitting with AREC explanations.\nmetric is the proportion that the alignment rationale includes the annotated alignment. 3) Soft-Inc: It is a loosed version of Exact-Inc, which is the average recall comparing alignment rationales and annotations. Details are shown in Figure 3.\nWe carry out human evaluations on HANS because it is not annotated in any form of rationales. We ask 2 human annotators if (yes/no) the decision process observed by AREC is agreed with them and report averaged agreed ratio11 (see Appendix D for details)."
+    }, {
+      "heading" : "4.2.2 Results",
+      "text" : "Table 3 shows alignment plausibility results, where we obtain the following findings:\n1) Across datasets, alignment plausibilities are consistent with the accuracy performances in different degrees. Especially on BNLI, where BERT surpasses other competitors on all metrics substantially, quantitatively revealing that the alignment detection ability is important and distinguishes NLI models. We also discover that modeling order information explicitly is also useful for NLI, where ESIM achieves a better accuracy even with a poorer alignment plausibility on SNLI compared to DA.\n11The human evaluation is conducted on randomly selected 300 examples, 10 examples per heuristic.\nCombining the two factors makes BERT an effective approach for NLI.\n2) Our explanation method is helpful to detect artifacts or biases leveraged by the model. For example, though obtaining high accuracy on HANSE, DA’s low alignment plausibility suggests it usually makes a right prediction with wrong alignments (see Appendix D for examples). Further, all the models are brittle on catching reasonable alignments when facing non-entailment instances in HANS. As we will discuss next, they tend do shallow literal lexical matching, which we conjecture the reason why they also fail on accuracy.\nIn summary, the ability to capture correct alignments is closely related to accuracy performance in NLI. This conclusion is often discussed qualitatively in previous works. But we are the first to illustrate and prove this point exhaustively via quantitative evaluation."
+    }, {
+      "heading" : "4.2.3 Improving Robustness against Overlap Heuristics",
+      "text" : "With our AREC, we find that both three models tend to align overlapped words between the sentence pair no matter their syntactical or semantic roles, causing wrong predictions in HANS. Figure 4 presents an example, where the model mistakenly matches identical words. However, president in the premise and doctor in the hypothesis are subjects of the same predicate advised, they should be aligned, and so do doctor in the premise and president in the hypothesis.\nTo remedy this, we turn to Semantic Role Labeling (SRL), the task to recognize arguments for a predicate and assign semantic role labels to them,\nto guide alignments for NLI models. In particular, we employ an off-the-shelf BERT-based SRL model (Shi and Lin, 2019) to extract predicates and their corresponding arguments from the premise and the hypothesis in advance. Then we limit the model to only align identical predicates and phrases with identical semantic roles by applying a corresponding co-attention mask (SRL mask), as presented in Figure 4. In this way the semantic role information is injected into the model. Note that there is no need to modify the model architecture or design new training protocol, contrary to Cengiz and Yuret (2020) who jointly train NLI and SRL in a multi-task learning (MTL) manner.\nWe report model accuracy performances when alignments are guided by SRL masks (subscripted with SRL GUID) in Table 4. The results show that without obvious performance drops on entailment instances, applying SRL masks gains significant\nimprovements on non-entailment instances, especially for lexical heuristic. Nevertheless, it doesn’t boost model performances for constituent heuristic. We speculate that is because constituent heuristic instances are accompanied with restrictions such as prepositions, which is unable to handle only with alignments. Overall, the results show that guiding alignments is a potential promising way to incorporate useful information. Additionally, this also proves that our method is faithful towards models from another point of view."
+    }, {
+      "heading" : "5 Conclusions",
+      "text" : "In this work, we propose AREC, a new post-hoc method to generate alignment rationale for coattention based NLI models. Experimental results show that our explanation is faithful and readable. We study typical models using our method and shed lights on potential improvements. We believe our method and findings are illuminating for NLI. For future works, we plan to explore modelagnostic alignment explanations, and analyze models in other NLP tasks."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "This work was supported by the National Key Research and Development Program of China (No.2020AAA0105200), the National Natural Science Foundation of China (No. 61922085, 61831022, 61906196). This work is also supported by Beijing Academy of Artificial Intelligence (BAAI2019QN0301), the Key Research Program of the Chinese Academy of Sciences (Grant NO. ZDBS-SSW-JSC006) and independent research project of National Laboratory of Pattern Recognition."
+    }, {
+      "heading" : "A The HardConcrete Distribution",
+      "text" : "The HardConcrete distribution (Louizos et al., 2018b) is derived from the binary Concrete distribution (Maddison et al., 2017) using stretch and rectify, assigning probability densities on the close unit interval [0, 1]. The Concrete distribution is a continuous relaxation of Categorical distribution and submissive for reparameterization (GumbelSoftmax trick) (Maddison et al., 2017). We only introduce the special binary case here for conciseness.\nA binary Concrete variable Ẑ could be sampled by first sampling U ∼ U(0, 1), and conducting the following transformations\nL = logU − log(1− U) Ẑ = σ(logα+ L)/τ)\n(14)\nwhere σ is sigmoid function, α and τ are parameters of Ẑ, where the latter one is called temperature controling the sharpness. In practice, logα is usually the logit outputted by a classifier, e.g., a neural network. The probability density function (PDF) and the cumulative distribution function (CDF) of Z is\npẐ(z) = ταz−τ−1(1− z)−τ−1\n(αz−τ + (1− z)−τ )2\nQẐ(z) = σ((log z − log(1− z))τ − logα) (15) However, we are about to generate binary masks as our rationales, implying word alignment appearances. That is, we require Z remains some discrete properties, allowing us to sample the exact 0 and 1. For this purpose, Louizos et al. (2018b) introduces stretch and rectify strategy. As illustrated in Figure 5, the binary Concrete PDF is first stretched to support (γ, ζ), where γ < 0 and ζ > 1, via a scaling transformation, then we rectify densities on the close unit interval\nZ = min(1,max(0, γ + (ζ − γ)Ẑ)) (16)\nwhere γ, ζ and τ are hyperparameters and we set -0.1, 1.1 and 0.2 respectively. Transformations in\nEquation (14) and Equation (16) compose g in Equation (8). Now, we have\nP(Z = 0) = P ( 0 < Ẑ ≤ γ\nγ − ζ ) = QẐ ( γ\nγ − ζ ) = σ ( τ log ( −γ ζ ) − logα ) (17)\nand\nP(Z = 1) = P ( 1− γ ζ − γ ≤ Ẑ < 1 )\n= 1−QẐ ( 1− γ ζ − γ ) = σ ( logα− τ log ( 1− γ ζ − γ )) (18)"
+    }, {
+      "heading" : "B Loss Derivation",
+      "text" : "According to the above basis, for L1, we have\nL1 = ∑ i,j E(Zi,j)\n= ∑ i,j P(Zi,j = 1) + ∫ 1 0 zpZi,j (z)dz\n≤ ∑ i,j P(Zi,j = 1) + ∫ 1 0 fZi,j (z)dz\n= ∑ i,j (1− P(Zi,j = 0))\n= ∑ i,j σ ( logαi,j − τ log ( −γ ζ\n)) (19)\nNote that we optimize L1’s upper bound instead of itself. For L2, we have\nL2 = ∑ i,j E 1  ∑ Z∈Wi,j dZe = 3  = ∑ i,j P 1  ∑ Z∈Wi,j dZe = 3\n = ∑ i,j ∑ Z∈WZi,j P(Z = 0)\n∏ Z′∈WZi,j\\{Z} (1− P(Z ′ = 0))\n= ∑ i,j ∑ α∈Wαi,j σ ( τ log ( −γ ζ ) − logα ) ∏\nα′∈Wαi,j\\{α}\nσ ( logα′ − τ log ( −γ ζ )) (20)\nOptimizing L1 and L2 is directly since we don’t need to sample. Now the loss functions are differential about α, allowing us to process gradient descent. In the implementation, we actually optimize over logα because it’s a free variable."
+    }, {
+      "heading" : "C Alignment DIFFMASK Baseline",
+      "text" : "DIFFMASK utilizes a neural network to obtain logα on input representations, and optimizes the neural network on a training set. In the original implementation (De Cao et al., 2020), the neural network is feed with word vectors from different layers. To make it be on alignment level, logα is computed on alignment features\nlogαi,j = FFN([pi; hj ;pi−hj ;pi hj ]) (21)\nwhere FFN is a feed forward neural network with one hidden layer and ; means concatenation. Word representations pi and hj are the input incontextualized word vectors. The subsequent steps are similar to AREC, except that DIFFMASK is trained on a traning set, leveraging data knowledge."
+    }, {
+      "heading" : "D Alignment Plausibility Human Evaluation",
+      "text" : "The principle of manual evaluation is that the decision process observed by AREC is agreed with humans when it includes complete alignment information for the correct prediction. Thus, an alignment rationale could not agree with humans even instruct\nThe professor\nin front\nof the bankers\nsaw\nthe lawyer\n.\nTh e pr of es so r sa w th e la w ye r .\nFigure 6: An example labeled entailment in HANS, where the alignment rationale is extracted from DA. The alignment rationale is not agreed with humans while allowing humans to reach the correct prediction.\nhumans to arrive the correct prediction. This is different from Human Accuracy (Jain et al., 2020). Figure 6 presents an example. From the alignment rationale, a human is able to predict entailment with identical nouns professor – professor and lawyer – lawyer. However, as a human, we also need to identify the predicate pair saw – saw for complete semantics. Thus, we consider alignment rationales like in Figure 6 are not agreed with human justifications.\nE Visualization\nWe plot a few examples of AREC explanations in Figure 7. We also present examples of different alignment explanations in Figure 8. It’s clear that our proposed AREC explanation is the most readable one.\nBoy sitting\nlooking through\na glass window\nat a train station\n.\nA bo y is si tti ng a t a tra in st at io n .\nA young\nboy\nin green\nis practicing\nkicking\n.\nTh e yo un g bo y is w ea rin g bl ac k\n(a) DA\nBoy sitting\nlooking through\na glass window\nat a train station\n. A\nbo y is si tti ng a t a tra in st at io n .\nA young\nboy\nin green\nis practicing\nkicking\n.\nTh e yo un g bo y is w ea rin g bl ac k\n(b) ESIM\nBoy sitting\nlooking through\na glass window\nat a train station\n.\nA bo y is si tti ng a t a tra in st at io n .\nA young\nboy\nin green\nis practicing\nkicking\n.\nTh e yo un g bo y is w ea rin g bl ac k\n(c) BERT\nFigure 7: AREC Explanation examples."
+    } ],
+    "references" : [ {
+      "title" : "Neural machine translation by jointly learning to align and translate",
+      "author" : [ "Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio." ],
+      "venue" : "3rd International Conference on Learning Representations, ICLR 2015, San Diego, CA, USA, May 7-9, 2015,",
+      "citeRegEx" : "Bahdanau et al\\.,? 2015",
+      "shortCiteRegEx" : "Bahdanau et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Interpretable neural predictions with differentiable binary variables",
+      "author" : [ "Jasmijn Bastings", "Wilker Aziz", "Ivan Titov." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 2963–2977, Florence, Italy. Associa-",
+      "citeRegEx" : "Bastings et al\\.,? 2019",
+      "shortCiteRegEx" : "Bastings et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The elephant in the interpretability room: Why use attention as explanation when we have saliency methods",
+      "author" : [ "Jasmijn Bastings", "Katja Filippova" ],
+      "venue" : "In Proceedings of the Third BlackboxNLP Workshop on Analyzing and Interpreting Neural Networks",
+      "citeRegEx" : "Bastings and Filippova.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Bastings and Filippova.",
+      "year" : 2020
+    }, {
+      "title" : "A large annotated corpus for learning natural language inference",
+      "author" : [ "Samuel R. Bowman", "Gabor Angeli", "Christopher Potts", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages",
+      "citeRegEx" : "Bowman et al\\.,? 2015",
+      "shortCiteRegEx" : "Bowman et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "e-snli: Natural language inference with natural language explanations",
+      "author" : [ "Oana-Maria Camburu", "Tim Rocktäschel", "Thomas Lukasiewicz", "Phil Blunsom." ],
+      "venue" : "Advances in Neural Information Processing Systems 31: Annual Conference on Neural Infor-",
+      "citeRegEx" : "Camburu et al\\.,? 2018",
+      "shortCiteRegEx" : "Camburu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "What made you do this? understanding black-box decisions with sufficient input subsets",
+      "author" : [ "Brandon Carter", "Jonas Mueller", "Siddhartha Jain", "David K. Gifford." ],
+      "venue" : "The 22nd International Conference on Artificial Intelligence and Statistics, AISTATS",
+      "citeRegEx" : "Carter et al\\.,? 2019",
+      "shortCiteRegEx" : "Carter et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Joint training with semantic role labeling for better generalization in natural language inference",
+      "author" : [ "Cemil Cengiz", "Deniz Yuret." ],
+      "venue" : "Proceedings of the 5th Workshop on Representation Learning for NLP, pages 78–88, Online. Association for Computational",
+      "citeRegEx" : "Cengiz and Yuret.,? 2020",
+      "shortCiteRegEx" : "Cengiz and Yuret.",
+      "year" : 2020
+    }, {
+      "title" : "Learning alignments and leveraging natural logic",
+      "author" : [ "Nathanael Chambers", "Daniel Cer", "Trond Grenager", "David Hall", "Chloe Kiddon", "Bill MacCartney", "MarieCatherine de Marneffe", "Daniel Ramage", "Eric Yeh", "Christopher D. Manning." ],
+      "venue" : "Proceedings",
+      "citeRegEx" : "Chambers et al\\.,? 2007",
+      "shortCiteRegEx" : "Chambers et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "Generating hierarchical explanations on text classification via feature interaction detection",
+      "author" : [ "Hanjie Chen", "Guangtao Zheng", "Yangfeng Ji." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 5578–",
+      "citeRegEx" : "Chen et al\\.,? 2020",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Enhanced LSTM for natural language inference",
+      "author" : [ "Qian Chen", "Xiaodan Zhu", "Zhen-Hua Ling", "Si Wei", "Hui Jiang", "Diana Inkpen." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers),",
+      "citeRegEx" : "Chen et al\\.,? 2017",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Supervised learning of universal sentence representations from natural language inference data",
+      "author" : [ "Alexis Conneau", "Douwe Kiela", "Holger Schwenk", "Loı̈c Barrault", "Antoine Bordes" ],
+      "venue" : "In Proceedings of the 2017 Conference on Empirical Methods in Nat-",
+      "citeRegEx" : "Conneau et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "How do decisions emerge across layers in neural models? interpretation with differentiable masking",
+      "author" : [ "Nicola De Cao", "Michael Sejr Schlichtkrull", "Wilker Aziz", "Ivan Titov." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Nat-",
+      "citeRegEx" : "Cao et al\\.,? 2020",
+      "shortCiteRegEx" : "Cao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "ERASER: A benchmark to evaluate rationalized NLP models",
+      "author" : [ "Jay DeYoung", "Sarthak Jain", "Nazneen Fatema Rajani", "Eric Lehman", "Caiming Xiong", "Richard Socher", "Byron C. Wallace." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for",
+      "citeRegEx" : "DeYoung et al\\.,? 2020",
+      "shortCiteRegEx" : "DeYoung et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Pathologies of neural models make interpretations difficult",
+      "author" : [ "Shi Feng", "Eric Wallace", "Alvin Grissom II", "Mohit Iyyer", "Pedro Rodriguez", "Jordan Boyd-Graber." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Feng et al\\.,? 2018",
+      "shortCiteRegEx" : "Feng et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Breaking NLI systems with sentences that require simple lexical inferences",
+      "author" : [ "Max Glockner", "Vered Shwartz", "Yoav Goldberg." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers),",
+      "citeRegEx" : "Glockner et al\\.,? 2018",
+      "shortCiteRegEx" : "Glockner et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Annotation artifacts in natural lan",
+      "author" : [ "Smith" ],
+      "venue" : null,
+      "citeRegEx" : "2018.,? \\Q2018\\E",
+      "shortCiteRegEx" : "2018.",
+      "year" : 2018
+    }, {
+      "title" : "Learning to faithfully rational",
+      "author" : [ "ron C. Wallace" ],
+      "venue" : null,
+      "citeRegEx" : "Wallace.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Wallace.",
+      "year" : 2020
+    }, {
+      "title" : "Interpretation of NLP models through input marginalization",
+      "author" : [ "Siwon Kim", "Jihun Yi", "Eunji Kim", "Sungroh Yoon." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 3154–3167, Online. As-",
+      "citeRegEx" : "Kim et al\\.,? 2020",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "NILE : Natural language inference with faithful natural language explanations",
+      "author" : [ "Sawan Kumar", "Partha Talukdar." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 8730–8742, Online. Association for",
+      "citeRegEx" : "Kumar and Talukdar.,? 2020",
+      "shortCiteRegEx" : "Kumar and Talukdar.",
+      "year" : 2020
+    }, {
+      "title" : "Rationalizing neural predictions",
+      "author" : [ "Tao Lei", "Regina Barzilay", "Tommi Jaakkola." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 107–117, Austin, Texas. Association for Computational Linguistics.",
+      "citeRegEx" : "Lei et al\\.,? 2016",
+      "shortCiteRegEx" : "Lei et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Understanding neural networks through representation erasure",
+      "author" : [ "Jiwei Li", "Will Monroe", "Dan Jurafsky." ],
+      "venue" : "CoRR, abs/1612.08220.",
+      "citeRegEx" : "Li et al\\.,? 2016",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Learning sparse neural networks through l 0 regularization",
+      "author" : [ "Christos Louizos", "Max Welling", "Diederik P. Kingma." ],
+      "venue" : "6th International Conference on Learning Representations, ICLR 2018, Vancouver, BC, Canada, April 30 - May 3, 2018,",
+      "citeRegEx" : "Louizos et al\\.,? 2018a",
+      "shortCiteRegEx" : "Louizos et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Learning sparse neural networks through l 0 regularization",
+      "author" : [ "Christos Louizos", "Max Welling", "Diederik P. Kingma." ],
+      "venue" : "6th International Conference on Learning Representations, ICLR 2018, Vancouver, BC, Canada, April 30 - May 3, 2018,",
+      "citeRegEx" : "Louizos et al\\.,? 2018b",
+      "shortCiteRegEx" : "Louizos et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A unified approach to interpreting model predictions",
+      "author" : [ "Scott M. Lundberg", "Su-In Lee." ],
+      "venue" : "Advances in Neural Information Processing Systems 30: Annual Conference on Neural Information Processing Systems 2017, December 4-9, 2017, Long",
+      "citeRegEx" : "Lundberg and Lee.,? 2017",
+      "shortCiteRegEx" : "Lundberg and Lee.",
+      "year" : 2017
+    }, {
+      "title" : "A phrase-based alignment model for natural language inference",
+      "author" : [ "Bill MacCartney", "Michel Galley", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2008 Conference on Empirical Methods in Natural Language Processing, pages 802–811, Honolulu,",
+      "citeRegEx" : "MacCartney et al\\.,? 2008",
+      "shortCiteRegEx" : "MacCartney et al\\.",
+      "year" : 2008
+    }, {
+      "title" : "Learning to recognize features of valid textual entailments",
+      "author" : [ "Bill MacCartney", "Trond Grenager", "Marie-Catherine de Marneffe", "Daniel Cer", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the Human Language Technology Conference of the NAACL,",
+      "citeRegEx" : "MacCartney et al\\.,? 2006",
+      "shortCiteRegEx" : "MacCartney et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "Natural language inference",
+      "author" : [ "Bill MacCartney", "Christopher D Manning." ],
+      "venue" : "Citeseer.",
+      "citeRegEx" : "MacCartney and Manning.,? 2009",
+      "shortCiteRegEx" : "MacCartney and Manning.",
+      "year" : 2009
+    }, {
+      "title" : "The concrete distribution: A continuous relaxation of discrete random variables",
+      "author" : [ "Chris J. Maddison", "Andriy Mnih", "Yee Whye Teh." ],
+      "venue" : "5th International Conference on Learning Representations,",
+      "citeRegEx" : "Maddison et al\\.,? 2017",
+      "shortCiteRegEx" : "Maddison et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Right for the wrong reasons: Diagnosing syntactic heuristics in natural language inference",
+      "author" : [ "Tom McCoy", "Ellie Pavlick", "Tal Linzen." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 3428–3448,",
+      "citeRegEx" : "McCoy et al\\.,? 2019",
+      "shortCiteRegEx" : "McCoy et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Explanation in artificial intelligence: Insights from the social sciences",
+      "author" : [ "Tim Miller." ],
+      "venue" : "Artificial Intelligence, 267:1 – 38.",
+      "citeRegEx" : "Miller.,? 2019",
+      "shortCiteRegEx" : "Miller.",
+      "year" : 2019
+    }, {
+      "title" : "Interpretable Machine Learning",
+      "author" : [ "Christoph Molnar." ],
+      "venue" : "Lulu. com.",
+      "citeRegEx" : "Molnar.,? 2020",
+      "shortCiteRegEx" : "Molnar.",
+      "year" : 2020
+    }, {
+      "title" : "Siamese recurrent architectures for learning sentence similarity",
+      "author" : [ "Jonas Mueller", "Aditya Thyagarajan." ],
+      "venue" : "Proceedings of the Thirtieth AAAI Conference on Artificial Intelligence, February 12-17, 2016, Phoenix, Arizona, USA, pages 2786–2792.",
+      "citeRegEx" : "Mueller and Thyagarajan.,? 2016",
+      "shortCiteRegEx" : "Mueller and Thyagarajan.",
+      "year" : 2016
+    }, {
+      "title" : "Beyond word importance: Contextual decomposition to extract interactions from lstms",
+      "author" : [ "W. James Murdoch", "Peter J. Liu", "Bin Yu." ],
+      "venue" : "6th International Conference on Learning Representations, ICLR 2018, Vancouver, BC, Canada, April 30 - May",
+      "citeRegEx" : "Murdoch et al\\.,? 2018",
+      "shortCiteRegEx" : "Murdoch et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Text matching as image recognition",
+      "author" : [ "Liang Pang", "Yanyan Lan", "Jiafeng Guo", "Jun Xu", "Shengxian Wan", "Xueqi Cheng." ],
+      "venue" : "Proceedings of the Thirtieth AAAI Conference on Artificial Intelligence, February 12-17, 2016, Phoenix, Arizona, USA, pages",
+      "citeRegEx" : "Pang et al\\.,? 2016",
+      "shortCiteRegEx" : "Pang et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "A decomposable attention model for natural language inference",
+      "author" : [ "Ankur Parikh", "Oscar Täckström", "Dipanjan Das", "Jakob Uszkoreit." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 2249–2255,",
+      "citeRegEx" : "Parikh et al\\.,? 2016",
+      "shortCiteRegEx" : "Parikh et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Constrained differential optimization",
+      "author" : [ "John Platt", "Alan Barr." ],
+      "venue" : "Neural Information Processing Systems. American Institute of Physics.",
+      "citeRegEx" : "Platt and Barr.,? 1988",
+      "shortCiteRegEx" : "Platt and Barr.",
+      "year" : 1988
+    }, {
+      "title" : "Hypothesis only baselines in natural language inference",
+      "author" : [ "Adam Poliak", "Jason Naradowsky", "Aparajita Haldar", "Rachel Rudinger", "Benjamin Van Durme." ],
+      "venue" : "Proceedings of the Seventh Joint Conference on Lexical and Computational Semantics,",
+      "citeRegEx" : "Poliak et al\\.,? 2018",
+      "shortCiteRegEx" : "Poliak et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Learning to deceive with attention-based explanations",
+      "author" : [ "Danish Pruthi", "Mansi Gupta", "Bhuwan Dhingra", "Graham Neubig", "Zachary C. Lipton." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 4782–",
+      "citeRegEx" : "Pruthi et al\\.,? 2020",
+      "shortCiteRegEx" : "Pruthi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "why should I trust you?”: Explaining the predictions of any classifier",
+      "author" : [ "Marco Túlio Ribeiro", "Sameer Singh", "Carlos Guestrin." ],
+      "venue" : "Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining,",
+      "citeRegEx" : "Ribeiro et al\\.,? 2016",
+      "shortCiteRegEx" : "Ribeiro et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Beyond accuracy: Behavioral testing of NLP models with CheckList",
+      "author" : [ "Marco Tulio Ribeiro", "Tongshuang Wu", "Carlos Guestrin", "Sameer Singh." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 4902–",
+      "citeRegEx" : "Ribeiro et al\\.,? 2020",
+      "shortCiteRegEx" : "Ribeiro et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Is attention interpretable? In Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 2931–2951, Florence, Italy",
+      "author" : [ "Sofia Serrano", "Noah A. Smith." ],
+      "venue" : "Association for Computational Linguistics.",
+      "citeRegEx" : "Serrano and Smith.,? 2019",
+      "shortCiteRegEx" : "Serrano and Smith.",
+      "year" : 2019
+    }, {
+      "title" : "Simple BERT models for relation extraction and semantic role labeling",
+      "author" : [ "Peng Shi", "Jimmy Lin." ],
+      "venue" : "CoRR, abs/1904.05255.",
+      "citeRegEx" : "Shi and Lin.,? 2019",
+      "shortCiteRegEx" : "Shi and Lin.",
+      "year" : 2019
+    }, {
+      "title" : "Deep inside convolutional networks: Visualising image classification models and saliency maps",
+      "author" : [ "Karen Simonyan", "Andrea Vedaldi", "Andrew Zisserman" ],
+      "venue" : null,
+      "citeRegEx" : "Simonyan et al\\.,? \\Q2014\\E",
+      "shortCiteRegEx" : "Simonyan et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Axiomatic attribution for deep networks",
+      "author" : [ "Mukund Sundararajan", "Ankur Taly", "Qiqi Yan." ],
+      "venue" : "Proceedings of the 34th International Conference on Machine Learning, ICML 2017, Sydney, NSW, Australia, 6-11 August 2017, volume 70 of Proceedings",
+      "citeRegEx" : "Sundararajan et al\\.,? 2017",
+      "shortCiteRegEx" : "Sundararajan et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Rationalizing text matching: Learning sparse alignments via optimal transport",
+      "author" : [ "Kyle Swanson", "Lili Yu", "Tao Lei." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 5609–5626, Online. Association",
+      "citeRegEx" : "Swanson et al\\.,? 2020",
+      "shortCiteRegEx" : "Swanson et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Generating token-level explanations for natural language inference",
+      "author" : [ "James Thorne", "Andreas Vlachos", "Christos Christodoulopoulos", "Arpit Mittal." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the",
+      "citeRegEx" : "Thorne et al\\.,? 2019",
+      "shortCiteRegEx" : "Thorne et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Performance impact caused by hidden bias of training data for recognizing textual entailment",
+      "author" : [ "Masatoshi Tsuchiya." ],
+      "venue" : "Proceedings of the Eleventh International Conference on Language Resources and Evaluation (LREC 2018), Miyazaki,",
+      "citeRegEx" : "Tsuchiya.,? 2018",
+      "shortCiteRegEx" : "Tsuchiya.",
+      "year" : 2018
+    }, {
+      "title" : "Attention interpretability across NLP tasks",
+      "author" : [ "Shikhar Vashishth", "Shyam Upadhyay", "Gaurav Singh Tomar", "Manaal Faruqui." ],
+      "venue" : "CoRR, abs/1909.11218.",
+      "citeRegEx" : "Vashishth et al\\.,? 2019",
+      "shortCiteRegEx" : "Vashishth et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Lukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems 30: Annual Conference on Neural",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Bilateral multi-perspective matching for natural language sentences",
+      "author" : [ "Zhiguo Wang", "Wael Hamza", "Radu Florian." ],
+      "venue" : "Proceedings of the Twenty-Sixth International Joint Conference on Artificial Intelligence, IJCAI 2017, Melbourne, Australia, August",
+      "citeRegEx" : "Wang et al\\.,? 2017",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "A broad-coverage challenge corpus for sentence understanding through inference",
+      "author" : [ "Adina Williams", "Nikita Nangia", "Samuel Bowman." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Lin-",
+      "citeRegEx" : "Williams et al\\.,? 2018",
+      "shortCiteRegEx" : "Williams et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Learning the Dyck language with attention-based Seq2Seq models",
+      "author" : [ "Xiang Yu", "Ngoc Thang Vu", "Jonas Kuhn." ],
+      "venue" : "Proceedings of the 2019 ACL Workshop BlackboxNLP: Analyzing and Interpreting Neural Networks for NLP, pages 138–146, Florence,",
+      "citeRegEx" : "Yu et al\\.,? 2019",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "End-to-end neural word alignment outperforms GIZA++",
+      "author" : [ "Thomas Zenkel", "Joern Wuebker", "John DeNero." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 1605–1617, Online. Association for",
+      "citeRegEx" : "Zenkel et al\\.,? 2020",
+      "shortCiteRegEx" : "Zenkel et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Interpreting hierarchical linguistic interactions in dnns",
+      "author" : [ "Die Zhang", "Huilin Zhou", "Xiaoyi Bao", "Da Huo", "Ruizhao Chen", "Xu Cheng", "Hao Zhang", "Mengyue Wu", "Quanshi Zhang" ],
+      "venue" : null,
+      "citeRegEx" : "Zhang et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 3,
+      "context" : "Recently, with the introduction of large-scale annotated datasets (Bowman et al., 2015; Williams et al., 2018), deep learning models are adopted to solve the task in a supervised manner (Conneau et al.",
+      "startOffset" : 66,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 51,
+      "context" : "Recently, with the introduction of large-scale annotated datasets (Bowman et al., 2015; Williams et al., 2018), deep learning models are adopted to solve the task in a supervised manner (Conneau et al.",
+      "startOffset" : 66,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2018), deep learning models are adopted to solve the task in a supervised manner (Conneau et al., 2017; Chen et al., 2017; Devlin et al., 2019) and achieve great success, while inner mechanisms of these methods are still opaque due to high computational complexities.",
+      "startOffset" : 83,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2018), deep learning models are adopted to solve the task in a supervised manner (Conneau et al., 2017; Chen et al., 2017; Devlin et al., 2019) and achieve great success, while inner mechanisms of these methods are still opaque due to high computational complexities.",
+      "startOffset" : 83,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2018), deep learning models are adopted to solve the task in a supervised manner (Conneau et al., 2017; Chen et al., 2017; Devlin et al., 2019) and achieve great success, while inner mechanisms of these methods are still opaque due to high computational complexities.",
+      "startOffset" : 83,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 0,
+      "context" : "assigns saliency scores for input features (Bahdanau et al., 2015; Lundberg and Lee, 2017; Thorne et al., 2019; Kim et al., 2020), and feature selection or rationale that keeps a subset of features sufficient for the prediction (Lei et al.",
+      "startOffset" : 43,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 24,
+      "context" : "assigns saliency scores for input features (Bahdanau et al., 2015; Lundberg and Lee, 2017; Thorne et al., 2019; Kim et al., 2020), and feature selection or rationale that keeps a subset of features sufficient for the prediction (Lei et al.",
+      "startOffset" : 43,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 46,
+      "context" : "assigns saliency scores for input features (Bahdanau et al., 2015; Lundberg and Lee, 2017; Thorne et al., 2019; Kim et al., 2020), and feature selection or rationale that keeps a subset of features sufficient for the prediction (Lei et al.",
+      "startOffset" : 43,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 18,
+      "context" : "assigns saliency scores for input features (Bahdanau et al., 2015; Lundberg and Lee, 2017; Thorne et al., 2019; Kim et al., 2020), and feature selection or rationale that keeps a subset of features sufficient for the prediction (Lei et al.",
+      "startOffset" : 43,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2020), and feature selection or rationale that keeps a subset of features sufficient for the prediction (Lei et al., 2016; Bastings et al., 2019; De Cao et al., 2020; DeYoung et al., 2020).",
+      "startOffset" : 106,
+      "endOffset" : 190
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2020), and feature selection or rationale that keeps a subset of features sufficient for the prediction (Lei et al., 2016; Bastings et al., 2019; De Cao et al., 2020; DeYoung et al., 2020).",
+      "startOffset" : 106,
+      "endOffset" : 190
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2020), and feature selection or rationale that keeps a subset of features sufficient for the prediction (Lei et al., 2016; Bastings et al., 2019; De Cao et al., 2020; DeYoung et al., 2020).",
+      "startOffset" : 106,
+      "endOffset" : 190
+    }, {
+      "referenceID" : 39,
+      "context" : "Figure 1 (a) and (b) present a text attribution explanation by LIME (Ribeiro et al., 2016) and a text rationale explanation from Li et al.",
+      "startOffset" : 68,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 27,
+      "context" : "However, NLI is a cross-sentence task requiring a system to reason over alignments2 (MacCartney and Manning, 2009).",
+      "startOffset" : 84,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 35,
+      "context" : "To explain NLI models over alignments, the literature usually looks at co-attention weights (Parikh et al., 2016; Pang et al., 2016; Chen et al., 2017), which is a dominant way to implicitly align word pairs (Wang et al.",
+      "startOffset" : 92,
+      "endOffset" : 151
+    }, {
+      "referenceID" : 34,
+      "context" : "To explain NLI models over alignments, the literature usually looks at co-attention weights (Parikh et al., 2016; Pang et al., 2016; Chen et al., 2017), which is a dominant way to implicitly align word pairs (Wang et al.",
+      "startOffset" : 92,
+      "endOffset" : 151
+    }, {
+      "referenceID" : 9,
+      "context" : "To explain NLI models over alignments, the literature usually looks at co-attention weights (Parikh et al., 2016; Pang et al., 2016; Chen et al., 2017), which is a dominant way to implicitly align word pairs (Wang et al.",
+      "startOffset" : 92,
+      "endOffset" : 151
+    }, {
+      "referenceID" : 50,
+      "context" : ", 2017), which is a dominant way to implicitly align word pairs (Wang et al., 2017; Gong et al., 2018; Devlin et al., 2019).",
+      "startOffset" : 64,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2017), which is a dominant way to implicitly align word pairs (Wang et al., 2017; Gong et al., 2018; Devlin et al., 2019).",
+      "startOffset" : 64,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 41,
+      "context" : "However, attention is argued not as explainable as expected (Jain and Wallace, 2019; Serrano and Smith, 2019; Bastings and Filippova, 2020).",
+      "startOffset" : 60,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 2,
+      "context" : "However, attention is argued not as explainable as expected (Jain and Wallace, 2019; Serrano and Smith, 2019; Bastings and Filippova, 2020).",
+      "startOffset" : 60,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 52,
+      "context" : "Other works build hard alignments resorting sparse attention (Yu et al., 2019; Bastings et al., 2019; Swanson et al., 2020).",
+      "startOffset" : 61,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 1,
+      "context" : "Other works build hard alignments resorting sparse attention (Yu et al., 2019; Bastings et al., 2019; Swanson et al., 2020).",
+      "startOffset" : 61,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 45,
+      "context" : "Other works build hard alignments resorting sparse attention (Yu et al., 2019; Bastings et al., 2019; Swanson et al., 2020).",
+      "startOffset" : 61,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 31,
+      "context" : "But their selfexplanatory architectures pay for the interpretability at a cost of performance dropping on accuracy (Molnar, 2020).",
+      "startOffset" : 115,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 30,
+      "context" : "Second, the explanation should be humanfriendly or readable (Miller, 2019), which means the pairs are few to promote compact rationales, and extracted continuously to make phrase-level rationales as far as possible (Lei et al.",
+      "startOffset" : 60,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 20,
+      "context" : "Second, the explanation should be humanfriendly or readable (Miller, 2019), which means the pairs are few to promote compact rationales, and extracted continuously to make phrase-level rationales as far as possible (Lei et al., 2016; Bastings et al., 2019).",
+      "startOffset" : 215,
+      "endOffset" : 256
+    }, {
+      "referenceID" : 1,
+      "context" : "Second, the explanation should be humanfriendly or readable (Miller, 2019), which means the pairs are few to promote compact rationales, and extracted continuously to make phrase-level rationales as far as possible (Lei et al., 2016; Bastings et al., 2019).",
+      "startOffset" : 215,
+      "endOffset" : 256
+    }, {
+      "referenceID" : 35,
+      "context" : "With the proposed AREC, we study three typical co-attention based models Decomposable Attention (DA) (Parikh et al., 2016), Enhanced LSTM (ESIM) (Chen et al.",
+      "startOffset" : 101,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2016), Enhanced LSTM (ESIM) (Chen et al., 2017) and BERT (Devlin et al.",
+      "startOffset" : 30,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2017) and BERT (Devlin et al., 2019) on four benchmarks including SNLI (Bowman et al.",
+      "startOffset" : 17,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 3,
+      "context" : ", 2019) on four benchmarks including SNLI (Bowman et al., 2015), ESNLI (Camburu et al.",
+      "startOffset" : 42,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2015), ESNLI (Camburu et al., 2018), BNLI (Glockner et al.",
+      "startOffset" : 15,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 15,
+      "context" : ", 2018), BNLI (Glockner et al., 2018) and HANS (McCoy et al.",
+      "startOffset" : 14,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 3,
+      "context" : "Despite lots of works construct representations for the input two sentences individually (Bowman et al., 2015; Mueller and Thyagarajan, 2016; Conneau et al., 2017), the task actually requires a system to recognize alignments (MacCartney and Manning, 2009).",
+      "startOffset" : 89,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 32,
+      "context" : "Despite lots of works construct representations for the input two sentences individually (Bowman et al., 2015; Mueller and Thyagarajan, 2016; Conneau et al., 2017), the task actually requires a system to recognize alignments (MacCartney and Manning, 2009).",
+      "startOffset" : 89,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 10,
+      "context" : "Despite lots of works construct representations for the input two sentences individually (Bowman et al., 2015; Mueller and Thyagarajan, 2016; Conneau et al., 2017), the task actually requires a system to recognize alignments (MacCartney and Manning, 2009).",
+      "startOffset" : 89,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 27,
+      "context" : ", 2017), the task actually requires a system to recognize alignments (MacCartney and Manning, 2009).",
+      "startOffset" : 69,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 7,
+      "context" : "In early days, alignment detection is sometimes formed as an independent task (Chambers et al., 2007; MacCartney et al., 2008), or a component of a pipeline system (MacCartney et al.",
+      "startOffset" : 78,
+      "endOffset" : 126
+    }, {
+      "referenceID" : 25,
+      "context" : "In early days, alignment detection is sometimes formed as an independent task (Chambers et al., 2007; MacCartney et al., 2008), or a component of a pipeline system (MacCartney et al.",
+      "startOffset" : 78,
+      "endOffset" : 126
+    }, {
+      "referenceID" : 26,
+      "context" : ", 2008), or a component of a pipeline system (MacCartney et al., 2006).",
+      "startOffset" : 45,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 35,
+      "context" : "Currently deep learning methods seek to model alignments implicitly through co-attention mechanism (Parikh et al., 2016; Pang et al., 2016; Chen et al., 2017; Wang et al., 2017; Gong et al., 2018; Joshi et al., 2019; Devlin et al., 2019).",
+      "startOffset" : 99,
+      "endOffset" : 237
+    }, {
+      "referenceID" : 34,
+      "context" : "Currently deep learning methods seek to model alignments implicitly through co-attention mechanism (Parikh et al., 2016; Pang et al., 2016; Chen et al., 2017; Wang et al., 2017; Gong et al., 2018; Joshi et al., 2019; Devlin et al., 2019).",
+      "startOffset" : 99,
+      "endOffset" : 237
+    }, {
+      "referenceID" : 9,
+      "context" : "Currently deep learning methods seek to model alignments implicitly through co-attention mechanism (Parikh et al., 2016; Pang et al., 2016; Chen et al., 2017; Wang et al., 2017; Gong et al., 2018; Joshi et al., 2019; Devlin et al., 2019).",
+      "startOffset" : 99,
+      "endOffset" : 237
+    }, {
+      "referenceID" : 50,
+      "context" : "Currently deep learning methods seek to model alignments implicitly through co-attention mechanism (Parikh et al., 2016; Pang et al., 2016; Chen et al., 2017; Wang et al., 2017; Gong et al., 2018; Joshi et al., 2019; Devlin et al., 2019).",
+      "startOffset" : 99,
+      "endOffset" : 237
+    }, {
+      "referenceID" : 12,
+      "context" : "Currently deep learning methods seek to model alignments implicitly through co-attention mechanism (Parikh et al., 2016; Pang et al., 2016; Chen et al., 2017; Wang et al., 2017; Gong et al., 2018; Joshi et al., 2019; Devlin et al., 2019).",
+      "startOffset" : 99,
+      "endOffset" : 237
+    }, {
+      "referenceID" : 0,
+      "context" : "The technique is first proposed in machine translation (Bahdanau et al., 2015), and soon dominates in many applications including NLI.",
+      "startOffset" : 55,
+      "endOffset" : 78
+    }, {
+      "referenceID" : 33,
+      "context" : "5374 ponent of models (Murdoch et al., 2018), assigning word importance scores (Ribeiro et al.",
+      "startOffset" : 22,
+      "endOffset" : 44
+    }, {
+      "referenceID" : 39,
+      "context" : ", 2018), assigning word importance scores (Ribeiro et al., 2016; Li et al., 2016; Kim et al., 2020), extracting predictive related input pieces, referred as sufficient input subset (Carter et al.",
+      "startOffset" : 42,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2018), assigning word importance scores (Ribeiro et al., 2016; Li et al., 2016; Kim et al., 2020), extracting predictive related input pieces, referred as sufficient input subset (Carter et al.",
+      "startOffset" : 42,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 18,
+      "context" : ", 2018), assigning word importance scores (Ribeiro et al., 2016; Li et al., 2016; Kim et al., 2020), extracting predictive related input pieces, referred as sufficient input subset (Carter et al.",
+      "startOffset" : 42,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 5,
+      "context" : ", 2020), extracting predictive related input pieces, referred as sufficient input subset (Carter et al., 2019) or rationale (Lei et al.",
+      "startOffset" : 89,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2019) or rationale (Lei et al., 2016; Bastings et al., 2019), building hierarchical explanations (Chen et al.",
+      "startOffset" : 21,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2019) or rationale (Lei et al., 2016; Bastings et al., 2019), building hierarchical explanations (Chen et al.",
+      "startOffset" : 21,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2019), building hierarchical explanations (Chen et al., 2020; Zhang et al., 2020), and generating natural language explanations (Camburu et al.",
+      "startOffset" : 44,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 54,
+      "context" : ", 2019), building hierarchical explanations (Chen et al., 2020; Zhang et al., 2020), and generating natural language explanations (Camburu et al.",
+      "startOffset" : 44,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2020), and generating natural language explanations (Camburu et al., 2018; Kumar and Talukdar, 2020).",
+      "startOffset" : 54,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 19,
+      "context" : ", 2020), and generating natural language explanations (Camburu et al., 2018; Kumar and Talukdar, 2020).",
+      "startOffset" : 54,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 48,
+      "context" : "Indeed, co-attention is a key proxy to model alignments, where perturbing its weights has a significant impact (Vashishth et al., 2019).",
+      "startOffset" : 111,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 41,
+      "context" : "Yet recently, attention is argued to be not explainable as expected (Jain and Wallace, 2019; Serrano and Smith, 2019; Grimsley et al., 2020; Bastings and Filippova, 2020).",
+      "startOffset" : 68,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 2,
+      "context" : "Yet recently, attention is argued to be not explainable as expected (Jain and Wallace, 2019; Serrano and Smith, 2019; Grimsley et al., 2020; Bastings and Filippova, 2020).",
+      "startOffset" : 68,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 49,
+      "context" : "Furthermore, for models with multiple attentions (Vaswani et al., 2017), it’s hard to acquire a global understanding of alignments.",
+      "startOffset" : 49,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 20,
+      "context" : "(2019), who adopts generator-encoder architecture (Lei et al., 2016) to generate corresponded rationales.",
+      "startOffset" : 50,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 9,
+      "context" : "where φ is a similarity function, ordinarily a vector dot product (Chen et al., 2017).",
+      "startOffset" : 66,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 31,
+      "context" : "The first term L0 is about fidelity, asking that the model prediction is maintained after masking (Molnar, 2020).",
+      "startOffset" : 98,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2020) or label equality (Feng et al., 2018), the euclidean distance between logits is a stricter constraint that narrows down the solution space and would lead to more faithful explanations3.",
+      "startOffset" : 26,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 31,
+      "context" : "Secondly, an explanation ought to be readable (Molnar, 2020).",
+      "startOffset" : 46,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 30,
+      "context" : "Compactness draws intuition from the philosophy that a good explanation should be short or selective (Miller, 2019), which encourages fewer alignments to be selected.",
+      "startOffset" : 101,
+      "endOffset" : 115
+    }, {
+      "referenceID" : 53,
+      "context" : "Contiguity encourages continuous phrase-level alignments4 (Zenkel et al., 2020), which is helpful for human understandings.",
+      "startOffset" : 58,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 14,
+      "context" : "(3)If we use label equality (Feng et al., 2018), which the prediction is only maintained in terms of the label, there are many explanations satisfying the constraint.",
+      "startOffset" : 28,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 22,
+      "context" : "Specifically, we assume that every element Zi,j in Z is an independent random variable satisfying HardConcrete distribution (Louizos et al., 2018a).",
+      "startOffset" : 124,
+      "endOffset" : 147
+    }, {
+      "referenceID" : 3,
+      "context" : "Datasets We use four datasets SNLI (Bowman et al., 2015), ESNLI (Camburu et al.",
+      "startOffset" : 35,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2015), ESNLI (Camburu et al., 2018), BNLI (Glockner et al.",
+      "startOffset" : 15,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 15,
+      "context" : ", 2018), BNLI (Glockner et al., 2018) and HANS as our testbeds.",
+      "startOffset" : 14,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 35,
+      "context" : "Models We choose three typical co-attention based NLI models DA5 (Parikh et al., 2016), ESIM (Chen et al.",
+      "startOffset" : 65,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2016), ESIM (Chen et al., 2017) and BERT (base version) (Devlin et al.",
+      "startOffset" : 14,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2017) and BERT (base version) (Devlin et al., 2019) for our discussion.",
+      "startOffset" : 32,
+      "endOffset" : 53
+    }, {
+      "referenceID" : 49,
+      "context" : "Differently, BERT concatenates the input sentence pair with a template “[CLS] p [SEP] h [SEP]” and uses global self-attention (Vaswani et al., 2017).",
+      "startOffset" : 126,
+      "endOffset" : 148
+    }, {
+      "referenceID" : 21,
+      "context" : "1 Baselines We select feature attribution baselines including co-attention itself, perturbation-based approaches LEAVEONEOUT (Li et al., 2016), LIME (Ribeiro et al.",
+      "startOffset" : 125,
+      "endOffset" : 142
+    }, {
+      "referenceID" : 39,
+      "context" : ", 2016), LIME (Ribeiro et al., 2016), BACKSELECT (Carter et al.",
+      "startOffset" : 14,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 5,
+      "context" : ", 2016), BACKSELECT (Carter et al., 2019), gradient-based approaches GRADIENT (Simonyan et al.",
+      "startOffset" : 20,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 43,
+      "context" : ", 2019), gradient-based approaches GRADIENT (Simonyan et al., 2014) and INTEGRATGRAD (Sundararajan et al.",
+      "startOffset" : 44,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 44,
+      "context" : ", 2014) and INTEGRATGRAD (Sundararajan et al., 2017) and a feature selection method DIFFMASK (De Cao et al.",
+      "startOffset" : 25,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 13,
+      "context" : "We don’t use Area Over Perturbation Curve (AOPC) (DeYoung et al., 2020) because our method is to reserve features (i.",
+      "startOffset" : 49,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 47,
+      "context" : "In our knowledge, DIFFMASK is to globally learn to explain local instances: the explainer is trained on a training set which may contain artifacts and biases (Gururangan et al., 2018; Tsuchiya, 2018; Poliak et al., 2018).",
+      "startOffset" : 158,
+      "endOffset" : 220
+    }, {
+      "referenceID" : 37,
+      "context" : "In our knowledge, DIFFMASK is to globally learn to explain local instances: the explainer is trained on a training set which may contain artifacts and biases (Gururangan et al., 2018; Tsuchiya, 2018; Poliak et al., 2018).",
+      "startOffset" : 158,
+      "endOffset" : 220
+    }, {
+      "referenceID" : 40,
+      "context" : "Diverse evaluations are pursued to understand models profoundly (Ribeiro et al., 2020).",
+      "startOffset" : 64,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 13,
+      "context" : "we evaluate its alignment plausibility (Jacovi and Goldberg, 2020): how well do its alignment rationales agree with human judgments (DeYoung et al., 2020).",
+      "startOffset" : 132,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 29,
+      "context" : "Lex, Sub and Cons are different overlap heuristics in HANS (McCoy et al., 2019).",
+      "startOffset" : 59,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 42,
+      "context" : "In particular, we employ an off-the-shelf BERT-based SRL model (Shi and Lin, 2019) to extract predicates and their corresponding arguments from the premise and the hypothesis in advance.",
+      "startOffset" : 63,
+      "endOffset" : 82
+    } ],
+    "year" : 2021,
+    "abstractText" : "Deep learning models have achieved great success on the task of Natural Language Inference (NLI), though only a few attempts try to explain their behaviors. Existing explanation methods usually pick prominent features such as words or phrases from the input text. However, for NLI, alignments among words or phrases are more enlightening clues to explain the model. To this end, this paper presents AREC, a post-hoc approach to generate alignment rationale explanations for co-attention based models in NLI. The explanation is based on feature selection, which keeps few but sufficient alignments while maintaining the same prediction of the target model. Experimental results show that our method is more faithful and readable compared with many existing approaches. We further study and reevaluate three typical models through our explanation beyond accuracy, and propose a simple method that greatly improves the model robustness.1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

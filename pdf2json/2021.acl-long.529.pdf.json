@@ -1,0 +1,620 @@
+{
+  "name" : "2021.acl-long.529.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Joint Verification and Reranking for Open Fact Checking Over Tables",
+    "authors" : [ "Michael Schlichtkrull", "Vladimir Karpukhin", "Barlas Oğuz", "Mike Lewis", "Wen-tau Yih", "Sebastian Riedel" ],
+    "emails" : [ "michael.schlichtkrull@cst.cam.ac.uk,", "sriedel}@fb.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 6787–6799\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n6787"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Verifying whether a given fact coheres with a trusted body of knowledge is a fundamental problem in NLP, with important applications to automated fact checking (Vlachos and Riedel, 2014) and other tasks in computational journalism (Cohen et al., 2011; Flew et al., 2012). Despite extensive investigation of the problem under different conditions including entailment and natural language inference (Dagan et al., 2005; Bowman et al., 2015) as well as claim verification (Vlachos and Riedel, 2014; Alhindi et al., 2018; Thorne and Vlachos, 2018), relatively little attention has been devoted to the setting where the trusted body of evidence is structured in nature — that is, where it consists of tabular or graph-structured data.\nRecently, two datasets were introduced for claim verification over tables (Chen et al., 2020b; Gupta et al., 2020). In both datasets, claims can be verified\n∗Work done while interning with Facebook AI Research.\ngiven a single associated table. While highly useful for the development of models, this closed setting is not reflective of real-world fact checking tasks where it is usually not known which table to consult for evidence. Realistic systems must first retrieve evidence from a large data source. That is, realistic systems must operate in an open setting.\nHere, we investigate fact verification over tables in the open setting. We take inspiration from similar work on unstructured data (Chen et al., 2017; Nie et al., 2019; Karpukhin et al., 2020; Lewis et al., 2020), proposing a two-step model which combines ad-hoc retrieval with a neural reader. Drawing on preliminary work in open question answering over tables (Sun et al., 2016), we perform retrieval based on simple heuristic modeling of individual table cells. We combine this retriever with a RoBERTa-based (Liu et al., 2019) joint reranking-and-verification model, performing\nfusion of evidence documents in the verification component. This corresponds to the approach suggested for question answering by e.g. Izacard and Grave (2020).\nWe evaluate our models using the recently introduced TabFact dataset (Chen et al., 2020b). While initially developed for the closed domain, the majority of claims are sufficiently contextindependent that they can be understood without knowing which table they were constructed with reference to. As such, the dataset is suitable for the open domain as well. Our models represent a first step into the open domain, achieving open-domain performance exceeding the previous closed-domain state of the art—outside of Eisenschlos et al. (2020), which includes pretraining on additional synthetic data. We demonstrate significant gains from including multiple tables, and these gains are increasing as more tables are used. We furthermore present results using a more realistic setting where tables are retrieved not just from the 16,573 TabFact tables, but from the full Wikipedia dump. Our contributions can be summarized as follows:\n1. We introduce the first model for open-domain table fact verification, demonstrating strong performance exceeding the previous closedsetting state of the art.\n2. We propose two strategies with corresponding loss functions for modeling table fact verification in the open setting, suitable respectively for high verification accuracy or identifying if appropriate information has been retrieved for verification.\n3. In addition to our open-domain performance, our model achieves a new closed-domain stateof-the-art result.\n4. We report the first results on Wikipedia-scale open-domain table fact verification, using all tables from a Wikipedia dump as the backend.\nWe release the source code for our experiments at https://github.com/facebookresearch/ OpenTableFactChecking."
+    }, {
+      "heading" : "2 Open-Domain Table Fact Verification",
+      "text" : "Formally, the open table fact verification problem can be described as follows. Given a claim q and a collection of tables T , the task is to determine whether q is true or false. As such, we approach the task by modeling a binary verdict variable v as p(v|q, T ). This is in contrast to the closed setting, where a single table tq ∈ T is given, and the task is to model p(v|q, tq). Since there are large available datasets for the closed setting (Chen et al., 2020b; Gupta et al., 2020), it is reasonable to expect to exploit tq during training; however, at test time, this information may not be available. We follow a two-step methodology that is often adopted in open-domain setting for unstructed data (Chen et al., 2017; Nie et al., 2019; Karpukhin et al., 2020; Lewis et al., 2020) to our setting. Namely, given a claim query q, we retrieve a set of evidence tables Dq ⊂ T (Section 3), and subsequently model p(v|q,Dq) in place of p(v|q, T ) (Section 4)."
+    }, {
+      "heading" : "3 Entity-based Retrieval",
+      "text" : "We first design a strategy for retrieving an appropriate subset of evidence tables for a given query. For\nquestion answering over tables, Sun et al. (2016) demonstrated strong performance on retrieving relevant tables using entity linking information, following the intuition that many table cells contain entities. We take inspiration from these results. In their setting, claim entities are linked to Freebase entities, and string matching on the alias list is used to map entities to cells. To avoid reliance on a knowledge graph, we instead use only the textual string from the claim to represent entities, and perform approximate matching through dot products of bi- and tri-gram TF-IDF vectors.\nWe pre-compute bi- and trigram TF-IDF vectors z(c1t ), ..., z(c m t ) for every table t ∈ T with cells c1t , ..., c m t . Then, we identify the named entities e1q , ..., e n q within the query q. For our experiments, we use the named entity spans for TabFact, provided by Chen et al. (2020b) as part of their LPA-model.1 We compute bi- and trigram TF-IDF vectors z(e1q), ..., z(e n q ) for the surface forms of those entities. To retrieve Dq given q, we then score every t ∈ T . Since we are approximating entity linking between claim entities and cells, we let the score between an entity and a table be the best match between that entity and any cell in the table. That is:\nscore(q, t) = n∑ i=1 m max j=1 z(eiq) ᵀ · z(cjt ) (1)\nIn other words, we compute for every entity the best match in the table, and score the table as the sum over the best matches. To construct the set of evidence tables Dq, we then retrieve the top-k highest scoring tables. Our choice to use bi- and tri-gram TF-IDF as the retrieval strategy was determined empirically — see Section 5.1 and Table 1 for experimental comparisons."
+    }, {
+      "heading" : "4 Neural Verification",
+      "text" : "To model p(v|q,Dq), we employ a RoBERTabased (Liu et al., 2019) late fusion strategy (see Figure 2 for a diagram of our model). Given a query q with a ranked list of k retrieved tables Dq = (d 1 q , ..., d k q ), we begin by linearising each table. Our linearisation scheme follows Chen et al. (2020b). We first perform sub-table selection by excluding columns not linked to entities in the query. Here, we reuse the entity linking obtained during\n1In the absence of named entity tags, named entity spans would first need to be found though an off-the-shelf named entity recognizer, such as SpaCy (Honnibal et al., 2020).\nthe retrieval step (see Section 3), and retain only the three columns in which cells received the highest retrieval scores. We linearise each row separately, encoding entries and table headers. Suppose r is a row with cell entries c1, c2, ..., cm in a table, where the corresponding column headers are h1, h2, ..., hm. Row number r is mapped to “row r is : h1 is c1 ; h2 is c2; ... ; hm is cm .”\nWe construct a final linearisation Lq,t for each query-table pair q, t by prepending the query to the filtered table linearisation. We then encode each Lq,t with RoBERTa, and obtain a contextualised embedding f(dkq ) ∈ Rn for every table by using the final-layer embedding of the CLS-token. We construct the sequence of embeddings f(d1q), ...f(d k q ) for all k tables. When the model attempts to judge whether to rely on a given table for verification, other highlyscored tables represent useful contextual information (e.g., in the example in Figure 1, newspapers belonging to the same owner may be likely to also share political leanings). Nevertheless, each table embedding f(dkq ) is functionally independent from the embeddings of the other tables. As such, contextual clues from other tables cannot be taken into account. To remedy this, we introduce a crossattention layer between all tables corresponding to the same query. We collect the embeddings f(dkq ) of each table into a tensor F (Dq). We then apply a single multi-head self-attention transformation as defined by Vaswani et al. (2017) to this tensor, and concatenate the result. That is, we compute an attention score for head h from table i to table j with query q as:\nαhij = σ\n( W hQf(d i q)(W h Kf(d\nj q))T√\ndim(K)\n) (2)\nwhere σ is the softmax function, and WQ and WK represent linear transformations to queries and keys, respectively. We then compute an attention vector for that head as:\nAhi = ∑ j∈Dq αijW h V f(d j q) (3)\nand finally construct contextualized table representations through concatenation as:\nf∗(dkq ) = [f(d k q ), A 1 i , ..., A h i ] (4)\nWe subsequently use F ∗(Dq), i.e. the tensor containing f∗(d1q), ..., f\n∗(dkq ), for downstream predictions. We note that our approach can be viewed\nas an extension of the Table-BERT algorithm introduced by Chen et al. (2020b) to the multi-table setting, using an attention function to fuse together the information from different tables."
+    }, {
+      "heading" : "4.1 Training & Testing",
+      "text" : "Relying on a closed-domain dataset provides a table with appropriate information for answering each query; namely, the table against which the claim is to be checked in the closed setting. Although this information is not available at test time, we can construct a training regime that allows us to exploit it to improve model performance. We experiment with two different strategies: jointly modeling reranking of tables along with verification of the claim, and modeling for each table a ternary choice between indicating truth, falsehood, or giving no relevant information. Later, we demonstrate how the former leads to increased performance on verification, while the latter gives access to a strong predictor for cases where no appropriate table has been retrieved.\nJoint reranking and verification For the joint reranking and verification approach, we assume that a best table for answering each query is given and can be used to learn a ranking function. We model this as selecting the right table from Dq, e.g., through a categorical variable s that indicates which table should be selected. We then learn a joint probability of s and the truth value of the claim v over the tables for a given query. Assuming that s and v are independent, p(s, v|q,Dq) is also a categorical distribution with one correct outcome that can be optimized for (that is, one correct pair of table and truth value). As such, we let:\np(s, v|q,Dq) = σ(W (F ∗(Dq)s)v) (5)\nWhere W : R2n → R2 is an MLP and σ is the softmax function. At train time, we obtain one cross-entropy term corresponding to p(s, v|q,Dq) per query. At test time, we marginalize over s to obtain a final truth value:\npv(v|q,Dq) = ∑ t∈Dq p(v, s = t|q,Dq) (6)\nThis formulation has the additional benefit of also allowing us to make a prediction on which table matches the query. We can do so by marginalizing\nover v: ps(s|q,Dq) = ∑\nvq∈{true,false}\np(s, v = vq|q,Dq)\n(7) With this loss, we train the model by substituting forDq a setD∗q containing wherein the gold table is guaranteed to appear. We ensure this by replacing the lowest-scored retrieved table in Dq with the gold table whenever it has not been retrieved.\nTernary verification At test time, there may be cases where a table refuting or verifying the fact is not contained in Dq. For some applications, it could be useful to identify these cases. We therefore design an alternative variant of our system better suited for this scenario. Intuitively, each table can represent three outcomes – the query is true, the query is false, or the table is irrelevant. We can model this through a ternary variable i such that for table t:\np(i|q, t,Dq) = σ(W ′(F ∗(Dq)t)i) (8)\nWhere W ′ : R2n → R3 is an MLP and σ is the softmax function. During training, we assign true or false to the gold table depending on the truth of the query, and irrelevant to every other table. We then use the mean cross-entropy over the tables associated with each query as the loss for each example. At test time, we compute the truth value v of each query as:∑ t∈Dq p(i = true|q, t) > ∑ t∈Dq p(i = false|q, t)\n(9)"
+    }, {
+      "heading" : "5 Experiments",
+      "text" : "We apply our model to the TabFact dataset (Chen et al., 2020b), which consists of 92,283 training, 12,792 validation and 12,792 test queries over 16,573 tables. The task is binary classification of claims as true or false, with an even proportion of the two classes in each split. To benchmark our open-domain models and construct performance bounds, we begin by evaluating in the closed domain. As an upper bound, we can then compare against the performance of the closed-domain system scored using a single table retrieved through an oracle. As a lower bound, we can again use the closed-domain system, but using the highestranked table according to our TF-IDF retriever. The evaluation metric is simply prediction accuracy."
+    }, {
+      "heading" : "5.1 Retrieval",
+      "text" : "We choose bi- and tri-gram TF-IDF as the retrieval strategy empirically. To address the comparative performance of this choice, we compute and rank in Table 1 the retrieval scores obtained through our strategy on the TabFact test set. We compare against several alternative strategies: bi- and trigram TF-IDF vectors for all words in the query (rather than just the entities), word-level TF-IDF vectors for entities, and entity-level exact matching. Our bi- and tri-gram TF-IDF strategy yields by far the strongest performance. We furthermore demonstrate how the exclusion of unigrams from the TF-IDF vectors slightly increases performance."
+    }, {
+      "heading" : "5.2 Verification",
+      "text" : "In Table 2, we compare our best-performing models to the closed-setting system from Chen et al.\n(2020b), as well as to several recent models from the literature (Zhong et al., 2020; Yang et al., 2020; Eisenschlos et al., 2020). We include results with both losses as discussed in Section 4, using varying numbers of tables.\nWith an accuracy of 75.1%, we obtain the best open-domain results with our model using the joint reranking-and-verification loss and five tables. We see performance improvements when increasing the number of tables, both from 1 to 3 and from 3 to 5. In the closed domain, the 77.6% accuracy our model achieves is a significant improvement over the 74.4% the strongest comparable baseline reached. This may be due to our use of RoBERTa, which has previously been found to perform well for linearised tables (Gupta et al., 2020).\nRelying purely on TF-IDF for retrieval — that is, using our system with only one retrieved table\n— yields a performance of 73.2%. This is a surprisingly small decrease compared to the closed domain, given that an incorrect table is provided in approximately a third of all cases (see Table 1). We suspect that many cases for which the retriever fails are also cases for which the closed-domain model fails. To make sure we are not seeing the effect of false negatives (e.g., tables which are not the gold table, but which nevertheless have the information to verify the claim), we run the model in a setting where one retrieved table is used, but the gold table is removed from the retrieval results; here, the model achieves an accuracy of only 56.2%. We furthermore test a system relying on a random table rather than a retrieved table; with a performance drop to 53.1, we find that the information in the retrieved table is indeed crucial to obtain high performance (rather than the performance being purely a consequence of, say, RoBERTa weights).\nTo understand how our model derives improvement from the addition of more tables, we compute in Table 3 the performance of our reranking-andverification model when TF-IDF returns the correct table at rank 1, rank 2-3, or rank 4-5. Immediately, we notice a much stronger improvement from using multiple tables when TF-IDF fails to correctly identify the gold table. This is natural, as those are exactly the cases where our model (as opposed to the baseline) has access to the appropriate information to verify or refute the claim.\nInterestingly, using three tables improves on using one table even when the gold table is not included among the top three (from 53.9% to 58.2%), and using five tables improves on using three tables also when the gold table is included among the top three (from 66.7% to 73.1%). Manual inspection reveals that our model in some cases relies on correlations between tables — if a sports team loses games in three tables, then that may give a\nhigher probability of that team also losing in an unretrieved, hypothetical fourth table. To test this, we apply the model in a setting where we retrieve the top five tables excluding the gold table, and a setting where we use five random tables. Using highly scored (but wrong) tables, we achieve a performance of 59.4%, a significant improvement on the 53.1% we achieve using random tables. This supports our hypothesis that other good tables can provide useful background context for verification.\nIt should be noted that such inferences, while increasing model performance, may also increase the degree to which the model exhibits biases. Depending on the application, this may as such not be a desirable basis for verification. Returning to the example in Figure 1, inferring ownership on the basis of political affiliation when no other information is available may increase accuracy on average, but it can also lead to erroneous or biased decisions (indeed, for the claim in the example, the prediction would be wrong)."
+    }, {
+      "heading" : "5.3 Ablation Tests",
+      "text" : "Our best-performing model from Table 2 relies on two innovations: The cross-attention function which contextualizes retrieved tables in relation to each other, and the joint reranking-and-verification loss. In Table 4, we evaluate the model without either of these. Leaving the attention function out is simple — we use f(dkq ) for each table directly for predictions. We model performance without the reranking component of our loss function by assuming a uniform distribution over the tables.\nAs can be seen, the combination of both is strictly necessary to obtain strong performance — indeed, without our joint objective, the model performs worse than simply applying the baseline model to the top table returned by TF-IDF as in Table 2. The ability for the model to express the relative relatedness of tables to the query is crucial.\ntropy of the reranking scores with our joint loss ( ) or the maximum probability of some table being the gold table with our ternary loss, ( ). We also include a most frequent class baseline ( ).\nWe include further investigation of the role our cross-attention mechanism plays in Appendix E."
+    }, {
+      "heading" : "5.4 Predicting Insufficient Information",
+      "text" : "In realistic settings, some claims will not be directly answerable from any retrieved table. In such cases, it can be valuable to explicitly inform the user — giving false verifications or refutations when sufficient information is not available is misleading, and can decrease user trust. To model a scenario where the lack of relevant information must be detected, we create a classification task wherein the model must predict for all examples, whether the gold table is among the k documents in Dq.\nUsing the ternary loss, our model directly gives the probability of each table containing appropriate information as (1 − p(It = irrelevant|q, t)). We can estimate the suitability of the best retrieved table for verifying the claim as max\nt (1 − p(It =\nirrelevant|q, t)), and apply a threshold τ1 to classify Dq as suitable or unsuitable. For the joint loss, a more indirect approach is necessary. Intuitively, if our model is too uncertain about which table answers the query, there is a high likelihood that no suitable table has been retrieved. This corresponds to the entropy of the reranking component Hs(s|q,Dq) after marginalizing over the truth value of the claim exceeding some threshold τ2.\nWe compare these strategies in Figure 3, obtaining Precision-Recall curves by measuring at varying τ1 and τ2. We find that while both approaches\noutperform a most frequent class baseline by a significant margin, the ternary loss performs better than the joint loss. As such, the choice between the two losses represents a tradeoff between raw performance (see Tables 2 and 5) and the ability to identify missing or incomplete information."
+    }, {
+      "heading" : "5.5 Wikipedia-scale Table Verification",
+      "text" : "In our experiments so far, we have relied on the 16,573 TabFact tables as the knowledge source. The tables selected for TabFact were taken from WikiTables (Bhagavatula et al., 2013), and filtered so as to exclude “overly complicated and huge tables” (Chen et al., 2020b). Moving beyond the scope of that dataset, a fully open fact verification system should be able to verify claims over even larger collections of tables — for example, the full set of tables available on Wikipedia. To make a preliminary exploration of that larger-scale setting, we include in Table 5 the performance of our approach evaluated using roughly 3 million tables automatically extracted from Wikipedia.\nAs can be seen, our approach improves on the naive strategy of using a single table and a closeddomain verification component also in this more complex setting. To verify that the inference happens on the basis of the retrieved tables and not simply the RoBERTa-weights, we include also the performance of a model which simply uses classification on top of a RoBERTa-encoding of the claim. Similar to our previous experiments, the joint-loss model with five retrieved tables performs the strongest. We note that it is unclear whether the performance we observe here originates from correlations obtained through background information (as we see in Section 5.2 when the retriever fails to find the appropriate table), or due to verification against a single entirely appropriate table happening at a lower rate than when using TabFact."
+    }, {
+      "heading" : "6 Related Work",
+      "text" : "Semantic querying against large collections of tables has previously been studied for question answering. Sun et al. (2016) used string matching between aliases of linked entities to search millions of tables crawled from the Web, with retrieved table cells providing evidence for a question answering task. Jauhar et al. (2016) demonstrated strong results with a Lucene index and a Markov Logic Network-based model for answering scientific questions. Recently, Chakrabarti et al. (2020a,b) developed an improved model for table retrieval combining neural representations of the table and the query with a BM25 index.\nCafarella et al. (2008, 2009) employed keyphrase-based table retrieval by reranking a list of tables returned by a search engine. Pimplikar and Sarawagi (2012) used a graphical model to perform retrieval on the basis of co-occurence statistics, table metadata, and column headers. In (Ghasemi-Gol and Szekely, 2018), non-parametric clustering was employed as a strong heuristic for table retrieval. Zhang and Balog (2018) introduced a ranking method based on mapping available features into several semantic spaces. Recently, Zhang et al. (2019) introduced a neural method for table retrieval and completion using word- and entity-embeddings of table elements.\nNeural modeling of tables has been the subject of several recent papers. Aside from the original BERT-based model in (Chen et al., 2020b), the closest to our work is (Yin et al., 2020). In these paper, a pretrained BERT-based encoder for tables is introduced and demonstrated to yield strong improvements on several semantic parsing tasks. Chen et al. (2019) introduced a model to automatically predict and compare column headers for tables in order to find semantically synonymous schema attributes. Similarly, Zhang and Balog (2019) introduced an autoencoder for predicting table relatedness.\nClosed-domain semantic parsing over tables has been studied extensively in the context of question answering (e.g., Pasupat and Liang (2015); Khashabi et al. (2016); Yu et al. (2018)). In Zhong et al. (2020), a logic-based fact verification system was introduced to improve on the model presented in the initial TabFact paper (Chen et al., 2020b). Yang et al. (2020) builds on the program induction model also introduced in Chen et al. (2020b), using a graph neural network to verify generated programs. Orthogonally, a similar dataset for table-\nbased natural language inference was introduced by Gupta et al. (2020) — interestingly, like in our experiments, they found RoBERTa-large to work extremely well for linearised tables. Finally, Herzig et al. (2020); Eisenschlos et al. (2020) introduced BERT-based models for various table semantic tasks, extending BERT with additional position embeddings denoting columns and rows.\nOpen-domain fact verification and question answering over unstructured, textual data has been studied in a series of recent papers. Early work resulted in several highly sophisticated full pipeline systems (Brill et al., 2002; Ferrucci et al., 2010; Sun et al., 2015). These provided inspiration for the influential DrQA model (Chen et al., 2017), which like ours relies on a TF-IDF-based heuristic retrieval model, and a complex reading model. Recent work (Karpukhin et al., 2020; Lewis et al., 2020) has built on this approach, developing learned dense retrieval models with dot-product indexing (Johnson et al., 2017), and increasingly advanced pretrained transformer-models for reading. The development of similarly fast, reliable and learnable indexing techniques for tables as well as text is an important direction for future work.\nConcurrently with our work, Chen et al. (2020a) have introduced a BERT-based model to perform question answering over open collections of data including tables. Like ours, their model consists of separate retriever- and reader-steps. Their bestperforming reader employs a long-range sparse attention transformer (Ainslie et al., 2020) to jointly summarize all retrieved data. As in our case, their model demonstrates significant improvements from using multiple retrieved tables."
+    }, {
+      "heading" : "7 Conclusion",
+      "text" : "We have introduced a novel model for fact verification over large collections of tables, along with two strategies for exploiting closed-domain datasets to increase performance. Our approach performs on par with the current closed-domain state of the art, with larger gains the more tables we include. When using an oracle to retrieve a reference table, our approach also represents a new closed-domain state of the art. Finally, we have made an initial foray into Wikipedia-scale open-domain table fact verification, demonstrating improvements from multiple tables also when using a full set of Wikipedia tables as the knowledge source. Our results indicate that the use of multiple tables can provide contex-\ntual clues to the model even when those tables do not explicitly verify or refute the claim, because they can provide evidence for the probability of the claim. This is a double-edged sword, as reliance on such clues can increase performance while also inducing biased claims of truthfulness. Care will be needed in future work to disentangle the positive and negative aspects of this phenomenon."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We would like to thank Fabio Petroni and Nicola De Cao for helpful discussions and comments."
+    }, {
+      "heading" : "In Proceedings of the 24th International Conference on World Wide Web, WWW 2015, Florence, Italy,",
+      "text" : "May 18-22, 2015, pages 1045–1055. ACM.\nJames Thorne and Andreas Vlachos. 2018. Automated fact checking: Task formulations, methods and future directions. In Proceedings of the 27th International Conference on Computational Linguistics, pages 3346–3359, Santa Fe, New Mexico, USA. Association for Computational Linguistics.\nAshish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, and Illia Polosukhin. 2017. Attention is all you need. In Advances in Neural Information Processing Systems 30: Annual Conference on Neural Information Processing Systems 2017, December 4- 9, 2017, Long Beach, CA, USA, pages 5998–6008.\nAndreas Vlachos and Sebastian Riedel. 2014. Fact checking: Task definition and dataset construction. In Proceedings of the ACL 2014 Workshop on Language Technologies and Computational Social Science, pages 18–22, Baltimore, MD, USA. Association for Computational Linguistics.\nXiaoyu Yang, Feng Nie, Yufei Feng, Quan Liu, Zhigang Chen, and Xiaodan Zhu. 2020. Program enhanced fact verification with verbalization and graph attention network. In Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 7810–7825, Online. Association for Computational Linguistics.\nPengcheng Yin, Graham Neubig, Wen-tau Yih, and Sebastian Riedel. 2020. TaBERT: Pretraining for joint understanding of textual and tabular data. In Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 8413– 8426, Online. Association for Computational Linguistics.\nTao Yu, Rui Zhang, Kai Yang, Michihiro Yasunaga, Dongxu Wang, Zifan Li, James Ma, Irene Li, Qingning Yao, Shanelle Roman, Zilin Zhang, and Dragomir Radev. 2018. Spider: A largescale human-labeled dataset for complex and crossdomain semantic parsing and text-to-SQL task. In Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 3911–3921, Brussels, Belgium. Association for Computational Linguistics.\nLi Zhang, Shuo Zhang, and Krisztian Balog. 2019. Table2vec: Neural word and entity embeddings for table population and retrieval. In Proceedings of the 42nd International ACM SIGIR Conference on Research and Development in Information Retrieval, SIGIR 2019, Paris, France, July 21-25, 2019, pages 1029–1032. ACM.\nShuo Zhang and Krisztian Balog. 2018. Ad hoc table retrieval using semantic similarity. In Proceedings of the 2018 World Wide Web Conference on World Wide Web, WWW 2018, Lyon, France, April 23-27, 2018, pages 1553–1562. ACM.\nShuo Zhang and Krisztian Balog. 2019. Autocompletion for data cells in relational tables. In Proceedings of the 28th ACM International Conference on Information and Knowledge Management, CIKM 2019, Beijing, China, November 3-7, 2019, pages 761–770. ACM.\nWanjun Zhong, Duyu Tang, Zhangyin Feng, Nan Duan, Ming Zhou, Ming Gong, Linjun Shou, Daxin Jiang, Jiahai Wang, and Jian Yin. 2020. LogicalFactChecker: Leveraging logical operations for fact checking with graph module network. In Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 6053–6065, Online. Association for Computational Linguistics."
+    }, {
+      "heading" : "A Performance using RoBERTa-base",
+      "text" : "In our paper, we have reported results using the larger version of RoBERTa with additional hidden layers and greater dimensionality. Liu et al. (2019) also include a smaller version, RoBERTa-base, corresponding to the BERT-base model of Devlin et al. (2019). In Table 6, we report results corresponding to those of Table 2 for our joint model using RoBERTa-base instead of RoBERTa-large.\nInterestingly, the performance gain from using multiple tables is even larger for RoBERTa-base (an increase of 4.1 rather than 1.9 point accuracy from using five tables, for example). One explanation could be that some information necessary to verify certain facts may be encoded in the weights of the larger RoBERTa. We attempt to investigate this using random tables; however, with five random tables, RoBERTa-large and RoBERTabase reach an almost equivalent respective performance of 52.1 and 52.0. As such, we believe that RoBERTa-large exploits the correlations between tables which we discuss in Section 5.2 better than RoBERTa-base."
+    }, {
+      "heading" : "B Hyperparameters",
+      "text" : "Our model uses RoBERTa (Liu et al., 2019) to encode each table into vectors. On top of RoBERTa we employ key-value self-attention (Vaswani et al., 2017) with two attention heads. We then use an MLP consisting of a linear transformation to h = 3072 hidden units, followed by tanh-activation and linear projection to the output space. During training, we employ dropouts with probability 0.1 before each linear transformation in the MLP. The hyperparameters for all experiments were selected using the TabFact development set (with TabFact tables as the backend).\nWe train the model using Adam (Kingma and Ba, 2015) with a learning rate of 5e − 6. We use a linear learning rate schedule, warming up over the first 30000 batches. We use a batch size of 32. Training was done on 8 NVIDIA Tesla V100 Volta GPUs (with 32GB of memory), and completed in approximately 36 hours."
+    }, {
+      "heading" : "C Retrieval accuracy for TabFact splits",
+      "text" : "The TabFact dataset comes with several different data splits. We include here the performance of our retrieval component for each split:"
+    }, {
+      "heading" : "D Reranking Performance",
+      "text" : "In Section 4, we introduced our model as a joint system for fact verification and evidence reranking. A benefit of our formulation is the ability to\nreason about the ability of our model to rerank by marginalizing over the truth value of the claim, following Equation 7. In Table 8, we compare the table retrieval ranking performance of our joint model to a model only trained for reranking, as well as to the TF-IDF baseline.\nAs can be seen, our joint loss provides a slight performance improvement when the attention component is included. Interestingly, the joint-loss model performs better than a system trained purely for reranking — this highlights the complementary nature of the reranking and verification tasks."
+    }, {
+      "heading" : "E The Role of Attention",
+      "text" : "An interesting question is the role attention plays in our model. As can be seen from Tables 2 and 8, our\ncross-attention module is necessary to achieve high performance – without it, the model struggles to identify which table should be used for verification. To investigate the function of attention, we plot in Figure 4 the strength of the cross-attention between each table for our five-table model. We produce separate plot for the two attention heads, as well as for each of the splits used in Table 3 representing the parts of the dataset where our TF-IDF retriever assigns the gold table rank respectively 1, 2-3, or 4-5.\nFor both attention heads, the attention function has clearly distinct behaviour when the gold table is retrieved as top 1; the degree to which that table attends to itself is much greater. We suspect that this is because of “easy” cases, where the attention function is used to separate a clearly identifiable “appropriate” table from the other tables. In harder cases, the model uses the attention focus to compare information across tables. To test this, we run the model in a setting where four random tables are used along with the gold table. In that setting, the division is even clearer. For the gold table, respectively 86 and 82 percent of the attention for the two heads is on average focused on itself; for the four\nrandom tables, the attention is evenly distributed over all tables except the gold table.\nTo distinguish the two heads, we in general see the first head exhibit a pattern of behaviour where each table assigns the majority of attention to itself — especially when that table is the gold table. The second head seemingly encodes a more even spread over the retrieved tables, perhaps representing general context more than an attempt to identify the gold table."
+    } ],
+    "references" : [ {
+      "title" : "ETC: Encoding long and structured inputs in transformers",
+      "author" : [ "Joshua Ainslie", "Santiago Ontanon", "Chris Alberti", "Vaclav Cvicek", "Zachary Fisher", "Philip Pham", "Anirudh Ravula", "Sumit Sanghai", "Qifan Wang", "Li Yang." ],
+      "venue" : "Proceedings of the 2020 Con-",
+      "citeRegEx" : "Ainslie et al\\.,? 2020",
+      "shortCiteRegEx" : "Ainslie et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Where is your evidence: Improving factchecking by justification modeling",
+      "author" : [ "Tariq Alhindi", "Savvas Petridis", "Smaranda Muresan." ],
+      "venue" : "Proceedings of the First Workshop on Fact Extraction and VERification (FEVER), pages 85–90, Brussels, Belgium.",
+      "citeRegEx" : "Alhindi et al\\.,? 2018",
+      "shortCiteRegEx" : "Alhindi et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Methods for exploring and mining tables on wikipedia",
+      "author" : [ "Chandra Sekhar Bhagavatula", "Thanapon Noraset", "Doug Downey." ],
+      "venue" : "Proceedings of the ACM SIGKDD Workshop on Interactive Data Exploration and Analytics, pages 18–26.",
+      "citeRegEx" : "Bhagavatula et al\\.,? 2013",
+      "shortCiteRegEx" : "Bhagavatula et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "A large annotated corpus for learning natural language inference",
+      "author" : [ "Samuel R. Bowman", "Gabor Angeli", "Christopher Potts", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages",
+      "citeRegEx" : "Bowman et al\\.,? 2015",
+      "shortCiteRegEx" : "Bowman et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "An analysis of the AskMSR question-answering system",
+      "author" : [ "Eric Brill", "Susan Dumais", "Michele Banko." ],
+      "venue" : "Proceedings of the 2002 Conference on Empirical Methods in Natural Language Processing (EMNLP 2002), pages 257–264. Association for",
+      "citeRegEx" : "Brill et al\\.,? 2002",
+      "shortCiteRegEx" : "Brill et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Data integration for the relational web",
+      "author" : [ "Michael J Cafarella", "Alon Halevy", "Nodira Khoussainova." ],
+      "venue" : "Proceedings of the VLDB Endowment, 2(1):1090–1101.",
+      "citeRegEx" : "Cafarella et al\\.,? 2009",
+      "shortCiteRegEx" : "Cafarella et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Webtables: exploring the power of tables on the web",
+      "author" : [ "Michael J Cafarella", "Alon Halevy", "Daisy Zhe Wang", "Eugene Wu", "Yang Zhang." ],
+      "venue" : "Proceedings of the VLDB Endowment, 1(1):538–549.",
+      "citeRegEx" : "Cafarella et al\\.,? 2008",
+      "shortCiteRegEx" : "Cafarella et al\\.",
+      "year" : 2008
+    }, {
+      "title" : "Open domain question answering using web tables",
+      "author" : [ "Kaushik Chakrabarti", "Zhimin Chen", "Siamak Shakeri", "Guihong Cao." ],
+      "venue" : "arXiv preprint arXiv:2001.03272.",
+      "citeRegEx" : "Chakrabarti et al\\.,? 2020a",
+      "shortCiteRegEx" : "Chakrabarti et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Tableqna: Answering list intent queries with web tables",
+      "author" : [ "Kaushik Chakrabarti", "Zhimin Chen", "Siamak Shakeri", "Guihong Cao", "Surajit Chaudhuri." ],
+      "venue" : "arXiv preprint arXiv:2001.04828.",
+      "citeRegEx" : "Chakrabarti et al\\.,? 2020b",
+      "shortCiteRegEx" : "Chakrabarti et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Reading Wikipedia to answer opendomain questions",
+      "author" : [ "Danqi Chen", "Adam Fisch", "Jason Weston", "Antoine Bordes." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1870–",
+      "citeRegEx" : "Chen et al\\.,? 2017",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Colnet: Embedding the semantics of web tables for column type prediction",
+      "author" : [ "Jiaoyan Chen", "Ernesto Jiménez-Ruiz", "Ian Horrocks", "Charles Sutton." ],
+      "venue" : "The Thirty-Third AAAI Conference on Artificial Intelligence, AAAI 2019, The Thirty-First Innova-",
+      "citeRegEx" : "Chen et al\\.,? 2019",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Open question answering over tables and text",
+      "author" : [ "Wenhu Chen", "Ming-Wei Chang", "Eva Schlinger", "William Wang", "William W Cohen." ],
+      "venue" : "arXiv preprint arXiv:2010.10439.",
+      "citeRegEx" : "Chen et al\\.,? 2020a",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Tabfact: A large-scale dataset for table-based fact verification",
+      "author" : [ "Wenhu Chen", "Hongmin Wang", "Jianshu Chen", "Yunkai Zhang", "Hong Wang", "Shiyang Li", "Xiyou Zhou", "William Yang Wang." ],
+      "venue" : "8th International Conference on Learning Representations,",
+      "citeRegEx" : "Chen et al\\.,? 2020b",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Computational journalism: A call to arms to database researchers",
+      "author" : [ "Sarah Cohen", "Chengkai Li", "Jun Yang", "Cong Yu." ],
+      "venue" : "CIDR 2011, Fifth Biennial Conference on Innovative Data Systems Research, Asilomar, CA, USA, January 9-12, 2011, Online Pro-",
+      "citeRegEx" : "Cohen et al\\.,? 2011",
+      "shortCiteRegEx" : "Cohen et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "The pascal recognising textual entailment challenge",
+      "author" : [ "Ido Dagan", "Oren Glickman", "Bernardo Magnini." ],
+      "venue" : "Machine Learning Challenges Workshop, pages 177–190. Springer.",
+      "citeRegEx" : "Dagan et al\\.,? 2005",
+      "shortCiteRegEx" : "Dagan et al\\.",
+      "year" : 2005
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Understanding tables with intermediate pre-training",
+      "author" : [ "Julian Eisenschlos", "Syrine Krichene", "Thomas Müller." ],
+      "venue" : "Findings of the Association for Computational Linguistics: EMNLP 2020, pages 281–296, Online. Association for Computational",
+      "citeRegEx" : "Eisenschlos et al\\.,? 2020",
+      "shortCiteRegEx" : "Eisenschlos et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Building watson: An overview of the deepqa project",
+      "author" : [ "David Ferrucci", "Eric Brown", "Jennifer Chu-Carroll", "James Fan", "David Gondek", "Aditya A Kalyanpur", "Adam Lally", "J William Murdock", "Eric Nyberg", "John Prager" ],
+      "venue" : "AI magazine,",
+      "citeRegEx" : "Ferrucci et al\\.,? \\Q2010\\E",
+      "shortCiteRegEx" : "Ferrucci et al\\.",
+      "year" : 2010
+    }, {
+      "title" : "The promise of computational journalism",
+      "author" : [ "Terry Flew", "Christina Spurgeon", "Anna Daniel", "Adam Swift." ],
+      "venue" : "Journalism Practice, 6(2):157–171.",
+      "citeRegEx" : "Flew et al\\.,? 2012",
+      "shortCiteRegEx" : "Flew et al\\.",
+      "year" : 2012
+    }, {
+      "title" : "Tabvec: Table vectors for classification of web tables",
+      "author" : [ "Majid Ghasemi-Gol", "Pedro Szekely." ],
+      "venue" : "arXiv preprint arXiv:1802.06290.",
+      "citeRegEx" : "Ghasemi.Gol and Szekely.,? 2018",
+      "shortCiteRegEx" : "Ghasemi.Gol and Szekely.",
+      "year" : 2018
+    }, {
+      "title" : "INFOTABS: Inference on tables as semi-structured data",
+      "author" : [ "Vivek Gupta", "Maitrey Mehta", "Pegah Nokhiz", "Vivek Srikumar." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 2309–2324, Online. Association",
+      "citeRegEx" : "Gupta et al\\.,? 2020",
+      "shortCiteRegEx" : "Gupta et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "TaPas: Weakly supervised table parsing via pre-training",
+      "author" : [ "Jonathan Herzig", "Pawel Krzysztof Nowak", "Thomas Müller", "Francesco Piccinno", "Julian Eisenschlos." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Lin-",
+      "citeRegEx" : "Herzig et al\\.,? 2020",
+      "shortCiteRegEx" : "Herzig et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "spaCy: Industrial-strength Natural Language Processing in Python",
+      "author" : [ "Matthew Honnibal", "Ines Montani", "Sofie Van Landeghem", "Adriane Boyd" ],
+      "venue" : null,
+      "citeRegEx" : "Honnibal et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Honnibal et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Leveraging passage retrieval with generative models for open domain question answering",
+      "author" : [ "Gautier Izacard", "Edouard Grave." ],
+      "venue" : "arXiv preprint arXiv:2007.01282.",
+      "citeRegEx" : "Izacard and Grave.,? 2020",
+      "shortCiteRegEx" : "Izacard and Grave.",
+      "year" : 2020
+    }, {
+      "title" : "Tables as semi-structured knowledge for question answering",
+      "author" : [ "Sujay Kumar Jauhar", "Peter Turney", "Eduard Hovy." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 474–",
+      "citeRegEx" : "Jauhar et al\\.,? 2016",
+      "shortCiteRegEx" : "Jauhar et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Billion-scale similarity search with GPUs",
+      "author" : [ "Jeff Johnson", "Matthijs Douze", "Hervé Jégou." ],
+      "venue" : "arXiv preprint arXiv:1702.08734.",
+      "citeRegEx" : "Johnson et al\\.,? 2017",
+      "shortCiteRegEx" : "Johnson et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Dense passage retrieval for open-domain question answering",
+      "author" : [ "Vladimir Karpukhin", "Barlas Oguz", "Sewon Min", "Patrick Lewis", "Ledell Wu", "Sergey Edunov", "Danqi Chen", "Wen-tau Yih." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Nat-",
+      "citeRegEx" : "Karpukhin et al\\.,? 2020",
+      "shortCiteRegEx" : "Karpukhin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Question answering via integer programming over semistructured knowledge",
+      "author" : [ "Daniel Khashabi", "Tushar Khot", "Ashish Sabharwal", "Peter Clark", "Oren Etzioni", "Dan Roth." ],
+      "venue" : "Proceedings of the TwentyFifth International Joint Conference on Artificial In-",
+      "citeRegEx" : "Khashabi et al\\.,? 2016",
+      "shortCiteRegEx" : "Khashabi et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P. Kingma", "Jimmy Ba." ],
+      "venue" : "3rd International Conference on Learning Representations, ICLR 2015, San Diego, CA, USA, May 7-9, 2015, Conference Track Proceedings.",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "Retrieval-augmented generation",
+      "author" : [ "Patrick S.H. Lewis", "Ethan Perez", "Aleksandra Piktus", "Fabio Petroni", "Vladimir Karpukhin", "Naman Goyal", "Heinrich Küttler", "Mike Lewis", "Wen-tau Yih", "Tim Rocktäschel", "Sebastian Riedel", "Douwe Kiela" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Roberta: A robustly optimized bert pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "arXiv preprint arXiv:1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Combining fact extraction and verification with neural semantic matching networks",
+      "author" : [ "Yixin Nie", "Haonan Chen", "Mohit Bansal." ],
+      "venue" : "The ThirtyThird AAAI Conference on Artificial Intelligence, AAAI 2019, The Thirty-First Innovative Applications",
+      "citeRegEx" : "Nie et al\\.,? 2019",
+      "shortCiteRegEx" : "Nie et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Compositional semantic parsing on semi-structured tables",
+      "author" : [ "Panupong Pasupat", "Percy Liang." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Lan-",
+      "citeRegEx" : "Pasupat and Liang.,? 2015",
+      "shortCiteRegEx" : "Pasupat and Liang.",
+      "year" : 2015
+    }, {
+      "title" : "Answering table queries on the web using column keywords",
+      "author" : [ "Rakesh Pimplikar", "Sunita Sarawagi." ],
+      "venue" : "Proceedings of the VLDB Endowment, 5(10):908– 919.",
+      "citeRegEx" : "Pimplikar and Sarawagi.,? 2012",
+      "shortCiteRegEx" : "Pimplikar and Sarawagi.",
+      "year" : 2012
+    }, {
+      "title" : "Table cell search for question answering",
+      "author" : [ "Huan Sun", "Hao Ma", "Xiaodong He", "Wen-tau Yih", "Yu Su", "Xifeng Yan." ],
+      "venue" : "Proceedings of the 25th International Conference on World Wide Web, WWW 2016, Montreal, Canada, April 11 - 15, 2016, pages 771–782.",
+      "citeRegEx" : "Sun et al\\.,? 2016",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Open domain question answering via semantic enrichment",
+      "author" : [ "Huan Sun", "Hao Ma", "Wen-tau Yih", "Chen-Tse Tsai", "Jingjing Liu", "Ming-Wei Chang" ],
+      "venue" : null,
+      "citeRegEx" : "Sun et al\\.,? \\Q2015\\E",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Automated fact checking: Task formulations, methods and future directions",
+      "author" : [ "James Thorne", "Andreas Vlachos." ],
+      "venue" : "Proceedings of the 27th International Conference on Computational Linguistics, pages 3346–3359, Santa Fe, New Mexico, USA. As-",
+      "citeRegEx" : "Thorne and Vlachos.,? 2018",
+      "shortCiteRegEx" : "Thorne and Vlachos.",
+      "year" : 2018
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Lukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems 30: Annual Conference on Neural",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Fact checking: Task definition and dataset construction",
+      "author" : [ "Andreas Vlachos", "Sebastian Riedel." ],
+      "venue" : "Proceedings of the ACL 2014 Workshop on Language Technologies and Computational Social Science, pages 18–22, Baltimore, MD, USA. Associa-",
+      "citeRegEx" : "Vlachos and Riedel.,? 2014",
+      "shortCiteRegEx" : "Vlachos and Riedel.",
+      "year" : 2014
+    }, {
+      "title" : "Program enhanced fact verification with verbalization and graph attention network",
+      "author" : [ "Xiaoyu Yang", "Feng Nie", "Yufei Feng", "Quan Liu", "Zhigang Chen", "Xiaodan Zhu." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language",
+      "citeRegEx" : "Yang et al\\.,? 2020",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "TaBERT: Pretraining for joint understanding of textual and tabular data",
+      "author" : [ "Pengcheng Yin", "Graham Neubig", "Wen-tau Yih", "Sebastian Riedel." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 8413–",
+      "citeRegEx" : "Yin et al\\.,? 2020",
+      "shortCiteRegEx" : "Yin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Spider: A largescale human-labeled dataset for complex and cross",
+      "author" : [ "Tao Yu", "Rui Zhang", "Kai Yang", "Michihiro Yasunaga", "Dongxu Wang", "Zifan Li", "James Ma", "Irene Li", "Qingning Yao", "Shanelle Roman", "Zilin Zhang", "Dragomir Radev" ],
+      "venue" : null,
+      "citeRegEx" : "Yu et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Table2vec: Neural word and entity embeddings for table population and retrieval",
+      "author" : [ "Li Zhang", "Shuo Zhang", "Krisztian Balog." ],
+      "venue" : "Proceedings of the 42nd International ACM SIGIR Conference on Research and Development in Information Retrieval,",
+      "citeRegEx" : "Zhang et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Ad hoc table retrieval using semantic similarity",
+      "author" : [ "Shuo Zhang", "Krisztian Balog." ],
+      "venue" : "Proceedings of the 2018 World Wide Web Conference on World Wide Web, WWW 2018, Lyon, France, April 23-27, 2018, pages 1553–1562. ACM.",
+      "citeRegEx" : "Zhang and Balog.,? 2018",
+      "shortCiteRegEx" : "Zhang and Balog.",
+      "year" : 2018
+    }, {
+      "title" : "Autocompletion for data cells in relational tables",
+      "author" : [ "Shuo Zhang", "Krisztian Balog." ],
+      "venue" : "Proceedings of the 28th ACM International Conference on Information and Knowledge Management, CIKM 2019, Beijing, China, November 3-7, 2019, pages",
+      "citeRegEx" : "Zhang and Balog.,? 2019",
+      "shortCiteRegEx" : "Zhang and Balog.",
+      "year" : 2019
+    }, {
+      "title" : "LogicalFactChecker: Leveraging logical operations for fact checking with graph module network",
+      "author" : [ "Wanjun Zhong", "Duyu Tang", "Zhangyin Feng", "Nan Duan", "Ming Zhou", "Ming Gong", "Linjun Shou", "Daxin Jiang", "Jiahai Wang", "Jian Yin." ],
+      "venue" : "Proceed-",
+      "citeRegEx" : "Zhong et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhong et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 38,
+      "context" : "Verifying whether a given fact coheres with a trusted body of knowledge is a fundamental problem in NLP, with important applications to automated fact checking (Vlachos and Riedel, 2014) and other tasks in computational journalism (Cohen et al.",
+      "startOffset" : 160,
+      "endOffset" : 186
+    }, {
+      "referenceID" : 13,
+      "context" : "Verifying whether a given fact coheres with a trusted body of knowledge is a fundamental problem in NLP, with important applications to automated fact checking (Vlachos and Riedel, 2014) and other tasks in computational journalism (Cohen et al., 2011; Flew et al., 2012).",
+      "startOffset" : 231,
+      "endOffset" : 270
+    }, {
+      "referenceID" : 18,
+      "context" : "Verifying whether a given fact coheres with a trusted body of knowledge is a fundamental problem in NLP, with important applications to automated fact checking (Vlachos and Riedel, 2014) and other tasks in computational journalism (Cohen et al., 2011; Flew et al., 2012).",
+      "startOffset" : 231,
+      "endOffset" : 270
+    }, {
+      "referenceID" : 14,
+      "context" : "Despite extensive investigation of the problem under different conditions including entailment and natural language inference (Dagan et al., 2005; Bowman et al., 2015) as well as claim verification (Vlachos and Riedel, 2014; Alhindi et al.",
+      "startOffset" : 126,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 3,
+      "context" : "Despite extensive investigation of the problem under different conditions including entailment and natural language inference (Dagan et al., 2005; Bowman et al., 2015) as well as claim verification (Vlachos and Riedel, 2014; Alhindi et al.",
+      "startOffset" : 126,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 38,
+      "context" : ", 2015) as well as claim verification (Vlachos and Riedel, 2014; Alhindi et al., 2018; Thorne and Vlachos, 2018), relatively little attention has been devoted to the setting where the trusted body of evidence is structured in nature — that is, where it consists of tabular or graph-structured data.",
+      "startOffset" : 38,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2015) as well as claim verification (Vlachos and Riedel, 2014; Alhindi et al., 2018; Thorne and Vlachos, 2018), relatively little attention has been devoted to the setting where the trusted body of evidence is structured in nature — that is, where it consists of tabular or graph-structured data.",
+      "startOffset" : 38,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 36,
+      "context" : ", 2015) as well as claim verification (Vlachos and Riedel, 2014; Alhindi et al., 2018; Thorne and Vlachos, 2018), relatively little attention has been devoted to the setting where the trusted body of evidence is structured in nature — that is, where it consists of tabular or graph-structured data.",
+      "startOffset" : 38,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 12,
+      "context" : "Recently, two datasets were introduced for claim verification over tables (Chen et al., 2020b; Gupta et al., 2020).",
+      "startOffset" : 74,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 20,
+      "context" : "Recently, two datasets were introduced for claim verification over tables (Chen et al., 2020b; Gupta et al., 2020).",
+      "startOffset" : 74,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 9,
+      "context" : "We take inspiration from similar work on unstructured data (Chen et al., 2017; Nie et al., 2019; Karpukhin et al., 2020; Lewis et al., 2020), proposing a two-step model which combines ad-hoc retrieval with a neural reader.",
+      "startOffset" : 59,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 31,
+      "context" : "We take inspiration from similar work on unstructured data (Chen et al., 2017; Nie et al., 2019; Karpukhin et al., 2020; Lewis et al., 2020), proposing a two-step model which combines ad-hoc retrieval with a neural reader.",
+      "startOffset" : 59,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 26,
+      "context" : "We take inspiration from similar work on unstructured data (Chen et al., 2017; Nie et al., 2019; Karpukhin et al., 2020; Lewis et al., 2020), proposing a two-step model which combines ad-hoc retrieval with a neural reader.",
+      "startOffset" : 59,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 29,
+      "context" : "We take inspiration from similar work on unstructured data (Chen et al., 2017; Nie et al., 2019; Karpukhin et al., 2020; Lewis et al., 2020), proposing a two-step model which combines ad-hoc retrieval with a neural reader.",
+      "startOffset" : 59,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 34,
+      "context" : "Drawing on preliminary work in open question answering over tables (Sun et al., 2016), we perform retrieval based on simple heuristic modeling of individual table cells.",
+      "startOffset" : 67,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 30,
+      "context" : "We combine this retriever with a RoBERTa-based (Liu et al., 2019) joint reranking-and-verification model, performing",
+      "startOffset" : 47,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 12,
+      "context" : "We evaluate our models using the recently introduced TabFact dataset (Chen et al., 2020b).",
+      "startOffset" : 69,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 12,
+      "context" : "Since there are large available datasets for the closed setting (Chen et al., 2020b; Gupta et al., 2020), it is reasonable to expect to exploit tq during training; however, at test time, this information may not be available.",
+      "startOffset" : 64,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 20,
+      "context" : "Since there are large available datasets for the closed setting (Chen et al., 2020b; Gupta et al., 2020), it is reasonable to expect to exploit tq during training; however, at test time, this information may not be available.",
+      "startOffset" : 64,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 9,
+      "context" : "We follow a two-step methodology that is often adopted in open-domain setting for unstructed data (Chen et al., 2017; Nie et al., 2019; Karpukhin et al., 2020; Lewis et al., 2020) to our setting.",
+      "startOffset" : 98,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 31,
+      "context" : "We follow a two-step methodology that is often adopted in open-domain setting for unstructed data (Chen et al., 2017; Nie et al., 2019; Karpukhin et al., 2020; Lewis et al., 2020) to our setting.",
+      "startOffset" : 98,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 26,
+      "context" : "We follow a two-step methodology that is often adopted in open-domain setting for unstructed data (Chen et al., 2017; Nie et al., 2019; Karpukhin et al., 2020; Lewis et al., 2020) to our setting.",
+      "startOffset" : 98,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 29,
+      "context" : "We follow a two-step methodology that is often adopted in open-domain setting for unstructed data (Chen et al., 2017; Nie et al., 2019; Karpukhin et al., 2020; Lewis et al., 2020) to our setting.",
+      "startOffset" : 98,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 30,
+      "context" : "To model p(v|q,Dq), we employ a RoBERTabased (Liu et al., 2019) late fusion strategy (see Figure 2 for a diagram of our model).",
+      "startOffset" : 45,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 22,
+      "context" : "In the absence of named entity tags, named entity spans would first need to be found though an off-the-shelf named entity recognizer, such as SpaCy (Honnibal et al., 2020).",
+      "startOffset" : 148,
+      "endOffset" : 171
+    }, {
+      "referenceID" : 12,
+      "context" : "We apply our model to the TabFact dataset (Chen et al., 2020b), which consists of 92,283 training, 12,792 validation and 12,792 test queries over 16,573 tables.",
+      "startOffset" : 42,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 45,
+      "context" : "(2020b), as well as to several recent models from the literature (Zhong et al., 2020; Yang et al., 2020; Eisenschlos et al., 2020).",
+      "startOffset" : 65,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 39,
+      "context" : "(2020b), as well as to several recent models from the literature (Zhong et al., 2020; Yang et al., 2020; Eisenschlos et al., 2020).",
+      "startOffset" : 65,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 16,
+      "context" : "(2020b), as well as to several recent models from the literature (Zhong et al., 2020; Yang et al., 2020; Eisenschlos et al., 2020).",
+      "startOffset" : 65,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 20,
+      "context" : "This may be due to our use of RoBERTa, which has previously been found to perform well for linearised tables (Gupta et al., 2020).",
+      "startOffset" : 109,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 2,
+      "context" : "The tables selected for TabFact were taken from WikiTables (Bhagavatula et al., 2013), and filtered so as to exclude “overly complicated and huge tables” (Chen et al.",
+      "startOffset" : 59,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2013), and filtered so as to exclude “overly complicated and huge tables” (Chen et al., 2020b).",
+      "startOffset" : 76,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 19,
+      "context" : "In (Ghasemi-Gol and Szekely, 2018), non-parametric clustering was employed as a strong heuristic for table retrieval.",
+      "startOffset" : 3,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 12,
+      "context" : "Aside from the original BERT-based model in (Chen et al., 2020b), the closest to our work is (Yin et al.",
+      "startOffset" : 44,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 40,
+      "context" : ", 2020b), the closest to our work is (Yin et al., 2020).",
+      "startOffset" : 37,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 12,
+      "context" : "(2020), a logic-based fact verification system was introduced to improve on the model presented in the initial TabFact paper (Chen et al., 2020b).",
+      "startOffset" : 125,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 4,
+      "context" : "Early work resulted in several highly sophisticated full pipeline systems (Brill et al., 2002; Ferrucci et al., 2010; Sun et al., 2015).",
+      "startOffset" : 74,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 17,
+      "context" : "Early work resulted in several highly sophisticated full pipeline systems (Brill et al., 2002; Ferrucci et al., 2010; Sun et al., 2015).",
+      "startOffset" : 74,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 35,
+      "context" : "Early work resulted in several highly sophisticated full pipeline systems (Brill et al., 2002; Ferrucci et al., 2010; Sun et al., 2015).",
+      "startOffset" : 74,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 9,
+      "context" : "These provided inspiration for the influential DrQA model (Chen et al., 2017), which like ours relies on a TF-IDF-based heuristic retrieval model, and a complex reading model.",
+      "startOffset" : 58,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 26,
+      "context" : "Recent work (Karpukhin et al., 2020; Lewis et al., 2020) has built on this approach, developing learned dense retrieval models with dot-product indexing (Johnson et al.",
+      "startOffset" : 12,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 29,
+      "context" : "Recent work (Karpukhin et al., 2020; Lewis et al., 2020) has built on this approach, developing learned dense retrieval models with dot-product indexing (Johnson et al.",
+      "startOffset" : 12,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2020) has built on this approach, developing learned dense retrieval models with dot-product indexing (Johnson et al., 2017), and increasingly advanced pretrained transformer-models for reading.",
+      "startOffset" : 104,
+      "endOffset" : 126
+    }, {
+      "referenceID" : 0,
+      "context" : "Their bestperforming reader employs a long-range sparse attention transformer (Ainslie et al., 2020) to jointly summarize all retrieved data.",
+      "startOffset" : 78,
+      "endOffset" : 100
+    } ],
+    "year" : 2021,
+    "abstractText" : "Structured information is an important knowledge source for automatic verification of factual claims. Nevertheless, the majority of existing research into this task has focused on textual data, and the few recent inquiries into structured data have been for the closed-domain setting where appropriate evidence for each claim is assumed to have already been retrieved. In this paper, we investigate verification over structured data in the open-domain setting, introducing a joint reranking-and-verification model which fuses evidence documents in the verification component. Our open-domain model achieves performance comparable to the closed-domain stateof-the-art on the TabFact dataset, and demonstrates performance gains from the inclusion of multiple tables as well as a significant improvement over a heuristic retrieval baseline.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

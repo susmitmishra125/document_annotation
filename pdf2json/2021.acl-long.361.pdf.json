@@ -1,0 +1,549 @@
+{
+  "name" : "2021.acl-long.361.pdf",
+  "metadata" : {
+    "source" : "CRF",
+    "title" : "Element Intervention for Open Relation Extraction",
+    "authors" : [ "Fangchao Liu", "Lingyong Yan", "Hongyu Lin", "Xianpei Han", "Le Sun" ],
+    "emails" : [ "fangchao2017@iscas.ac.cn", "lingyong2014@iscas.ac.cn", "hongyu@iscas.ac.cn", "xianpei@iscas.ac.cn", "sunle@iscas.ac.cn" ],
+    "sections" : [ {
+      "heading" : "1 Introduction",
+      "text" : "Relation extraction (RE) is the task to extract relation between entity pair in plain text. For example, when given the entity pair (Obama, the United States) in the sentence “Obama was sworn in as the 44th president of the United States”, an RE model should accurately predict the relationship “President of” and extract the corresponding triplet (Obama, President of, the United States) for downstream tasks. Despite the success of many RE models (Zeng et al., 2014; Baldini Soares et al., 2019), most previous RE paradigms rely on the predefined relation types, which are always unavailable in open domain scenario and thereby limits their capability in real applications.\n∗Corresponding authors. 1Code available at https://github.com/Lfc1993/EI ORE\nOpen Relation Extraction (OpenRE), on the other hand, has been proposed to extract relation facts without pre-defined relation types neither annotated data. Given a relation instance consisting of two entities and their context, OpenRE aims to identify other instances which mention the same relation. To achieve this, OpenRE is commonly formulated as a clustering or pair-matching task. Therefore the most critical challenge for OpenRE is how to learn effective representations for relation instances and then cluster them. To this end, Yao et al. (2011) adopts topic model (Blei et al., 2003) to generate latent relation type for unlabelled instances. Later works start to utilize datasets collected using distant supervision for model training. Along this line, Marcheggiani and Titov (2016) utilizes an auto-encoder model and trains the model through self-supervised signals from entity link predictor. Hu et al. (2020) encodes each instance with pretrained language model (Devlin et al., 2019; Baldini Soares et al., 2019) and learn the representation by self-supervised signals from pseudo labels.\nUnfortunately, current OpenRE models are often unstable and easily collapsed (Simon et al., 2019).\nFor example, OpenRE models frequently cluster all relation instances with context “was born in” into the relation type BORN IN PLACE because they share similar context information. However, “was born in” can also refer to the relation BORN IN TIME. Furthermore, current models also tend to cluster two relation instances with the same entities (i.e., relation instances with the same head and tail entities) or the same entity types into one relation. This problem can be even more severe if the dataset is generated using distant supervision because it severely relies on prototypical context and entity information as supervision signals and therefore lacks of diversity.\nIn this paper, we attempt to explain and resolve the above-mentioned problem in OpenRE from a causal view. Specifically, we formulate the process of OpenRE using a structural causal model (SCM) (Pearl, 2009), as shown in Figure 1. The main assumption behind the SCM is that distant supervision will generate highly correlated relation instances to the original prototypical instance, and there is a strong connection between the generated instance to the prototypical instance through either their entities or their context. For example, ”[Jobs] was born in [California]” and ”[Jobs] was born in [1955]” are highly correlated because they share similar context “was born in” and entity “Jobs”. Such connection will result in spurious correlations, which appear in the form of the backdoor paths in the SCM. Then the spurious correlations will mislead OpenRE models, which are trained to capture the connection between entities and context to the relation type.\nBased on the above observations, we propose element intervention, which conducts backdoor adjustment on entities and context respectively to block the backdoor paths. However, due to the lack of supervision signals, we cannot directly optimize towards the underlying causal effects. To this end, we further propose two surrogate implementations on the adjustments on context and entities, respectively. Specifically, we regard the instances in the original datasets as the relation prototypes. Then we implement the adjustment on context through a Hierarchy-Based Entity Ranking (Hyber), which fixes the context, samples related entities from an entity hierarchy tree and learns the causal relation through rank-based learning. Besides, we implement the adjustment on entities through a Generation-based Context Con-\ntrasting (Gcc), which fixes the entities, generates positive and negative contexts from a generationbased model and learns the causal effects through contrastive learning.\nWe conduct experiments on different unsupervised relation extraction datasets. Experimental results show that our method outperforms previous state-of-the-art methods with a large margin and suffers much less performance discrepancy between different datasets, which demonstrate the effectiveness and robustness of the proposed methods."
+    }, {
+      "heading" : "2 OpenRE from Causal View",
+      "text" : "In this section, we formulate OpenRE from the perspective of Structural Causal Model and give the theoretical proof for intervention methods that block the backdoor paths from relation elements (i.e., context and entity pair) to the latent relation types."
+    }, {
+      "heading" : "2.1 Task Definition",
+      "text" : "Relation extraction (RE) is the task of extracting the relationship between two given entities in the context. Considering the sequence example: S = [s0, ..., sn−1] which contains n words, e1 = [i, j] and e2 = [k, l] indicate the entity pair, where 0 ≤ i ≤ j < k ≤ l ≤ n − 1, a relation instance X is defined as X = (S, e1, e2), (i.e. the tuple of entity pair and the corresponding context). The element of a relation instance is the entity pair and the corresponding context. Traditional RE task is to predict the relations type when given X . However, the target relation types are not pre-defined in OpenRE. Consequently, OpenRE is commonly formulated as a clustering task or a pair-matching task by considering whether two relation instances Xi and Xj refer to the same relation.\nUnfortunately, current OpenRE models are often unstable and easily collapsed (Simon et al., 2019). In the next section, we formulate OpenRE using a structural causal model and then identify the reasons behind these deficiencies from the SCM."
+    }, {
+      "heading" : "2.2 Structural Causal Model for OpenRE",
+      "text" : "Figure 1 (a) shows the structural causal model for OpenRE. The main idea behind the SCM is distant supervision will generate highly correlated relation instances to the original prototypical instance, and there is a strong connection between the generated instance to the prototypical instance through\neither their entities or their context. Specifically, in the SCM, we describe OpenRE with five critical variables: 1) the prototypical relation instance P , which is a representative relation instance of one relation type cluster; 2) the entity pair E, which encodes the entity information of one relation instance; 3) the context C, which encodes the context information of one relation instance; 4) a relation instance X (which can be generated from distant supervision or other strategies) and 5) the final pair-wise matching result Y , which corresponds to whether instance X and the prototypical relation instance P entail the same relation.\nGiven the variables mentioned above, we formulate the process of generating OpenRE instances based on the following causal relations:\n• E ← P → C formulates the process of sampling related entities and context respectively from the prototypical relation instance P .\n• E → X ← C formulates the relation instance generating process. Given the context C and entities E from the prototypical relation instance P , a new relation instance X is generated based on the information in C and E. This process can be conducted through distant supervision.\n• P → Y ← X formulates the OpenRE clustering or pair-wise matching process. Given a prototypical relation instance P and another relation instance X , this process will determine whetherX belongs to the relation cluster of P ."
+    }, {
+      "heading" : "2.3 Spurious Correlations in OpenRE",
+      "text" : "Given a relation prototypical instance P , the learning process of OpenRE is commonly to maximize the probability P(y, P |X) = P(y, P |E,C). However, as it can be observed from the SCM, there exists a backdoor path P → E → X when we learn the underlying effects of context C. That is to say, the learned effect of C to Y is confounded by E (through P ). For example, when we learned the effects of context “was born in” to the relation “BORN IN PLACE”, the backdoor path will lead the model to mistake the contribution of the entities (PERSON, PLACE) to the contribution of context, and therefore resulted in spurious correlation. The same thing happens when we learn the effects of entities E, which is influenced by the backdoor path P → C → X . As a result, optimizing these spurious correlations will result in an unstable and collapsed OpenRE model."
+    }, {
+      "heading" : "2.4 Resolving Spurious Correlations via",
+      "text" : "Element Intervention\nTo resolve the spurious correlations, we adopt the backdoor adjustment (Pearl, 2009) to block the backdoor paths. Specifically, we separately intervene on context C and entities E by applying the do–operation.\nEntity Intervention. As shown in Figure 1 (b), to avoid the spurious correlations of entities to relation types, we conduct the do-operation by inter-\nvening on the entities E: P(Y, P |do(E = e0))\n= ∑ C,X P(C,P )P(X,Y |e0, C, P )\n= ∑ C P(C,P )P(Y |e0, C, P )\n= ∑ C P(P )P(C|P )P(Y |e0, C, P )\n(1)\nSince P(P ) is uniformly distributed in the real world, this equation can be rewritten as:\nP(Y, P |do(E = e0)) ∝ ∑ C P(C|P )P(Y |e0, C, P ) (2)\nThis equation means the causal effect from the entities E to its matching result Y can be estimated by considering the corresponding possibility of each context given the prototypical relation instance P . The detailed implementation will be described in the next section.\nContext Intervention. Similarly, we conduct context intervention to avoid the spurious correlations of context to relation types, as shown in Figure 1 (c):\nP(Y, P |do(C = c0)) ∝ ∑ E P(E|P )P(Y |c0, E, P ) (3)\nwhich means the causal effect from the context C to its matching result Y can be estimated by considering the corresponding possibility of each entity E given P . The detailed implementation will also be described in the next section."
+    }, {
+      "heading" : "2.5 Optimizing Causal Effects for OpenRE",
+      "text" : "To effectively capture the causal effects of entities E and context C to OpenRE, a matching model P(Y |C,E, P ; θ) should be learned by optimizing the causal effects: L(θ) =I(X,P ) · P(Y = 1, P |do(E = e(X))\n+ I(X,P ) · P(Y = 1, P |do(C = c(X)) + [1− I(X,P )] · P(Y = 0, P |do(E = e(X)) + [1− I(X,P )] · P(Y = 0, P |do(C = c(X))\n(4)\nwhere e(X) and c(X) represents the entities and context in relation instance X , I(X,P ) is an indicator which represents whether X and P belong to the same relation. P(Y |C,E, P ; θ) = P(Y |X,P ; θ) is a matching model, which is defined using a prototype-based measurements:\nP(Y |X,P ; θ) ∝ −D(R(X; θ), R(P ; θ)) (5)\nwhere D is a distance measurement and R(X; θ) is a representation learning model parametrized by θ, which needs to be optimized during learning. In the following, we will use D(X,P ) = D(R(X; θ), R(P ; θ)) for short.\nHowever, it is difficult to directly optimize the above loss function because 1) in unsupervised OpenRE, we are unable to know whether the relation instanceX generated from (E,C) matches the prototypical relation instance P ; 2) we are unable to traverse all possibleE andC in Equation (2) and (3). To resolve these problems, in the next section, we will describe how we implement the context intervention via hierarchy-based entity ranking and the entity intervention via generation-based context contrasting."
+    }, {
+      "heading" : "3 Element Intervention Implementation",
+      "text" : "As we mentioned above, it is difficult to directly optimize the causal effects via Equation (4). To tackle this issue, this section provides a detailed implementation to approximate the causal effects. Specifically, we regard all relation instances in the original data as the prototypical relation instance P , and then generate highly correlated relation instances X from P via a hierarchy-based sampling and generation-based contrasting. Then we regard structural signals from the entity hierarchy and confidence score from the generator as distant supervision signals, and learn the causal effects via ranking-based learning and contrastive learning."
+    }, {
+      "heading" : "3.1 Hierarchy-based Entity Ranking for",
+      "text" : "Context Intervention\nTo implement context intervention, we propose to formulate P(E|P ) using an entity hierarchy, and approximately learn to optimize the causal effects of P(Y = 1, P |do(C)) and P(Y = 0, P |do(C)) in Equation (4) via a hierarchy-based entity ranking loss. Specifically, we first regard all relation instances in the data as prototypical relation instance P . Then we formulate the distribution P(E|P ) by fixing the context in P and replacing entities by sampling from an entity hierarchy. Each sampled entity is regarded as the same P(E|P ). Intuitively, the entity closer to the original entities in P tends to generate more consistent relation instance to P . To approximate this semantic similarity, we utilize the meta-information in WikiData (i.e., the “instance of” and “subclass of” statements, which\ndescribe the basic property and concept of each entity), and construct a hierarchical entity tree for ranking the similarity between entities. In this work, we apply a three-level hierarchy through these two statements:\n• Sibling Entities: The entities belonging to the same parent category as the original entity. For example, “Aube” and “Paris” are sibling entities since they are both the child entity of “department of France”, and both express the concepts of location and GPE. These sibling entities can be considered as golden entities to replace.\n• Cousin Entities: The entities belonging to the same grandparent category but the different parent category from the original entity. For example, “Occitanie” and “Paris” is of the same grandparent category “French Administrative Division”, but shares different parent category. These entities can be considered as silver entities since they are likely to be the same type as the original one but less possible than the sibling entities.\n• Other Entities: The entities beyond the grandparent category, which are much less likely to be the same type as the original one.\nFor the example in Figure 2, the prototypical relation instance “Hugo was born in [Paris], [France]” is sampled to be intervened. We first fix the context and randomly choose one of the head or tail entity to be replaced. In this case, we choose ”Paris”. Then, entities that correspond to different hierarchies are sampled and to replace the original entity. In this case, “Aube” is sampled as the sibling entity, “Occitanie” to be the cousin entity and “19th century” to be the other entity. After sampled these intervened instances, we approximately optimize P(Y, P |do(C)) using a rankbased loss function:\nLE(θ;X ) = n−1∑ i=1 max(0,\nD(P,Xi)−D(P,Xi+1) +mE), (6)\nwhere θ is the model parameters, D(Xi, P ) is the distances between representations of generated relation instance Xi and prototypical relation instance P . X is the intervened relation instance set, mE is the margin for entity ranking loss, and n = 3 is the depth of the entity hierarchy."
+    }, {
+      "heading" : "3.2 Generation-based Context Contrasting for Entity Intervention",
+      "text" : "Different from the context intervention that can easily replace entities, it is more difficult to intervene on entities and modify the context. Fortunately, the rapid progress in pre-trained language model (Radford et al., 2019; Lewis et al., 2020; Raffel et al., 2020) makes the language generation from RDF data2 available (Ribeiro et al., 2020). So in this work, we take a different paradigm named Generation-based Context Contrasting, which directly generates different relation instances from specifically designed relation triplets, and approximately learn to optimize the causal effects of P(Y = 1, P |do(E)) and P(Y = 0, P |do(E)) in Equation (4) via contrastive learning. Specifically, we first sample relation triplets from Wikidata as prototypical relation instance P , and then generates relation triplets with the same entities but different relation context using the following strategies:\n• Relation Renaming, which contains the same entity pair with the original one, but an alias relation name for generating a sentence with different expressions. Then this instance is considered as a positive sample to prototypical relation instance.\n• Context Expansion, which extends the original relation instance with an additional triplet. The added triplet owns the same head/tail entity with the original instance but differs in the relation and tail/head entity. This variety aims to add irrelative context, which forces the model to focus on the important part of the context and is also considered as a positive sample to prototypical relation instance.\n• Relation Replacing, which contains the same entity pair as the original one, but with other relations between these two entities. This variety aims to avoid spurious correlations that extracts only based on the entity pair and is considered as a negative instance to the prototypical relation instance.\nThen we use the generator to generate texts based on these triplets. Specifically, we first wrap the triplets with special markers “[H], [T],[ R]” corresponds to head entity, tail entity, and relation name. Then we input the concatenated texts for relation instance generation. In our implementation, we\n2https://www.w3.org/TR/WD-rdf-syntax-971002/\nuse T5 (Raffel et al., 2020; Ribeiro et al., 2020) as the base generator, and pre-train the generator on WebNLG data (Gardent et al., 2017). After sampled these intervened instances, we approximately optimize P(Y, P |do(E)) using the following contrastive loss function: LC(θ;X ) =\n∑ Xp∈P ∑ Xn∈N max(D(P,Xp)\n−D(P,Xn) +mC , 0), (7)\nwhere θ is the model parameters, X is the intervened instance set, P is the positive instance set generated from relation renaming and context expansion, N is the negative instance set generated from relation replacing, P is the original prototypical relation instance, mC is the margin."
+    }, {
+      "heading" : "3.3 Surrogate Loss for Optimizing Causal Effects",
+      "text" : "Based on entity ranking and context contrasting, we approximate the causal effects optimized in Equation (4) with the following ranking and contrastive loss:\nL(θ;X ) = LE(θ;X ) + LC(θ;X ). (8) which involves both the entity ranking loss and the context contrastive loss. During inference, we first encode each instance into its representation using the learned model. Then we apply a clustering algorithm to cluster the relation representations, and the relation for each instance is predicted through the clustering results."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Dataset",
+      "text" : "We conduct experiments on two OpenRE datasets – T-REx SPO and T-REx DS, since these datasets are from the same data source but only differ in constructing settings, which is very suitable for evaluating the stability of OpenRE methods. These datasets are both from T-REx3 (Elsahar et al., 2018) – a dataset consists of Wikipedia sentences that are distantly aligned with Wikidata relation triplets; and these aligned sentences are further collected as T-REx SPO and T-REx DS according to whether they have surface-form relations or not. As a result, T-REx SPO contains 763,000 sentences of 615 relations, and T-REx DS contains nearly 12 million sentences of 1189 relations. For both datasets, we\n3https://hadyelsahar.github.io/t-rex/\nuse 20% for validation and the remaining for model training as Hu et al. (2020)."
+    }, {
+      "heading" : "4.2 Baseline and Evaluation Metrics",
+      "text" : "Baseline Methods. We compare our model with the following baselines: 1) rel-LDA (Yao et al., 2011), a generative model that considers the unsupervised relation extraction as a topic model. We choose the full rel-LDA with a total number of 8 features for comparison in our experiment. 2) March (Marcheggiani and Titov, 2016), a VAEbased model learned by self-supervised signal of entity link predictor. 3) UIE (Simon et al., 2019), a discriminative model that adopts additional regularization to guide model learning. And it has different versions according to the choices of different relation encoding models (e.g., PCNN). We report the results of two versions–UIE-PCNN and UIEBERT (i.e., using PCNN and BERT as the relation encoding models) with the highest performance. 4) SelfORE (Hu et al., 2020), a self-supervised framework that bootstraps to learn a contextual relation representation through adaptive clustering and pseudo label.\nEvaluation Metrics. We adopt three commonlyused metrics to evaluate different methods: B3 (Bagga and Baldwin, 1998), V-measure (Rosenberg and Hirschberg, 2007) and Adjusted Rand Index (ARI) (Hubert and Arabie, 1985).\nSpecifically, B3 contains the precision and recall metrics to correspondingly measure the correct rate of putting each sentence in its cluster or clustering all samples into a single class, which are defined as follows: B3Prec. = E\nX,Y P (g(X) = g(Y )|c(X) = c(Y ))\nB3Rec. = E X,Y P (c(X) = c(Y )|g(X) = g(Y ))\nThen B3 F1 is computed as the harmonic mean of the precision and recall.\nSimilar to B3, V-measure focuses more on small impurities in a relatively “pure” cluster than less “pure” cluster, and use the homogeneity and completeness metrics:\nVHomo. =1−H(c(X)|g(X))/H(c(X)) VComp. =1−H(g(X)|c(X))/H(g(x))\nARI is a normalization of the Rand Index, which measures the agreement degree between the cluster and golden distribution. This metric ranges in [-1,1], a more accurate cluster will get a higher score. Different from previous metrics, ARI is\nless sensitive to precision/homogeneity and recall/completeness."
+    }, {
+      "heading" : "4.3 Hyperparameters and Implementation Details",
+      "text" : "In the training period, we manually search the Hyperparameters of learning rate in [5e-6,1e-5, 5e-5], and find 1e-5 is optimal, search weight decay in [1e-6, 3e-6, 5e-5] and choose 3e-6, and use other hyperparameters without search: the dropout rate of 0.6, a batch size of 32, and a linear learning schedule with a 0.85 decay rate per 1000 minibatches. In the evaluation period, we simply adopt the pre-trained models for representation extraction, then cluster the evaluate instances based on these representations. For clustering, we follow previous work (Simon et al., 2019; Hu et al., 2020) and set K=10 as the number of clusters. The training period of each epoch costs about one day. In our implementation, we adopt Bert-base-uncased model 4 as the base model for relation extraction and a modified T5-base model 5 for text generation. The entity hierarchical tree is constructed based on WikiData and finally contains 589,121 entities. The generation set contains about 530,000 triplets, and each triplet corresponds to 5 positive/negative triplets and generated texts. We use one Titan RTX for Element Intervention training and four cards of RTX for text generation.\n4https://github.com/huggingface/transformers 5https://github.com/UKPLab/plms-graph2text"
+    }, {
+      "heading" : "4.4 Overall Results",
+      "text" : "Table 1 shows the overall results on T-REx SPO and T-REx DS. From this table, we can see that:\n1. Our method outperforms previous OpenRE models and achieves the new state-of-the-art performance. Comparing with all baseline models, our method achieves significant performance improvements: on T-Rex SPO, our method improves the SOTA B3 F1 and V-measure F1 by at least 3.9%, and ARI by 2.9%; on T-Rex DS, the improvements are more evident, where SOTA B3 F1 and V-measure F1 are improved by at least 10.0%, and ARI is improved by 4.9%.\n2. Our methods perform robustly in different datasets. Comparing the performances on these two datasets, we can see that almost all baseline methods suffer dramatic performance drops on all these metrics, which verifies that previous OpenRE methods can be easily influenced by the spurious correlations in datasets, as T-REx DS involves much more noisy instances without relation surface forms. As\ncontrast, our methods have marginal performance differences, which indicates both the effectiveness and robustness of our methods."
+    }, {
+      "heading" : "4.5 Detailed Analysis",
+      "text" : "In this section, we conduct several experiments for detailed analysis of our method.\nAblation Study. To study the effect of different intervention modules, we conduct an ablation study on each intervention module by correspondingly ablating one. The other setting remains the same as the main model. From Table 1, we can see that, in both T-REx SPO and DS, combining these two modules can result in a noticeable performance gain, which demonstrates that both two modules are important to the final model performance and they are complementary on alleviating unnecessary co-dependencies: Hyber aims to alleviate the spurious correlations between the context and the final relation prediction, and Gcc aims to alleviate the spurious correlations between entity pair and the final relation prediction. Besides, in T-REx DS, we can see that Hyber or Gcc only is effective enough to outperform previous SOTA methods, which indicates that element intervention has clearly unbiased representation on either entity pair or context.\nEntity Ranking on Generated Texts. This experiment studies the effect of different data sources for Hyber module. As shown in Table 2, we can see that Hyber based on T-REx SPO dataset or the generated texts has marginal difference. That means Hyber is robust to the source context. On the other hand, the quality of the generated texts satisfies the demand of this task.\nQuality of Context Generation(unseen relations). This experiment gives a quantitative analysis of the generator used in our work. We select WebNLG (Gardent et al., 2017) to test the generator, and adopt the widely-used metrics including BLEU (Papineni et al., 2002) and chrF++ (Popović, 2017) for evaluation. As shown in Table 3, we can\nsee that our generator is quite effective on seen relation generation. Though the generator suffers a performance drop in unseen relations, the scores are still receptible. Combined with results from other experiments, the generator is sufficient for this task.\nVisualization of Relation Representations. In this experiment, we visual the representations of the validation instances. We sample 10 relations from the T-REx SPO validation set and each relation with 200 instances for visualization. To reduce the dimension, we use t-sne (van der Maaten and Hinton, 2008) to map each representation to the dimension of 2. For the convenience of comparison, we color each instance with its ground-truth relation label. Since the visualization results of only Hyber or Gcc are marginally different from the full model, so we only choose the full model for visualization. As shown in Figure 3, we can see that each relation is mostly separate from others. However, there still be some instances misclassified due to the overlapping in the representation space."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "Current success of supervised relation extraction methods (Bunescu and Mooney, 2005; Qian et al., 2008; Zeng et al., 2014; Zhou et al., 2016; Velikovi et al., 2018) depends heavily on large amount of annotated data. Due to this data bottleneck, some weakly-supervised methods are proposed to learn relation extraction models from distantly labeled datasets (Mintz et al., 2009; Hoffmann et al., 2011; Lin et al., 2016) or few-shot datasets (Han et al., 2018; Baldini Soares et al., 2019; Peng et al., 2020). However, these paradigms still require pre-defined\nrelation types and therefore restricts their application to open scenarios.\nOpen relation extraction, on the other hand, aims to cluster relation instances referring to the same underlying relation without pre-defined relation types. Previous methods for OpenRE can be roughly divided into two categories. The generative method (Yao et al., 2011) formulates OpenRE using a topic model, and the latent relations are generated based on the hand-crafted feature representations of entities and context. While the discriminative method is first proposed by Marcheggiani and Titov (2016), which learns the model through the self-supervised signal from entity link predictor. Along this line, Hu et al. (2020) propose the SelfORE that learns the model through pseudo label and bootstrapping technology. However, Simon et al. (2019) point out that previous OpenRE methods severely suffer from the instability, and they also propose two regularizers to guide the learning procedure. But the fundamental cause of the instability is still undiscovered.\nIn this paper, we revisit the procedure of OpenRE from a causal view. By formulating OpenRE using a structural causal model, we identify the cause of the above-mentioned problems, and alleviate the problems by Element Intervention. There are also some recent studies try to introduce causal theory to explain the spurious correlations in neural models (Feng et al., 2018; Gururangan et al., 2018; Tang et al., 2020; Qi et al., 2020; Zeng et al., 2020; Wu et al., 2020; Qin et al., 2020; Fu et al., 2020). However, to the best of our knowledge, this is the first work to revisit OpenRE from the perspective of causality."
+    }, {
+      "heading" : "6 Conclusions",
+      "text" : "In this paper, we revisit OpenRE from the perspective of causal theory. We find that the strong connections between the generated instance to the prototypical instance through either their entities or their context will result in spurious correlations, which appear in the form of the backdoor paths in the SCM. Then the spurious correlations will mislead OpenRE models. Based on the observations, we propose Element Intervention to block the backdoor paths, which intervenes on the context and entities respectively to obtain the underlying causal effects of them. We also provide two specific implementations of the interventions based on entity ranking and context contrasting. Experimen-\ntal results on two OpenRE datasets show that our methods outperform previous methods with a large margin, and suffer the least performance discrepancy between datasets, which indicates both the effectiveness and stability of our methods."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "We thank all reviewers for their insightful suggestions. Moreover, this work is supported by the National Key Research and Development Program of China under Grant No.2019YFC1521200, the National Natural Science Foundation of China under Grants no. U1936207 and 61772505, and in part by the Youth Innovation Promotion Association CAS(2018141)."
+    } ],
+    "references" : [ {
+      "title" : "Entity-based cross-document coreferencing using the vector space model",
+      "author" : [ "Amit Bagga", "Breck Baldwin." ],
+      "venue" : "36th Annual Meeting of the Association for Computational Linguistics and 17th International Conference on Computational Linguistics,",
+      "citeRegEx" : "Bagga and Baldwin.,? 1998",
+      "shortCiteRegEx" : "Bagga and Baldwin.",
+      "year" : 1998
+    }, {
+      "title" : "Matching the blanks: Distributional similarity for relation learning",
+      "author" : [ "Livio Baldini Soares", "Nicholas FitzGerald", "Jeffrey Ling", "Tom Kwiatkowski." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Soares et al\\.,? 2019",
+      "shortCiteRegEx" : "Soares et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Latent dirichlet allocation",
+      "author" : [ "David M. Blei", "Andrew Y. Ng", "Michael I. Jordan." ],
+      "venue" : "Journal of Machine Learning Research, 3:993–1022.",
+      "citeRegEx" : "Blei et al\\.,? 2003",
+      "shortCiteRegEx" : "Blei et al\\.",
+      "year" : 2003
+    }, {
+      "title" : "A shortest path dependency kernel for relation extraction",
+      "author" : [ "Razvan Bunescu", "Raymond Mooney." ],
+      "venue" : "Proceedings of Human Language Technology Conference and Conference on Empirical Methods in Natural Language Processing, pages 724–",
+      "citeRegEx" : "Bunescu and Mooney.,? 2005",
+      "shortCiteRegEx" : "Bunescu and Mooney.",
+      "year" : 2005
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "T-REx: A large scale alignment of natural language with knowledge",
+      "author" : [ "Hady Elsahar", "Pavlos Vougiouklis", "Arslen Remaci", "Christophe Gravier", "Jonathon Hare", "Frederique Laforest", "Elena Simperl" ],
+      "venue" : null,
+      "citeRegEx" : "Elsahar et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Elsahar et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Pathologies of neural models make interpretations difficult",
+      "author" : [ "Shi Feng", "Eric Wallace", "Alvin Grissom II", "Mohit Iyyer", "Pedro Rodriguez", "Jordan Boyd-Graber." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Feng et al\\.,? 2018",
+      "shortCiteRegEx" : "Feng et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "SSCR: Iterative language-based image editing via self-supervised counterfactual reasoning",
+      "author" : [ "Tsu-Jui Fu", "Xin Wang", "Scott Grafton", "Miguel Eckstein", "William Yang Wang." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural",
+      "citeRegEx" : "Fu et al\\.,? 2020",
+      "shortCiteRegEx" : "Fu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "The WebNLG challenge: Generating text from RDF data",
+      "author" : [ "Claire Gardent", "Anastasia Shimorina", "Shashi Narayan", "Laura Perez-Beltrachini." ],
+      "venue" : "Proceedings of the 10th International Conference on Natural Language Generation, pages 124–133, San-",
+      "citeRegEx" : "Gardent et al\\.,? 2017",
+      "shortCiteRegEx" : "Gardent et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Annotation artifacts in natural language inference data",
+      "author" : [ "Suchin Gururangan", "Swabha Swayamdipta", "Omer Levy", "Roy Schwartz", "Samuel Bowman", "Noah A. Smith." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the",
+      "citeRegEx" : "Gururangan et al\\.,? 2018",
+      "shortCiteRegEx" : "Gururangan et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "FewRel: A large-scale supervised few-shot relation classification dataset with state-of-the-art evaluation",
+      "author" : [ "Xu Han", "Hao Zhu", "Pengfei Yu", "Ziyun Wang", "Yuan Yao", "Zhiyuan Liu", "Maosong Sun." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Meth-",
+      "citeRegEx" : "Han et al\\.,? 2018",
+      "shortCiteRegEx" : "Han et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Knowledgebased weak supervision for information extraction of overlapping relations",
+      "author" : [ "Raphael Hoffmann", "Congle Zhang", "Xiao Ling", "Luke Zettlemoyer", "Daniel S. Weld." ],
+      "venue" : "Proceedings of the 49th Annual Meeting of the Association for Computa-",
+      "citeRegEx" : "Hoffmann et al\\.,? 2011",
+      "shortCiteRegEx" : "Hoffmann et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "SelfORE: Self-supervised relational feature learning for open relation extraction",
+      "author" : [ "Xuming Hu", "Lijie Wen", "Yusong Xu", "Chenwei Zhang", "Philip Yu." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP),",
+      "citeRegEx" : "Hu et al\\.,? 2020",
+      "shortCiteRegEx" : "Hu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Comparing partitions",
+      "author" : [ "L. Hubert", "P. Arabie." ],
+      "venue" : "Journal of classification, 2(1):193–218.",
+      "citeRegEx" : "Hubert and Arabie.,? 1985",
+      "shortCiteRegEx" : "Hubert and Arabie.",
+      "year" : 1985
+    }, {
+      "title" : "BART: Denoising sequence-to-sequence pretraining for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Neural relation extraction with selective attention over instances",
+      "author" : [ "Yankai Lin", "Shiqi Shen", "Zhiyuan Liu", "Huanbo Luan", "Maosong Sun." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Pa-",
+      "citeRegEx" : "Lin et al\\.,? 2016",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Visualizing data using t-SNE",
+      "author" : [ "Laurens van der Maaten", "Geoffrey Hinton." ],
+      "venue" : "Journal of Machine Learning Research, 9:2579–2605.",
+      "citeRegEx" : "Maaten and Hinton.,? 2008",
+      "shortCiteRegEx" : "Maaten and Hinton.",
+      "year" : 2008
+    }, {
+      "title" : "Discretestate variational autoencoders for joint discovery and factorization of relations",
+      "author" : [ "Diego Marcheggiani", "Ivan Titov." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 4:231–244.",
+      "citeRegEx" : "Marcheggiani and Titov.,? 2016",
+      "shortCiteRegEx" : "Marcheggiani and Titov.",
+      "year" : 2016
+    }, {
+      "title" : "Distant supervision for relation extraction without labeled data",
+      "author" : [ "Mike Mintz", "Steven Bills", "Rion Snow", "Daniel Jurafsky." ],
+      "venue" : "Proceedings of the Joint Conference of the 47th Annual Meeting of the ACL and the 4th International Joint Conference on Natu-",
+      "citeRegEx" : "Mintz et al\\.,? 2009",
+      "shortCiteRegEx" : "Mintz et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Bleu: a method for automatic evaluation of machine translation",
+      "author" : [ "Kishore Papineni", "Salim Roukos", "Todd Ward", "WeiJing Zhu." ],
+      "venue" : "Proceedings of the 40th Annual Meeting of the Association for Computational Linguistics, pages 311–318, Philadelphia,",
+      "citeRegEx" : "Papineni et al\\.,? 2002",
+      "shortCiteRegEx" : "Papineni et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Causality: Models, Reasoning, and Inference",
+      "author" : [ "Judea Pearl." ],
+      "venue" : "Cambridge University Press.",
+      "citeRegEx" : "Pearl.,? 2009",
+      "shortCiteRegEx" : "Pearl.",
+      "year" : 2009
+    }, {
+      "title" : "Learning from Context or Names? An Empirical Study on Neural Relation Extraction",
+      "author" : [ "Hao Peng", "Tianyu Gao", "Xu Han", "Yankai Lin", "Peng Li", "Zhiyuan Liu", "Maosong Sun", "Jie Zhou." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Method-",
+      "citeRegEx" : "Peng et al\\.,? 2020",
+      "shortCiteRegEx" : "Peng et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "chrF++: words helping character n-grams",
+      "author" : [ "Maja Popović." ],
+      "venue" : "Proceedings of the Second Conference on Machine Translation, pages 612–618, Copenhagen, Denmark. Association for Computational Linguistics.",
+      "citeRegEx" : "Popović.,? 2017",
+      "shortCiteRegEx" : "Popović.",
+      "year" : 2017
+    }, {
+      "title" : "Two causal principles for improving visual dialog",
+      "author" : [ "Jiaxin Qi", "Yulei Niu", "Jianqiang Huang", "Hanwang Zhang." ],
+      "venue" : "Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR).",
+      "citeRegEx" : "Qi et al\\.,? 2020",
+      "shortCiteRegEx" : "Qi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Exploiting constituent dependencies for tree kernel-based semantic relation extraction",
+      "author" : [ "Longhua Qian", "Guodong Zhou", "Fang Kong", "Qiaoming Zhu", "Peide Qian." ],
+      "venue" : "Proceedings of the 22nd International Conference on Computational Linguistics (Col-",
+      "citeRegEx" : "Qian et al\\.,? 2008",
+      "shortCiteRegEx" : "Qian et al\\.",
+      "year" : 2008
+    }, {
+      "title" : "Back to the future: Unsupervised backprop-based decoding for counterfactual and abductive commonsense reasoning",
+      "author" : [ "Lianhui Qin", "Vered Shwartz", "Peter West", "Chandra Bhagavatula", "Jena D. Hwang", "Ronan Le Bras", "Antoine Bosselut", "Yejin Choi." ],
+      "venue" : "In",
+      "citeRegEx" : "Qin et al\\.,? 2020",
+      "shortCiteRegEx" : "Qin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "Alec Radford", "Jeffrey Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever." ],
+      "venue" : "OpenAI blog, 1(8):9.",
+      "citeRegEx" : "Radford et al\\.,? 2019",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Exploring the limits of transfer learning with a unified text-totext transformer",
+      "author" : [ "Colin Raffel", "Noam Shazeer", "Adam Roberts", "Katherine Lee", "Sharan Narang", "Michael Matena", "Yanqi Zhou", "Wei Li", "Peter J. Liu." ],
+      "venue" : "Journal of Machine Learning Re-",
+      "citeRegEx" : "Raffel et al\\.,? 2020",
+      "shortCiteRegEx" : "Raffel et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Investigating pretrained language models for graph-to-text generation",
+      "author" : [ "Leonardo F.R. Ribeiro", "Martin Schmitt", "Hinrich Schütze", "Iryna Gurevych." ],
+      "venue" : "CoRR, abs/2007.08426.",
+      "citeRegEx" : "Ribeiro et al\\.,? 2020",
+      "shortCiteRegEx" : "Ribeiro et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Vmeasure: A conditional entropy-based external cluster evaluation measure",
+      "author" : [ "Andrew Rosenberg", "Julia Hirschberg." ],
+      "venue" : "Proceedings of the 2007 Joint Conference on Empirical Methods in Natural Language Processing and Computational Natural",
+      "citeRegEx" : "Rosenberg and Hirschberg.,? 2007",
+      "shortCiteRegEx" : "Rosenberg and Hirschberg.",
+      "year" : 2007
+    }, {
+      "title" : "Unsupervised information extraction: Regularizing discriminative approaches with relation distribution losses",
+      "author" : [ "Étienne Simon", "Vincent Guigue", "Benjamin Piwowarski." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Compu-",
+      "citeRegEx" : "Simon et al\\.,? 2019",
+      "shortCiteRegEx" : "Simon et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Long-tailed classification by keeping the good and removing the bad momentum causal effect",
+      "author" : [ "Kaihua Tang", "Jianqiang Huang", "Hanwang Zhang." ],
+      "venue" : "NeurIPS.",
+      "citeRegEx" : "Tang et al\\.,? 2020",
+      "shortCiteRegEx" : "Tang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "De-biased court’s view generation with causality",
+      "author" : [ "Yiquan Wu", "Kun Kuang", "Yating Zhang", "Xiaozhong Liu", "Changlong Sun", "Jun Xiao", "Yueting Zhuang", "Luo Si", "Fei Wu." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language",
+      "citeRegEx" : "Wu et al\\.,? 2020",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Structured relation discovery using generative models",
+      "author" : [ "Limin Yao", "Aria Haghighi", "Sebastian Riedel", "Andrew McCallum." ],
+      "venue" : "Proceedings of the 2011 Conference on Empirical Methods in Natural Language Processing, pages 1456–1466, Edinburgh,",
+      "citeRegEx" : "Yao et al\\.,? 2011",
+      "shortCiteRegEx" : "Yao et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "Relation classification via convolutional deep neural network",
+      "author" : [ "Daojian Zeng", "Kang Liu", "Siwei Lai", "Guangyou Zhou", "Jun Zhao." ],
+      "venue" : "Proceedings of COLING 2014, the 25th International Conference on Computational Linguistics: Technical Papers,",
+      "citeRegEx" : "Zeng et al\\.,? 2014",
+      "shortCiteRegEx" : "Zeng et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Counterfactual generator: A weaklysupervised method for named entity recognition",
+      "author" : [ "Xiangji Zeng", "Yunliang Li", "Yuchen Zhai", "Yin Zhang." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP),",
+      "citeRegEx" : "Zeng et al\\.,? 2020",
+      "shortCiteRegEx" : "Zeng et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Attention-based bidirectional long short-term memory networks for relation classification",
+      "author" : [ "Peng Zhou", "Wei Shi", "Jun Tian", "Zhenyu Qi", "Bingchen Li", "Hongwei Hao", "Bo Xu." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computation-",
+      "citeRegEx" : "Zhou et al\\.,? 2016",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2016
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 34,
+      "context" : "Despite the success of many RE models (Zeng et al., 2014; Baldini Soares et al., 2019), most previous RE paradigms rely on the predefined relation types, which are always unavailable in open domain scenario and thereby limits their capability in real applications.",
+      "startOffset" : 38,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 2,
+      "context" : "(2011) adopts topic model (Blei et al., 2003) to generate latent relation type for unlabelled instances.",
+      "startOffset" : 26,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 4,
+      "context" : "(2020) encodes each instance with pretrained language model (Devlin et al., 2019; Baldini Soares et al., 2019) and learn the representation by self-supervised signals from pseudo labels.",
+      "startOffset" : 60,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 30,
+      "context" : "Unfortunately, current OpenRE models are often unstable and easily collapsed (Simon et al., 2019).",
+      "startOffset" : 77,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 20,
+      "context" : "Specifically, we formulate the process of OpenRE using a structural causal model (SCM) (Pearl, 2009), as shown in Figure 1.",
+      "startOffset" : 87,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 30,
+      "context" : "Unfortunately, current OpenRE models are often unstable and easily collapsed (Simon et al., 2019).",
+      "startOffset" : 77,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 20,
+      "context" : "To resolve the spurious correlations, we adopt the backdoor adjustment (Pearl, 2009) to block the backdoor paths.",
+      "startOffset" : 71,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 26,
+      "context" : "the rapid progress in pre-trained language model (Radford et al., 2019; Lewis et al., 2020; Raffel et al., 2020) makes the language generation from RDF data2 available (Ribeiro et al.",
+      "startOffset" : 49,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 14,
+      "context" : "the rapid progress in pre-trained language model (Radford et al., 2019; Lewis et al., 2020; Raffel et al., 2020) makes the language generation from RDF data2 available (Ribeiro et al.",
+      "startOffset" : 49,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 27,
+      "context" : "the rapid progress in pre-trained language model (Radford et al., 2019; Lewis et al., 2020; Raffel et al., 2020) makes the language generation from RDF data2 available (Ribeiro et al.",
+      "startOffset" : 49,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 28,
+      "context" : ", 2020) makes the language generation from RDF data2 available (Ribeiro et al., 2020).",
+      "startOffset" : 63,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 27,
+      "context" : "use T5 (Raffel et al., 2020; Ribeiro et al., 2020) as the base generator, and pre-train the generator on WebNLG data (Gardent et al.",
+      "startOffset" : 7,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 28,
+      "context" : "use T5 (Raffel et al., 2020; Ribeiro et al., 2020) as the base generator, and pre-train the generator on WebNLG data (Gardent et al.",
+      "startOffset" : 7,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2020) as the base generator, and pre-train the generator on WebNLG data (Gardent et al., 2017).",
+      "startOffset" : 74,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 5,
+      "context" : "These datasets are both from T-REx3 (Elsahar et al., 2018) – a dataset consists of Wikipedia sentences that are distantly aligned with Wikidata relation triplets; and these aligned sentences are further collected as T-REx SPO and T-REx DS according to whether they have surface-form relations or not.",
+      "startOffset" : 36,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 33,
+      "context" : "We compare our model with the following baselines: 1) rel-LDA (Yao et al., 2011), a generative model that considers the unsupervised relation extraction as a topic model.",
+      "startOffset" : 62,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 17,
+      "context" : "2) March (Marcheggiani and Titov, 2016), a VAEbased model learned by self-supervised signal of entity link predictor.",
+      "startOffset" : 9,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 30,
+      "context" : "3) UIE (Simon et al., 2019), a discriminative model that adopts additional regular-",
+      "startOffset" : 7,
+      "endOffset" : 27
+    }, {
+      "referenceID" : 12,
+      "context" : "4) SelfORE (Hu et al., 2020), a self-supervised framework that bootstraps to learn a contextual relation representation through adaptive clustering and pseudo label.",
+      "startOffset" : 11,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 0,
+      "context" : "We adopt three commonlyused metrics to evaluate different methods: B3 (Bagga and Baldwin, 1998), V-measure (Rosenberg and Hirschberg, 2007) and Adjusted Rand Index (ARI) (Hubert and Arabie, 1985).",
+      "startOffset" : 70,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 29,
+      "context" : "We adopt three commonlyused metrics to evaluate different methods: B3 (Bagga and Baldwin, 1998), V-measure (Rosenberg and Hirschberg, 2007) and Adjusted Rand Index (ARI) (Hubert and Arabie, 1985).",
+      "startOffset" : 107,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 13,
+      "context" : "We adopt three commonlyused metrics to evaluate different methods: B3 (Bagga and Baldwin, 1998), V-measure (Rosenberg and Hirschberg, 2007) and Adjusted Rand Index (ARI) (Hubert and Arabie, 1985).",
+      "startOffset" : 170,
+      "endOffset" : 195
+    }, {
+      "referenceID" : 30,
+      "context" : "For clustering, we follow previous work (Simon et al., 2019; Hu et al., 2020) and set K=10 as the number of clusters.",
+      "startOffset" : 40,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 12,
+      "context" : "For clustering, we follow previous work (Simon et al., 2019; Hu et al., 2020) and set K=10 as the number of clusters.",
+      "startOffset" : 40,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 8,
+      "context" : "We select WebNLG (Gardent et al., 2017) to test the generator, and adopt the widely-used metrics including BLEU (Papineni et al.",
+      "startOffset" : 17,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 19,
+      "context" : ", 2017) to test the generator, and adopt the widely-used metrics including BLEU (Papineni et al., 2002) and chrF++ (Popović, 2017) for evaluation.",
+      "startOffset" : 80,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2002) and chrF++ (Popović, 2017) for evaluation.",
+      "startOffset" : 19,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 3,
+      "context" : "Current success of supervised relation extraction methods (Bunescu and Mooney, 2005; Qian et al., 2008; Zeng et al., 2014; Zhou et al., 2016; Velikovi et al., 2018) depends heavily on large amount of annotated data.",
+      "startOffset" : 58,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 24,
+      "context" : "Current success of supervised relation extraction methods (Bunescu and Mooney, 2005; Qian et al., 2008; Zeng et al., 2014; Zhou et al., 2016; Velikovi et al., 2018) depends heavily on large amount of annotated data.",
+      "startOffset" : 58,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 34,
+      "context" : "Current success of supervised relation extraction methods (Bunescu and Mooney, 2005; Qian et al., 2008; Zeng et al., 2014; Zhou et al., 2016; Velikovi et al., 2018) depends heavily on large amount of annotated data.",
+      "startOffset" : 58,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 36,
+      "context" : "Current success of supervised relation extraction methods (Bunescu and Mooney, 2005; Qian et al., 2008; Zeng et al., 2014; Zhou et al., 2016; Velikovi et al., 2018) depends heavily on large amount of annotated data.",
+      "startOffset" : 58,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 18,
+      "context" : "Due to this data bottleneck, some weakly-supervised methods are proposed to learn relation extraction models from distantly labeled datasets (Mintz et al., 2009; Hoffmann et al., 2011; Lin et al., 2016) or few-shot datasets (Han et al.",
+      "startOffset" : 141,
+      "endOffset" : 202
+    }, {
+      "referenceID" : 11,
+      "context" : "Due to this data bottleneck, some weakly-supervised methods are proposed to learn relation extraction models from distantly labeled datasets (Mintz et al., 2009; Hoffmann et al., 2011; Lin et al., 2016) or few-shot datasets (Han et al.",
+      "startOffset" : 141,
+      "endOffset" : 202
+    }, {
+      "referenceID" : 15,
+      "context" : "Due to this data bottleneck, some weakly-supervised methods are proposed to learn relation extraction models from distantly labeled datasets (Mintz et al., 2009; Hoffmann et al., 2011; Lin et al., 2016) or few-shot datasets (Han et al.",
+      "startOffset" : 141,
+      "endOffset" : 202
+    }, {
+      "referenceID" : 33,
+      "context" : "The generative method (Yao et al., 2011) formulates OpenRE using a topic model, and the latent relations are generated based on the hand-crafted feature representations of entities and context.",
+      "startOffset" : 22,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 6,
+      "context" : "There are also some recent studies try to introduce causal theory to explain the spurious correlations in neural models (Feng et al., 2018; Gururangan et al., 2018; Tang et al., 2020; Qi et al., 2020; Zeng et al., 2020; Wu et al., 2020; Qin et al., 2020; Fu et al., 2020).",
+      "startOffset" : 120,
+      "endOffset" : 271
+    }, {
+      "referenceID" : 9,
+      "context" : "There are also some recent studies try to introduce causal theory to explain the spurious correlations in neural models (Feng et al., 2018; Gururangan et al., 2018; Tang et al., 2020; Qi et al., 2020; Zeng et al., 2020; Wu et al., 2020; Qin et al., 2020; Fu et al., 2020).",
+      "startOffset" : 120,
+      "endOffset" : 271
+    }, {
+      "referenceID" : 31,
+      "context" : "There are also some recent studies try to introduce causal theory to explain the spurious correlations in neural models (Feng et al., 2018; Gururangan et al., 2018; Tang et al., 2020; Qi et al., 2020; Zeng et al., 2020; Wu et al., 2020; Qin et al., 2020; Fu et al., 2020).",
+      "startOffset" : 120,
+      "endOffset" : 271
+    }, {
+      "referenceID" : 23,
+      "context" : "There are also some recent studies try to introduce causal theory to explain the spurious correlations in neural models (Feng et al., 2018; Gururangan et al., 2018; Tang et al., 2020; Qi et al., 2020; Zeng et al., 2020; Wu et al., 2020; Qin et al., 2020; Fu et al., 2020).",
+      "startOffset" : 120,
+      "endOffset" : 271
+    }, {
+      "referenceID" : 35,
+      "context" : "There are also some recent studies try to introduce causal theory to explain the spurious correlations in neural models (Feng et al., 2018; Gururangan et al., 2018; Tang et al., 2020; Qi et al., 2020; Zeng et al., 2020; Wu et al., 2020; Qin et al., 2020; Fu et al., 2020).",
+      "startOffset" : 120,
+      "endOffset" : 271
+    }, {
+      "referenceID" : 32,
+      "context" : "There are also some recent studies try to introduce causal theory to explain the spurious correlations in neural models (Feng et al., 2018; Gururangan et al., 2018; Tang et al., 2020; Qi et al., 2020; Zeng et al., 2020; Wu et al., 2020; Qin et al., 2020; Fu et al., 2020).",
+      "startOffset" : 120,
+      "endOffset" : 271
+    }, {
+      "referenceID" : 25,
+      "context" : "There are also some recent studies try to introduce causal theory to explain the spurious correlations in neural models (Feng et al., 2018; Gururangan et al., 2018; Tang et al., 2020; Qi et al., 2020; Zeng et al., 2020; Wu et al., 2020; Qin et al., 2020; Fu et al., 2020).",
+      "startOffset" : 120,
+      "endOffset" : 271
+    }, {
+      "referenceID" : 7,
+      "context" : "There are also some recent studies try to introduce causal theory to explain the spurious correlations in neural models (Feng et al., 2018; Gururangan et al., 2018; Tang et al., 2020; Qi et al., 2020; Zeng et al., 2020; Wu et al., 2020; Qin et al., 2020; Fu et al., 2020).",
+      "startOffset" : 120,
+      "endOffset" : 271
+    } ],
+    "year" : 2021,
+    "abstractText" : "Open relation extraction aims to cluster relation instances referring to the same underlying relation, which is a critical step for general relation extraction. Current OpenRE models are commonly trained on the datasets generated from distant supervision, which often results in instability and makes the model easily collapsed. In this paper, we revisit the procedure of OpenRE from a causal view. By formulating OpenRE using a structural causal model, we identify that the above-mentioned problems stem from the spurious correlations from entities and context to the relation type. To address this issue, we conduct Element Intervention, which intervenes on the context and entities respectively to obtain the underlying causal effects of them. We also provide two specific implementations of the interventions based on entity ranking and context contrasting. Experimental results on unsupervised relation extraction datasets show that our methods outperform previous state-of-the-art methods and are robust across different datasets1.",
+    "creator" : "LaTeX with hyperref package"
+  }
+}

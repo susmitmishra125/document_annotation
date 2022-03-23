@@ -1,0 +1,598 @@
+{
+  "name" : "2021.acl-long.509.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "GhostBERT: Generate More Features with Cheap Operations for BERT",
+    "authors" : [ "Zhiqi Huang", "Lu Hou", "Lifeng Shang", "Xin Jiang", "Xiao Chen", "Qun Liu" ],
+    "emails" : [ "zhiqihuang@pku.edu.cn,", "qun.liu}@huawei.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 6512–6523\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n6512"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Recently, there is a surge of research interests in compressing the transformer-based pre-trained language models like BERT into smaller ones using various compression methods, i.e., knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Jiao et al., 2020), pruning (Michel et al., 2019; Fan et al., 2019), low-rank approximation (Lan et al., 2020), weight-sharing (Lan et al., 2020), dynamic networks with adaptive depth and/or width (Liu et al., 2020; Hou et al., 2020; Xin et al., 2020; Zhou et al., 2020), and quantization (Shen et al., 2020; Fan et al., 2020; Zhang et al., 2020; Bai et al., 2021).\nPrevious works show that there are some redundant features in the BERT model, and unimportant attention heads or neurons can be pruned away\nwithout severe accuracy degradation (Michel et al., 2019; Hou et al., 2020). However, for computer vision (CV) tasks, it is shown in (Han et al., 2020) that redundant features in convolutional neural networks also contribute positively to the performance, and using cheap linear operations to generate more ghost feature maps enhances the performance with few additional parameters. On the other hand, it is shown in (Voita et al., 2019; Kovaleva et al., 2019; Rogers et al., 2020) that many attention maps in pre-trained language models exhibit typical positional patterns, e.g., diagonal or vertical, which can be easily generated from other similar ones using operations like convolution.\nBased on the above two aspects, in this paper, we propose to use cheap ghost modules on top of the remaining important attention heads and neurons to generate more features, so as to compensate for the pruned ones. Considering that the convolution operation (1) encodes local context dependency, as a complement of the global self-attention in Transformer models (Wu et al., 2020); and (2) can generate some BERT features like positional attention maps from similar others, in this work, we propose to use the efficient 1-Dimensional Depthwise Separable Convolution (Wu et al., 2019) as the basic operation in the ghost module. To ensure the generated ghost features have similar scales\nas the original ones, we use a softmax function to normalize the convolution kernel.\nAfterwards, we fine-tune the parameters in both the BERT backbone model and the added ghost modules. Note that the ghost modules are not necessarily applied to pruned models. They can also be directly applied to pre-trained language models for better performance while with negligible additional parameters and floating-point operations (FLOPs). Figure 1 summarizes the average accuracy versus parameter size and FLOPs on the GLUE benchmark, where adding ghost modules to both the unpruned (m = 12/12) and pruned (m < 1) BERT models perform better than the counterparts without ghost modules. More experiments on the GLUE benchmark show that with only 0.4% more parameters and 0.9% more FLOPs, the proposed ghost modules improve the average accuracy of BERT-base, RoBERTa-base and ELECTRA-small by 0.9, 0.6, 2.4 points, respectively. When applying ghost modules to small or pruned models, the resultant models outperform other BERT compression methods."
+    }, {
+      "heading" : "2 Approach",
+      "text" : "In this section, we first introduce where to add ghost modules in a BERT model (Section 2.1), and then discuss the components and optimization details of the ghost module (Section 2.2)."
+    }, {
+      "heading" : "2.1 Adding Ghost Modules to BERT",
+      "text" : "The BERT model is built with Transformer layers, each of which contains a Multi-Head Attention (MHA) layer and a Feed-Forward Network (FFN), as well as skip connections and layer normalizations. Hou et al. (2020) show that the computations\nfor attention heads of MHA and neurons in the intermediate layer of FFN can be performed in parallel. Thus the BERT model can be compressed in a structured manner by pruning parameters associated with these heads and neurons (Hou et al., 2020). In this paper, after pruning the unimportant heads and neurons, we employ cheap ghost modules upon the remaining ones to generate more ghost features to compensate for the pruned ones.\nFor simplicity of notation, we omit the bias terms in linear and convolution operations where applicable in the rest of this work."
+    }, {
+      "heading" : "2.1.1 Ghost Module on MHA",
+      "text" : "Following (Hou et al., 2020), we divide the computation of MHA into the computation of each attention head. Specifically, suppose the sequence length and hidden state size are n and d, respectively. Each transformer layer consists ofNH attention heads. For input matrix X ∈ Rn×d, the h-th attention head computes its output as Hh(X) = Softmax(1/ √ d · XWQh W K> h X >)XWVh W O> h , where WQh ,W K h ,W V h ,W O h ∈ Rd×dh with dh = d/NH are the projection matrices associated with it. In multi-head attention, NH heads are computed in parallel to get the final output:\nMHA(X) = NH∑ h=1 Hh(X). (1)\nGiven a width multiplier m ≤ 1, we keep M = bNhmc heads and use them to generate F ghost features. The f th ghost feature is generated by\nGf (X)=Nonlinear ( M∑ h=1 Gf,h (Hh(X)) ) . (2)\nwhere Gf,h is the proposed cheap ghost module which generates features from the hth attention head’s representation to the f th ghost feature. ReLU is used as the nonlinearity function. Thus the computation of MHA in the GhostBERT is:\nGhost-MHA(X)= M∑ h=1 Hh(X)+ F∑ f=1 Gf (X). (3)\nBesides being added to the output of MHA, the ghost modules can also be added to other positions in MHA. Detailed discussions are in Section 4.2."
+    }, {
+      "heading" : "2.1.2 Ghost Module on FFN",
+      "text" : "Similar to the attention heads in MHA, the computation of FFN can also be divided into computations for each neuron in the intermediate layer of FFN (Hou et al., 2020). With a slight abuse of notation, we still use X ∈ Rn×d as the input to FFN. Denote the number of neurons in the intermediate layer as dff , the computation of FFN can be writ-\nten as: FFN(X) = ∑dff i=1 GeLU ( XW1:,i ) W2i,:, where W1,W2 are the weights in FFN. For simplicity, we also use width multiplier m for FFN as MHA, and divide these neurons into NH folds, where each fold contains df = dff/NH neurons. For the h-th fold, its output can be computed as Hh(X) = GeLU ( XW1h ) W2h where W1h =W 1 :,(h−1)df :hdf and W 2 h =W 2 (h−1)df :hdf ,: are the parameters associated with it. In FFN, NH folds are computed in parallel to get the output:\nFFN(X) = NH∑ h=1 Hh(X). (4)\nFor width multiplier m, we keep M folds of neurons and use ghost modules to generate F ghost features as in Equation (2). Thus the computation of FFN in the GhostBERT can be written as:\nGhost-FFN(X)= M∑ h=1 Hh(X)+ F∑ f=1 Gf (X). (5)"
+    }, {
+      "heading" : "2.2 Ghost Module",
+      "text" : "In the previous section, we discussed where we insert the ghost modules in the Transformer layer. In this section, we elaborate on the components and normalization of the ghost modules.\nGenerally speaking, any function can be used as the ghost module G in Equation (2). Considering that (i) convolution operation can encode local context dependency, as a compensation for the global\nself-attention (Wu et al., 2020; Jiang et al., 2020); and (ii) features like diagonal or vertical attention maps (Kovaleva et al., 2019; Rogers et al., 2020) can be easily generated by convolving similar others, we consider using convolution as the basic operation in the ghost module."
+    }, {
+      "heading" : "2.2.1 Convolution Type",
+      "text" : "With a slight abuse of notation, here we still use X ∈ Rn×d as the input to the convolution, i.e., the output Hh of hth head in MHA or hth fold of neurons in FFN. Denote O ∈ Rn×d as the output of the convolution in the ghost module.\n1-Dimensional convolution (Conv1D) over the sequence direction encodes local dependency over contexts, and has shown remarkable performance for NLP tasks (Wu et al., 2019, 2020). To utilize the representation power of Conv1D without too much additional memory and computation, we choose 1-Dimensional Depthwise Separable Convolution (DWConv) (Wu et al., 2019) for the ghost module. Compared with Conv1D, DWConv performs a convolution independently over every channel, and reduces the number of parameters from d2k to dk (where k is the convolution kernel size). Denote the weight of the DWConv operation as W ∈ Rd×k. After applying DWConv, the output for the ith token and cth channel can be written as:\nOi,c = DWConv(X:,c,Wc,:, i, c)\n= k∑ m=1 Wc,m ·Xi−d k+1 2 e+m,c."
+    }, {
+      "heading" : "2.2.2 Normalization",
+      "text" : "Since the parameters of the BERT backbone model and the ghost modules can have quite different scales and optimization behaviors, we use a softmax function to normalize each convolution kernel Wc,: across the sequence dimension as Softmax(Wc,:) before convolution as Wu et al. (2019). By softmax normalization, the weights in one kernel are summed up to 1, ensuring that the convolved output has a similar scale as the input. Thus after applying the ghost module, the output for the ith token and cth channel can be written as:\nÔi,c=DWConv(X:,c,Softmax(Wc,:), i, c)."
+    }, {
+      "heading" : "2.3 Training Details",
+      "text" : "To turn a pre-trained BERT model into a smallersized GhostBERT, we do the following three steps:\nPruning. For a certain width multiplier m, we prune the attention heads in MHA and neurons in the intermediate layer of FFN from a pre-trained BERT-based model following (Hou et al., 2020).\nDistillation. Then we add ghost modules to the pruned model as in Section 2.1. Suppose there are L Transformer layers. We distill the knowledge from the embedding (i.e., the output of the embedding layer) E, hidden states Ml after MHA and Fl after FFN (where l = 1, 2, · · · , L) from the full-sized teacher model to Em,Mml ,F m l of the student GhostBERT. Following (Jiao et al., 2020), we use the augmented data for distillation. Denote MSE as the mean squared error, the three loss terms are `emb = MSE(Em,E), `mha = ∑L l=1 MSE(M\nm l ,Ml), and `ffn =∑L\nl=1 MSE(F m l ,Fl), respectively. Thus, the distil-\nlation loss function is:\nLdistill = `emb + `mha + `ffn.\nFine-tuning. Denote y as the predicted logits, we finally fine-tune the GhostBERT with groundtruth labels ŷ as:\nLfinetune = CrossEntropy(ŷ,y).\nNote that instead of being applied to pruned models, the cheap ghost modules can also be directly applied to a pre-trained model for better performance while with negligible additional parameters\nand FLOPs. In this case, the training procedure contains only the distillation and fine-tuning steps.\nEmpirically, to save memory and computation, we generate one ghost feature for each MHA or FFN (i.e., F = 1 in Equations (3) and (5)), and let all ghost modules Gf,h share the same parameters with each other. As will be shown in Section 3, adding these simplified ghost modules already achieve clear performance gain empirically."
+    }, {
+      "heading" : "3 Experiment",
+      "text" : "In this section, we show the efficacy of the proposed method with (pruned) BERT (Devlin et al., 2019), RoBERTa (Liu et al., 2019) and ELECTRA (Clark et al., 2020) as backbone models."
+    }, {
+      "heading" : "3.1 Setup",
+      "text" : "Experiments are performed on the GLUE benchmark (Wang et al., 2019), which consists of various natural language understanding tasks. More statistics about the GLUE datasets are in Appendix A.1. Following (Clark et al., 2020), we report Spearman correlation for STS-B, Matthews correlation for CoLA and accuracy for the other tasks. For MNLI, we report the results on the matched section. The convolution kernel size in the ghost module is set as 3 unless otherwise stated. The detailed hyperparameters for training the GhostBERT are in Appendix A.2. The model with the best development set performance is used for testing. For each method, we also report the number of parameters\nand FLOPs at inference (Details can be found in Appendix A.3).\nWe compare our proposed method against the following methods: (i) baseline pre-trained language models: BERT-base (Devlin et al., 2019), RoBERTa-base (Liu et al., 2019) and ELECTRAsmall (Clark et al., 2020); (ii) BERT compression methods: TinyBERT (Jiao et al., 2020), ConvBERT (Jiang et al., 2020), and MobileBERT (Sun et al., 2020). The development set results of RoBERTa-base are from Hou et al. (2020). The test set results of ELECTRA, BERT-base and ConvBERT are from Jiang et al. (2020). The others are from their original papers or repositories."
+    }, {
+      "heading" : "3.2 Main Results",
+      "text" : ""
+    }, {
+      "heading" : "3.2.1 Ghost Modules on Unpruned Models",
+      "text" : "Table 1 shows the GLUE development set results of the baseline pre-trained language models and our proposed method. When the cheap ghost modules are directly applied to these unpruned pretrained models, better performances are achieved with only negligible additional parameters and FLOPs. Specifically, adding ghost modules to BERT-base, RoBERTa-base and ELECTRA-small increases the average development accuracy by 0.9, 0.6, 2.4 points with only 55.3K more parameters, and 14.2M more FLOPs. For the test set, the\naverage performance gains are 0.8, 1.1, 2.4 points."
+    }, {
+      "heading" : "3.2.2 Ghost Modules on Pruned Models",
+      "text" : "Comparison with Baseline Models. From Table 1, when the ghost modules are applied to the pruned BERT (or RoBERTa) model with m < 1, the proposed GhostBERT or GhostRoBERTa also achieves comparable performances as BERT-base or RoBERTa-base with fewer FLOPs. Specifically, GhostBERT (m = 6/12) and GhostRoBERTa (m = 9/12) perform similarly or even better than BERTbase and RoBERTa-base with only 50% and 75% FLOPs, respectively. In particular, when the compression ratio increases (i.e., m = 3/12, 1/12), we still achieve 99.6% performance (resp. 96.3%) with only 25% FLOPs (resp. 8%) of BERT-base model.\nComparison with Other Compression Methods. Table 2 shows the comparison between the proposed method and other popular BERT compression methods. Under similar parameter sizes or FLOPs, the proposed GhostBERT performs comparably as the other BERT compression methods, while GhostRoBERTa often outperforms them. In particular, GhostELECTRA-small has over 1.5 points or higher accuracy gain than other similar-sized small models like ELECTRA-small, TinyBERT4 and ConvBERT-small.\nIn Table 3 and Figure 1, we also compare the\npruned BERT with and without ghost modules. For fair comparison, for the pruned model without ghost module, we use the same training procedure as Section 2.3. As can be seen, adding the ghost modules achieves considerable improvement with negligible additional memory and computation."
+    }, {
+      "heading" : "3.3 Ablation Study",
+      "text" : "In this section, we perform ablation study in the (i) training procedure: including data augmentation (DA) and knowledge distillation (KD); (ii) ghost module: including convolution kernel size, softmax normalization over the convolution kernel and nonlinearity for each ghost feature in Equation (2).\nTraining Procedure. Table 4 verifies the effectiveness of the Data Augmentation (DA) and Knowledge Distillation (KD) upon the GhostBERT model with width multiplier m ∈ {3/12, 1/12}. The GhostBERT incurs severe accuracy drop without DA and KD. with a drop of 3.5 and 6.4 points on average, for m = 3/12 and 1/12, respectively.\nGhost Module. Table 4 also shows the effectiveness of the softmax normalization over the convolution kernel and ReLU nonlinearity in Equation (2). As can be seen, dropping the softmax normalization or ReLU nonlinearity reduces the average accuracy by 0.8 and 1.6 points respectively for m = 3/12, and 0.9 and 2.2 points respectively for m = 1/12.\nFurther, we explore whether the kernel size plays an important role in the DWConv in the ghost module. Figure 3 shows the results of GhostBERT with width multipliers m ∈ {3/12, 1/12}, with various convolution kernel sizes in DWConv. Average accuracy over five tasks is reported. Detailed results for each task can be found in Table 9 in Appendix B.1. As can be seen, the performance of GhostBERT increases first and then decreases gradually as the kernel size increases. For both width multipliers, kernel size 3 performs best and is used as the default kernel size in other experiments unless otherwise stated."
+    }, {
+      "heading" : "4 Discussion",
+      "text" : "In this section, we discuss about different choices of which type of convolution to use in the ghost module (Section 4.1), and where to posit the ghost modules in a BERT model (Section 4.2)."
+    }, {
+      "heading" : "4.1 Ghost Module Types",
+      "text" : "Besides the DWConv in Section 2.2, in this section, we discuss more options for the convolution in the ghost module. We follow the notation in Section 2.2 and denote the input, output, kernel size of the convolution as X,W and k, respectively.\n1-Dimensional Convolution. If the kernel convolves input over the sequence direction (abbreviated as Conv1D S), the number of input and output channel is d, and the weight W has shape W ∈ Rd×d×k. After applying Conv1D S, the output for the ith token and cth channel is:\nOi,c = Conv1D S(X,Wc,:,:, i, c)\n= d∑ j=1 k∑ m=1 Wc,j,k ·Xi−d k+1 2 e+m,j .\nIf the kernel convolves input over the feature direction (abbreviated as Conv1D F), the number of input and output channel is n, and the weight has shape W ∈ Rn×n×k. After applying Conv1D F, the output for the ith token and cth channel is:\nOi,c = Conv1D F(X,Wi,:,:, i, c)\n= n∑\nj=1 k∑ m=1 Wi,j,m ·Xj,c−d k+1 2 e+m.\n2-Dimensional Convolution (Conv2D). For Conv2D, the number of input and output channels are both 1, and thus the weight W has shape W ∈ R1×1×k×k. After applying Conv2D, the output for the ith token and cth channel is:\nOi,c = Conv2D(X,W, i, c)\n= k∑ w=1 k∑ h=1 W:,:,h,w ·Xi−d k+1 2 e+h,c−d k+1 2 e+w."
+    }, {
+      "heading" : "4.1.1 Comparison of Different Convolutions",
+      "text" : "Table 5 shows the comparison of using different convolutions for the ghost module. For 1- Dimensional convolution, Conv1D S performs better Conv1D F. This may because that convolving over the sequence urges the model to learn the dependencies among tokens.\nThough 2-Dimensional convolution (Conv2D) is quite successful in CV tasks, it performs much worse than Conv1D S here. This may because the two dimensions of feature maps in CV tasks encode similar information, while those of hidden states in Transformers encode quite different information (i.e., feature and sequence). Thus Conv2D results in worse performance than Conv1D S, though much fewer parameters and FLOPs are required.\nOn the other hand, DWConv achieves comparable performance as Conv1D S, while being much more efficient in terms of number of parameters and FLOPs, by performing the convolution independently over every feature dimension."
+    }, {
+      "heading" : "4.2 Ghost Module Positions",
+      "text" : "In this section, we explore more possible positions of adding the ghost module. For MHA, besides adding ghost module after the projection layer (After O in Figure 4(c)) as in Section 2.1.1, we can also add it right after calculating the attention score (After QK in Figure 4(a)), or after multiplying the attention score and the value layer (After V in Figure 4(b)). For FFN, besides adding the ghost module after the second linear layer (After FFN2 in Figure 4(e)) as in Section 2.1.1, we can also add it after the intermediate layer (After FFN1 in Figure 4(d)). Note that\nwe use Conv2D as the ghost module for After QK because the attention map encodes attention probabilities in both dimensions. For After QK and After V, to match the dimension of other parameters, the number of input and output channels are M and NH −M , respectively.\nTable 6 shows the results of adding one ghost module to the same position for each Transformer layer. As can be seen, adding ghost module upon the attention maps (After QK) performs best. However, since the parameters in the value and projection layer of MHA are left unpruned, After QK has much more parameters and FLOPs than the other positions. Adding ghost modules to the other four positions has similar average accuracy. Thus in this work, for MHA, we choose the most memory- and computation-efficient strategy After O. Similarly, for FFN, we also add ghost modules to the final output (After FFN2). From Table 6, our way of adding ghost modules has comparable performance as After QK, while being much more efficient in parameter size and FLOPs."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : ""
+    }, {
+      "heading" : "5.1 Network Pruning in Transformer",
+      "text" : "Pruning removes unimportant connections or neurons in the network. Compared with pruning connections (Yu et al., 2019; Gordon et al., 2020; Sanh\nLinearLinear Linear\nInput\nMat Mul\nScale & Softmax\nGhost\nMat Mul\nNonLinear\nLinear\nInput\nGhost\nNonLinear\nLinear\nInput\nGhost\nLinearLinear Linear\nInput\nMat Mul\nScale & Softmax\nGhost\nMat Mul\nLinearLinear Linear\nInput\nMat Mul\nScale & Softmax\nGhost\nMat Mul\n(a) After QK.\nLinearLinear Linear\nInput\nMat Mul\nScale & Softmax\nGhost\nMat Mul\nNonLinear\nLinear\nInput\nGhost\nNonLinear\nLinear\nInput\nGhost\nLinearLinear Linear\nInput\nMat Mul\nScale & Softmax\nGhost\nMat Mul\nLinearLinear Linear\nInput\nMat Mul\nScale & Softmax\nGhost\nMat Mul\n(b) After V.\nLinearLinear Linear\nInput\nMat Mul\nScale & Softmax\nGhost\nMat Mul\nNo Linear\nLinear\nInput\nGhost\nNo Linear\nLinear\nInput\nGhost\nLinearLinear Linear\nInput\nMat Mul\nScale & Softmax\nGhost\nMat Mul\nLinearLinear Linear\nInput\nMat Mul\nScale & Softmax\nGhost\nMat Mul\n(c) After O.\nLinearLinear Linear\nInput\nMat Mul\nScale & Softmax\nGhost\nMat Mul\nNonLinear\nLinear\nInput\nGhost\nLinearLinear Linear\nInput\nMat Mul\nScale & Softmax\nGhost\nMat Mul\nLinearLinear Linear\nInput\nMat Mul\n(d) After FFN1.\nLinearLinear Linear\nInput\nat Mul\nScale & Softmax\nGhost\nat Mul\nNonLinear\nLinear\nInput\nGhost\nLinearLinear Linear\nInput\nat Mul\nScale & Softmax\nGhost\nat Mul\nLinearLinear Linear\nInput\nat Mul\nPosition Convolution Type FLOPs (G) #params (M) Avg. acc\nAfter QK Conv2D 5.4 45 75.9 After V DWConv 3.6 39 74.3 After O DWConv 2.0 32 74.4 After FFN1 DWConv 2.0 32 74.3 After FFN2 DWConv 2.0 32 74.3\nOurs: After O&FFN2 DWConv 2.0 32 75.8\nTable 6: Comparison of different positions to add the ghost module. Average development set accuracy on five GLUE tasks (RTE, SST-2, MRPC, CoLA and STSB) are reported. The pruned BERT with width multiplier 1/12 is used as backbone model .\net al., 2020), structured pruning prunes away a group of parameters without changing the model topology and is more favored for hardware and real inference speedup.\nIn the width direction, Michel et al. (2019); Voita et al. (2019) retain the performance after pruning a large percentage of attention heads in a structured manner. Besides attention heads, McCarley et al. (2019) also prune the neurons and the embeddings. In the depth direction, pruning Transformer layers is proposed in LayerDrop (Fan et al., 2019) via structured dropout. Efficient choice of Transformer layers at inference via early exit are also proposed in (Liu et al., 2020; Xin et al., 2020; Zhou et al., 2020). Hou et al. (2020) perform structured pruning in both width and depth directions. The importance of attention heads and neurons in the intermediate layer of Feed-forward network is measured by their impact on the loss, and the least important heads and neurons are pruned away."
+    }, {
+      "heading" : "5.2 Enhanced Representation in Transformer-based Models",
+      "text" : "Various methods have been proposed to use linear or convolution operations to enhance the representation of the Transformer layers.\nThe first group of research works replaces the\nself-attention mechanism or feed-forward networks with simpler and more efficient convolution operations, while maintaining comparable results. Wu et al. (2019) introduce the token-based dynamic depth-wise convolution to compute the importance of context elements, and achieve better results in various NLP tasks. Iandola et al. (2020) replace all the feed-forward networks with grouped convolution. AdaBERT (Chen et al., 2020) uses differentiable neural architecture to search for more efficient convolution-based NLP models.\nThe second group uses linear or convolutional module along with the self-attention mechanism for more powerful representation. The new module can be incorporated though serial connection to the original self-attention mechanism (Mehta et al., 2020), or be used in parallel with the original selfattention mechanism (Wu et al., 2020; Jiang et al., 2020) to capture both local and global context dependency. Serial and parallel connections of these linear or convolution operations to Transformer layers are also extended to multi-task (Houlsby et al., 2019; Stickland and Murray, 2019) and multilingual tasks (Pfeiffer et al., 2020).\nNote that the proposed ghost modules are orthogonal to the above methods in that these modules are used to generate more features for the Transformer models and can be easily integrated into existing methods to boost their performance."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "In this paper, we propose GhostBERT to generate more features in pre-trained model with cheap operations. We use the softmax-normalized 1- Dimensional Convolutions as ghost modules and add them to the output of the MHA and FFN of each Transformer layer. Empirical results on BERT, RoBERTa and ELECTRA demonstrate that adding the proposed ghost modules enhances the representation power and boosts the performance of the original model by supplying more features."
+    }, {
+      "heading" : "Acknowledgement",
+      "text" : "We thank MindSpore for the partial support of this work, which is a new deep learning computing framework. Given the superior performance of Huawei Ascend AI Processor and MindSpore computing framework, our code will be released based on MindSpore at (https: //gitee.com/mindspore/mindspore/tree/ master/model_zoo/research/nlp/ghostbert)."
+    }, {
+      "heading" : "A Experiment Settings",
+      "text" : "A.1 Statistics of GLUE datasets\nThe GLUE benchmark (Wang et al., 2019) consists of various sentence understanding tasks, including two single-sentence classification tasks (CoLA and SST-2), three similarity and paraphrase tasks (MRPC, STS-B and QQP), and four inference tasks (MNLI, QNLI, RTE and WMLI). For MNLI task, we report the result on the matched section. For Winograd Schema (WNLI), it is a small natural inference dataset while even a majority baseline outperforms many methods on it. As is noted in the GLUE official website1, there are some issues with the construction of it. Like previous work (Hou et al., 2020; Jiang et al., 2020), we do not experiment on WNLI. We use the default train/development/test splits from the official website.\nA.2 Hyperparameters\nWe show the detailed hyperparameters for the distillation and fine-tuning stages in Section 2.3 of the proposed method on the GLUE benchmark in Table 8.\nA.3 FLOPs\nFloating-point operations (FLOPs) measures the number of floating-point operations that the model performs for a single process and can be used as a measure of the computational complexity of deep neural network models. To count the FLOPs, we\n1https://gluebenchmark.com/faq\nfollow the setting in (Hou et al., 2020) and infer FLOPs with batch size 1 and sequence length 128. Since the operations in the embedding lookup are relatively cheap compared to those in Transformer layers, following (Hou et al., 2020; Sun et al., 2020), we do not count them. Note that the reported FLOPs for ELECTRA (Clark et al., 2020) and ConvBERT(Jiang et al., 2020) in their original papers include those for the embedding lookup, and are slightly different from the numbers in this paper."
+    }, {
+      "heading" : "B More Experiment Results",
+      "text" : "B.1 Full Results of Different Convolution Kernel Sizes\nIn Table 9, we show the detailed results of different convolutions kernel sizes for each of the five tasks (SST-2, MRPC, CoLA, STS-B and RTE). As can be seen, for each task, DWConv with kernel size 3 has the best performance.\nB.2 Full Results of Pruned BERT\nIn Table 10, we show the detailed results of the pruned BERT and the GhostBERT for each task. We can see that under the same training procedure, the GhostBERT outperforms the pruned BERT over all compared sizes.\nB.3 Full Results of Different Positions\nTable 11 shows the detailed results of adding ghost modules to different positions of the model.\nB.4 Generating More Features\nAs is mentioned at the end of Section 2.3, we generate only one ghost feature for each MHA and FFN, i.e., F = 1 to save computation and memory. Indeed, our framework has no limitation on F , and also allows the model to generate more features (i.e., F > 1). In this section, we discuss the relationship between generating more ghost features and the computation/memory requirements.\nFollowing the notation in Section 2 and omitting the cheap computation of ReLU and softmax, generating F ghost features from M features for all L layers requires 2LMFdk additional parameters and 4LMFndk additional FLOPs. Both of them scale linearly as F , and can be large when F is large. For instance, for BERT-base with d = 768, when n = 128, k = 3, M = 12 and F = 12, the additional #parameters and FLOPs are 8M and\n2.0G respectively, accounting for 7.2% and 9.1% of the backbone model.\nWhen F increases, the accuracy of GhostBERT first increases slowly and soon begins to saturate or decrease. E.g., for GhostBERT (m = 1/12), the average development accuracy on GLUE only increases from 80.3 to 80.6 when F increases from 1 to 4, and then saturates when F > 4. For GhostBERT (m = 3/12), the highest accuracy 83.1 is achieved when F = 1 or 2, and then the accuracy begins to decrease.\nThus in the paper, we simply choose F=1 which is cheap, but already achieves good performance on most tasks."
+    } ],
+    "references" : [ {
+      "title" : "Binarybert: Pushing the limit of bert quantization",
+      "author" : [ "H. Bai", "W. Zhang", "L. Hou", "L. Shang", "J. Jin", "X. Jiang", "Q. Liu", "M. Lyu", "I. King." ],
+      "venue" : "Annual Meeting of the Association for Computational Linguistics.",
+      "citeRegEx" : "Bai et al\\.,? 2021",
+      "shortCiteRegEx" : "Bai et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Adabert: Task-adaptive BERT compression with differentiable neural architecture search",
+      "author" : [ "D. Chen", "Y. Li", "M. Qiu", "Z. Wang", "B. Li", "B. Ding", "H. Deng", "J. Huang", "W. Lin", "J. Zhou." ],
+      "venue" : "International Joint Conference on Artificial Intelligence.",
+      "citeRegEx" : "Chen et al\\.,? 2020",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "ELECTRA: pre-training text encoders as discriminators rather than generators",
+      "author" : [ "K. Clark", "M. Luong", "Q. Le", "C. Manning." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Clark et al\\.,? 2020",
+      "shortCiteRegEx" : "Clark et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BERT: pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "J. Devlin", "M. Chang", "K. Lee", "K. Toutanova." ],
+      "venue" : "North American Chapter of the Association for Computational Linguistics.",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Reducing transformer depth on demand with structured dropout",
+      "author" : [ "A. Fan", "E. Grave", "A. Joulin." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Fan et al\\.,? 2019",
+      "shortCiteRegEx" : "Fan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Training with quantization noise for extreme model compression",
+      "author" : [ "A. Fan", "P. Stock", "B. Graham", "E. Grave", "R. Gribonval", "H. Jegou", "A. Joulin." ],
+      "venue" : "Preprint arXiv:2004.07320.",
+      "citeRegEx" : "Fan et al\\.,? 2020",
+      "shortCiteRegEx" : "Fan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Compressing bert: Studying the effects of weight pruning on transfer learning",
+      "author" : [ "M.A. Gordon", "K. Duh", "N. Andrews." ],
+      "venue" : "Preprint arXiv:2002.08307.",
+      "citeRegEx" : "Gordon et al\\.,? 2020",
+      "shortCiteRegEx" : "Gordon et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Ghostnet: More features from cheap operations",
+      "author" : [ "K. Han", "Y. Wang", "Q. Tian", "J. Guo", "C. Xu", "C. Xu." ],
+      "venue" : "IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 1580–1589.",
+      "citeRegEx" : "Han et al\\.,? 2020",
+      "shortCiteRegEx" : "Han et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Dynabert: Dynamic bert with adaptive width and depth",
+      "author" : [ "L. Hou", "Z. Huang", "L. Shang", "X. Jiang", "X. Chen", "Q. Liu." ],
+      "venue" : "Advances in Neural Information Processing Systems.",
+      "citeRegEx" : "Hou et al\\.,? 2020",
+      "shortCiteRegEx" : "Hou et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Parameter-efficient transfer learning for NLP",
+      "author" : [ "N. Houlsby", "A. Giurgiu", "S. Jastrzebski", "B. Morrone", "Q. Laroussilhe", "A. Gesmundo", "M. Attariyan", "S. Gelly." ],
+      "venue" : "International Conference on Machine Learning.",
+      "citeRegEx" : "Houlsby et al\\.,? 2019",
+      "shortCiteRegEx" : "Houlsby et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Squeezebert: What can computer vision teach nlp about efficient neural networks",
+      "author" : [ "F. Iandola", "A. Shaw", "R. Krishna", "K. Keutzer" ],
+      "venue" : "In Proceedings of SustaiNLP: Workshop on Simple and Efficient Natural Language Processing",
+      "citeRegEx" : "Iandola et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Iandola et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Convbert: Improving BERT with span-based dynamic convolution",
+      "author" : [ "Z. Jiang", "W. Yu", "D. Zhou", "Y. Chen", "J. Feng", "S. Yan." ],
+      "venue" : "Advances in Neural Information Processing Systems.",
+      "citeRegEx" : "Jiang et al\\.,? 2020",
+      "shortCiteRegEx" : "Jiang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Tinybert: Distilling BERT for natural language understanding",
+      "author" : [ "X. Jiao", "Y. Yin", "L. Shang", "X. Jiang", "X. Chen", "L. Li", "F. Wang", "Q. Liu." ],
+      "venue" : "Findings of Empirical Methods in Natural Language Processing.",
+      "citeRegEx" : "Jiao et al\\.,? 2020",
+      "shortCiteRegEx" : "Jiao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Revealing the dark secrets of bert",
+      "author" : [ "O. Kovaleva", "A. Romanov", "A. Rogers", "A. Rumshisky." ],
+      "venue" : "Conference on Empirical Methods in Natural Language Processing, pages 4356–4365.",
+      "citeRegEx" : "Kovaleva et al\\.,? 2019",
+      "shortCiteRegEx" : "Kovaleva et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Albert: A lite bert for selfsupervised learning of language representations",
+      "author" : [ "Z. Lan", "M. Chen", "S. Goodman", "K. Gimpel", "P. Sharma", "R. Soricut." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Lan et al\\.,? 2020",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Fastbert: a self-distilling bert with adaptive inference time",
+      "author" : [ "W. Liu", "P. Zhou", "Z. Zhao", "Z. Wang", "H. Deng", "Q. Ju." ],
+      "venue" : "Annual Meeting of the Association for Computational Linguistics.",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Roberta: A robustly optimized bert pretraining approach",
+      "author" : [ "Y. Liu", "M. Ott", "N. Goyal", "J. Du", "M. Joshi", "D. Chen", "O. Levy", "M. Lewis", "L. Zettlemoyer", "V. Stoyanov." ],
+      "venue" : "Preprint arXiv:1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Structured pruning of a bert-based question answering model",
+      "author" : [ "J.S. McCarley", "R. Chakravarti", "A. Sil." ],
+      "venue" : "Preprint arXiv:1910.06360.",
+      "citeRegEx" : "McCarley et al\\.,? 2019",
+      "shortCiteRegEx" : "McCarley et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Delight: Very deep and light-weight transformer",
+      "author" : [ "S. Mehta", "M. Ghazvininejad", "S. Iyer", "L. Zettlemoyer", "H. Hajishirzi." ],
+      "venue" : "CoRR, abs/2008.00623.",
+      "citeRegEx" : "Mehta et al\\.,? 2020",
+      "shortCiteRegEx" : "Mehta et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Are sixteen heads really better than one",
+      "author" : [ "P. Michel", "O. Levy", "G. Neubig" ],
+      "venue" : "In Advances in Neural Information Processing Systems",
+      "citeRegEx" : "Michel et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Michel et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Mad-x: An adapter-based framework for multi-task cross-lingual transfer",
+      "author" : [ "J. Pfeiffer", "I. Vulić", "I. Gurevych", "S. Ruder." ],
+      "venue" : "Conference on Empirical Methods in Natural Language Processing, pages 7654–7673.",
+      "citeRegEx" : "Pfeiffer et al\\.,? 2020",
+      "shortCiteRegEx" : "Pfeiffer et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A primer in bertology: What we know about how bert works",
+      "author" : [ "A. Rogers", "O. Kovaleva", "A. Rumshisky." ],
+      "venue" : "Preprint arXiv:2002.12327.",
+      "citeRegEx" : "Rogers et al\\.,? 2020",
+      "shortCiteRegEx" : "Rogers et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter",
+      "author" : [ "V. Sanh", "L. Debut", "J. Chaumond", "T. Wolf." ],
+      "venue" : "Preprint arXiv:1910.01108.",
+      "citeRegEx" : "Sanh et al\\.,? 2019",
+      "shortCiteRegEx" : "Sanh et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Movement pruning: Adaptive sparsity by fine-tuning",
+      "author" : [ "V. Sanh", "T. Wolf", "A. Rush." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 33.",
+      "citeRegEx" : "Sanh et al\\.,? 2020",
+      "shortCiteRegEx" : "Sanh et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Q-bert: Hessian based ultra low precision quantization of bert",
+      "author" : [ "S. Shen", "Z. Dong", "J. Ye", "L. Ma", "Z. Yao", "A. Gholami", "M.W. Mahoney", "K. Keutzer." ],
+      "venue" : "AAAI Conference on Artificial Intelligence.",
+      "citeRegEx" : "Shen et al\\.,? 2020",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bert and pals: Projected attention layers for efficient adaptation in multi-task learning",
+      "author" : [ "A.C. Stickland", "I. Murray." ],
+      "venue" : "International Conference on Machine Learning, pages 5986–5995. PMLR.",
+      "citeRegEx" : "Stickland and Murray.,? 2019",
+      "shortCiteRegEx" : "Stickland and Murray.",
+      "year" : 2019
+    }, {
+      "title" : "Patient knowledge distillation for bert model compression",
+      "author" : [ "S. Sun", "Y. Cheng", "Z. Gan", "J. Liu." ],
+      "venue" : "Conference on Empirical Methods in Natural Language Processing.",
+      "citeRegEx" : "Sun et al\\.,? 2019",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Mobilebert: a compact task-agnostic BERT for resource-limited devices",
+      "author" : [ "Z. Sun", "H. Yu", "X. Song", "R. Liu", "Y. Yang", "D. Zhou." ],
+      "venue" : "Annual Meeting of the Association for Computational Linguistics.",
+      "citeRegEx" : "Sun et al\\.,? 2020",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Analyzing multi-head self-attention: Specialized heads do the heavy lifting, the rest can be pruned",
+      "author" : [ "E. Voita", "D. Talbot", "F. Moiseev", "R. Sennrich", "I. Titov." ],
+      "venue" : "Annual Meeting of the Association for Computational Linguistics.",
+      "citeRegEx" : "Voita et al\\.,? 2019",
+      "shortCiteRegEx" : "Voita et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "GLUE: A multi-task benchmark and analysis platform for natural language understanding",
+      "author" : [ "A. Wang", "A. Singh", "J. Michael", "F. Hill", "O. Levy", "S. Bowman." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Pay less attention with lightweight and dynamic convolutions",
+      "author" : [ "F. Wu", "A. Fan", "A. Baevski", "Y. Dauphin", "M. Auli." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Wu et al\\.,? 2019",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Lite transformer with long-short range attention",
+      "author" : [ "Z. Wu", "Z. Liu", "J. Lin", "Y. Lin", "S. Han." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Wu et al\\.,? 2020",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deebert: Dynamic early exiting for accelerating bert inference",
+      "author" : [ "J. Xin", "R. Tang", "J. Lee", "Y. Yu", "J. Lin." ],
+      "venue" : "Annual Meeting of the Association for Computational Linguistics.",
+      "citeRegEx" : "Xin et al\\.,? 2020",
+      "shortCiteRegEx" : "Xin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Playing the lottery with rewards and multiple languages: lottery tickets in rl and nlp",
+      "author" : [ "H. Yu", "S. Edunov", "Y. Tian", "A. S Morcos." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Yu et al\\.,? 2019",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Ternarybert: Distillation-aware ultra-low bit bert",
+      "author" : [ "W. Zhang", "L. Hou", "Y. Yin", "L. Shang", "X. Chen", "X. Jiang", "Q. Liu." ],
+      "venue" : "Empirical Methods in Natural Language Processing.",
+      "citeRegEx" : "Zhang et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bert loses patience: Fast and robust inference with early exit",
+      "author" : [ "W. Zhou", "C. Xu", "T. Ge", "J. McAuley", "K. Xu", "F. Wei." ],
+      "venue" : "Advances in Neural Information Processing Systems.",
+      "citeRegEx" : "Zhou et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 22,
+      "context" : ", knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Jiao et al., 2020), pruning (Michel et al.",
+      "startOffset" : 25,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 26,
+      "context" : ", knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Jiao et al., 2020), pruning (Michel et al.",
+      "startOffset" : 25,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 12,
+      "context" : ", knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Jiao et al., 2020), pruning (Michel et al.",
+      "startOffset" : 25,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 19,
+      "context" : ", 2020), pruning (Michel et al., 2019; Fan et al., 2019), low-rank approximation (Lan et al.",
+      "startOffset" : 17,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2020), pruning (Michel et al., 2019; Fan et al., 2019), low-rank approximation (Lan et al.",
+      "startOffset" : 17,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2019), low-rank approximation (Lan et al., 2020), weight-sharing (Lan et al.",
+      "startOffset" : 32,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2020), weight-sharing (Lan et al., 2020), dynamic networks with adaptive depth and/or width (Liu et al.",
+      "startOffset" : 24,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 15,
+      "context" : ", 2020), dynamic networks with adaptive depth and/or width (Liu et al., 2020; Hou et al., 2020; Xin et al., 2020; Zhou et al., 2020), and quantization (Shen et al.",
+      "startOffset" : 59,
+      "endOffset" : 132
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2020), dynamic networks with adaptive depth and/or width (Liu et al., 2020; Hou et al., 2020; Xin et al., 2020; Zhou et al., 2020), and quantization (Shen et al.",
+      "startOffset" : 59,
+      "endOffset" : 132
+    }, {
+      "referenceID" : 32,
+      "context" : ", 2020), dynamic networks with adaptive depth and/or width (Liu et al., 2020; Hou et al., 2020; Xin et al., 2020; Zhou et al., 2020), and quantization (Shen et al.",
+      "startOffset" : 59,
+      "endOffset" : 132
+    }, {
+      "referenceID" : 35,
+      "context" : ", 2020), dynamic networks with adaptive depth and/or width (Liu et al., 2020; Hou et al., 2020; Xin et al., 2020; Zhou et al., 2020), and quantization (Shen et al.",
+      "startOffset" : 59,
+      "endOffset" : 132
+    }, {
+      "referenceID" : 19,
+      "context" : "without severe accuracy degradation (Michel et al., 2019; Hou et al., 2020).",
+      "startOffset" : 36,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 8,
+      "context" : "without severe accuracy degradation (Michel et al., 2019; Hou et al., 2020).",
+      "startOffset" : 36,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 7,
+      "context" : "However, for computer vision (CV) tasks, it is shown in (Han et al., 2020) that redundant features in convolutional neural networks also contribute positively to the performance, and using cheap linear operations to generate more ghost feature maps enhances the performance with few additional parameters.",
+      "startOffset" : 56,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 28,
+      "context" : "On the other hand, it is shown in (Voita et al., 2019; Kovaleva et al., 2019; Rogers et al., 2020) that many attention maps in pre-trained language models exhibit typical positional patterns, e.",
+      "startOffset" : 34,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 13,
+      "context" : "On the other hand, it is shown in (Voita et al., 2019; Kovaleva et al., 2019; Rogers et al., 2020) that many attention maps in pre-trained language models exhibit typical positional patterns, e.",
+      "startOffset" : 34,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 21,
+      "context" : "On the other hand, it is shown in (Voita et al., 2019; Kovaleva et al., 2019; Rogers et al., 2020) that many attention maps in pre-trained language models exhibit typical positional patterns, e.",
+      "startOffset" : 34,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 31,
+      "context" : "Considering that the convolution operation (1) encodes local context dependency, as a complement of the global self-attention in Transformer models (Wu et al., 2020); and (2) can generate some BERT features like positional attention maps from similar others, in this work, we propose to use the efficient 1-Dimensional Depthwise Separable Convolution (Wu et al.",
+      "startOffset" : 148,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 30,
+      "context" : ", 2020); and (2) can generate some BERT features like positional attention maps from similar others, in this work, we propose to use the efficient 1-Dimensional Depthwise Separable Convolution (Wu et al., 2019) as the basic operation in the ghost module.",
+      "startOffset" : 193,
+      "endOffset" : 210
+    }, {
+      "referenceID" : 8,
+      "context" : "Thus the BERT model can be compressed in a structured manner by pruning parameters associated with these heads and neurons (Hou et al., 2020).",
+      "startOffset" : 123,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 8,
+      "context" : "1 Ghost Module on MHA Following (Hou et al., 2020), we divide the computation of MHA into the computation of each attention head.",
+      "startOffset" : 32,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 8,
+      "context" : "2 Ghost Module on FFN Similar to the attention heads in MHA, the computation of FFN can also be divided into computations for each neuron in the intermediate layer of FFN (Hou et al., 2020).",
+      "startOffset" : 171,
+      "endOffset" : 189
+    }, {
+      "referenceID" : 31,
+      "context" : "Considering that (i) convolution operation can encode local context dependency, as a compensation for the global self-attention (Wu et al., 2020; Jiang et al., 2020); and (ii) features like diagonal or vertical attention maps (Kovaleva et al.",
+      "startOffset" : 128,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 11,
+      "context" : "Considering that (i) convolution operation can encode local context dependency, as a compensation for the global self-attention (Wu et al., 2020; Jiang et al., 2020); and (ii) features like diagonal or vertical attention maps (Kovaleva et al.",
+      "startOffset" : 128,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2020); and (ii) features like diagonal or vertical attention maps (Kovaleva et al., 2019; Rogers et al., 2020) can be easily generated by convolving similar others, we consider using convolution as the basic operation in the ghost module.",
+      "startOffset" : 68,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2020); and (ii) features like diagonal or vertical attention maps (Kovaleva et al., 2019; Rogers et al., 2020) can be easily generated by convolving similar others, we consider using convolution as the basic operation in the ghost module.",
+      "startOffset" : 68,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 30,
+      "context" : "To utilize the representation power of Conv1D without too much additional memory and computation, we choose 1-Dimensional Depthwise Separable Convolution (DWConv) (Wu et al., 2019) for the ghost module.",
+      "startOffset" : 163,
+      "endOffset" : 180
+    }, {
+      "referenceID" : 8,
+      "context" : "For a certain width multiplier m, we prune the attention heads in MHA and neurons in the intermediate layer of FFN from a pre-trained BERT-based model following (Hou et al., 2020).",
+      "startOffset" : 161,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 12,
+      "context" : "Following (Jiao et al., 2020), we use the augmented data for distillation.",
+      "startOffset" : 10,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 3,
+      "context" : "In this section, we show the efficacy of the proposed method with (pruned) BERT (Devlin et al., 2019), RoBERTa (Liu et al.",
+      "startOffset" : 80,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2019), RoBERTa (Liu et al., 2019) and ELECTRA (Clark et al.",
+      "startOffset" : 17,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 2,
+      "context" : ", 2019) and ELECTRA (Clark et al., 2020) as backbone models.",
+      "startOffset" : 20,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 29,
+      "context" : "1 Setup Experiments are performed on the GLUE benchmark (Wang et al., 2019), which consists of various natural language understanding tasks.",
+      "startOffset" : 56,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 2,
+      "context" : "Following (Clark et al., 2020), we report Spearman correlation for STS-B, Matthews correlation for CoLA and accuracy for the other tasks.",
+      "startOffset" : 10,
+      "endOffset" : 30
+    }, {
+      "referenceID" : 3,
+      "context" : "We compare our proposed method against the following methods: (i) baseline pre-trained language models: BERT-base (Devlin et al., 2019), RoBERTa-base (Liu et al.",
+      "startOffset" : 114,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2019), RoBERTa-base (Liu et al., 2019) and ELECTRAsmall (Clark et al.",
+      "startOffset" : 22,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 2,
+      "context" : ", 2019) and ELECTRAsmall (Clark et al., 2020); (ii) BERT compression methods: TinyBERT (Jiao et al.",
+      "startOffset" : 25,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2020); (ii) BERT compression methods: TinyBERT (Jiao et al., 2020), ConvBERT (Jiang et al.",
+      "startOffset" : 49,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 11,
+      "context" : ", 2020), ConvBERT (Jiang et al., 2020), and MobileBERT (Sun et al.",
+      "startOffset" : 18,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 4,
+      "context" : "In the depth direction, pruning Transformer layers is proposed in LayerDrop (Fan et al., 2019) via structured dropout.",
+      "startOffset" : 76,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 15,
+      "context" : "Efficient choice of Transformer layers at inference via early exit are also proposed in (Liu et al., 2020; Xin et al., 2020; Zhou et al., 2020).",
+      "startOffset" : 88,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 32,
+      "context" : "Efficient choice of Transformer layers at inference via early exit are also proposed in (Liu et al., 2020; Xin et al., 2020; Zhou et al., 2020).",
+      "startOffset" : 88,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 35,
+      "context" : "Efficient choice of Transformer layers at inference via early exit are also proposed in (Liu et al., 2020; Xin et al., 2020; Zhou et al., 2020).",
+      "startOffset" : 88,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 1,
+      "context" : "AdaBERT (Chen et al., 2020) uses differentiable neural architecture to search for more efficient convolution-based NLP models.",
+      "startOffset" : 8,
+      "endOffset" : 27
+    }, {
+      "referenceID" : 18,
+      "context" : "The new module can be incorporated though serial connection to the original self-attention mechanism (Mehta et al., 2020), or be used in parallel with the original selfattention mechanism (Wu et al.",
+      "startOffset" : 101,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 31,
+      "context" : ", 2020), or be used in parallel with the original selfattention mechanism (Wu et al., 2020; Jiang et al., 2020) to capture both local and global context dependency.",
+      "startOffset" : 74,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 11,
+      "context" : ", 2020), or be used in parallel with the original selfattention mechanism (Wu et al., 2020; Jiang et al., 2020) to capture both local and global context dependency.",
+      "startOffset" : 74,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 9,
+      "context" : "Serial and parallel connections of these linear or convolution operations to Transformer layers are also extended to multi-task (Houlsby et al., 2019; Stickland and Murray, 2019) and multilingual tasks (Pfeiffer et al.",
+      "startOffset" : 128,
+      "endOffset" : 178
+    }, {
+      "referenceID" : 25,
+      "context" : "Serial and parallel connections of these linear or convolution operations to Transformer layers are also extended to multi-task (Houlsby et al., 2019; Stickland and Murray, 2019) and multilingual tasks (Pfeiffer et al.",
+      "startOffset" : 128,
+      "endOffset" : 178
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2019; Stickland and Murray, 2019) and multilingual tasks (Pfeiffer et al., 2020).",
+      "startOffset" : 59,
+      "endOffset" : 82
+    } ],
+    "year" : 2021,
+    "abstractText" : "Transformer-based pre-trained language models like BERT, though powerful in many tasks, are expensive in both memory and computation, due to their large number of parameters. Previous works show that some parameters in these models can be pruned away without severe accuracy drop. However, these redundant features contribute to a comprehensive understanding of the training data and removing them weakens the model’s representation ability. In this paper, we propose GhostBERT, which generates more features with very cheap operations from the remaining features. In this way, GhostBERT has similar memory and computational cost as the pruned model, but enjoys much larger representation power. The proposed ghost module can also be applied to unpruned BERT models to enhance their performance with negligible additional parameters and computation. Empirical results on the GLUE benchmark on three backbone models (i.e., BERT, RoBERTa and ELECTRA) verify the efficacy of our proposed method.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

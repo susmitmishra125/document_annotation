@@ -1,0 +1,712 @@
+{
+  "name" : "2021.acl-long.209.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Neural Bi-Lexicalized PCFG Induction",
+    "authors" : [ "Songlin Yang", "Yanpeng Zhao", "Kewei Tu" ],
+    "emails" : [ "yangsl@shanghaitech.edu.cn", "tukw@shanghaitech.edu.cn", "yannzhao.ed@gmail.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 2688–2699\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n2688"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Probabilistic context-free grammars (PCFGs) has been an important probabilistic approach to syntactic analysis (Lari and Young, 1990; Jelinek et al., 1992). They assign a probability to each of the parses admitted by CFGs and rank them by the plausibility in such a way that the ambiguity of CFGs can be ameliorated. Still, due to the strong independence assumption of CFGs, vanilla PCFGs (Charniak, 1996) are far from adequate for highly ambiguous text.\nA common premise for tackling the issue is to incorporate lexical information and weaken the independence assumption. There have been many approaches proposed under the premise (Magerman, 1995; Collins, 1997; Johnson, 1998; Klein and Manning, 2003). Among them lexicalized PCFGs (L-PCFGs) are a relatively straightforward formalism (Collins, 2003). L-PCFGs extend PCFGs by associating a word, i.e., the lexical head, with each grammar symbol. They can thus exploit lexical\n˚Corresponding Author\ninformation to disambiguate parsing decisions and are much more expressive than vanilla PCFGs. However, they suffer from representation and inference complexities. For representation, the addition of lexical information greatly increases the number of parameters to be estimated and exacerbates the data sparsity problem during learning, so the expectation-maximisation (EM) based estimation of L-PCFGs has to rely on sophisticated smoothing techniques and factorizations (Collins, 2003). As for inference, the CYK algorithm for L-PCFGs has a Opl5|G|q complexity, where l is the sentence length and |G| is the grammar constant. Although Eisner and Satta (1999) manage to reduce the complexity to Opl4|G|q, inference with L-PCFGs is still relatively slow, making them less popular nowadays.\nRecently, Zhu et al. (2020) combine the ideas of factorizing the binary rule probabilities (Collins, 2003) and neural parameterization (Kim et al., 2019) and propose neural L-PCFGs (NL-PCFGs), achieving good results in both unsupervised dependency and constituency parsing. Neural parameterization is the key to success, which facilitates informed smoothing (Kim et al., 2019), reduces the number of learnable parameters for large grammars (Chiu and Rush, 2020; Yang et al., 2021) and facilitates advanced gradient-based optimization techniques instead of using the traditional EM algorithm (Eisner, 2016). However, Zhu et al. (2020) oversimplify the binary rules to decrease the complexity of the inside/CYK algorithm in learning (i.e., estimating the marginal sentence loglikelihood) and inference. Specifically, they make a strong independence assumption on the generation of the child word such that it is only dependent on the nonterminal symbol. Bilexical dependencies, which have been shown useful in unsupervised dependency parsing (Han et al., 2017; Yang et al., 2020), are thus ignored.\nTo model bilexical dependencies and meanwhile reduce complexities, we draw inspiration from the canonical polyadic decomposition (CPD) (Kolda and Bader, 2009) and propose a latent-variable based neural parameterization of L-PCFGs. Cohen et al. (2013); Yang et al. (2021) have used CPD to decrease the complexities of PCFGs, and our work can be seen as an extension of their work to L-PCFGs. We further adopt the unfold-refold transformation technique (Eisner and Blatz, 2007) to decrease complexities. By using this technique, we show that the time complexity of the inside algorithm implemented by Zhu et al. (2020) can be improved from cubic to quadratic in the number of nonterminals m. The inside algorithm of our proposed method has a linear complexity in m after combining CPD and unfold-refold.\nWe evaluate our model on the benchmarking Wall Street Journey (WSJ) dataset. Our model surpasses the strong baseline NL-PCFG (Zhu et al., 2020) by 2.9% mean F1 and 1.3% mean UUAS under CYK decoding. When using the Minimal Bayes-Risk (MBR) decoding, our model performs even better. We provide an efficient implementation of our proposed model at https://github.com/ sustcsonglin/TN-PCFG."
+    }, {
+      "heading" : "2 Background",
+      "text" : ""
+    }, {
+      "heading" : "2.1 Lexicalized CFGs",
+      "text" : "We first introduce the formalization of CFGs. A CFG is defined as a 5-tuple G “ pS,N ,P,Σ,Rq where S is the start symbol, N is a finite set of nonterminal symbols, P is a finite set of preterminal symbols,1 Σ is a finite set of terminal symbols, and R is a set of rules in the following form:\nS Ñ A A P N AÑ BC, A P N , B,C P N Y P T Ñ w, T P P, w P Σ\nN ,P and Σ are mutually disjoint. We will use ‘nonterminals’ to indicate N Y P when it is clear from the context.\nLexicalized CFGs (L-CFGs) (Collins, 2003) extend CFGs by associating a word with each of the\n1An alternative definition of CFGs does not distinguish nonterminals N (constituent labels) from preterminals P (partof-speech tags) and treats both as nonterminals.\nnonterminals:\nS Ñ Arwps A P N Arwps Ñ BrwpsCrwqs, A P N ;B,C P N Y P Arwps Ñ CrwqsBrwps, A P N ;B,C P N Y P T rwps Ñ wp, T P P\nwhere wp, wq P Σ are the headwords of the constituents spanned by the associated grammar symbols, and p, q are the word positions in the sentence. We refer to A, a parent nonterminal annotated by the headword wp, as head-parent. In binary rules, we refer to a child nonterminal as head-child if it inherits the headword of the headparent (e.g., Brwps) and as non-head-child otherwise (e.g., Crwqs). A head-child appears as either the left child or the right child. We denote the head direction by D P tð,ñu, where ð means head-child appears as the left child."
+    }, {
+      "heading" : "2.2 Grammar induction with lexicalized probabilistic CFGs",
+      "text" : "Lexicalized probabilistic CFGs (L-PCFGs) extend L-CFGs by assigning each production rule r “ A Ñ γ a scalar πr such that it forms a valid categorical probability distribution given the left hand side A. Note that preterminal rules always have a probability of 1 because they define a deterministic generating process.\nGrammar induction with L-PCFGs follows the same way of grammar induction with PCFGs. As with PCFGs, we maximize the log-likelihood of each observed sentence w “ w1, . . . , wl:\nlog ppwq “ log ÿ\ntPTGL pwq pptq , (1)\nwhere pptq “ ś rPt πr and TGLpwq consists of all possible lexicalized parse trees of the sentence w under an L-PCFG GL. We can compute the marginal ppwq of the sentence by using the inside algorithm in polynomial time. The core recursion of the inside algorithm is formalized in Equation 3. It recursively computes the probability sA,pi,j of a head-parentArwps spanning the substring wi, . . . , wj´1 (p P ri, j ´ 1s). Term A1 and A2 in Equation 3 cover the cases of the head-child as the left child and the right child respectively."
+    }, {
+      "heading" : "2.3 Challenges of L-PCFG induction",
+      "text" : "The major difference between L-PCFGs from vanilla PCFGs is that they use word-annotated nonterminals, so the nonterminal number of L-PCFGs\nis up to |Σ| times the number of nonterminals in PCFGs. As the grammar size is largely determined by the number of binary rules and increases approximately in cubic of the nonterminal number, representing L-PCFGs has a high space complexity Opm3|Σ|2q (m is the nonterminal number). Specifically, it requires an order-6 probability tensor for binary rules with each dimension representing A, B, C, wp, wq, and head direction D, respectively. With so many rules, L-PCFGs are very prone to the data sparsity problem in rule probability estimation. Collins (2003) suggests factorizing the binary rule probabilities according to specific independence assumptions, but his approach still relies on complicated smoothing techniques to be effective.\nThe addition of lexical heads also scales up the computational complexity of the inside algorithm by a factor Opl2q and brings it up to Opl5m3q. Eisner and Satta (1999) point out that, by changing the order of summations in Term A1 (A2) of Equation 3, one can cache and reuse Term B1 (B2) in Equation 4 and reduce the computational complexity to Opl4m2` l3m3q. This is an example application of unfold-refold as noted by Eisner and Blatz (2007). However, the complexity is still cubic inm, making it expensive to increase the total number of nonterminals."
+    }, {
+      "heading" : "2.4 Neural L-PCFGs",
+      "text" : "Zhu et al. (2020) apply neural parameterization to tackle the data sparsity issue and to reduce the total learnable parameters of L-PCFGs. Considering the head-child as the left child (similarly for the other case), they further factorize the binary rule probability as:\nppArwps Ñ BrwpsCrwqsq “ ppB,ð, C|A,wpqppwq|Cq . (2)\nBayesian networks representing the original probability and the factorization are illustrated in\nFigure 1 (a) and (b). With the factorized binary rule probability in Equation 2, Term A1 in Equation 3 can be rewritten as Equation 5. Zhu et al. (2020) implement the inside algorithm by caching Term C1-1 in Equation 6, resulting in a time complexity Opl4m3` l3mq, which is cubic in m. We note that, we can use unfold-refold to further cache Term C12 in Equation 6 and reduce the time complexity of the inside algorithm to Opl4m2 ` l3m` l2m2q, which is quadratic in m.\nAlthough the factorization of Equation 2 reduces the space and time complexity of the inside algorithm of L-PCFG, it is based on the independence assumption that the generation of wq is independent of A, B, D and wp given the non-head-child C. This assumption can be violated in many scenarios and hence reduces the expressiveness of the grammar. For example, suppose C is Noun, then even if we know B is Verb, we still need to know D to determine if wq is an object or a subject of the verb, and then need to know the actual verb wp to pick a likely noun as wq."
+    }, {
+      "heading" : "3 Factorization with latent variable",
+      "text" : "Our main goal is to find a parameterization that removes the implausible independence assumptions of Zhu et al. (2020) while decreases the complexities of the original L-PCFGs.\nTo reduce the representation complexity, we draw inspiration from the canonical polyadic decomposition (CPD). CPD factorizes an n-th order tensor into n two-dimensional matrices. Each matrix consists of two dimensions: one dimension comes from the original n-th order tensor and the other dimension is shared by all the nmatrices. The shared dimension can be marginalized to recover the original n-th order tensor. From a probabilistic perspective, the shared dimension can be regarded as a latent-variable. In the spirit of CPD, we introduce a latent-variable H to decompose the order-6\nprobability tensor ppB,C,D,wq|A,wpq. Instead of fully decomposing the tensor, we empirically find that binding some of the variables leads to better results. Our best factorization is as follows (also illustrated by a Bayesian network in Figure 1 (c)):\nppB,C,Wq, D|A,Wpq “ (9) ÿ\nH\nppH|A,WpqppB|HqppC,D|HqppWq|Hq .\nAccording to d-separation (Pearl, 1988), when A and wp are given, B, C, wq, and D are interdependent due to the existence of H . In other words, our factorization does not make any independence assumption beyond the original binary rule. The domain size of H is analogous to the tensor rank in CPD and thus influences the expressiveness of our proposed model.\nBased on our factorization approach, the binary\nrule probability is factorized as\nppArwps Ñ BrwpsCrwqsq “ (10) ÿ\nH\nppH|A,wpqppB|HqppC ð |Hqppwq|Hq ,\nand\nppArwps Ñ BrwqsCrwpsq “ (11) ÿ\nH\nppH|A,wpqppC|HqppB ñ |Hqppwq|Hq .\nWe also follow Zhu et al. (2020) and factorize the start rule as follows.\nppS Ñ Arwpsq “ ppA|Sqppwp|Aq . (12)\nComputational complexity: Considering the head-child as the left child (similarly for the other case), we apply Equation 10 in Term A1 of Equation 3 and obtain Equation 7. Rearranging the summations in Equation 7 gives Equation 8, where Term D1-1 and D1-2 can be cached and reused, which also uses the unfold-refold technique. The final time complexity of the inside computation with\nour factorization approach is Opl4dH ` l2mdHq (dH is the domain size of the latent variable H), which is linear in m.\nChoices of factorization: If we follow the intuition of CPD, then we shall assume that B, C, D, andwq are all independent conditioned onH . However, properly relaxing this strong assumption by binding some variables could benefit our model. Though there are many different choices of binding the variables, some bindings can be easily ruled out. For instance, binding B and C inhibits us from caching Term D1-1 and Term D1-2 in Equation 7 and thus we cannot implement the inside algorithm efficiently; binding C and wq leads to a high computational complexity because we will have to compute a high-dimensional (m|Σ|) categorical distribution. In Section 6.3, we make an ablation study on the impact of different choices of factorizations.\nNeural parameterizations: We follow Kim et al. (2019) and Zhu et al. (2020) and define the following neural parameterization:\nppA|Sq “ exppu J Sf1pwAqq ř\nA1PN exppuJSf1pwA1qq ,\nppw|Aq “ exppu J Af2pwwqq ř\nw1PΣ exppuJAf2pww1qq ,\nppB|Hq “ exppu J HwBq ř\nB1PNYP exppuJHwB1q ,\nppw|Hq “ exppu J Hf2pwwqq ř\nw1PΣ exppuJHf2pww1qq ,\nppC ð |Hq “ exppu J HwCðq ř\nC1PM exppuJHwC1q ,\nppC ñ |Hq “ exppu J HwCñq ř\nC1PM exppuJHwC1q ,\nppH|A,wq “ exppu J Hf4prwA;wwsqq ř\nH 1PH exppuJH 1f4prwA;wwsqq ,\nwhere H “ tH1, . . . ,HdHu, M “ pN YPqˆtð ,ñu, u and w are nonterminal embeddings and word embeddings respectively, and f1p¨q, f2p¨q, f3p¨q, f4p¨q are neural networks with residual layers (He et al., 2016) (Full parameterization is shown in Appendix.)."
+    }, {
+      "heading" : "4 Experimental setup",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Dataset",
+      "text" : "We conduct experiments on the Wall Street Journal (WSJ) corpus of the Penn Treebank (Marcus et al.,\n1994). We use the same preprocessing pipeline as in Kim et al. (2019). Specifically, punctuation is removed from all data splits and the top 10,000 frequent words in the training data are used as the vocabulary. For dependency grammar induction, we follow (Zhu et al., 2020) to use the Stanford typed dependency representation (de Marneffe and Manning, 2008)."
+    }, {
+      "heading" : "4.2 Hyperparameters",
+      "text" : "We optimize our model using the Adam optimizer with β1 “ 0.75, β2 “ 0.999, and learning rate 0.001. All parameters are initialized with Xavier uniform initialization. We set the dimension of all embeddings to 256 and the ratio of the nonterminal number to the preterminal number to 1:2. Our best model uses 15 nonterminals, 30 preterminals, and dH “ 300. We use grid search to tune the nonterminal number (from 5 to 30) and domain size dH of the latent H (from 50 to 500)."
+    }, {
+      "heading" : "4.3 Evaluation",
+      "text" : "We run each model four times with different random seeds and for ten epochs. We train our models on training sentences of length ď 40 with batch size 8 and test them on the whole testing set. For each run, we perform early stopping and select the best model according to the perplexity of the development set. We use two different parsing methods: the variant of CYK algorithm (Eisner and Satta, 1999) and Minimum Bayes-Risk (MBR) decoding (Smith and Eisner, 2006). 2 For constituent grammar induction, we report the means and standard deviations of sentence-level F1 scores.3 For dependency grammar induction, we report unlabeled directed attachment score (UDAS) and unlabeled undirected attachment score (UUAS)."
+    }, {
+      "heading" : "5 Main result",
+      "text" : "We present our main results in Table 2. Our model is referred to as Neural Bi-Lexicalized PCFGs (NBL-PCFGs). We mainly compare our approach against recent PCFG-based models: neural PCFG (N-PCFG) and compound PCFG (C-PCFG) (Kim et al., 2019), tensor decomposition based neural\n2In MBR decoding, we use automatic differentiation (Eisner, 2016; Rush, 2020) to estimate the marginals of spans and arcs, and then use the CYK and Eisner algorithms for constituency and dependency parsing, respectively.\n3Following Kim et al. (2019), we remove all trivial spans (single-word spans and sentence-level spans). Sentence-level means that we compute F1 for each sentence and then average over all sentences.\nPCFG (TN-PCFG) (Yang et al., 2021) and neural L-PCFG (NL-PCFG) (Zhu et al., 2020). We report both official result of Zhu et al. (2020) and our reimplementation.\nWe do not use the compound trick (Kim et al., 2019) in our implementations of lexicalized PCFGs because we empirically find that using it results in unstable training and does not necessarily bring performance improvements.\nWe draw three key observations: (1) Our model achieves the best F1 and UUAS scores under both CYK and MBR decoding. It is also comparable to the official NL-PCFG in the UDAS score. (2) When we remove the compound parameterization from NL-PCFG, its F1 score drops slightly while its UDAS and UUAS scores drop dramatically. It implies that compound parameterization is the key to achieve excellent dependency grammar induction performance in NL-PCFG. (3) The MBR decoding outperforms CYK decoding.\nRegarding UDAS, our model significantly outperforms NL-PCFGs in UDASs if compound parameterization is not used (37.1 vs. 23.8 with CYK decoding), showing that explicitly modeling bilexical relationship is helpful in dependency grammar induction. However, when compound parameterization is used, the UDAS of NL-PCFGs is greatly improved, slightly surpassing that of our model. We believe this is because compound parameterization greatly weakens the independence assumption of NL-PCFGs (i.e., the child word is dependent on C only) by leaking bilexical information via the global sentence embedding. On the other hand, NBL-PCFGs are already expressive enough and thus compound parameterization brings no further increase of their expressiveness but makes learning more difficult."
+    }, {
+      "heading" : "6 Analysis",
+      "text" : "In the following experiments, we report results using MBR decoding by default. We also use dH “ 300 by default unless otherwise specified."
+    }, {
+      "heading" : "6.1 Influence of the domain size of H",
+      "text" : "dH (the domain size of H) influences the expressiveness of our model. Figure 2a illustrates perplexities and F1 scores with the increase of dH and a fixed nonterminal number of 10 (plots of UDAS and UUAS can be found in Appendix). We can see that when dH is small, the model has a high perplexity and a low F1 score, indicating the lim-\nited expressiveness of NBL-PCFGs. When dH is larger than 300, the perplexity becomes plateaued and the F1 score starts to decrease possibly because of overfitting."
+    }, {
+      "heading" : "6.2 Influence of nonterminal number",
+      "text" : "Figure 2b illustrates perplexities and F1 scores with the increase of the nonterminal number and fixed dH “ 300 (plots of UDAS and UUAS can be found in Appendix). We observe that increasing the nonterminal number has only a minor influence on NBL-PCFGs. We speculate that it is because the number of word-annotated nonterminals (m|Σ|) is already sufficiently large even if m is small. On the other hand, the nonterminal number has a big influence on NL-PCFGs. This is most likely because NL-PCFGs make the independence assumption that the generation of wq is solely determined by the non-head-child C and thus require more nonterminals so that C has the capacity of conveying information from A,B,D and wp. Using more nonterminals (ą 30) seems to be helpful for NL-\nPCFGs, but would be computationally too expensive due to the quadratically increased complexity in the number of nonterminals."
+    }, {
+      "heading" : "6.3 Influence of different variable bindings",
+      "text" : "Table 3 presents the results of our models with the following bindings:\n• D-alone: D is generated alone.\n• D-wq: D is generated with wq.\n• D-B: D is generated with head-child B.\n• D-C: D is generated with non-head-child C.\nClearly, binding D and C (the default setting for NBL-PCFG) results in the lowest perplexity and the highest F1 score. Binding D and wq has a surprisingly good performance in unsupervised dependency parsing.\nWe find that how to bind the head direction has a huge impact on the unsupervised parsing performance and we give the following intuition. Usually given a headword and its type, the children generated in each direction would be different. So, D is intuitively more related to wq and C than to B. On the other hand, B is dependent more on the headword instead. In Table 3 we can see that (D-B) has a lower UDAS score than (D-C) and (D-wq), which is consistent with this intuition. Notably, in Zhu et al. (2020), their Factorization III has a significantly lower UDAS than the default model (35.5 vs. 25.9), and the only difference is whether the generation of C is dependent on the head direction. This is also consistent with our intuition."
+    }, {
+      "heading" : "6.4 Qualitative analysis",
+      "text" : "We analyze the parsing performance of different PCFG extensions by breaking down their recall numbers by constituent labels (see Table 4). NPs and VPs cover most of the gold constituents in WSJ test set. TN-PCFGs have the best performance in predicting NPs and NBL-PCFGs have better performance in predicting other labels on average.\nWe further analyze the quality of our induced trees. Our model prefers to predict left-headed constituents (i.e., constituents headed by the leftmost word). VPs are usually left-headed in English, so our model has a much higher recall on VPs and correctly predicts their headwords. SBARs often start with which and that and PPs often start with prepositions such as of and for. Our model often relies on these words to predict the correct constituents and hence erroneously predicts these words as the headwords, which hurts the dependency accuracy. For NPs, we find our model often makes mistakes in predicting adjective-noun phrases. For example, the correct parse of a rough market is (a (rough market)), but our model predicts ((a rough) market) instead."
+    }, {
+      "heading" : "7 Discussion on dependency annotation schemes",
+      "text" : "What should be regarded as the headwords is still debatable in linguistics, especially for those around function words (Zwicky, 1993). For example, in phrase the company, some linguists argue that the should be the headword (Abney, 1972). These disagreements are reflected in the dependency annotation schemes. Researchers have found that different dependency annotation schemes result in very different evaluation scores of unsupervised dependency parsing (Noji, 2016; Shen et al., 2020).\nIn our experiments, we use the Stanford Dependencies annotation scheme in order to compare with NL-PCFGs. Stanford Dependencies prefers to select content words as headwords. However, as we discussed in previous sections, our model prefers to select function words (e.g., of, which, for) as headwords for SBARs or PPs.This explains why our model can outperform all the baselines on constituency parsing but not on dependency parsing (as judged by Stanford Dependencies) at the same time. Table 3 shows that there is a trade-off between the F1 score and UDAS, which suggests that adapting our model to Stanford Dependencies would hurt its ability to identify constituents."
+    }, {
+      "heading" : "8 Speed comparison",
+      "text" : "In practice, the forward and backward pass of the inside algorithm consumes the majority of the running time in training a N(B)L-PCFG. The existing implementation by Zhu et al. (2020)4 does not employ efficient parallization and has a cubic time\n4https://github.com/neulab/neural-lpcfg\ncomplexity in the number of nonterminals. We provide an efficient reimplementation (we follow Zhang et al. (2020) to batchify) of the inside algorithm based on Equation 6. We refer to an implementation which caches Term C1-1 as re-impl-1 and refer to an implementation which caches Term C1-2 as re-impl-2.\nWe measure the time based on a single forward and backward pass of the inside algorithm with batch size 1 on a single Titan V GPU. Figure 3a illustrates the time with the increase of the sentence length and a fixed nonterminal number of 10. The original implementation of NL-PCFG by Zhu et al. (2020) takes much more time when sentences are long. For example, when sentence length is 40, it needs 6.80s, while our fast implementation takes 0.43s and our NBL-PCFG takes only 0.30s. Figure 3b illustrates the time with the increase of the non-\nterminal number m and a fixed sentence length of 30. The original implementation runs out of 12GB memory when m “ 30. re-impl-2 is faster than re-impl-1 when increasing m as it has a better time complexity in m (quadratic for re-impl-2, cubic for re-impl-1). Our NBL-PCFGs have a linear complexity in m, and as we can see in the figure, our NBL-PCFGs are much faster when m is large."
+    }, {
+      "heading" : "9 Related Work",
+      "text" : "Unsupervised parsing has a long history but has regained great attention in recent years. In unsupervised dependency parsing, most methods are based on Dependency Model with Valence (DMV) (Klein and Manning, 2004). Neurally parameterized DMVs have obtained state-of-the-art performance (Jiang et al., 2016; Han et al., 2017, 2019; Yang et al., 2020). However, they rely on gold POS tags and sophisticated initializations (e.g. K&M initialization or initialization with the parsing result of another unsupervised model). Noji et al. (2016) propose a left-corner parsing-based DMV model to limit the stack depth of center-embedding, which is insensitive to initialization but needs gold POS tags. He et al. (2018) propose a latent-variable based DMV model, which does not need gold POS tags but requires good initialization and high-quality induced POS tags. See Han et al. (2020) for a survey of unsupervised dependency parsing. Compared to these methods, our method does not require gold/induced POS tags or sophisticated initializations, though its performance lags behind some of these previous methods.\nRecent unsupervised constituency parsers can be roughly categorized into the following groups: (1) PCFG-based methods. Depth-bounded PCFGs (Jin et al., 2018a,b) limit the stack depth of centerembedding. Neurally parameterized PCFGs (Jin\net al., 2019; Kim et al., 2019; Zhu et al., 2020; Yang et al., 2021) use neural networks to produce grammar rule probabilities. (2) Deep Inside-Outside Recursive Auto-encoder (DIORA) based methods (Drozdov et al., 2019a,b, 2020; Hong et al., 2020; Sahay et al., 2021). They use neural networks to mimic the inside-outside algorithm and they are trained with masked language model objectives. (3) Syntactic distance-based methods (Shen et al., 2018, 2019, 2020). They encode hidden syntactic trees into syntactic distances and inject them into language models. (4) Probing based methods (Kim et al., 2020; Li et al., 2020). They extract phrase-structure trees based on the attention distributions of large pre-trained language models. In addition to these methods, Cao et al. (2020) use constituency tests and Shi et al. (2021) make use of naturally-occurring bracketings such as hyperlinks on webpages to train parsers. Multimodal information such as images (Shi et al., 2019; Zhao and Titov, 2020; Jin and Schuler, 2020) and videos (Zhang et al., 2021) have also been exploited for unsupervised constituency parsing.\nWe are only aware of a few previous studies in unsupervised joint dependency and constituency parsing. Klein and Manning (2004) propose a joint DMV and CCM (Klein and Manning, 2002) model. Shen et al. (2020) propose a transformer-based method, in which they define syntactic distances to guild attentions of transformers. Zhu et al. (2020) propose neural L-PCFGs for unsupervised joint parsing."
+    }, {
+      "heading" : "10 Conclusion",
+      "text" : "We have presented a new formalism of lexicalized PCFGs. Our formalism relies on the canonical polyadic decomposition to factorize the probability tensor of binary rules. The factorization reduces the space and time complexity of lexicalized PCFGs while keeping the independence assumptions encoded in the original binary rules intact. We further parameterize our model by using neural networks and present an efficient implementation of our model. On the English WSJ test data, our model achieves the lowest perplexity, outperforms all the existing extensions of PCFGs in constituency grammar induction, and is comparable to strong baselines in dependency grammar induction."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We thank the anonymous reviewers for their constructive comments. This work was supported by the National Natural Science Foundation of China (61976139)."
+    }, {
+      "heading" : "A Full Parameterization",
+      "text" : "We give the full parameterizations of the following probability distributions.\nppA|Sq “ exppu J Sh1pwAqq ř\nA1PN exppuJSh1pwA1qq ,\nppw|Aq “ exppu J Ah2pwwqq ř\nw1PΣ exppuJAh2pww1qq ,\nppw|Hq “ exppu J Hh3pwwqq ř\nw1PΣ exppuJHh3pww1qq ,\nppH|A,wq “ exppu J HfprwA;wwsqq ř\nH 1PH exppuJh1fprwA;wwsqq ,\nhipxq “ gi,1 pgi,2 pWixqq gi,jpyq “ ReLU pVi,j ReLU pUi,jyqq ` y\nfprx,ysq “ h4pReLUpWrx; ysq ` yq\nB Influence of the domain size of H and the number of nonterminals\nFigure 4 illustrates the change of UUAS and UDAS with the increase of dH . We find similar tendencies compared to the change of F1 scores and perplexities with the increase of dH . dH “ 300 performs best. Figure 5 illustrates the change of UUAS and UDAS when increasing the number of nonterminals. We can see that NL-PCFGs benefit from using more nonterminals while NBL-PCFGs have a better performance when the number of nonterminals is relatively small."
+    } ],
+    "references" : [ {
+      "title" : "The english noun phrase in its sentential aspect",
+      "author" : [ "Steven P. Abney" ],
+      "venue" : null,
+      "citeRegEx" : "Abney.,? \\Q1972\\E",
+      "shortCiteRegEx" : "Abney.",
+      "year" : 1972
+    }, {
+      "title" : "Unsupervised parsing via constituency tests",
+      "author" : [ "Steven Cao", "Nikita Kitaev", "Dan Klein." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 4798–4808, Online. Association for Computational",
+      "citeRegEx" : "Cao et al\\.,? 2020",
+      "shortCiteRegEx" : "Cao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Tree-bank grammars",
+      "author" : [ "Eugene Charniak." ],
+      "venue" : "Technical report, USA.",
+      "citeRegEx" : "Charniak.,? 1996",
+      "shortCiteRegEx" : "Charniak.",
+      "year" : 1996
+    }, {
+      "title" : "Scaling hidden Markov language models",
+      "author" : [ "Justin Chiu", "Alexander Rush." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1341–1349, Online. Association for Computational Linguistics.",
+      "citeRegEx" : "Chiu and Rush.,? 2020",
+      "shortCiteRegEx" : "Chiu and Rush.",
+      "year" : 2020
+    }, {
+      "title" : "Approximate PCFG parsing using tensor decomposition",
+      "author" : [ "Shay B. Cohen", "Giorgio Satta", "Michael Collins." ],
+      "venue" : "Proceedings of the 2013 Conference of the North American Chapter of the Association for Computational Linguistics: Human Lan-",
+      "citeRegEx" : "Cohen et al\\.,? 2013",
+      "shortCiteRegEx" : "Cohen et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Three generative, lexicalised models for statistical parsing",
+      "author" : [ "Michael Collins." ],
+      "venue" : "35th Annual Meeting of the Association for Computational Linguistics and 8th Conference of the European Chapter of the Association for Computational Linguistics,",
+      "citeRegEx" : "Collins.,? 1997",
+      "shortCiteRegEx" : "Collins.",
+      "year" : 1997
+    }, {
+      "title" : "Head-driven statistical models for natural language parsing",
+      "author" : [ "Michael Collins." ],
+      "venue" : "Computational Linguistics, 29(4):589–637.",
+      "citeRegEx" : "Collins.,? 2003",
+      "shortCiteRegEx" : "Collins.",
+      "year" : 2003
+    }, {
+      "title" : "Unsupervised parsing with S-DIORA: Single tree encoding for deep inside-outside recursive autoencoders",
+      "author" : [ "Andrew Drozdov", "Subendhu Rongali", "Yi-Pei Chen", "Tim O’Gorman", "Mohit Iyyer", "Andrew McCallum" ],
+      "venue" : "In Proceedings of the 2020 Con-",
+      "citeRegEx" : "Drozdov et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Drozdov et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Unsupervised latent tree induction with deep inside-outside recursive auto-encoders",
+      "author" : [ "Andrew Drozdov", "Patrick Verga", "Mohit Yadav", "Mohit Iyyer", "Andrew McCallum." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the",
+      "citeRegEx" : "Drozdov et al\\.,? 2019a",
+      "shortCiteRegEx" : "Drozdov et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unsupervised latent tree induction with deep inside-outside recursive auto-encoders",
+      "author" : [ "Andrew Drozdov", "Patrick Verga", "Mohit Yadav", "Mohit Iyyer", "Andrew McCallum." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the",
+      "citeRegEx" : "Drozdov et al\\.,? 2019b",
+      "shortCiteRegEx" : "Drozdov et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Inside-outside and forwardbackward algorithms are just backprop (tutorial paper)",
+      "author" : [ "Jason Eisner." ],
+      "venue" : "Proceedings of the Workshop on Structured Prediction for NLP, pages 1–17, Austin, TX. Association for Computational Linguistics.",
+      "citeRegEx" : "Eisner.,? 2016",
+      "shortCiteRegEx" : "Eisner.",
+      "year" : 2016
+    }, {
+      "title" : "Program transformations for optimization of parsing algorithms and other weighted logic programs",
+      "author" : [ "Jason Eisner", "John Blatz." ],
+      "venue" : "Proceedings of FG 2006: The 11th Conference on Formal Grammar, pages 45–85. CSLI Publications.",
+      "citeRegEx" : "Eisner and Blatz.,? 2007",
+      "shortCiteRegEx" : "Eisner and Blatz.",
+      "year" : 2007
+    }, {
+      "title" : "Efficient parsing for bilexical context-free grammars and head automaton grammars",
+      "author" : [ "Jason Eisner", "Giorgio Satta." ],
+      "venue" : "Proceedings of the 37th Annual Meeting of the Association for Computational Linguistics, pages 457–464, College Park, Maryland,",
+      "citeRegEx" : "Eisner and Satta.,? 1999",
+      "shortCiteRegEx" : "Eisner and Satta.",
+      "year" : 1999
+    }, {
+      "title" : "A survey of unsupervised dependency parsing",
+      "author" : [ "Wenjuan Han", "Yong Jiang", "Hwee Tou Ng", "Kewei Tu." ],
+      "venue" : "Proceedings of the 28th International Conference on Computational Linguistics, pages 2522–2533, Barcelona, Spain (Online). Interna-",
+      "citeRegEx" : "Han et al\\.,? 2020",
+      "shortCiteRegEx" : "Han et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Dependency grammar induction with neural lexicalization and big training data",
+      "author" : [ "Wenjuan Han", "Yong Jiang", "Kewei Tu." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 1683–1688, Copen-",
+      "citeRegEx" : "Han et al\\.,? 2017",
+      "shortCiteRegEx" : "Han et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Enhancing unsupervised generative dependency parser with contextual information",
+      "author" : [ "Wenjuan Han", "Yong Jiang", "Kewei Tu." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 5315–5325, Florence,",
+      "citeRegEx" : "Han et al\\.,? 2019",
+      "shortCiteRegEx" : "Han et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unsupervised learning of syntactic structure with invertible neural projections",
+      "author" : [ "Junxian He", "Graham Neubig", "Taylor BergKirkpatrick." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "He et al\\.,? 2018",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Deep residual learning for image recognition",
+      "author" : [ "Kaiming He", "Xiangyu Zhang", "Shaoqing Ren", "Jian Sun." ],
+      "venue" : "2016 IEEE Conference on Computer Vi-",
+      "citeRegEx" : "He et al\\.,? 2016",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Deep inside-outside recursive autoencoder with all-span objective",
+      "author" : [ "Ruyue Hong", "Jiong Cai", "Kewei Tu." ],
+      "venue" : "Proceedings of the 28th International Conference on Computational Linguistics, pages 3610–3615, Barcelona, Spain (Online). Inter-",
+      "citeRegEx" : "Hong et al\\.,? 2020",
+      "shortCiteRegEx" : "Hong et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Basic methods of probabilistic context free grammars",
+      "author" : [ "F. Jelinek", "J.D. Lafferty", "R.L. Mercer." ],
+      "venue" : "Speech Recognition and Understanding, pages 345– 360, Berlin, Heidelberg. Springer Berlin Heidelberg.",
+      "citeRegEx" : "Jelinek et al\\.,? 1992",
+      "shortCiteRegEx" : "Jelinek et al\\.",
+      "year" : 1992
+    }, {
+      "title" : "Unsupervised neural dependency parsing",
+      "author" : [ "Yong Jiang", "Wenjuan Han", "Kewei Tu." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 763–771, Austin, Texas. Association for Computational Lin-",
+      "citeRegEx" : "Jiang et al\\.,? 2016",
+      "shortCiteRegEx" : "Jiang et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Depthbounding is effective: Improvements and evaluation of unsupervised PCFG induction",
+      "author" : [ "Lifeng Jin", "Finale Doshi-Velez", "Timothy Miller", "William Schuler", "Lane Schwartz." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Nat-",
+      "citeRegEx" : "Jin et al\\.,? 2018a",
+      "shortCiteRegEx" : "Jin et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Unsupervised grammar induction with depth-bounded PCFG",
+      "author" : [ "Lifeng Jin", "Finale Doshi-Velez", "Timothy Miller", "William Schuler", "Lane Schwartz." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 6:211–224.",
+      "citeRegEx" : "Jin et al\\.,? 2018b",
+      "shortCiteRegEx" : "Jin et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Unsupervised learning of PCFGs with normalizing flow",
+      "author" : [ "Lifeng Jin", "Finale Doshi-Velez", "Timothy Miller", "Lane Schwartz", "William Schuler." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages",
+      "citeRegEx" : "Jin et al\\.,? 2019",
+      "shortCiteRegEx" : "Jin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Grounded PCFG induction with images",
+      "author" : [ "Lifeng Jin", "William Schuler." ],
+      "venue" : "Proceedings of the 1st Conference of the Asia-Pacific Chapter of the Association for Computational Linguistics and the 10th International Joint Conference on Natural Lan-",
+      "citeRegEx" : "Jin and Schuler.,? 2020",
+      "shortCiteRegEx" : "Jin and Schuler.",
+      "year" : 2020
+    }, {
+      "title" : "PCFG models of linguistic tree representations",
+      "author" : [ "Mark Johnson." ],
+      "venue" : "Computational Linguistics, 24(4):613–632.",
+      "citeRegEx" : "Johnson.,? 1998",
+      "shortCiteRegEx" : "Johnson.",
+      "year" : 1998
+    }, {
+      "title" : "Are pre-trained language models aware of phrases? simple but strong baselines for grammar induction",
+      "author" : [ "Taeuk Kim", "Jihun Choi", "Daniel Edmiston", "Sanggoo Lee." ],
+      "venue" : "8th International Conference on Learning Representations, ICLR 2020, Ad-",
+      "citeRegEx" : "Kim et al\\.,? 2020",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Compound probabilistic context-free grammars for grammar induction",
+      "author" : [ "Yoon Kim", "Chris Dyer", "Alexander Rush." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 2369–2385, Florence, Italy. Asso-",
+      "citeRegEx" : "Kim et al\\.,? 2019",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Corpusbased induction of syntactic structure: Models of dependency and constituency",
+      "author" : [ "Dan Klein", "Christopher Manning." ],
+      "venue" : "Proceedings of the 42nd Annual Meeting of the Association for Computational Linguistics (ACL-04), pages 478–485,",
+      "citeRegEx" : "Klein and Manning.,? 2004",
+      "shortCiteRegEx" : "Klein and Manning.",
+      "year" : 2004
+    }, {
+      "title" : "A generative constituent-context model for improved grammar induction",
+      "author" : [ "Dan Klein", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 40th Annual Meeting of the Association for Computational Linguistics, pages 128–135, Philadelphia, Pennsyl-",
+      "citeRegEx" : "Klein and Manning.,? 2002",
+      "shortCiteRegEx" : "Klein and Manning.",
+      "year" : 2002
+    }, {
+      "title" : "Accurate unlexicalized parsing",
+      "author" : [ "Dan Klein", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 41st Annual Meeting of the Association for Computational Linguistics, pages 423–430, Sapporo, Japan. Association for Computational Linguistics.",
+      "citeRegEx" : "Klein and Manning.,? 2003",
+      "shortCiteRegEx" : "Klein and Manning.",
+      "year" : 2003
+    }, {
+      "title" : "Tensor decompositions and applications",
+      "author" : [ "Tamara G. Kolda", "Brett W. Bader." ],
+      "venue" : "SIAM Review, 51(3):455–500.",
+      "citeRegEx" : "Kolda and Bader.,? 2009",
+      "shortCiteRegEx" : "Kolda and Bader.",
+      "year" : 2009
+    }, {
+      "title" : "The estimation of stochastic context-free grammars using the insideoutside algorithm",
+      "author" : [ "Karim Lari", "Steve J Young." ],
+      "venue" : "Computer speech & language, 4(1):35–56.",
+      "citeRegEx" : "Lari and Young.,? 1990",
+      "shortCiteRegEx" : "Lari and Young.",
+      "year" : 1990
+    }, {
+      "title" : "Heads-up! unsupervised constituency parsing via self-attention heads",
+      "author" : [ "Bowen Li", "Taeuk Kim", "Reinald Kim Amplayo", "Frank Keller." ],
+      "venue" : "Proceedings of the 1st Conference of the Asia-Pacific Chapter of the Association for Computational Lin-",
+      "citeRegEx" : "Li et al\\.,? 2020",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Statistical decision-tree models for parsing",
+      "author" : [ "David M. Magerman." ],
+      "venue" : "33rd Annual Meeting of the Association for Computational Linguistics, pages 276–283, Cambridge, Massachusetts, USA. Association for Computational Linguistics.",
+      "citeRegEx" : "Magerman.,? 1995",
+      "shortCiteRegEx" : "Magerman.",
+      "year" : 1995
+    }, {
+      "title" : "The Penn Treebank: Annotating predicate argument structure",
+      "author" : [ "Mitchell Marcus", "Grace Kim", "Mary Ann Marcinkiewicz", "Robert MacIntyre", "Ann Bies", "Mark Ferguson", "Karen Katz", "Britta Schasberger." ],
+      "venue" : "Human Language Technology:",
+      "citeRegEx" : "Marcus et al\\.,? 1994",
+      "shortCiteRegEx" : "Marcus et al\\.",
+      "year" : 1994
+    }, {
+      "title" : "The Stanford typed dependencies representation",
+      "author" : [ "Marie-Catherine de Marneffe", "Christopher D. Manning." ],
+      "venue" : "Coling 2008: Proceedings of the workshop on Cross-Framework and Cross-Domain",
+      "citeRegEx" : "Marneffe and Manning.,? 2008",
+      "shortCiteRegEx" : "Marneffe and Manning.",
+      "year" : 2008
+    }, {
+      "title" : "Left-corner methods for syntactic modeling with universal structural constraints",
+      "author" : [ "Hiroshi Noji." ],
+      "venue" : "CoRR, abs/1608.00293.",
+      "citeRegEx" : "Noji.,? 2016",
+      "shortCiteRegEx" : "Noji.",
+      "year" : 2016
+    }, {
+      "title" : "Using left-corner parsing to encode universal structural constraints in grammar induction",
+      "author" : [ "Hiroshi Noji", "Yusuke Miyao", "Mark Johnson." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 33–43,",
+      "citeRegEx" : "Noji et al\\.,? 2016",
+      "shortCiteRegEx" : "Noji et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Probabilistic Reasoning in Intelligent Systems: Networks of Plausible Inference",
+      "author" : [ "Judea Pearl." ],
+      "venue" : "Morgan Kaufmann Publishers Inc., San Francisco, CA, USA.",
+      "citeRegEx" : "Pearl.,? 1988",
+      "shortCiteRegEx" : "Pearl.",
+      "year" : 1988
+    }, {
+      "title" : "Torch-struct: Deep structured prediction library",
+      "author" : [ "Alexander Rush." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics: System Demonstrations, pages 335– 342, Online. Association for Computational Linguis-",
+      "citeRegEx" : "Rush.,? 2020",
+      "shortCiteRegEx" : "Rush.",
+      "year" : 2020
+    }, {
+      "title" : "Rule augmented unsupervised constituency parsing",
+      "author" : [ "Atul Sahay", "Anshul Nasery", "Ayush Maheshwari", "Ganesh Ramakrishnan", "Rishabh Iyer" ],
+      "venue" : null,
+      "citeRegEx" : "Sahay et al\\.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Sahay et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Neural language modeling by jointly learning syntax and lexicon",
+      "author" : [ "Yikang Shen", "Zhouhan Lin", "Chin-Wei Huang", "Aaron C. Courville." ],
+      "venue" : "6th International Conference on Learning Representations, ICLR 2018, Vancouver, BC, Canada, April 30",
+      "citeRegEx" : "Shen et al\\.,? 2018",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Ordered memory",
+      "author" : [ "Yikang Shen", "Shawn Tan", "Seyedarian Hosseini", "Zhouhan Lin", "Alessandro Sordoni", "Aaron C. Courville." ],
+      "venue" : "CoRR, abs/1910.13466.",
+      "citeRegEx" : "Shen et al\\.,? 2019",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Structformer: Joint unsupervised induction of dependency and constituency structure from masked language modeling",
+      "author" : [ "Yikang Shen", "Yi Tay", "Che Zheng", "Dara Bahri", "Donald Metzler", "Aaron Courville" ],
+      "venue" : null,
+      "citeRegEx" : "Shen et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Visually grounded neural syntax acquisition",
+      "author" : [ "Haoyue Shi", "Jiayuan Mao", "Kevin Gimpel", "Karen Livescu." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 1842–1861, Florence, Italy. Association for",
+      "citeRegEx" : "Shi et al\\.,? 2019",
+      "shortCiteRegEx" : "Shi et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Learning syntax from naturally-occurring bracketings",
+      "author" : [ "Tianze Shi", "Ozan İrsoy", "Igor Malioutov", "Lillian Lee." ],
+      "venue" : "Proceedings of the 2021 Conference of the North American Chapter of the Association for Computational Linguistics: Human Lan-",
+      "citeRegEx" : "Shi et al\\.,? 2021",
+      "shortCiteRegEx" : "Shi et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Minimum risk annealing for training log-linear models",
+      "author" : [ "David A. Smith", "Jason Eisner." ],
+      "venue" : "Proceedings of the COLING/ACL 2006 Main Conference Poster Sessions, pages 787–794, Sydney, Australia. Association for Computational Linguistics.",
+      "citeRegEx" : "Smith and Eisner.,? 2006",
+      "shortCiteRegEx" : "Smith and Eisner.",
+      "year" : 2006
+    }, {
+      "title" : "Second-order unsupervised neural dependency parsing",
+      "author" : [ "Songlin Yang", "Yong Jiang", "Wenjuan Han", "Kewei Tu." ],
+      "venue" : "Proceedings of the 28th International Conference on Computational Linguistics, pages 3911–3924, Barcelona, Spain (Online). Inter-",
+      "citeRegEx" : "Yang et al\\.,? 2020",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "PCFGs can do better: Inducing probabilistic contextfree grammars with many symbols",
+      "author" : [ "Songlin Yang", "Yanpeng Zhao", "Kewei Tu." ],
+      "venue" : "Proceedings of the 2021 Conference of the North American Chapter of the Association for Computational Linguistics:",
+      "citeRegEx" : "Yang et al\\.,? 2021",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Video-aided unsupervised grammar induction",
+      "author" : [ "Songyang Zhang", "Linfeng Song", "Lifeng Jin", "Kun Xu", "Dong Yu", "Jiebo Luo." ],
+      "venue" : "Proceedings of the 2021 Conference of the North American Chapter of the Association for Computational Linguistics: Hu-",
+      "citeRegEx" : "Zhang et al\\.,? 2021",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Fast and accurate neural CRF constituency parsing",
+      "author" : [ "Yu Zhang", "Houquan Zhou", "Zhenghua Li." ],
+      "venue" : "Proceedings of the Twenty-Ninth International Joint Conference on Artificial Intelligence, IJCAI 2020, pages 4046–4053. ijcai.org.",
+      "citeRegEx" : "Zhang et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Visually grounded compound PCFGs",
+      "author" : [ "Yanpeng Zhao", "Ivan Titov." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 4369–4379, Online. Association for Computational Linguistics.",
+      "citeRegEx" : "Zhao and Titov.,? 2020",
+      "shortCiteRegEx" : "Zhao and Titov.",
+      "year" : 2020
+    }, {
+      "title" : "The return of lexical dependencies: Neural lexicalized PCFGs",
+      "author" : [ "Hao Zhu", "Yonatan Bisk", "Graham Neubig." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 8:647–661.",
+      "citeRegEx" : "Zhu et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Heads in grammatical theory: Heads, bases and functors",
+      "author" : [ "A. Zwicky." ],
+      "venue" : "A Full Parameterization",
+      "citeRegEx" : "Zwicky.,? 1993",
+      "shortCiteRegEx" : "Zwicky.",
+      "year" : 1993
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 53,
+      "context" : "Neural lexicalized PCFGs (L-PCFGs) (Zhu et al., 2020) have been shown effective in grammar induction.",
+      "startOffset" : 35,
+      "endOffset" : 53
+    }, {
+      "referenceID" : 32,
+      "context" : "Probabilistic context-free grammars (PCFGs) has been an important probabilistic approach to syntactic analysis (Lari and Young, 1990; Jelinek et al., 1992).",
+      "startOffset" : 111,
+      "endOffset" : 155
+    }, {
+      "referenceID" : 19,
+      "context" : "Probabilistic context-free grammars (PCFGs) has been an important probabilistic approach to syntactic analysis (Lari and Young, 1990; Jelinek et al., 1992).",
+      "startOffset" : 111,
+      "endOffset" : 155
+    }, {
+      "referenceID" : 2,
+      "context" : "Still, due to the strong independence assumption of CFGs, vanilla PCFGs (Charniak, 1996) are far from adequate for highly ambiguous text.",
+      "startOffset" : 72,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 34,
+      "context" : "There have been many approaches proposed under the premise (Magerman, 1995; Collins, 1997; Johnson, 1998; Klein and Manning, 2003).",
+      "startOffset" : 59,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 5,
+      "context" : "There have been many approaches proposed under the premise (Magerman, 1995; Collins, 1997; Johnson, 1998; Klein and Manning, 2003).",
+      "startOffset" : 59,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 25,
+      "context" : "There have been many approaches proposed under the premise (Magerman, 1995; Collins, 1997; Johnson, 1998; Klein and Manning, 2003).",
+      "startOffset" : 59,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 30,
+      "context" : "There have been many approaches proposed under the premise (Magerman, 1995; Collins, 1997; Johnson, 1998; Klein and Manning, 2003).",
+      "startOffset" : 59,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 6,
+      "context" : "Among them lexicalized PCFGs (L-PCFGs) are a relatively straightforward formalism (Collins, 2003).",
+      "startOffset" : 82,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 6,
+      "context" : "For representation, the addition of lexical information greatly increases the number of parameters to be estimated and exacerbates the data sparsity problem during learning, so the expectation-maximisation (EM) based estimation of L-PCFGs has to rely on sophisticated smoothing techniques and factorizations (Collins, 2003).",
+      "startOffset" : 308,
+      "endOffset" : 323
+    }, {
+      "referenceID" : 6,
+      "context" : "(2020) combine the ideas of factorizing the binary rule probabilities (Collins, 2003) and neural parameterization (Kim et al.",
+      "startOffset" : 70,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 27,
+      "context" : "(2020) combine the ideas of factorizing the binary rule probabilities (Collins, 2003) and neural parameterization (Kim et al., 2019) and propose neural L-PCFGs (NL-PCFGs), achieving good results in both unsupervised dependency and constituency parsing.",
+      "startOffset" : 114,
+      "endOffset" : 132
+    }, {
+      "referenceID" : 27,
+      "context" : "Neural parameterization is the key to success, which facilitates informed smoothing (Kim et al., 2019), reduces the number of learnable parameters for large grammars (Chiu and Rush, 2020; Yang et al.",
+      "startOffset" : 84,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 3,
+      "context" : ", 2019), reduces the number of learnable parameters for large grammars (Chiu and Rush, 2020; Yang et al., 2021) and facilitates advanced gradient-based optimization techniques instead of using the traditional EM algorithm (Eisner, 2016).",
+      "startOffset" : 71,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 49,
+      "context" : ", 2019), reduces the number of learnable parameters for large grammars (Chiu and Rush, 2020; Yang et al., 2021) and facilitates advanced gradient-based optimization techniques instead of using the traditional EM algorithm (Eisner, 2016).",
+      "startOffset" : 71,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2021) and facilitates advanced gradient-based optimization techniques instead of using the traditional EM algorithm (Eisner, 2016).",
+      "startOffset" : 118,
+      "endOffset" : 132
+    }, {
+      "referenceID" : 14,
+      "context" : "Bilexical dependencies, which have been shown useful in unsupervised dependency parsing (Han et al., 2017; Yang et al., 2020), are thus ignored.",
+      "startOffset" : 88,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 48,
+      "context" : "Bilexical dependencies, which have been shown useful in unsupervised dependency parsing (Han et al., 2017; Yang et al., 2020), are thus ignored.",
+      "startOffset" : 88,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 31,
+      "context" : "2689 To model bilexical dependencies and meanwhile reduce complexities, we draw inspiration from the canonical polyadic decomposition (CPD) (Kolda and Bader, 2009) and propose a latent-variable based neural parameterization of L-PCFGs.",
+      "startOffset" : 140,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 11,
+      "context" : "We further adopt the unfold-refold transformation technique (Eisner and Blatz, 2007) to decrease complexities.",
+      "startOffset" : 60,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 53,
+      "context" : "Our model surpasses the strong baseline NL-PCFG (Zhu et al., 2020) by 2.",
+      "startOffset" : 48,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 6,
+      "context" : "Lexicalized CFGs (L-CFGs) (Collins, 2003) extend CFGs by associating a word with each of the",
+      "startOffset" : 26,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 39,
+      "context" : "According to d-separation (Pearl, 1988), when A and wp are given, B, C, wq, and D are interdependent due to the existence of H .",
+      "startOffset" : 26,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 17,
+      "context" : ",HdHu, M “ pN YPqˆtð ,ñu, u and w are nonterminal embeddings and word embeddings respectively, and f1p ̈q, f2p ̈q, f3p ̈q, f4p ̈q are neural networks with residual layers (He et al., 2016) (Full parameterization is shown in Appendix.",
+      "startOffset" : 171,
+      "endOffset" : 188
+    }, {
+      "referenceID" : 35,
+      "context" : "1 Dataset We conduct experiments on the Wall Street Journal (WSJ) corpus of the Penn Treebank (Marcus et al., 1994).",
+      "startOffset" : 94,
+      "endOffset" : 115
+    }, {
+      "referenceID" : 53,
+      "context" : "For dependency grammar induction, we follow (Zhu et al., 2020) to use the Stanford typed dependency representation (de Marneffe and Manning, 2008).",
+      "startOffset" : 44,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 12,
+      "context" : "We use two different parsing methods: the variant of CYK algorithm (Eisner and Satta, 1999) and Minimum Bayes-Risk (MBR) decoding (Smith and Eisner, 2006).",
+      "startOffset" : 67,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 47,
+      "context" : "We use two different parsing methods: the variant of CYK algorithm (Eisner and Satta, 1999) and Minimum Bayes-Risk (MBR) decoding (Smith and Eisner, 2006).",
+      "startOffset" : 130,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 27,
+      "context" : "We mainly compare our approach against recent PCFG-based models: neural PCFG (N-PCFG) and compound PCFG (C-PCFG) (Kim et al., 2019), tensor decomposition based neural (2)In MBR decoding, we use automatic differentiation (Eisner, 2016; Rush, 2020) to estimate the marginals of spans and arcs, and then use the CYK and Eisner algorithms for constituency and dependency parsing, respectively.",
+      "startOffset" : 113,
+      "endOffset" : 131
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2019), tensor decomposition based neural (2)In MBR decoding, we use automatic differentiation (Eisner, 2016; Rush, 2020) to estimate the marginals of spans and arcs, and then use the CYK and Eisner algorithms for constituency and dependency parsing, respectively.",
+      "startOffset" : 96,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 40,
+      "context" : ", 2019), tensor decomposition based neural (2)In MBR decoding, we use automatic differentiation (Eisner, 2016; Rush, 2020) to estimate the marginals of spans and arcs, and then use the CYK and Eisner algorithms for constituency and dependency parsing, respectively.",
+      "startOffset" : 96,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 49,
+      "context" : "2693 PCFG (TN-PCFG) (Yang et al., 2021) and neural L-PCFG (NL-PCFG) (Zhu et al.",
+      "startOffset" : 20,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 53,
+      "context" : ", 2021) and neural L-PCFG (NL-PCFG) (Zhu et al., 2020).",
+      "startOffset" : 36,
+      "endOffset" : 54
+    }, {
+      "referenceID" : 27,
+      "context" : "We do not use the compound trick (Kim et al., 2019) in our implementations of lexicalized PCFGs because we empirically find that using it results in unstable training and does not necessarily bring performance improvements.",
+      "startOffset" : 33,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 54,
+      "context" : "What should be regarded as the headwords is still debatable in linguistics, especially for those around function words (Zwicky, 1993).",
+      "startOffset" : 119,
+      "endOffset" : 133
+    }, {
+      "referenceID" : 0,
+      "context" : "For example, in phrase the company, some linguists argue that the should be the headword (Abney, 1972).",
+      "startOffset" : 89,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 37,
+      "context" : "Researchers have found that different dependency annotation schemes result in very different evaluation scores of unsupervised dependency parsing (Noji, 2016; Shen et al., 2020).",
+      "startOffset" : 146,
+      "endOffset" : 177
+    }, {
+      "referenceID" : 44,
+      "context" : "Researchers have found that different dependency annotation schemes result in very different evaluation scores of unsupervised dependency parsing (Noji, 2016; Shen et al., 2020).",
+      "startOffset" : 146,
+      "endOffset" : 177
+    }, {
+      "referenceID" : 28,
+      "context" : "In unsupervised dependency parsing, most methods are based on Dependency Model with Valence (DMV) (Klein and Manning, 2004).",
+      "startOffset" : 98,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 20,
+      "context" : "Neurally parameterized DMVs have obtained state-of-the-art performance (Jiang et al., 2016; Han et al., 2017, 2019; Yang et al., 2020).",
+      "startOffset" : 71,
+      "endOffset" : 134
+    }, {
+      "referenceID" : 48,
+      "context" : "Neurally parameterized DMVs have obtained state-of-the-art performance (Jiang et al., 2016; Han et al., 2017, 2019; Yang et al., 2020).",
+      "startOffset" : 71,
+      "endOffset" : 134
+    }, {
+      "referenceID" : 18,
+      "context" : "(2) Deep Inside-Outside Recursive Auto-encoder (DIORA) based methods (Drozdov et al., 2019a,b, 2020; Hong et al., 2020; Sahay et al., 2021).",
+      "startOffset" : 69,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 41,
+      "context" : "(2) Deep Inside-Outside Recursive Auto-encoder (DIORA) based methods (Drozdov et al., 2019a,b, 2020; Hong et al., 2020; Sahay et al., 2021).",
+      "startOffset" : 69,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 45,
+      "context" : "Multimodal information such as images (Shi et al., 2019; Zhao and Titov, 2020; Jin and Schuler, 2020) and videos (Zhang et al.",
+      "startOffset" : 38,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 52,
+      "context" : "Multimodal information such as images (Shi et al., 2019; Zhao and Titov, 2020; Jin and Schuler, 2020) and videos (Zhang et al.",
+      "startOffset" : 38,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 24,
+      "context" : "Multimodal information such as images (Shi et al., 2019; Zhao and Titov, 2020; Jin and Schuler, 2020) and videos (Zhang et al.",
+      "startOffset" : 38,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 50,
+      "context" : ", 2019; Zhao and Titov, 2020; Jin and Schuler, 2020) and videos (Zhang et al., 2021) have also been exploited for unsupervised constituency parsing.",
+      "startOffset" : 64,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 29,
+      "context" : "Klein and Manning (2004) propose a joint DMV and CCM (Klein and Manning, 2002) model.",
+      "startOffset" : 53,
+      "endOffset" : 78
+    } ],
+    "year" : 2021,
+    "abstractText" : "Neural lexicalized PCFGs (L-PCFGs) (Zhu et al., 2020) have been shown effective in grammar induction. However, to reduce computational complexity, they make a strong independence assumption on the generation of the child word and thus bilexical dependencies are ignored. In this paper, we propose an approach to parameterize L-PCFGs without making implausible independence assumptions. Our approach directly models bilexical dependencies and meanwhile reduces both learning and representation complexities of LPCFGs. Experimental results on the English WSJ dataset confirm the effectiveness of our approach in improving both running speed and unsupervised parsing performance.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

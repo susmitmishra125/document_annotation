@@ -1,0 +1,459 @@
+{
+  "name" : "2021.acl-long.512.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Determinantal Beam Search",
+    "authors" : [ "Clara Meister", "Martina Forster", "Ryan Cotterell" ],
+    "emails" : [ "meistecl@inf.ethz.ch", "martfors@ethz.ch", "ryan.cotterell@inf.ethz.ch" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 6551–6562\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n6551"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "The decoding of neural sequence models is a fundamental component of many tasks in NLP. Yet, many proposed decoding methods aim to produce only a single solution; further, decoding strategies that provide a set, such as beam search, admit high overlap between solutions. Such approaches fail to reflect that for many NLP tasks,1 there can be multiple correct solutions—or that we may desire a diverse set of solutions. As it stands, standard beam search chooses items based purely on individual\n1As concrete examples, in machine translation there almost always exist multiple ways to translate a sentence; in story generation, we often seek creative language or multiple options to choose from.\nscores, with no means for encoding interaction between candidates; this is the limitation which we attempt to address in this work.\nWe derive determinantal beam search, a novel generalization of beam search that casts subset selection as the subdeterminant optimization problem. Specifically, we formulate each iteration of beam search as a subdeterminant maximization problem parameterized by a positive semi-definite matrix that encodes interactions between the possible candidates; standard beam search is recovered by a specific diagonal matrix. This framing creates a natural paradigm for taking the relationships between candidates during the decoding process, and can thus assign higher scores to diversified sets; we show how this approach relates to k-determinantal point processes (DPPs). Given the wealth of research on efficient kernel computation (Rousu and Shawe-Taylor, 2005; Farhan et al., 2017) and DPP inference strategies (Li et al., 2016; Han et al., 2017; Chen et al., 2018), we find the impact on runtime to be quite reasonable in comparison to standard decoding techniques.\nIn a case study on neural machine translation (NMT), we demonstrate how to make use of the string subsequence kernel (Lodhi et al., 2002) to encode the notion of n-gram diversity in the language generation process, allowing us to derive an elegant diverse beam search. Under this scheme, we observe that determinantal beam search generates more diverse sets than standard beam search with minimal trade-off in terms of BLEU. We see improved performance over stochastic beam search (SBS; Kool et al., 2019), which is reported to encourage diversity, and a slight improvement over Vijayakumar et al. (2018)’s diverse beam search (DBS) while providing a more general approach to optimizing for intra-set diversity."
+    }, {
+      "heading" : "2 Neural Sequence Models",
+      "text" : "Neural sequence models are probability distributions p(y | x) over sequences y in an output\nspace Y conditioned on an input x.2 Here we define Y as the set of all valid sequences derived from a vocabulary V that are bookended by distinguished BOS and EOS tokens, indicating the beginning and end of the sequence, respectively. Typically, the sequence length is upper-bounded by some value nmax ∈ Z+, which may depend on x. In this work, we consider locally normalized models, i.e. where p is a probability distribution over V̄ def= V ∪ {EOS} conditioned on previously generated tokens y<t. The probability of the full sequence y = 〈y1, y2, . . . 〉 is then calculated via the chain rule of probability:\np(y | x) = |y|∏ t=1 p(yt | y<t,x) (1)\nwhere y<1 = y0 def = BOS. Our model p is typically parameterized by a neural network with weights θ. As we do not focus on the underlying model itself in this work, we omit the dependence of p on the parameters θ.\nWe define the decoding problem as the search for the highest-scoring y among all sequences in Y according to the model p(y | x), which is also called maximum-a-posteriori (MAP) inference:\ny? = argmax y∈Y log p(y | x) (2)\nwhere the log transform of p is used by convention. We further define the set decoding problem as the search for a set Y ? of a specified cardinality k among all valid subsets {Y ′ ⊆ Y | |Y ′| = k} that has the highest score where, by overloading, we define\np(Y | x) def= ∏ y∈Y p(y | x) (3)\nSimilarly to Eq. (2), the set-decoding problem is then defined as:\nY ? = argmax Y ′⊆Y, |Y ′|=k log p(Y ′ | x) (4)\nHowever, as has been noted in the literature, there are a number of issues with both Eq. (2) and (4). First, as Y may be an exponentially large (in V) space and p is typically non-Markovian, we cannot efficiently search over Y , much less over Yk. Second, specifically for language generation tasks, these might not be useful objectives.\n2x may be, e.g., a source sentence or an image.\nDegenerate Objective. It is important to note that the highest-probability solutions under neural sequence models are not always high-quality; specifically for tasks involving language generation, e.g., machine translation, prior work has shown the tendency for MAP decoding to lead to generic or degenerate solutions (Stahlberg and Byrne, 2019; Meister et al., 2020; Eikema and Aziz, 2020) while superior solutions assigned only slightly lower probability are often overlooked (Holtzman et al., 2020). Consequently, heuristic search methods or alternative objectives are frequently employed for decoding language generators."
+    }, {
+      "heading" : "2.1 Beam Search",
+      "text" : "A common heuristic to approximate the decoding problem in Eq. (2) is to sequentially choose the token yt at each time step t that maximizes p(yt | y<t,x) until the EOS token is generated or the maximum sequence length nmax is reached. This procedure is known as greedy search. Beam search is an oft-employed generalization of greedy search that returns k candidates and explores more of the search space.3 In this work, we focus on a framing of beam search as iterative subset selection, which allows for a remarkably concise formulation of the algorithm. Given an initial set Y0 containing only the BOS token, we choose subsequent Yt for t ∈ {1, . . . , nmax} according to the following recursion:\nStandard Beam Search\nY0 ← {BOS} (5) Yt ← argmax\nY ′t⊆Bt, |Y ′t |=k\nlog p(Y ′t | Yt−1,x)\nwhere we are constrained to only extending candidates present in the beam set, which we define as\nBt def = {y<t ◦ y | y<t ∈ Yt−1 and y ∈ V̄} (6)\nwhere ◦ is used to indicate string concatenations. Note that candidates in Yt−1 already ending in EOS are simply added directly to Bt, i.e., EOS ◦ EOS = EOS. Under this definition, we have the cardinality constraint |Bt| ≤ |V̄| · k.\n3A number of NLP tasks only take the highest-scoring element of the returned set Y while other tasks utilize the entire set of solutions."
+    }, {
+      "heading" : "2.2 A Determinantal Reformulation",
+      "text" : "We now introduce an alternative, equivalent notation for Eq. (5) using matrices and determinants that will shed light on the straightforward generalization of beam search that we present as the primary contribution of this paper. We define a timestep-dependent4 diagonal matrix D ∈ R|Bt|×|Bt| where we take the diagonal entry\nDii def = p(y (i) ≤t | x) (7)\nHere y(i)≤t is the i th candidate in Bt according to a unique mapping of every element y≤t ∈ Bt to an integer between 1 and |Bt|. Furthermore, we use the notation DYt where Yt ⊆ Bt, to indicate the submatrix that only contains those rows and columns corresponding to the elements of Yt. We may now rewrite Eq. (5) as\nDeterminantal Standard Beam Search\nY0 ← {BOS} (8) Yt ← argmax\nY ′t⊆Bt, |Y ′t |=k\nlog det(DY ′t )\nwhere equivalence follows from the definition of the determinant for diagonal matrices. Formally, Eq. (8) is known as the subdeterminant maximization problem5 (Klee et al., 1995; Ebrahimi et al., 2017), which—as the name suggests— refers to the problem of finding the determinant maximizing subset of a matrix. While the notation introduced in Eq. (8) may seem contrived, it allows us to perform the subsequent generalization."
+    }, {
+      "heading" : "3 Determinantal Beam Search",
+      "text" : "We are now in a position to ask the fundamental question of this work: What happens if we replace the diagonal matrix D with a non-diagonal matrix? This substitution allows us to account for interactions between the elements in the beam. Formally, we consider a timestep-dependent positive semi-definite (PSD) matrix D + w ·K where the off-diagonal matrix K indicates the strength of the interactions between candidates. The nonnegative weight w ≥ 0 controls the importance of these interactions during the decoding process. In this case, the beam search recursion becomes:\n4We have omitted the time-step dependence of D for notational brevity as it is always clear from context.\n5Albeit with a cardinality constraint.\nFull Determinantal Beam Search\nY0 ← {BOS} (9) Yt ← argmax\nY ′t⊆Bt, |Y ′t |=k\nlog det(DY ′t + w ·KY ′t )\nClearly, we recover beam search when w = 0; however, we can now select subsets based additionally on candidate interactions. That is, Eq. (9) now has an interpretation as a diversity objective function (Indyk et al., 2014) when K is chosen wisely. Due to the presence of the log, Eq. (9) is only well defined when the matrix DY + w ·KY is PSD.6"
+    }, {
+      "heading" : "3.1 Constructing K",
+      "text" : "One simple way to construct K is as a Gram matrix, where each i, j element of K is computed via a kernel function K : S × S → R that maps two items in a space S to a real number. Specifically, we define Kij = K(si, sj) where si, sj ∈ S are the ith and jth elements of S, respectively. In slight abuse of notation, we overload the kernel function K to take a set S such that K = K(S) is the kernel matrix resulting from pairwise computation over elements of S.7 Following from Mercer’s theorem, the matrixK = K(S) is necessarily PSD and, thus the matrix DY +w ·KY is PSD for any Y ⊆ S.8\nThe efficient computation of kernel functions is a well-studied problem—largely due to the prevalence of kernels in various machine learning techniques. For example, dynamic programming techniques are often employed in computation of K(S) (Rousu and Shawe-Taylor, 2005) or approximate low-rank kernel matrices can be used in place of K(S) (Si et al., 2017)."
+    }, {
+      "heading" : "3.2 Relation to a DPPs",
+      "text" : "One interpretation of Eq. (9) is as a determinantal point process (DPP). Specifically, it is a k-DPP\n6To see this, recall that the determinant is the product of the eigenvalues. To ensure that the determinant is strictly positive, we can simply enforce that all the eigenvalues are positive, which is necessarily the case for PSD matrices. Note that in the case where any of the eigenvalues of a submatrix are zero, we take log det(·) = −∞.\n7In machine learning literature, the term “kernel” is often used to refer to both the function K and the kernel matrix K.\n8To see this, note that the matrix D is necessarily PSD. Since PSD matrices are closed under addition and multiplication by a positive scalar, then necessarily D +w ·K is PSD. Lastly, any submatrix of a PSD matrix is also PSD, which makes DY + w ·KY a PSD matrix.\n(Kulesza and Taskar, 2011) in the L-ensemble parameterization where we haveL = D+w·K. This interpretation as a k-DPP gives us a very clear understanding of why Eq. (8) yields a diverse beam search. The diagonal entries encode quality, which tells how “good” each candidate on the beam is, while the off-diagonal entries encode how similar two elements are and, thus, how much they should be repulsed. For an overview of DPPs we refer the reader to Kulesza and Taskar (2012)."
+    }, {
+      "heading" : "3.3 Computing Log-Determinants",
+      "text" : "Unfortunately, computing the argmax9 in Eq. (9) is an NP-hard problem (Ko et al., 1995). However, as the subdeterminant maximization problem has many applications, there has been much research on efficient algorithms for approximating logdeterminants in the context of, e.g., determinantal point processes (Gillenwater et al., 2012; Han et al., 2017).10 One such algorithm uses a first-order approximation of the log-determinant function (Han et al., 2017). The work of Chen et al. (2018) uses a greedy, iterative approach; by updating the Cholesky factorization of the matrix kernel incrementally, the algorithm reduces inference time to O(k2|S|) to return k candidates from set S. Pseudocode for the latter approach can be found in Chen et al. (2018); pseudocode for the algorithm in log-space—since probabilistic models are often worked with in log-space for numerical stability—can be found in App. A."
+    }, {
+      "heading" : "3.4 Runtime Analysis",
+      "text" : "We consider the runtime of selecting k candidates at any given time step in the recursion of Eq. (9). At each time step, we must first construct the matrix K. This computation is highly dependent on the set interactions being modeled; as such, let O(c(k)) be a runtime bound for K’s computation when our search uses a beam size of k. Once we have constructed our matrix D + w · K, we must next select k items. The set of hypotheses at any time step is at most k|V̄|. While as discussed in §3.3, finding the size-k subset that exactly\n9We may also sample from the k-DPP modeled by Eq. (9) rather than taking the approximate mode; this would only require changing the inference algorithm and can be done in a similarly efficient manner (Li et al., 2016). We focus on deterministic methods in this work as we aim to find the objective maximizing set.\n10As beam search is already a heuristic approach, such an approximation does not have any theoretical implications for the results of our algorithm.\nmaximizes Eq. (9) has exponential runtime, we assume approximate methods are employed. Using the method given by Chen et al. (2018), approximate MAP inference takes k3|V̄| time to return k items from a set of size k|V̄|. Thus, the runtime at each iteration of determinantal beam search under these conditions would be O(c(k) + k3|V̄|). Note that standard beam search runs in O(k|V̄| log(k|V̄|)) time at each iteration. As k is generally small (≤ 20) and the impact of c(k) can be made reasonable (§3.1), the practical increase in runtime is typically only moderate."
+    }, {
+      "heading" : "4 Case Study: Diverse Beam Search",
+      "text" : "We now consider the task of language generation, where our vocabulary V̄ is a set of words and Y is the set of all valid strings derived from V̄ . When the space of our kernel function S = Bt, one simple way of modeling interactions is through a string subsequence kernel (Lodhi et al., 2002)."
+    }, {
+      "heading" : "4.1 Computing the String Kernel",
+      "text" : "The string subsequence kernel, proposed by Lodhi et al. (2002), is a function over two strings s and t computed as:\nK(s, t) = ∑ u∈Vn ∑ i:u=s[i] λl(i) ∑ j:u=t[j] λl(j) (10)\nwhere Vn is the set of all finite strings of length n over the alphabet V; i (or j) denotes a vector of indices i = (i1, . . . , i|u|) where 1 < i1 < i|u| ≤ |s|; l(i) def= i|u|−i1+1 is the length of the substring u in s; λ ∈ (0, 1] is a decay factor which serves as a penalty for gaps within a compared subsequence.\nDirect computation of Eq. (10) is exponential in |V|, but efficient dynamic programs can be utilized: In this work, we employ the trie-based methods of Rousu and Shawe-Taylor (2005) to compute Eq. (10). Under this scheme, the computation of the kernel between two strings s and t isO(n ·M · log(max(|s|, |t|)), where n is the chosen subsequence length (a hyperparameter) andM is the number of words that strings s and t have in common. Note that |s|, and thus M , are bounded by the time step t. Further, we can reuse many of the computations between subsequent decoding rounds due to the iterative nature of both beam search and the subsequence kernel computations. Additionally, since the magnitude of Eq. (10) is influenced by the lengths of s and t, we normalize\nthe kernel as follows:\nKnorm(s, t) = K(s, t)√\nK(s, s) · K(t, t) (11)"
+    }, {
+      "heading" : "4.2 Integration into DetBS",
+      "text" : "The string subsequence kernel gives us a straightforward method for decoding diverse sets of strings from language generators. We construct the matrix\nD + w · K(Bt) (12)\nusing the dynamic program mentioned above to compute K(Bt). Intuitively, we can expect the argmax—i.e., the size k set corresponding to the objective-maximizing submatrix—of D + w · K(Bt) to have higher subsequence diversity as w is increased. This is perhaps most easily seen when viewing our problem as a k-DPP: if strings y(i) and y(j) have high overlap, this will be reflected in the matrix K(Bt) at position i, j. Higher values of K(Bt)i,j = K(y(i),y(j)) lead to lower probability of both y(i) and y(j) being in the set drawn according to the k-DPP parameterized by D + w · K(Bt), which follows from the properties of DPPs outlined in §2.2. In short, higher values of K(y(i),y(j)) decrease the value of log det(DY + w · K(Bt)Y ) for sets Y containing both y(i) and y(j), which makes Y less likely to be chosen in the recursion of Eq. (9)."
+    }, {
+      "heading" : "5 Experiments",
+      "text" : "In our experiments, we explore the use of determinantal beam search as a diverse decoding strategy for language generation."
+    }, {
+      "heading" : "5.1 Baselines",
+      "text" : "Various diverse decoding strategies exist in the NLP literature. We first discuss those strategies that we employ as baselines in our experiments.\nStandard Beam Search. Beam search is one of the most widely used decoding algorithms in NLP, where many problems require efficient strategies for decoding solutions from structured predictors. Specifically, for language generation tasks, beam search has repeatedly proved its effectiveness at decoding state-of-the-art solutions (Wu et al., 2016; Serban et al., 2017; Edunov et al., 2018; Yang et al., 2019). We refer back to §2.1 for the algorithm.\nStochastic Beam Search. Kool et al. (2019) propose stochastic beam search (SBS), a decoding technique that samples without replacement from sequence models according to their distribution over the entire space Y . For random sampling methods such as SBS, it is customary to use a sampling temperature T > 0 at generation time to control for the peakiness of the sampling distribution. This results in the generalized softmax:\npT (y | y<t,x) (13)\n= exp\n( log p(y | y<t,x)/T ) ∑\ny′∈V exp ( log p(y′ | y<t,x)/T )\nwhere larger T may lead to more diverse sets simply due to additional smoothing.\nDiverse Beam Search. Vijayakumar et al. (2018) propose a modification to the standard beam search algorithm—which they term diverse beam search (DBS)—to alleviate lack of diversity. The algorithm further divides the beam into G groups B1t , . . . ,BGt , where G is a hyperparameter of the algorithm, and optimizes for diversity between the different groups by subtracting a similarity term ∆(y≤t,Bgt ) from the decoding objective.11 Specifically, ∆(y≤t,Bgt ) represents the degree of similarity between a hypothesis y≤t and a group of hypotheses Bgt . They find G = k, i.e., each group contains a single hypothesis, and the Hamming distance similarity metric lead to the best results; we use these settings in our experiments. Note that under this scheme, the solution set may have duplicates if the diversity penalty is not large enough.\nNotably, under the above experimental settings, the runtimes of diverse beam search and our algorithm are the same, up to computation of the hamming loss and string kernel, respectively. However, while string kernel computations in our algorithm can be done in parallel, the diversity penalty in diverse beam search must be computed sequentially for each hypothesis, as it is based on the previously chosen groups."
+    }, {
+      "heading" : "5.2 Setup",
+      "text" : "We run experiments on neural machine translation (NMT) models trained on the WMT’14 (Bojar et al., 2014) En–Fr and the WMT’19 (Barrault\n11The diversity term has coefficient w to determine the strength of the penalty. When this weight is 0 or sufficiently small, all groups will return the same solution(s).\net al., 2019) De–En datasets; for reproducibility, we use the pretrained models made available by fairseq12 (Ott et al., 2019). We evaluate on the newstest set from the respective datasets, each containing 3003 sentences. Further details can be found in App. B.\nFor determinantal beam search (DetBS), we perform a hyperparameter search (precise details likewise in App. B) over λ and n, the decay factor and subsequence length, respectively. Search is performed for fixed w = 0.1 and k = 10 on validation sets for both languages; we omit a search over the entire space of w, k, λ, n so as to not create an unfair advantage for DetBS in comparison with the other decoding strategies, for which no hyperparameters are tuned. We use subsequence length n = 2 and λ ∈ {0.1, 0.3} for De–En and En–Fr, respectively.\nWe decode sets of size k ∈ {5, 10, 20} with each strategy, comparing sentence-level BLEU and n-gram coverage dn averaged across n ∈ {1, 2, 3, 4} in the decoded sets, where we define dn as\ndn = #of unique n-grams in k strings\n#of n-grams in k strings (14)\n12https://github.com/pytorch/fairseq/ tree/master/examples/translation\n13For each decoding strategy, we choose the diversity parameter corresponding to the most diverse set that had median BLEU 28.5± 0.05.\nWhile dn has a more natural interpretation as coverage of different n-grams, the above quantity is often referred to as n-gram diversity in the literature and so we transition to this term for consistency. Following the experimental setup of Kool et al. (2019), we vary sampling temperature T ∈ {0.1, 0.2, . . . , 0.8} in the case of beam search and stochastic beam search and diversity weight w ∈ {0.1, 0.2, . . . , 0.8} in the case of diverse beam search. For DetBS, we observe that larger sets require a smaller diversity penalty to achieve good n-gram diversity: in Fig. 1 we show results for DetBS with the string subsequence kernel for w ∈ {0.01, 0.02, · · · , 0.1, 0.2, 0.3, 0.4} for k = 5, w ∈ {0.01, 0.02, · · · , 0.15] for k = 10, and w ∈ {0.01, 0.02, · · · , 0.05} for k = 20.14 To observe how BLEU is affected by larger diversity coefficients under DetBS, we explore a finer grain of weights for DetBS in App. C."
+    }, {
+      "heading" : "5.3 Results",
+      "text" : "Fig. 1 shows the sentence-level BLEU score and averaged n-gram diversity on the newstest set for different decoding strategies; Tab. 2 shows explicit coverage of 1, 2, 3, 4-grams and averaged across 1, 2, 3, 4-grams for different decoding strategies when BLEU is controlled for. The 3 lines\n14Recall w = 0 recovers standard beam search with a temperature of T = 1.\nper decoding strategy in Fig. 1 represent the minimum, median, and maximum sentence-level BLEU score out of the k translation options, averaged across the corpus. We consider median BLEU to be the best metric of set text-quality, as a good diverse decoding algorithm should not completely sacrifice BLEU for the sake of diversity. The plots are analogous to those in Kool et al. (2019).\nOn both datasets and across different set sizes, results indicate that DetBS generates diverse sets of strings while maintaining high median and maximum BLEU scores. We see similar or higher n-gram diversity in comparison to DBS for the same median BLEU and a notably better n-gram diversity vs. BLEU trade-off than standard beam search and SBS. Further, the highest quality translation (shown by max BLEU) does not appear to be sacrificed when the diversity parameter is increased for DetBS. In contrast, there is a notable drop-off for generation strategies in which diversity is controlled for using temperature. We show samples of generated text in Tab. 1."
+    }, {
+      "heading" : "6 Related Work",
+      "text" : "Our work is built upon much of the subset optimization literature in machine learning. We base our algorithm off the subdeterminant maximization problem (Agarwal et al., 2004), which\nhas been used to find core sets—a concept originating in computational geometry concerning the existence of a small, representative set of core items—in data summarization problems (Mirzasoleiman et al., 2013), nearest neighbor search (Abbar et al., 2013) and streaming algorithms (Indyk et al., 2014) inter alia. Informally, we can connect our problem to the notion of decoding a core set from sequence models. To the best of our knowledge, our work is the first to use this concept when decoding sequence models.\nWang and Chan (2019) incorporate DPPs into a reinforcement learning objective to optimize for diverse text when training image captioning models. We optimize for diversity during decoding, rather than training, which makes our methods applicable with out-of-the-box models and allows us to avoid highly hyperparametersensitive techniques, like minimum-risk training or reinforcement learning-based algorithms, while achieving the same goal. While the application of our methods at training times is an interesting research direction, we foresee technical challenges corresponding to such approaches that may outweigh their benefits.\nAs a decoding method, our work is closest 15In the case that not all strategies had such a set, we instead bounded BLEU by the lowest of the median BLEU across decoding strategies.\nto that of Vijayakumar et al. (2018), who propose a variation of beam search (described in §5.3). However, their algorithm lacks theoretical motivation and is not guaranteed to provide a nonoverlapping set; the same solution may appear multiple times in the decoded set if the diversity penalty is not large enough, as shown in Tab. 2. Additionally, groups at each time step t must be processed in order since the score of all hypotheses considered for group g+1 depend on hypotheses in groups 1, . . . , g, which creates a large bottleneck under the recommended settings of G = k.\nRandom sampling strategies for decoding neural sequence models have received much attention in recent years. While techniques such as stochastic beam search and the UniqueRandomizer (Shi et al., 2020) are convenient for creating statistical estimators and have uses in reinforcement learning techniques due to their clear probabilistic interpretation, there are no diversity guarantees for the set of generated sequences.\nTam (2020) likewise adapts beam search, proposing a k-means clustering version that clusters solutions by averaged word embeddings. As there lacks an interpretation of distance between averaged word embeddings though, it is unclear if the method can explicitly optimize for any tangible notion of coverage or diversity."
+    }, {
+      "heading" : "7 Conclusion",
+      "text" : "We propose determinantal beam search (DetBS): a new way of framing beam search that allows us to optimize set generation for diversity and coverage rather than simply individual scores. Formally, we redefine beam search as an iterative subdeterminant maximization problems where we select the approximately maximizing set according to the PSD matrix parameterizing our score function. This gives us the ability to encode the notion of intra-set diversity into the beam\nsearch optimization problem. We discuss and experiment with efficient methods for inference and kernel computation that make DetBS an efficient decoding strategy in practice. We use DetBS in the context of language generation, where we explicitly encourage n-gram coverage through the string subsequence kernel. In our NMT experiments, we find DetBS generates much more diverse sets of strings than standard beam search and stochastic beam search with a small tradeoff in median BLEU. We observe competitive performance compared with diverse beam search."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "We would like to thank the anonymous reviewers for their helpful feedback and recommendations.\nEthical Considerations\nWhile language generation can be used for malicious purposes, e.g., to propagate misinformation or offensive text, we do not foresee any specific ethical concerns with the techniques in this work."
+    }, {
+      "heading" : "A Log-Space Computations",
+      "text" : "Algorithm 1 Fast Greedy MAP Inference with log-space parameterization (Chen et al., 2018). We transform computations according to (Li and Eisner, 2009). Input: L: log of PSD matrix\nk: desired set size 1: function GREEDY_MAP_INFERENCE( ) 2: ci = [ ], di = Lii, si = [ ] 3: j = argmaxi∈S di 4: Yg = {j} 5: while |Yg| != k : 6: for i ∈ S\\Yg : 7: s, log_inner ← LOGSUMEXP(cj , ci, si, sj) 8: FUNC ← LOG_ADD if s < 0 else LOG_MINUS 9: if Lji > log_inner : 10: s← 1 11: ei = FUNC(Lji, log_inner)− 0.5 · dj 12: else 13: s← −s 14: ei = FUNC(log_inner, Lji)− 0.5 · dj 15: ci = [ci ei], di = di − 2 · ei, si = [si s] 16: j = argmaxi∈S\\Yg di, Yg = Yg ∪ {j} 17: return Yg 18: function LOGSUMEXP(c1, c2, s1, s2) 19: s, log_inner ← 1,−∞ 20: for 〈c1, c2, s1, s2〉 ∈ 〈c1, c2, s1, s2〉 : 21: s′ ← s1 · s2 22: FUNC ← LOG_ADD if s == s′ else LOG_MINUS 23: if log_inner > c1 + c2 : 24: log_inner← FUNC(log_inner, c1 + c2) 25: else 26: s = s′ 27: log_inner← FUNC(c1 + c2, log_inner) return s, log_inner"
+    }, {
+      "heading" : "B Experimental Setup",
+      "text" : "Hyperparameters. As we use the string subsequence kernel of section §4 in DetBS, there are a number of hyperparameters that can be adjusted beyond the diversity weight w: the decay factor λ indicates the degree to which interior gaps are penalized and subsequence length n indicates the length of the considered substrings u. For each language, we perform a search over these two hyperparameters for set size k = 10 and diversity coefficient w = 0.1 on validation sets. We use a grid search over n = [2, 3, 4, 5, 6, 7, 8] and λ = [0.1, 0.3, 0.5, 0.7, 1.0]. We choose the configuration that yields the highest (average n-gram diversity)*BLEU, using this configuration in all subsequent experiments. While there may be better performing hyperparameters under different k and w, we omit searching over the entire space to create a fairer comparison with the other decoding strategies.\nInterestingly, larger values of n did not improve performance, and were more computationally expensive; small values of n and decay λ appear to offer the best BLEU vs. n-gram diversity trade-off.\nDataset and Model Statistics We use a convolutional sequence-to-sequence model trained according to Gehring et al. (2017) on the WMT’14 En–Fr dataset.16 Data preprocessing steps, model hyperparameters and baseline performances can be found in their work. We use the pre-trained model checkpoints made available by fairseq at https://github.com/pytorch/fairseq/ tree/master/examples/translation. We use a Transformer-based model trained according to Ng et al. (2019) on the WMT’19 De–En dataset.17 Likewise, data preprocessing steps, model hyperparameters and baseline performances can be found in Ng et al. (2019). We similarly use the pretrained model checkpoints made available by fairseq."
+    }, {
+      "heading" : "C Additional Results",
+      "text" : "16available at http://statmt.org/wmt14/ translation-task.html\n17available at http://www.statmt.org/wmt19/ translation-task.html"
+    } ],
+    "references" : [ {
+      "title" : "Diverse near neighbor problem",
+      "author" : [ "Sofiane Abbar", "Sihem Amer-Yahia", "Piotr Indyk", "Sepideh Mahabadi", "Kasturi R. Varadarajan." ],
+      "venue" : "Proceedings of the Twenty-Ninth Annual Symposium on Computational Geometry. Association for Computing Ma-",
+      "citeRegEx" : "Abbar et al\\.,? 2013",
+      "shortCiteRegEx" : "Abbar et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Approximating extent measures of points",
+      "author" : [ "Pankaj K. Agarwal", "Sariel Har-Peled", "Kasturi R. Varadarajan." ],
+      "venue" : "Journal of the Association for Computing Machinery, 51(4):606–635.",
+      "citeRegEx" : "Agarwal et al\\.,? 2004",
+      "shortCiteRegEx" : "Agarwal et al\\.",
+      "year" : 2004
+    }, {
+      "title" : "Findings of the 2014 workshop",
+      "author" : [ "Ondřej Bojar", "Christian Buck", "Christian Federmann", "Barry Haddow", "Philipp Koehn", "Johannes Leveling", "Christof Monz", "Pavel Pecina", "Matt Post", "Herve Saint-Amand", "Radu Soricut", "Lucia Specia", "Aleš Tamchyna" ],
+      "venue" : null,
+      "citeRegEx" : "Bojar et al\\.,? \\Q2014\\E",
+      "shortCiteRegEx" : "Bojar et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Fast greedy map inference for determinantal point process to improve recommendation diversity",
+      "author" : [ "Laming Chen", "Guoxin Zhang", "Eric Zhou." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 5622–5633.",
+      "citeRegEx" : "Chen et al\\.,? 2018",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Subdeterminant maximization via nonconvex relaxations and anti-concentration",
+      "author" : [ "J.B. Ebrahimi", "D. Straszak", "N.K. Vishnoi." ],
+      "venue" : "2017 IEEE 58th Annual Symposium on Foundations of Computer Science (FOCS), pages 1020–1031. IEEE Computer",
+      "citeRegEx" : "Ebrahimi et al\\.,? 2017",
+      "shortCiteRegEx" : "Ebrahimi et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Understanding back-translation at scale",
+      "author" : [ "Sergey Edunov", "Myle Ott", "Michael Auli", "David Grangier." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 489–500. Association for Computational",
+      "citeRegEx" : "Edunov et al\\.,? 2018",
+      "shortCiteRegEx" : "Edunov et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Is MAP decoding all you need? The inadequacy of the mode in neural machine translation",
+      "author" : [ "Bryan Eikema", "Wilker Aziz." ],
+      "venue" : "Proceedings of the 28th International Conference on Computational Linguistics, pages 4506–4520. International Com-",
+      "citeRegEx" : "Eikema and Aziz.,? 2020",
+      "shortCiteRegEx" : "Eikema and Aziz.",
+      "year" : 2020
+    }, {
+      "title" : "Efficient approximation algorithms for strings kernel based sequence classification",
+      "author" : [ "Muhammad Farhan", "Juvaria Tariq", "Arif Zaman", "Mudassir Shabbir", "Imdad Ullah Khan." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 30,",
+      "citeRegEx" : "Farhan et al\\.,? 2017",
+      "shortCiteRegEx" : "Farhan et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Convolutional sequence to sequence learning",
+      "author" : [ "Jonas Gehring", "Michael Auli", "David Grangier", "Denis Yarats", "Yann N. Dauphin." ],
+      "venue" : "Proceedings of the 34th International Conference on Machine Learning, volume 70, pages 1243–1252.",
+      "citeRegEx" : "Gehring et al\\.,? 2017",
+      "shortCiteRegEx" : "Gehring et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Near-optimal MAP inference for determinantal point processes",
+      "author" : [ "Jennifer Gillenwater", "Alex Kulesza", "Ben Taskar." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 25, pages 2735– 2743. Curran Associates, Inc.",
+      "citeRegEx" : "Gillenwater et al\\.,? 2012",
+      "shortCiteRegEx" : "Gillenwater et al\\.",
+      "year" : 2012
+    }, {
+      "title" : "Faster greedy MAP inference for determinantal point processes",
+      "author" : [ "Insu Han", "Prabhanjan Kambadur", "Kyoungsoo Park", "Jinwoo Shin." ],
+      "venue" : "volume 70 of Proceedings of Machine Learning Research, pages 1384–1393.",
+      "citeRegEx" : "Han et al\\.,? 2017",
+      "shortCiteRegEx" : "Han et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "The curious case of neural text degeneration",
+      "author" : [ "Ari Holtzman", "Jan Buys", "Li Du", "Maxwell Forbes", "Yejin Choi." ],
+      "venue" : "Proceedings of the International Conference on Learning Representations.",
+      "citeRegEx" : "Holtzman et al\\.,? 2020",
+      "shortCiteRegEx" : "Holtzman et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Composable core-sets for diversity and coverage maximization",
+      "author" : [ "Piotr Indyk", "Sepideh Mahabadi", "Mohammad Mahdian", "Vahab S. Mirrokni." ],
+      "venue" : "Proceedings of the Thirty-Third Association for Computing Machinery SIGMOD-SIGACT-SIGART Sym-",
+      "citeRegEx" : "Indyk et al\\.,? 2014",
+      "shortCiteRegEx" : "Indyk et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Largest j-simplices in n-polytopes",
+      "author" : [ "V. Klee", "P. Gritzmann", "D. Larman." ],
+      "venue" : "Discrete and Computational Geometry, 13(3-4):477–516.",
+      "citeRegEx" : "Klee et al\\.,? 1995",
+      "shortCiteRegEx" : "Klee et al\\.",
+      "year" : 1995
+    }, {
+      "title" : "An exact algorithm for maximum entropy sampling",
+      "author" : [ "Chun-Wa Ko", "Jon Lee", "Maurice Queyranne." ],
+      "venue" : "Operations Research, 43(4):684–691.",
+      "citeRegEx" : "Ko et al\\.,? 1995",
+      "shortCiteRegEx" : "Ko et al\\.",
+      "year" : 1995
+    }, {
+      "title" : "Stochastic beams and where to find them: The Gumbel-top-k trick for sampling sequences without replacement",
+      "author" : [ "Wouter Kool", "Herke Van Hoof", "Max Welling." ],
+      "venue" : "Proceedings of the International Conference on Machine Learning, pages",
+      "citeRegEx" : "Kool et al\\.,? 2019",
+      "shortCiteRegEx" : "Kool et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "k-DPPs: fixedsize determinantal point processes",
+      "author" : [ "Alex Kulesza", "Ben Taskar." ],
+      "venue" : "Proceedings of the 28th International Conference on Machine Learning, pages 1193–1200.",
+      "citeRegEx" : "Kulesza and Taskar.,? 2011",
+      "shortCiteRegEx" : "Kulesza and Taskar.",
+      "year" : 2011
+    }, {
+      "title" : "Determinantal Point Processes for Machine Learning",
+      "author" : [ "Alex Kulesza", "Ben Taskar." ],
+      "venue" : "Now Publishers Inc.",
+      "citeRegEx" : "Kulesza and Taskar.,? 2012",
+      "shortCiteRegEx" : "Kulesza and Taskar.",
+      "year" : 2012
+    }, {
+      "title" : "Efficient sampling for k-determinantal point processes",
+      "author" : [ "Chengtao Li", "Stefanie Jegelka", "Suvrit Sra." ],
+      "venue" : "volume 51 of Proceedings of Machine Learning Research, pages 1328–1337.",
+      "citeRegEx" : "Li et al\\.,? 2016",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "First- and secondorder expectation semirings with applications to minimum-risk training on translation forests",
+      "author" : [ "Zhifei Li", "Jason Eisner." ],
+      "venue" : "Proceedings of the 2009 Conference on Empirical Methods in Natural Language Processing, pages",
+      "citeRegEx" : "Li and Eisner.,? 2009",
+      "shortCiteRegEx" : "Li and Eisner.",
+      "year" : 2009
+    }, {
+      "title" : "Text classification using string kernels",
+      "author" : [ "Huma Lodhi", "Craig Saunders", "John Shawe-Taylor", "Nello Cristianini", "Chris Watkins." ],
+      "venue" : "Journal of Machine Learning Research, 2:419–444.",
+      "citeRegEx" : "Lodhi et al\\.,? 2002",
+      "shortCiteRegEx" : "Lodhi et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "If beam search is the answer, what was the question? In Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 2173–2185",
+      "author" : [ "Clara Meister", "Ryan Cotterell", "Tim Vieira." ],
+      "venue" : "Association for Com-",
+      "citeRegEx" : "Meister et al\\.,? 2020",
+      "shortCiteRegEx" : "Meister et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Distributed submodular maximization: Identifying representative elements in massive data",
+      "author" : [ "Baharan Mirzasoleiman", "Amin Karbasi", "Rik Sarkar", "Andreas Krause." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 26, pages 2049–2057.",
+      "citeRegEx" : "Mirzasoleiman et al\\.,? 2013",
+      "shortCiteRegEx" : "Mirzasoleiman et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Facebook FAIR’s WMT19 news translation task submission",
+      "author" : [ "Nathan Ng", "Kyra Yee", "Alexei Baevski", "Myle Ott", "Michael Auli", "Sergey Edunov." ],
+      "venue" : "Proceedings of the Fourth Conference on Machine Translation (Volume 2: Shared Task Papers,",
+      "citeRegEx" : "Ng et al\\.,? 2019",
+      "shortCiteRegEx" : "Ng et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "fairseq: A fast, extensible toolkit for sequence modeling",
+      "author" : [ "Myle Ott", "Sergey Edunov", "Alexei Baevski", "Angela Fan", "Sam Gross", "Nathan Ng", "David Grangier", "Michael Auli." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chap-",
+      "citeRegEx" : "Ott et al\\.,? 2019",
+      "shortCiteRegEx" : "Ott et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Efficient computation of gapped substring kernels on large alphabets",
+      "author" : [ "Juho Rousu", "John Shawe-Taylor." ],
+      "venue" : "Journal of Machine Learning Research, 6:1323–1344.",
+      "citeRegEx" : "Rousu and Shawe.Taylor.,? 2005",
+      "shortCiteRegEx" : "Rousu and Shawe.Taylor.",
+      "year" : 2005
+    }, {
+      "title" : "Multiresolution recurrent neural networks: An application to dialogue response generation",
+      "author" : [ "Iulian Vlad Serban", "Tim Klinger", "Gerald Tesauro", "Kartik Talamadupula", "Bowen Zhou", "Yoshua Bengio", "Aaron Courville." ],
+      "venue" : "Proceedings of the Thirty-",
+      "citeRegEx" : "Serban et al\\.,? 2017",
+      "shortCiteRegEx" : "Serban et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Incremental sampling without replacement for sequence models",
+      "author" : [ "Kensen Shi", "David Bieber", "Charles Sutton." ],
+      "venue" : "Proceedings of the 37th International Conference on Machine Learning, volume 119 of Proceedings of Machine Learning Research,",
+      "citeRegEx" : "Shi et al\\.,? 2020",
+      "shortCiteRegEx" : "Shi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Memory efficient kernel approximation",
+      "author" : [ "Si Si", "Cho-Jui Hsieh", "Inderjit S. Dhillon." ],
+      "venue" : "Journal of Machine Learning Research, 18(20):1–32.",
+      "citeRegEx" : "Si et al\\.,? 2017",
+      "shortCiteRegEx" : "Si et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "On NMT search errors and model errors: Cat got your tongue",
+      "author" : [ "Felix Stahlberg", "Bill Byrne" ],
+      "venue" : "In Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natural Lan-",
+      "citeRegEx" : "Stahlberg and Byrne.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Stahlberg and Byrne.",
+      "year" : 2019
+    }, {
+      "title" : "Cluster-based beam search for pointer-generator chatbot grounded by knowledge",
+      "author" : [ "Yik-Cheung Tam." ],
+      "venue" : "Computer Speech and Language, 64:101094.",
+      "citeRegEx" : "Tam.,? 2020",
+      "shortCiteRegEx" : "Tam.",
+      "year" : 2020
+    }, {
+      "title" : "Diverse beam search for improved description of complex scenes",
+      "author" : [ "Ashwin Vijayakumar", "Michael Cogswell", "Ramprasaath Selvaraju", "Qing Sun", "Stefan Lee", "David Crandall", "Dhruv Batra." ],
+      "venue" : "AAAI Conference on Artificial Intelligence, pages 7371–",
+      "citeRegEx" : "Vijayakumar et al\\.,? 2018",
+      "shortCiteRegEx" : "Vijayakumar et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Towards diverse and accurate image captions via reinforcing determinantal point process",
+      "author" : [ "Qingzhong Wang", "Antoni B. Chan." ],
+      "venue" : "CoRR, abs/1908.04919.",
+      "citeRegEx" : "Wang and Chan.,? 2019",
+      "shortCiteRegEx" : "Wang and Chan.",
+      "year" : 2019
+    }, {
+      "title" : "XLNet: Generalized autoregressive pretraining for language understanding",
+      "author" : [ "Zhilin Yang", "Zihang Dai", "Yiming Yang", "Jaime Carbonell", "Rusland Salakhutdinov", "Quoc V Le." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 32.",
+      "citeRegEx" : "Yang et al\\.,? 2019",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "We similarly use the pretrained model checkpoints made available by fairseq. C Additional Results Figure 2: n-gram diversity",
+      "author" : [ "Ng" ],
+      "venue" : null,
+      "citeRegEx" : "Ng,? \\Q2019\\E",
+      "shortCiteRegEx" : "Ng",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 25,
+      "context" : "Given the wealth of research on efficient kernel computation (Rousu and Shawe-Taylor, 2005; Farhan et al., 2017) and DPP inference strategies (Li et al.",
+      "startOffset" : 61,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 7,
+      "context" : "Given the wealth of research on efficient kernel computation (Rousu and Shawe-Taylor, 2005; Farhan et al., 2017) and DPP inference strategies (Li et al.",
+      "startOffset" : 61,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 20,
+      "context" : "(NMT), we demonstrate how to make use of the string subsequence kernel (Lodhi et al., 2002) to encode the notion of n-gram diversity in the language generation process, allowing us to derive an elegant diverse beam search.",
+      "startOffset" : 71,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 15,
+      "context" : "We see improved performance over stochastic beam search (SBS; Kool et al., 2019), which is reported",
+      "startOffset" : 56,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 29,
+      "context" : ", machine translation, prior work has shown the tendency for MAP decoding to lead to generic or degenerate solutions (Stahlberg and Byrne, 2019; Meister et al., 2020; Eikema and Aziz, 2020) while superior solutions assigned only slightly lower probability are often overlooked (Holtzman et al.",
+      "startOffset" : 117,
+      "endOffset" : 189
+    }, {
+      "referenceID" : 21,
+      "context" : ", machine translation, prior work has shown the tendency for MAP decoding to lead to generic or degenerate solutions (Stahlberg and Byrne, 2019; Meister et al., 2020; Eikema and Aziz, 2020) while superior solutions assigned only slightly lower probability are often overlooked (Holtzman et al.",
+      "startOffset" : 117,
+      "endOffset" : 189
+    }, {
+      "referenceID" : 6,
+      "context" : ", machine translation, prior work has shown the tendency for MAP decoding to lead to generic or degenerate solutions (Stahlberg and Byrne, 2019; Meister et al., 2020; Eikema and Aziz, 2020) while superior solutions assigned only slightly lower probability are often overlooked (Holtzman et al.",
+      "startOffset" : 117,
+      "endOffset" : 189
+    }, {
+      "referenceID" : 11,
+      "context" : ", 2020; Eikema and Aziz, 2020) while superior solutions assigned only slightly lower probability are often overlooked (Holtzman et al., 2020).",
+      "startOffset" : 118,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 13,
+      "context" : "(8) is known as the subdeterminant maximization problem5 (Klee et al., 1995; Ebrahimi et al., 2017), which—as the name suggests— refers to the problem of finding the determinant maximizing subset of a matrix.",
+      "startOffset" : 57,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 4,
+      "context" : "(8) is known as the subdeterminant maximization problem5 (Klee et al., 1995; Ebrahimi et al., 2017), which—as the name suggests— refers to the problem of finding the determinant maximizing subset of a matrix.",
+      "startOffset" : 57,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 12,
+      "context" : "(9) now has an interpretation as a diversity objective function (Indyk et al., 2014) when K is chosen wisely.",
+      "startOffset" : 64,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 25,
+      "context" : "For example, dynamic programming techniques are often employed in computation of K(S) (Rousu and Shawe-Taylor, 2005) or approximate low-rank kernel matrices can be used in place of K(S) (Si et al.",
+      "startOffset" : 86,
+      "endOffset" : 116
+    }, {
+      "referenceID" : 28,
+      "context" : "For example, dynamic programming techniques are often employed in computation of K(S) (Rousu and Shawe-Taylor, 2005) or approximate low-rank kernel matrices can be used in place of K(S) (Si et al., 2017).",
+      "startOffset" : 186,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 16,
+      "context" : "6554 (Kulesza and Taskar, 2011) in the L-ensemble parameterization where we haveL = D+w·K.",
+      "startOffset" : 5,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 10,
+      "context" : "10 One such algorithm uses a first-order approximation of the log-determinant function (Han et al., 2017).",
+      "startOffset" : 87,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 18,
+      "context" : "(9) rather than taking the approximate mode; this would only require changing the inference algorithm and can be done in a similarly efficient manner (Li et al., 2016).",
+      "startOffset" : 150,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 26,
+      "context" : "Specifically, for language generation tasks, beam search has repeatedly proved its effectiveness at decoding state-of-the-art solutions (Wu et al., 2016; Serban et al., 2017; Edunov et al., 2018; Yang et al., 2019).",
+      "startOffset" : 136,
+      "endOffset" : 214
+    }, {
+      "referenceID" : 5,
+      "context" : "Specifically, for language generation tasks, beam search has repeatedly proved its effectiveness at decoding state-of-the-art solutions (Wu et al., 2016; Serban et al., 2017; Edunov et al., 2018; Yang et al., 2019).",
+      "startOffset" : 136,
+      "endOffset" : 214
+    }, {
+      "referenceID" : 33,
+      "context" : "Specifically, for language generation tasks, beam search has repeatedly proved its effectiveness at decoding state-of-the-art solutions (Wu et al., 2016; Serban et al., 2017; Edunov et al., 2018; Yang et al., 2019).",
+      "startOffset" : 136,
+      "endOffset" : 214
+    }, {
+      "referenceID" : 2,
+      "context" : "We run experiments on neural machine translation (NMT) models trained on the WMT’14 (Bojar et al., 2014) En–Fr and the WMT’19 (Barrault",
+      "startOffset" : 84,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 24,
+      "context" : "we use the pretrained models made available by fairseq12 (Ott et al., 2019).",
+      "startOffset" : 57,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 1,
+      "context" : "We base our algorithm off the subdeterminant maximization problem (Agarwal et al., 2004), which has been used to find core sets—a concept originating in computational geometry concerning the existence of a small, representative set of core",
+      "startOffset" : 66,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 22,
+      "context" : "items—in data summarization problems (Mirzasoleiman et al., 2013), nearest neighbor search (Abbar et al.",
+      "startOffset" : 37,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2013), nearest neighbor search (Abbar et al., 2013) and streaming algorithms (Indyk et al.",
+      "startOffset" : 33,
+      "endOffset" : 53
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2013) and streaming algorithms (Indyk et al., 2014) inter alia.",
+      "startOffset" : 33,
+      "endOffset" : 53
+    }, {
+      "referenceID" : 27,
+      "context" : "While techniques such as stochastic beam search and the UniqueRandomizer (Shi et al., 2020) are convenient for creating statistical estimators and have uses in reinforcement",
+      "startOffset" : 73,
+      "endOffset" : 91
+    } ],
+    "year" : 2021,
+    "abstractText" : "Beam search is a go-to strategy for decoding neural sequence models. The algorithm can naturally be viewed as a subset optimization problem, albeit one where the corresponding set function does not reflect interactions between candidates. Empirically, this leads to sets often exhibiting high overlap, e.g., strings may differ by only a single word. Yet in use-cases that call for multiple solutions, a diverse or representative set is often desired. To address this issue, we propose a reformulation of beam search, which we call determinantal beam search. Determinantal beam search has a natural relationship to determinantal point processes (DPPs), models over sets that inherently encode intra-set interactions. By posing iterations in beam search as a series of subdeterminant maximization problems, we can turn the algorithm into a diverse subset selection process. In a case study, we use the string subsequence kernel to explicitly encourage n-gram coverage in text generated from a sequence model. We observe that our algorithm offers competitive performance against other diverse set generation strategies in the context of language generation, while providing a more general approach to optimizing for diversity.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

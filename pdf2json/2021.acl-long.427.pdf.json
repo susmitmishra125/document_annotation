@@ -1,0 +1,309 @@
+{
+  "name" : "2021.acl-long.427.pdf",
+  "metadata" : {
+    "source" : "CRF",
+    "title" : "Shortformer: Better Language Modeling Using Shorter Inputs",
+    "authors" : [ "Ofir Press", "Noah A. Smith", "Mike Lewis", "Paul G. Allen" ],
+    "emails" : [ "ofirp@cs.washington.edu" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 5493–5505\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n5493\nIncreasing the input length has been a driver of progress in language modeling with transformers. We identify conditions where shorter inputs are not harmful, and achieve perplexity and efficiency improvements through two new methods that decrease input length. First, we show that initially training a model on short subsequences before moving on to longer ones both reduces overall training time and, surprisingly, substantially improves perplexity. Second, we show how to improve the efficiency of recurrence methods in transformers, which let models condition on previously processed tokens when generating sequences that exceed the maximal length the transformer can handle at once. Existing methods require computationally expensive relative position embeddings; we introduce a simple alternative of adding absolute position embeddings to queries and keys instead of to word embeddings, which efficiently produces superior results. We show that these recurrent models also benefit from short input lengths. Combining these techniques speeds up training by a factor of 1.65, reduces memory usage, and substantially improves perplexity on WikiText103, without adding any parameters.1"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Scaling up transformer (Vaswani et al., 2017) language models (Radford et al., 2019; Lewis et al., 2019; Raffel et al., 2019; Brown et al., 2020) has been an important driver of progress in NLP. Language models require data to be segmented into subsequences for both training and inference: memory constraints limit a language model to handling at most a few thousand tokens at once, while many training and evaluation datasets are much longer.\n1Our code is available at https://github.com/ ofirpress/shortformer\nRecent work focuses on increasing the length of input subsequences, which determines the maximum number of tokens a model can attend to (Baevski and Auli, 2018; Sukhbaatar et al., 2019; Kitaev et al., 2020; Roy et al., 2020).\nWe challenge the assumption that longer input subsequences are always better by showing that existing transformers do not always effectively use them. We then introduce new methods based on shorter input subsequences that improve runtime, memory efficiency, and perplexity.\nWe first investigate how input subsequence length affects transformer language models (§3). Naı̈ve evaluation—where we split a large evaluation set into multiple nonoverlapping subsequences, each evaluated independently—initially supports the commonly-held belief that models that train and do inference on longer subsequences achieve better perplexity (Table 1, col. 3).\nHowever, when we evaluate each model with a sliding window (Baevski and Auli, 2018), outputting one token at a time using the maximal amount of context, we find—surprisingly—that models using subsequences exceeding 1,024 tokens do not further improve performance (Table 1, col. 5).\nWe conclude that the performance gains (using naı̈ve evaluation) of models that use longer subsequences occur not only because of their better modeling ability, but partly because they divide the evaluation set into longer subsequences. This division helps because of an issue we call the early token curse: by default, early tokens in a subsequence will have short histories to attend to. Using longer subsequences means fewer tokens will suffer from the early token curse. For example, when using inputs of length 1,024, about 94% of tokens get to attend to more than 64 preceding tokens. If we use inputs of length 128, only 50% of tokens get to attend to 64 or more preceding tokens.\nBased on this analysis, we explore how to improve models by using shorter inputs. We introduce two techniques.\nStaged Training (§4) First, we show that initially training on shorter subsequences (before moving to longer ones) leads not only to much faster and more memory-efficient training, but it surprisingly also greatly improves perplexity, suggesting that longer inputs are harmful early in training.\nPosition-Infused Attention (§5) Second, we consider a natural way to avoid the early token curse during training and inference: attending to cached representations from the previously evaluated subsequence (Dai et al., 2019). This approach interferes with conventional absolute position embeddings in a way that forced Dai et al. to use relative position embeddings, which are computationally expensive. We introduce a fast, simple alternative: instead of adding absolute position embeddings to word embeddings—thereby entangling a word’s content and positional information—we add them to the keys and queries in the self-attention mechanism (but not to the values). This does not increase parameter count or runtime. Token representations can then be cached and reused in subsequent computations. We show that when using this method, shorter subsequence models outperform longer ones.\nFinally, we show additive gains from combining staged training and position-infused attention (Shortformer, §6), resulting in a model that trains much quicker and achieves better perplexity on WikiText-103. We also show that these results transfer to language modeling on the Toronto Book Corpus (§A.5, appendix)."
+    }, {
+      "heading" : "2 Background and Experimental Setup",
+      "text" : "Transformer language models map a list of tokens xn−L:n−1 to a probability distribution over the next token xn. We refer to the list of tokens as the current input subsequence (whose length is L). Causal masking lets us make L predictions at once, with the prediction for token i + 1 conditioned on the ith token and all previous inputs xn−L:i−1, but not on future inputs. We define the number of tokens the model can attend to at each timestep as its effective context window. Note that L is not to be confused with the (typically much greater) length of a training or evaluation dataset.\nDuring inference, language models can be used\nfor two distinct tasks: generation and evaluation. In order to define these tasks, we first define nonoverlapping and sliding window inference.\nNonoverlapping Inference To evaluate a string longer than L, we can evaluate each subsequence of L tokens independently. This fast approach is commonly used during training; if used, tokens in one subsequence cannot condition on those in the previous subsequence, giving rise to the early token curse discussed in §1. See Figure 1(a).\nSliding Window Inference An alternative to the above is to use a sliding window during inference. Here, we choose a stride S between 1 and L − 1 and advance the window by S tokens after each forward pass.2 This means that L− S tokens from the previous block are re-encoded, and only S new tokens are outputted. The advantage is that all outputs in each subsequence after the first have at least L − S previous tokens to condition on. However, since tokens must be re-encoded multiple times, this approach is much slower. When S = 1, we output one token every inference pass, each using the maximal context window, but this is the slowest approach. See Figure 1(b).\nMinimal and Maximal Effective Context Window Sizes In the nonoverlapping approach, the min. and max. effective context window sizes are 1 and L, respectively. In the sliding window approach, the max. context window size is still L, but the min. context window size is now L− S + 1.\nEvaluation vs. Generation In evaluation, a model assigns a perplexity score to a given sequence. Evaluation is done using either nonoverlapping inference or with a sliding window of any stride; since we already have the target sequence we can simultaneously make predictions for multiple timesteps using causal masking. In generation, a model generates a new sequence, as in demonstrations of GPT-3 (Brown et al., 2020). Generation is done only with a sliding window with stride S = 1, which we refer to as token-by-token generation. During generation, we append to the input a single new token, get a prediction from the model about the next token (e.g., using beam search or picking the token with the highest probability); the process is then repeated.3\n2Nonoverlapping inference can be viewed as sliding window inference with stride L.\n3In this paper we do not consider open-ended generation; we generate the dev. set, and for next-token prediction we\nExperimental Setup Our baseline is the Baevski and Auli (2018) model, henceforth B&A, trained and evaluated on WikiText-103 (Merity et al., 2016). We use this baseline because of its prominent role in recent language modeling developments (Khandelwal et al., 2020; Press et al., 2020). The training set contains 103.2 million tokens from English Wikipedia. The B&A model has 16 transformer layers of dimension 1,024, with 8 heads in each self-attention sublayer, and feedforward sublayers with an inner dimension of 4,096. This model ties the word embedding and softmax matrices (Press and Wolf, 2017; Inan et al., 2017) and uses sinusoidal position embeddings. It has a subsequence length of 3,072 tokens and achieves a perplexity of 18.65 ± 0.24 (std. dev.) on the development set. In our experiments, other than varying the subsequence length, we modify no other hyperparameters, including the random seed and number of training epochs (205)."
+    }, {
+      "heading" : "3 How Does Context Window Size Affect Transformers?",
+      "text" : "Segmenting a corpus into subsequences results in different effective context windows for different timesteps depending on where they fall in a segment. Subsequence length L is an upper bound on the effective context window at each timestep. When making the first prediction, the model attends only to the first input token. When making the second prediction, the model attends to the first two inputs, and so on, up to the Lth timestep where the model can attend to all input tokens when making the Lth prediction."
+    }, {
+      "heading" : "3.1 Context Window Size Matters",
+      "text" : "Table 1 explores the effect of subsequence length in the B&A model on training runtime and on dev. set perplexity and runtime.4 We fix the number\nuse the ground truth token. This has the same complexity as sampling the token with the highest probability.\n4For consistency, throughout the paper we run inference with a batch size of one. This causes models shorter than\nTrain Inference\nNonoverlapping Sliding Window\nSubseq. Length\n(Token-by-token)\nSpeed ↑ PPL ↓ Speed ↑ PPL ↓ Speed ↑\nof tokens in each batch to 9,216 but vary the subsequence length L and batch size (so the product of the batch size and subsequence length remains at 9,216). We report results for both nonoverlapping inference and sliding window inference with stride S = 1, which generates only one new token per forward pass; it thus has the maximal effective context window for each generated token. We find that performance increases as S decreases until it reaches a peak and then stops improving (not shown in Table 1).5\nWe derive the following conclusions: Training on long sequences is expensive. Models trained on subsequences of length 256 are twice as fast as models trained on subsequences of 3,072 tokens, but gains for even shorter lengths are negligible (Tab. 1, col. 2).\nLong subsequence lengths can improve results. When using the naı̈ve approach, nonover-\nL = 512 to run slowly (in N.o. eval.), although during batched N.o. eval. they are slightly faster than the L = 512 model.\n5For example, the L = 3,072 model’s performance peaked at S = 512 (used in Baevski and Auli (2018)) and then stopped improving. Thus, the result shown in Table 1 for that model with S = 1 can also be achieved with S = 512 even though that runs 500 times faster, at 2.5k tok./sec.\nlapping evaluation, we see a monotonic decrease in dev. perplexity when increasing L (Tab. 1, col. 3).\nIncreasing the minimum effective context window size is more important than increasing the maximum one. Using a sliding window for token-by-token evaluation substantially improves results for all models (Tab. 1, col. 5). Here, we see negligible improvement between the models trained with subsequence lengths of 1,024 and 3,072 tokens (0.05 perplexity). This approach improves results by increasing the minimum amount of context available at each timestep which indicates that long contexts may not be beneficial to transformer models, but very short contexts are harmful. However, sliding window inference can be expensive since each token is encoded many times. For example, token-by-token inference for the L = 3,072 model is almost 300 times slower than nonoverlapping inference."
+    }, {
+      "heading" : "4 Training Subsequence Length",
+      "text" : "§3 results show that models trained on shorter subsequences can be effective at test time, and are much faster to train. We further explore this below."
+    }, {
+      "heading" : "4.1 Staged Training",
+      "text" : "We propose a two-stage training routine that initially uses short input subsequences followed by long subsequences.6 This method was previously applied to speed up the training of BERT (Devlin et al., 2019), but we show that it also improves perplexity.\nWe use sinusoidal position embeddings; learned position embeddings, which we do not consider, create a dependency between the parameterization and subsequence length. In our experiments, we neither modify nor reset the state of the optimization algorithm between the two stages."
+    }, {
+      "heading" : "4.2 Experiments",
+      "text" : "Our experimental setup is described in §2. We do not change any hyperparameters other than reducing subsequence length while correspondingly increasing batch size to keep the number of tokens per batch constant. As in the baseline, all models are trained for 205 epochs.\nAll models are trained in two stages; the second stage always uses a subsequence length of 3,072,\n6Curriculum learning (Bengio et al., 2009) trains on easier inputs before progressing to harder ones. Our approach does not change the order in which the training examples are given to the model, but instead modifies their lengths.\nsince that lead to the best performance (discussed at end of this subsection).\nAppendix Table 6 shows the time each training routine takes to match the baseline model’s performance on the validation set of WikiText-103.7 Many configurations match this performance in less than half the time it takes to train the baseline itself; some reach baseline performance in only 37% of the time needed to train the baseline.\nAlthough all models take less time to train than the baseline, Table 2 shows that many outperform it. For example, the best model—trained with subsequence length L = 128 until epoch 50— outperforms the baseline by 1.1 perplexity despite completing training in 87% of the time the baseline takes to do so. The model that trains with L = 128 until epoch 100 achieves similarly strong results (17.62 perplexity) and finishes training in 74% of the time it takes the baseline.8\nThese results are very robust to the choice of initial stage subsequence length and number of epochs. Table 2 shows that all models with an initial stage of L = 1,024 tokens or less that switch to the second stage at epoch 125 or before beat the baseline by a large margin at the end of training. Additionally, Appendix Table 6 shows that those models match the baseline’s perplexity in at most 71% of the time it takes to train the baseline.\nWhen we use nonoverlapping evaluation, the B&A baseline obtains 18.65 perplexity on the development set; our best model obtains 17.52. When we use sliding window evaluation (following Baevski & Auli, we use stride S = 512), our best\n7Table 7 in the appendix shows the epoch at which every model matched the baseline’s performance.\n8Table 8 in the appendix shows the total time it took to train each model.\nmodel obtains 16.89 perplexity, a large improvement on the 17.92 B&A result in that setting. On the test set, using the same sliding window evaluation, our model obtains 17.56 perplexity, a substantial gain over the baseline’s 18.70 test-set perplexity. Appendix Table 10 shows that our best model uses almost five times less memory during the first stage than the baseline.\nWe also found that setting L to less than 3,072 tokens in the second stage degraded performance. (Appendix Table 9 shows staged training results with an initial stage length of 128 for 50 epochs (as in the best model) and varying lengths for the second stage. We found this to also be true for other initial stage lengths and epochs.) Unlike results in Table 1, where we show that models with L larger than 1,024 do not substantially improve token-bytoken generation perplexity, models trained using staged training improve when given longer inputs (Appendix Table 9). Further, we explored using more than two stages (up to six), but this did not outperform our two-stage curriculum.\nFinally, Appendix A.5 shows that staged training substantially improves on the Toronto Book Corpus (Zhu et al., 2015)."
+    }, {
+      "heading" : "5 Repositioning Position Embeddings",
+      "text" : "Sliding window inference substantially improves performance by increasing the minimum effective context window size. But it is very slow. We could solve this by letting the model attend to representations of the previous subsequence during inference on the current one.\nIn this case, the same token representations would be used in different positions since a token generated near the end of one subsequence would be cached and reused near the start of the next one. However, transformer model representations entangle positional and content information, so a cached\ntoken representation would encode an incorrect position when reused in a new position.\nTransformerXL (Dai et al., 2019) uses relative position embeddings to solve this problem. However, that approach is slower and uses more parameters and memory than the baseline transformer.9\nWe solve this using no extra parameters, memory, or runtime. We also show that our method can use much shorter input subsequences and still achieve superior performance.\nTransformer Language Models The baseline transformer LM, given a token list T of length L and a tensor P containing the first L position embeddings, produces L next-token predictions using the following procedure:\n1. Embed each token in T , producing tensor X.\n2. Add the position embedding of each index to the token at that index: X = X+P.\n3. Feed X through each transformer layer. The self-attention sublayer in each transformer layer is invoked as follows: self-attention(key=X, query=X, value=X)\n4. Transform the outputs of the last transformer layer using the softmax layer, giving L nexttoken probability distributions."
+    }, {
+      "heading" : "5.1 Position-Infused Attention (PIA)",
+      "text" : "We propose to let the model reuse previous outputs by making each output contain no explicit positional information. To do this, we modify the\n9The self-attention coefficients between q queries and k keys in TransformerXL are the sum of two dot products of size q · k; the unmodified attention sublayer and our PIA method both compute only one dot product of size q ·k. We also benchmarked the TransformerXL model using its publicly released code and found that their relative position embeddings slow inference by 22% and require 26% more parameters than their implementation of the unmodified self-attention sublayer.\nmodel so that it does not add position embeddings at the beginning of the computation (step 2), but rather adds them to the query and key vectors at each layer (but not to the value vectors). The outputs at each layer are the transformed, weighted sums of the value vectors, and, since the value vectors in our model do not contain explicit positional information, the outputs also do not.\nFormally, steps 1 and 4 do not change, step 2 is omitted, and step 3 is modified to invoke the self-attention sublayer as follows:\nself-attention(key=X+P, query=X+P,\nvalue=X)\nFigure 2 (b) depicts this method. Although PIA sublayer outputs contain no explicit positioning information, the attention mechanism can still compute position-dependent outputs because positional information is added to the query and key vectors. Our method is implementable in just a few lines of code."
+    }, {
+      "heading" : "5.2 PIA Enables Caching",
+      "text" : "In the unmodified transformer, to generate a string whose length exceeds L, it would have to be split into separate subsequences, and the model would be unable to attend to the previous subsequence when generating the current one.\nUsing PIA, we can store and attend to representations of the previous subsequence since they no longer contain any explicit positioning information.\nTherefore, all our PIA models use a cache, where representations from the previous forward pass are stored and attended to in the next forward pass.\nCaching makes generation faster. The complexity of the attention mechanism is O(q·k) where q is the number of queries (outputs) and k is the number of key-value pairs (inputs). To generate a sequence whose length exceeds L using tokenby-token generation in the unmodified transformer (with subsequence length L), attention takes O(L2) time (since there are L queries and L keys). Using PIA and caching, we can reuse L − 1 of the previous outputs at every layer. Thus, our attention sublayer takes O(L) time (because now there is a single query and L keys).\nOur approach is useful in scenarios where we need to evaluate or generate sequences that are longer than the model’s subsequence length. Therefore, it would not be applicable to sequence-to-\nsequence tasks such as sentence-level translation, where sequence lengths are short.\nMost language models, including B&A, train on their data as nonoverlapping subsequences. This means that training subsequences can be shuffled at each epoch and consumed in random order. However, when using PIA, we would like the cache to contain the previous subsequence. We therefore do not shuffle the data, making the cached subsequence the previously occurring one.\nFigure 1(c) depicts training with a cache that contains representations of the previous subsequence."
+    }, {
+      "heading" : "5.3 Experiments",
+      "text" : "We use the experimental setup described in §2. The B&A baseline achieves 18.65 on the development set. We train two additional baselines, the first uses PIA without caching and the second uses caching but no PIA. If just PIA is used (without caching), performance degrades to 19.35 perplexity, but the model’s speed and memory usage do not change. Using caching without PIA severely hurts performance, obtaining 41.59 perplexity. Disabling data shuffling in the PIA-only model achieves similar performance to that model when it does use data shuffling, at 19.44 perplexity. Not shuffling the data is necessary for recurrent-style training that caches previously computed subsequence representations.\nOur next experiments use the recurrent-style training of Dai et al. (2019), where we receive L new tokens at every training iteration and attend to L′ cached representations (of the subsequence of tokens that came immediately prior to the L new tokens). As before, we output L predictions at every training iteration. This means that the maximal and minimal effective context window sizes are L′ +L and L′ + 1, respectively.\nIn all our models with PIA and caching, we set L′ = L because a manual exploration of different models where L′ 6= L did not yield better results.\nTable 3 compares the results of our models that use PIA and caching to the baseline on the WikiText-103 dev. set. Evaluation and generation speeds are shown in the nonoverlapping (N.o.) and sliding window (S.W., with stride S = 1) speed columns, respectively.10 Unlike in the baseline, token-by-token evaluation in our model achieves the same perplexity as nonoverlapping evaluation\n10Note that Baevski and Auli (2018) show that the baseline model can also achieve 17.92 during S.W. evaluation, when S = 512, with a speed of 2.5k tokens per second.\nsince in both cases, the predictions for each input subsequence are conditioned not only on the current input, but also on the previous input, making the context window the same in both inference modes (in both cases, at every timestep, the context window is all tokens up to that timestep).\nTable 3 shows that as we increase subsequence length, perplexity improves, peaking at 512 before starting to degrade. Our best model obtains 17.85 perplexity, which is multiple standard deviations better than the baseline (18.65, N.o.). Table 5 in §6 shows a similar gain on the test set. The best model runs 1% slower than the baseline during N.o. eval. (since caching reduces the speed gain from smaller attention matrices in this mode). Table 10 (appendix) shows that it uses less than half of the memory the baseline does during training. Our best model trains 55% faster than the baseline.\nOur best model, with subsequence length 512, has attention matrices of size 512 · 1,024 (since we have 512 queries—one per every new token—and 1,024 keys and 1,024 values—one per every new token and every cached token). In the baseline, all attention matrices are of size 3,072 · 3,072.\nCaching previously computed representations lets us do token-by-token generation efficiently when generating more than L tokens. Our model is nine times faster than the baseline at token-bytoken generation even as it achieves better perplexity and uses much less memory (Tab. 3, col. 5).\nPIA and caching also greatly improve perplexity on the Toronto Book Corpus; see A.5 in the appendix."
+    }, {
+      "heading" : "6 Shortformer Results",
+      "text" : "To assess whether the gains from staged training, PIA and caching are additive, we take our best caching PIA model, with subsequence length 512, and apply staged training to it, training it with a subsequence length of between 32 to 256 for the first half of training.11 Table 4 shows the results. As in §4.2, where staged training was applied to the unmodified baseline, the results are very robust to the choice of initial stage subsequence length, with all the different choices improving perplexity over the model that does not use staged training.\nThe best model (with initial subsequence length 128), which we call Shortformer, achieves 17.47 dev. set perplexity and trains 65% faster than the baseline. Since its attention matrices are of dimension 512 · 1,024 (the baseline’s are 3,072 · 3,072), our model uses less memory (§A.4, appendix). It has the same number of parameters as the baseline.\nFigure 3 (appendix) compares our best models using each method we presented (and their combination) to the baseline. It shows that combining caching, PIA and staged training (Shortformer) yields the quickest training and best perplexity when using nonoverlapping evaluation. Evaluation speed is similar for all of these models.\nFinally, Table 5 compares our best models on the test set of WikiText-103 to the state of the art.12\nShortformer is almost twice as fast to train as the baseline and achieves superior results. Like the\n11We picked 50% of epochs as the length of the first stage since that produced near-optimal results at a fast speed in §4.\n12We benchmarked speed, on V100 GPUs, for all models that had publicly available code.\nbest model from §5.3, it is nine times faster than the baseline for token-by-token generation.\nSince it uses a cache, sliding window evaluation does not increase Shortformer’s performance. By training the baseline with staged training (and no PIA or caching), we obtain a model (our best model from §4.2) that, with sliding window eval., obtains even better results, but that model is much slower than Shortformer (Table 5, second-to-last row).\nShortformer outperforms the baseline’s perplexity and performs within a standard deviation of the Sandwich Transformer (Press et al., 2020) and TransformerXL. It does not outperform the Compressive Transformer (Rae et al., 2020), Routing Transformer (Roy et al., 2020) and kNNLM (Khandelwal et al., 2020), which make orthogonal improvements that can be applied to any language model, at the price of slower decoding. Combining them with our approach may yield further gains. These results are similar to those we obtain on the Toronto Book Corpus (§A.5 in the appendix)."
+    }, {
+      "heading" : "7 Related Work",
+      "text" : "Staged Training Devlin et al. (2019) used a staged training routine for BERT by performing the first 90% of training on short subsequences (of length 128) before moving on to longer ones (of length 512). They use this method to speed training, but we show that also it improves perplexity and analyze different configurations of this method.\nMany recent papers have explored improving\ntransformer efficiency by reducing the quadratic cost of self-attention, motivated by scaling to longer sequences (Kitaev et al., 2020; Roy et al., 2020; Tay et al., 2020). We instead demonstrate improved results with shorter sequences, which naturally also improve efficiency.\nOne way to reduce transformer memory usage is to sparsify the attention matrix by letting the model attend only to a subset of nearby tokens at each timestep (Child et al., 2019; Beltagy et al., 2020; Roy et al., 2020). Training on shorter subsequence lengths is much more efficient: we use multiple, but much smaller, attention matrices. Since attention uses memory and computation in a way that scales quadratically with input size, splitting the inputs into multiple subsequences each processed independently lets us use less memory and run faster. Like our method, Beltagy et al. (2020) attend at each timestep to a growing number of neighbors as training progresses, but they use five stages, which we found not to be superior to our two-staged method.\nThe adaptive attention span model of Sukhbaatar et al. (2019) learns the maximum effective context window sizes for each head at each layer independently. Like in our method, context window sizes are smaller at the start of training and lengthen as training progresses. We show that a simple approach of manually choosing two subsequence lengths is highly effective. In addition, keeping subsequence lengths equal across all heads and layers lets us save memory and runtime.\nPosition-Infused Attention TransformerXL (Dai et al., 2019) caches and attends to previous representations using an attention sublayer that uses relative positioning (Shaw et al., 2018). It runs much slower than the unmodified attention sublayer, requires extra parameters, and requires internally modifying the self-attention sublayer, while our PIA method (§5) does not.\nIn parallel with our work, Ke et al. (2020) compute attention coefficients by summing two attention matrices, one based on position-position interactions and the other on content-content interactions. As in PIA, they do not add position embeddings at the bottom of the model. They present results only for BERT, which uses much smaller subsequences than our models."
+    }, {
+      "heading" : "8 Conclusion",
+      "text" : "Our results challenge the conventional wisdom that longer subsequences are always better. By first\ntraining on shorter subsequences and then progressing to longer ones via staged training, we improve perplexity and reduce training time. We additionally propose position-infused attention, which enables caching and efficiently attending to previous outputs; we show that models using this method do not require large input subsequences. We finally show that these two methods can be combined to produce a speedier and more accurate model."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We thank Tim Dettmers, Jungo Kasai, Gabriel Ilharco, Hao Peng, Sewon Min, Mandar Joshi, Omer Levy, Luke Zettlemoyer, Julian Michael, Edward Misback, Sofia Serrano, Nikolaos Pappas, Jesse Dodge, Myle Ott, and Sam Shleifer for their valuable feedback and fruitful discussions."
+    }, {
+      "heading" : "A Appendix",
+      "text" : "A.1 Additional Staged Training Results\nTable 6 shows the time each staged training model needs to match baseline performance, as a fraction of the time it takes to train the baseline. The fastest three configurations each match the baseline’s performance in just 37% of the time it takes to train the baseline. This result is very robust to hyperparameter changes, as all models trained with initial subsequence length of between 64 and 512, that switch to the second stage at epoch 50 to 150, manage to match the baseline’s performance in at most 59% of the time it takes to train it.\nTables 7 and 8 show the epoch at which each model matched the baseline’s performance and the total time it took to train each of our staged training models.\nA.2 Staged Training with Shorter Final Stage L\nIn section 4, all models presented used Staged Training with a final input subsequence length L of 3,072 tokens. In Table 9, we show the results of training with a first stage with L = 128 for 50 epochs, and using varying subsequence lengths for the second stage. The best result is obtained when the second stage uses L = 3,072. In addition, in all of our other experiments (not presented here) with different L and epoch number values for the first stage, we observed that using L = 3,072 for the second stage always achieved the best perplexities. Models trained with staged training and evaluated with a sliding window sometimes perform slightly worse when S is decreased, but this difference is much smaller than the standard deviation. The L = 1536 and L = 3072 models peaked at S = 512, and then as S was decreased perplexity started slightly degrading.13\nA.3 Training Speed vs. Performance\nFigure 3 compares the validation performance and training speed of the baseline to our models.\nA.4 Memory Usage\nTo understand how much memory our models and the baseline use during training, we find the largest batch size that we can load into memory for both our models and the baseline. Models that can simultaneously make more predictions are more memory efficient.\n13We conjecture that this is because of a train-test mismatch that occurs since the average effective context length during training is 3,072\n2 = 1,536 and so the model focuses on learning\nhow to make predictions for the tokens in the center of the input, and does not perform as well when making predictions for tokens at the end of the input (which is what we use when using sliding window evaluation).\nTable 10 shows the memory usage for the baseline model and our models. Since our Shortformer model has much smaller attention matrices, during training it can make more than double the nexttoken predictions than the baseline can in each feedforward pass. During inference, we use a batch size of 1 throughout the paper, following (Dai et al., 2019), and in our experiments, the PIA + Caching model, the final staged training model and the baseline all use a similar amount of memory during nonoverlapping evaluation. During token-by-token inference, the maximum number of predictions for the baseline model is 7, whereas our model can fit a batch size of 39 (so 39 predictions are made during token-by-token inference), making our model more than 5 times more memory efficient than the baseline. Using a batch size of one is a realistic benchmarking scenario: in large models such as GPT-3, a batch size of one is used during inference.\nA.5 Toronto Book Corpus\nTo verify that our results transfer to other datasets, we ran our models on the Toronto Book Corpus (TBC) (Zhu et al., 2015), a 700M token collection of books that has previously been used in the training corpus of BERT (along with English Wikipedia). We use the same train/development/test split as (Khandelwal et al., 2020) and (Press et al., 2020), as well as their tokenization, which uses BERT’s vocabulary of 29K BPE subwords. As in (Khandelwal et al., 2020) and (Press et al., 2020), since the vocabulary is much smaller than WikiText-103’s, we use a tied word embedding and softmax matrix (Press and Wolf, 2017; Inan et al., 2017), instead of using\nthe adaptive word embeddings (Baevski and Auli, 2018) as in the WikiText-103 models.\nTo fairly compare our models to the ones from (Khandelwal et al., 2020) and (Press et al., 2020), our initial set of experiments on the TBC use a maximum subsequence length of 1,024 (for staged training), train for 59 epochs, and for all other hyperparameters we use the same values as the ones we used for WikiText-103 (see Experiment Setup in Section 2). In this setting, the baseline achieves a perplexity of 15.38± 0.39 (standard deviation) on the development set.\nWe do not tune the hyperparameters of our methods on the TBC, we simply use the same values as the best ones that we found on the WikiText-103 dataset. For staged training, our best model trained for 50205% of the epochs with L = 128 and spent the rest of training with the same subsequence size as the baseline. For the TBC, we again trained the staged training model model with L = 128 for the first 50205% of training, and then move on to L = 1,024, to match the Sandwich Transformer (Press et al., 2020) and kNN-LM (Khandelwal et al., 2020) which used 1,024 as the subsequence length.\nFor the PIA + Caching model, we set L = 512, as we did for our best PIA + Caching on the WikiText-103 dataset.\nFor the Toronto Book Corpus Shortformer, we trained for the first half of training with L = 128 before moving on to training with L = 512, as in our WikiText-103 models (Section 6).\nTable 11 shows that staged training and the Shortformer improve over the baseline by a wide margin and match the results of the Sandwich Transformer and the kNN-LM. As noted in Section 6, those contributions are orthogonal to ours, and combining them might yield further gains. Since in Table 11 the final stage of the staged training model (and the baseline) both have L = 1,024, Shortformer lacks a speed advantage in this scenario.\nTable 12 shows results for our staged training model trained with a final stage subsequence length of 3,072 tokens, as in our WikiText-103 experiments in Section 4. This model trains faster than the L = 3,072 baseline and also achieves much better perplexity scores (the baseline in this setting achieves a perplexity of 14.52 ± 0.15 (standard deviation) on the development set). In addition, note that the Shortformer model from Table 11 achieves better perplexity than even the baseline with L = 3,072, although Shortformer is much faster to train and uses much smaller attention matrices during inference (of size 512 ·1024; the baseline has attention matrices of size 3,072 · 3,072, as in Section 6)."
+    } ],
+    "references" : [ {
+      "title" : "Adaptive input representations for neural language modeling",
+      "author" : [ "Alexei Baevski", "Michael Auli." ],
+      "venue" : "CoRR, abs/1809.10853.",
+      "citeRegEx" : "Baevski and Auli.,? 2018",
+      "shortCiteRegEx" : "Baevski and Auli.",
+      "year" : 2018
+    }, {
+      "title" : "Longformer: The long-document transformer",
+      "author" : [ "Iz Beltagy", "Matthew E. Peters", "Arman Cohan." ],
+      "venue" : "arXiv:2004.05150.",
+      "citeRegEx" : "Beltagy et al\\.,? 2020",
+      "shortCiteRegEx" : "Beltagy et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Curriculum learning",
+      "author" : [ "Yoshua Bengio", "Jérôme Louradour", "Ronan Collobert", "Jason Weston." ],
+      "venue" : "Proceedings of the 26th Annual International Conference on Machine Learning, ICML ’09, page 41–48, New York, NY, USA. Association for Com-",
+      "citeRegEx" : "Bengio et al\\.,? 2009",
+      "shortCiteRegEx" : "Bengio et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Generating long sequences with sparse transformers",
+      "author" : [ "Rewon Child", "Scott Gray", "Alec Radford", "Ilya Sutskever." ],
+      "venue" : "URL https://openai.com/blog/sparse-transformers.",
+      "citeRegEx" : "Child et al\\.,? 2019",
+      "shortCiteRegEx" : "Child et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Transformer-xl: Attentive language models beyond a fixed-length context",
+      "author" : [ "Zihang Dai", "Zhilin Yang", "Yiming Yang", "Jaime G Carbonell", "Quoc Le", "Ruslan Salakhutdinov." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computa-",
+      "citeRegEx" : "Dai et al\\.,? 2019",
+      "shortCiteRegEx" : "Dai et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Tying word vectors and word classifiers: A loss framework for language modeling",
+      "author" : [ "Hakan Inan", "Khashayar Khosravi", "Richard Socher." ],
+      "venue" : "ICLR.",
+      "citeRegEx" : "Inan et al\\.,? 2017",
+      "shortCiteRegEx" : "Inan et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Rethinking positional encoding in language pre-training",
+      "author" : [ "Guolin Ke", "Di He", "Tie-Yan Liu" ],
+      "venue" : null,
+      "citeRegEx" : "Ke et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Ke et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Generalization through Memorization: Nearest Neighbor Language Models",
+      "author" : [ "Urvashi Khandelwal", "Omer Levy", "Dan Jurafsky", "Luke Zettlemoyer", "Mike Lewis." ],
+      "venue" : "International Conference on Learning Representations (ICLR).",
+      "citeRegEx" : "Khandelwal et al\\.,? 2020",
+      "shortCiteRegEx" : "Khandelwal et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Reformer: The efficient transformer",
+      "author" : [ "Nikita Kitaev", "Lukasz Kaiser", "Anselm Levskaya." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Kitaev et al\\.,? 2020",
+      "shortCiteRegEx" : "Kitaev et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bart: Denoising sequence-to-sequence pre-training for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Ves Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Pointer sentinel mixture models",
+      "author" : [ "Stephen Merity", "Caiming Xiong", "James Bradbury", "Richard Socher" ],
+      "venue" : null,
+      "citeRegEx" : "Merity et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Merity et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Improving transformer models by reordering their sublayers",
+      "author" : [ "Ofir Press", "Noah A. Smith", "Omer Levy." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 2996–3005, Online. Association for Computa-",
+      "citeRegEx" : "Press et al\\.,? 2020",
+      "shortCiteRegEx" : "Press et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Using the output embedding to improve language models",
+      "author" : [ "Ofir Press", "Lior Wolf." ],
+      "venue" : "Proceedings of the 15th Conference of the European Chapter of the Association for Computational Linguistics: Volume 2, Short Papers, pages 157–163, Valencia,",
+      "citeRegEx" : "Press and Wolf.,? 2017",
+      "shortCiteRegEx" : "Press and Wolf.",
+      "year" : 2017
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "Alec Radford", "Jeff Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever" ],
+      "venue" : null,
+      "citeRegEx" : "Radford et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Compressive transformers for long-range sequence modelling",
+      "author" : [ "Jack W. Rae", "Anna Potapenko", "Siddhant M. Jayakumar", "Chloe Hillier", "Timothy P. Lillicrap." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Rae et al\\.,? 2020",
+      "shortCiteRegEx" : "Rae et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Exploring the limits of transfer learning with a unified text-to-text transformer",
+      "author" : [ "Colin Raffel", "Noam Shazeer", "Adam Roberts", "Katherine Lee", "Sharan Narang", "Michael Matena", "Yanqi Zhou", "Wei Li", "Peter J Liu." ],
+      "venue" : "arXiv preprint arXiv:1910.10683.",
+      "citeRegEx" : "Raffel et al\\.,? 2019",
+      "shortCiteRegEx" : "Raffel et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Efficient transformers: A survey",
+      "author" : [ "Metzler." ],
+      "venue" : "Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob",
+      "citeRegEx" : "Metzler.,? 2020",
+      "shortCiteRegEx" : "Metzler.",
+      "year" : 2020
+    }, {
+      "title" : "Attention is all",
+      "author" : [ "Kaiser", "Illia Polosukhin" ],
+      "venue" : null,
+      "citeRegEx" : "Kaiser and Polosukhin.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Kaiser and Polosukhin.",
+      "year" : 2017
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 14,
+      "context" : ", 2017) language models (Radford et al., 2019; Lewis et al., 2019; Raffel et al., 2019; Brown et al., 2020) has been an important driver of progress in NLP.",
+      "startOffset" : 24,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2017) language models (Radford et al., 2019; Lewis et al., 2019; Raffel et al., 2019; Brown et al., 2020) has been an important driver of progress in NLP.",
+      "startOffset" : 24,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2017) language models (Radford et al., 2019; Lewis et al., 2019; Raffel et al., 2019; Brown et al., 2020) has been an important driver of progress in NLP.",
+      "startOffset" : 24,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 0,
+      "context" : "ofirpress/shortformer Recent work focuses on increasing the length of input subsequences, which determines the maximum number of tokens a model can attend to (Baevski and Auli, 2018; Sukhbaatar et al., 2019; Kitaev et al., 2020; Roy et al., 2020).",
+      "startOffset" : 158,
+      "endOffset" : 246
+    }, {
+      "referenceID" : 9,
+      "context" : "ofirpress/shortformer Recent work focuses on increasing the length of input subsequences, which determines the maximum number of tokens a model can attend to (Baevski and Auli, 2018; Sukhbaatar et al., 2019; Kitaev et al., 2020; Roy et al., 2020).",
+      "startOffset" : 158,
+      "endOffset" : 246
+    }, {
+      "referenceID" : 0,
+      "context" : "However, when we evaluate each model with a sliding window (Baevski and Auli, 2018), outputting one token at a time using the maximal amount of context, we find—surprisingly—that models using subsequences exceeding 1,024 tokens do not further improve performance (Table 1, col.",
+      "startOffset" : 59,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 4,
+      "context" : "Position-Infused Attention (§5) Second, we consider a natural way to avoid the early token curse during training and inference: attending to cached representations from the previously evaluated subsequence (Dai et al., 2019).",
+      "startOffset" : 206,
+      "endOffset" : 224
+    }, {
+      "referenceID" : 11,
+      "context" : "Experimental Setup Our baseline is the Baevski and Auli (2018) model, henceforth B&A, trained and evaluated on WikiText-103 (Merity et al., 2016).",
+      "startOffset" : 124,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 8,
+      "context" : "We use this baseline because of its prominent role in recent language modeling developments (Khandelwal et al., 2020; Press et al., 2020).",
+      "startOffset" : 92,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 12,
+      "context" : "We use this baseline because of its prominent role in recent language modeling developments (Khandelwal et al., 2020; Press et al., 2020).",
+      "startOffset" : 92,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 13,
+      "context" : "This model ties the word embedding and softmax matrices (Press and Wolf, 2017; Inan et al., 2017) and uses sinusoidal position embeddings.",
+      "startOffset" : 56,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 6,
+      "context" : "This model ties the word embedding and softmax matrices (Press and Wolf, 2017; Inan et al., 2017) and uses sinusoidal position embeddings.",
+      "startOffset" : 56,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 5,
+      "context" : "6 This method was previously applied to speed up the training of BERT (Devlin et al., 2019), but we show that it also improves perplexity.",
+      "startOffset" : 70,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 2,
+      "context" : "Curriculum learning (Bengio et al., 2009) trains on easier inputs before progressing to harder ones.",
+      "startOffset" : 20,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 4,
+      "context" : "TransformerXL (Dai et al., 2019) uses relative position embeddings to solve this problem.",
+      "startOffset" : 14,
+      "endOffset" : 32
+    }, {
+      "referenceID" : 12,
+      "context" : "Shortformer outperforms the baseline’s perplexity and performs within a standard deviation of the Sandwich Transformer (Press et al., 2020) and TransformerXL.",
+      "startOffset" : 119,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 15,
+      "context" : "It does not outperform the Compressive Transformer (Rae et al., 2020), Routing Transformer (Roy et al.",
+      "startOffset" : 51,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2020) and kNNLM (Khandelwal et al., 2020), which make orthogonal improvements that can be applied to any language model, at the price of slower decoding.",
+      "startOffset" : 18,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 9,
+      "context" : "Many recent papers have explored improving transformer efficiency by reducing the quadratic cost of self-attention, motivated by scaling to longer sequences (Kitaev et al., 2020; Roy et al., 2020; Tay et al., 2020).",
+      "startOffset" : 157,
+      "endOffset" : 214
+    }, {
+      "referenceID" : 3,
+      "context" : "One way to reduce transformer memory usage is to sparsify the attention matrix by letting the model attend only to a subset of nearby tokens at each timestep (Child et al., 2019; Beltagy et al., 2020; Roy et al., 2020).",
+      "startOffset" : 158,
+      "endOffset" : 218
+    }, {
+      "referenceID" : 1,
+      "context" : "One way to reduce transformer memory usage is to sparsify the attention matrix by letting the model attend only to a subset of nearby tokens at each timestep (Child et al., 2019; Beltagy et al., 2020; Roy et al., 2020).",
+      "startOffset" : 158,
+      "endOffset" : 218
+    }, {
+      "referenceID" : 4,
+      "context" : "Position-Infused Attention TransformerXL (Dai et al., 2019) caches and attends to previous representations using an attention sublayer that uses relative positioning (Shaw et al.",
+      "startOffset" : 41,
+      "endOffset" : 59
+    } ],
+    "year" : 2021,
+    "abstractText" : "Increasing the input length has been a driver of progress in language modeling with transformers. We identify conditions where shorter inputs are not harmful, and achieve perplexity and efficiency improvements through two new methods that decrease input length. First, we show that initially training a model on short subsequences before moving on to longer ones both reduces overall training time and, surprisingly, substantially improves perplexity. Second, we show how to improve the efficiency of recurrence methods in transformers, which let models condition on previously processed tokens when generating sequences that exceed the maximal length the transformer can handle at once. Existing methods require computationally expensive relative position embeddings; we introduce a simple alternative of adding absolute position embeddings to queries and keys instead of to word embeddings, which efficiently produces superior results. We show that these recurrent models also benefit from short input lengths. Combining these techniques speeds up training by a factor of 1.65, reduces memory usage, and substantially improves perplexity on WikiText103, without adding any parameters.1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

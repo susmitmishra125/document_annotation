@@ -1,0 +1,492 @@
+{
+  "name" : "2021.acl-long.255.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Modeling Transitions of Focal Entities for Conversational Knowledge Base Question Answering",
+    "authors" : [ "Yunshi Lan", "Jing Jiang", "Frances Scott Fitzgerald" ],
+    "emails" : [ "yslan@smu.edu.sg", "jingjiang@smu.edu.sg" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 3288–3297\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n3288"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Recently, conversational Knowledge Base Question Answering (KBQA) has started to attract people’s attention (Saha et al., 2018; Christmann et al., 2019; Guo et al., 2018; Shen et al., 2019). Motivated by real-world conversational applications, particularly personal assistants such as Apple Siri and Amazon Alexa, the task aims to answer questions over KBs in a conversational manner.\nFigure 1 shows an example of conversational KBQA. As we can see, the conversation can be roughly divided into two parts: Q1, Q2 and Q3 revolve around the book “The Great Gatsby,” while Q4 and Q5 revolve around its author, “F. Scott Fitzgerald”. Although these entities are not explicitly mentioned in the questions, they are implied by the conversation history, and they are critical for answering the questions. For example, Q3, when taken out of context, cannot be answered because Q3 itself does not state the title of the book being discussed. But since Q3 is a follow-up question of Q1, humans can easily infer that the book of interest here is “The Great Gatsby” and can hence answer the question correctly. We therefore can\nregard the entity “The Great Gatsby” as the focus of the conversation at this point. When we move on to Q4, again, if the question is taken out of context, we cannot answer it. But by following the conversation flow, humans can guess that at this point the focus of the conversation has shifted to be “F. Scott Fitzgerald” (the answer to Q3), and based on this understanding, humans would have no problem answering Q4. We refer to “The Great Gatsby” and “F. Scott Fitzgerald” as the focal entities of the conversation.\nBased on the observation above, we hypothesize that it is important to explicitly model how a conversation transits from one focal entity to another in order to effectively address the conversational KBQA task. There are at least two scenarios where knowing the current focal entity helps answer the current question. (1) The current focal entity is the unspecified topic entity1 of the current question. E.g., “The Great Gatsby” is the unspecified topic entity for Q3, which effectively should be “what is the name of the author of The Great Gatsby?” (2) The current focal entity is closely related to the\n1In KBQA, a topic entity is an entity mentioned in the question and the starting point in the KB to search for answers.\ntopic entity of the current question and can help narrow down the search space in case of ambiguity. E.g., knowing the focal entity is “The Great Gatsby” for Q2, the system can identify the correct subgraph of the KB that contains both “Jay Gatsby” (the topic entity) and “The Great Gatsby” for answer prediction, which is critical if there are more than one entities in the KB named “Jay Gatsby.” We can also see that simple entity coreference resolution techniques (e.g., Lee et al. (2017)) may not always help for conversational KBQA as no pronouns are used in many cases.\nAlthough existing work on conversational KBQA has tried to address the challenges of missing information in follow-up questions by modeling conversation history, most of it simply includes everything in the conversation history without considering focal entities. For example, Saha et al. (2018) leveraged a hierarchical encoder to encode all the questions and responses in the conversation history, but there was no explicit modeling of anything similar to focal entities. Guo et al. (2018) concatenated previous questions with the current question to fill in the missing information, but again there was no special treatment of entities. A more recent work (Christmann et al., 2019) believed that the answers to sequential questions should be closely connected to each other in the KB. Thus, they proposed an algorithm to keep a context graph in memory, expanding it as the conversation evolves to increase the connections between the questions. However, their method is inefficient in capturing the most significant information related to focal entities in a conversation history.\nIn this paper, we explicitly model the focal entities and their transitions in a conversation in order to improve conversational KBQA. Based on several observations we have with focal entities, such as their tendencies to be topic entities or answer entities in the conversation history and their stickiness in a conversation, we propose to construct an Entity Transition Graph to elaborately model entities involved in the conversation as well as their interactions, and apply a graph-based neural network to derive a focal score for each entity in the graph, which represents the probability of this entity being the focal entity at the current stage of the conversation. The key intuition behind the graph neural network is to propagate an entity’s focal score in the i-th turn of the conversation to its neighboring entities in the (i + 1)-th turn of the conversation.\nThis derived focal entity distribution is then incorporated into a standard single-turn KBQA system to handle the current question in the conversation.\nWe evaluate our proposed method on two conversational KBQA datasets, ConvQuestions (Christmann et al., 2019) and ConvCSQA (which is a subset we derived from CSQA (Saha et al., 2018)). Experiment results show that compared with either a single-turn KBQA system or a system that simply encodes the entire conversation history without handling focal entities in a special way, our method can clearly perform better on both datasets. Our method also outperforms several existing systems that represent the state of the art on these benchmark datasets. We also conduct error analysis that sheds light on where further improvement is desired.\nWe summarize our contributions of this paper as follows: (1) We propose to explicitly model the focal entities of a conversation in order to improve conversational KBQA. (2) We propose a graphbased neural network model to capture the transitions of focal entities and derive a focal entity distribution that can be plugged into a standard single-turn KBQA system. (3) We empirically demonstrate the effectiveness of our method on two datasets. Our method can outperform the state of the art by 9.5 percentage points on ConvQuestions and 14.3 percentage points on ConvCSQA2."
+    }, {
+      "heading" : "2 Background",
+      "text" : ""
+    }, {
+      "heading" : "2.1 Problem Formulation",
+      "text" : "A KB K consists of a large nubmer of triplets 〈es, r, eo〉, where es and eo are entities and r indicates their relation.\nWe first define single-turn KBQA as follows. Given a KB K and a question q, the system is supposed to return one or more entities from K as the answer to q. In singleturn KBQA, different question-answer pairs D = {(q1, a1), (q2, a2), . . .} are independent.\nConversational KBQA is a multiple-turn KBQA problem, where a sequence of question-answer pairs c = ((q1, a1), (q2, a2), ..., (qm, am)) forms a complete conversation and a set of independent conversations D = {c1, c2, . . .} forms a conversational KBQA dataset. We refer to each questionanswer pair as one turn of the conversation. A conversational KBQA system is supposed to return\n2Our code is available at https://github.com/ lanyunshi/ConversationalKBQA.\nthe correct answer to the current question qt based on not only qt but also the preceding questions (q1, q2, ..., qt−1) in the same conversation."
+    }, {
+      "heading" : "2.2 Pipeline for Single-turn KBQA",
+      "text" : "A standard single-turn KBQA includes two main components: a Query Generator and an Answer Predictor. The Query Generator generates a set of candidate query graphs C for a given q. Specifically, we first assume that some entities relevant to q are first identified. These can be entities directly mentioned in q or other entities relevant to q but implicitly mentioned, such as the focal entities we introduced earlier. Starting from these entities, the Query Generator generates a set of candidate query graphs (Yih et al., 2016) from K, which lead to some candidate answers to the question. The second component of a single-turn KBQA system, the Answer Predictor, is a neural-network-based ranker that takes in the question as well as the generated query graphs as input and outputs a predicted answer â.\nFor conversational KBQA, the initial question q0 in a conversation c can be answered directly using an existing single-turn KBQA approach (Yu et al., 2017; Luo et al., 2018; Yih et al., 2016; Lan et al., 2019). When the single-turn KBQA system is used for answering follow-up questions, we make the following modifications: First, we assume that a focal entity distribution (which is the core of our method and will be presented in detail below) is derived from the conversation history. Then each focal entity is considered relevant to the current question and will be used to generate candidate query graphs by the Query Generator. Meanwhile, the probabilities of these focal entities (i.e., their focal scores) will be used by the Answer Predictor when it ranks the candidate query graphs."
+    }, {
+      "heading" : "3 Our Method",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Overview",
+      "text" : "Our proposed method hinges on the notion of focal entities that we introduced in Section 1. Recall that a focal entity is the focus of the conversation at its current stage. To model focal entities, we propose to first use an Entity Transition Graph to model all the entities involved in the conversation so far and their interactions. These entities are candidate focal entities. The edges of the graph reflect how the conversation has shifted from one entity to another, and such transitions can help us estimate how\nlikely an entity is the current focal entity, as we will explain in Section 3.2. This graph is incrementally constructed by a Graph Constructor after each turn of the conversation. To derive a focal score (i.e., a probability) for each entity in this graph, a Focal Entity Predictor employs a graph-based neural network and generates a new focal entity distribution based on the previous focal entity distribution as well as the conversation history, which is encoded by a Conversation History Encoder using a standard sequence model. Finally, the derived focal entity distribution is incorporated into the single-turn KBQA module presented in Section 2.2 to perform answer prediction. The overall architecture of our method is illustrated in Figure 2."
+    }, {
+      "heading" : "3.2 Entity Transition Graph and Graph Constructor",
+      "text" : "Our Graph Constructor builds the Entity Transition Graph as follows. The initial Entity Transition Graph G(0) is set to be an empty graph. Let G(t−1) denote the Entity Transition Graph before the tth turn of the conversation, and suppose we have processed the t-th question and obtained the answer entity ât (which is predicted) with the help of G(t−1). We now need to construct Gt, which will be used to help answer qt+1. Recall that the Answer Predictor presented in Section 2.2 obtains the answer entity ât by identifying a top-ranked query graph, which starts from either an entity in G(t−1) or a topic entity mentioned in qt. Let St denote all the entities except ât in this top-ranked query graph. The Graph Constructor adds the following nodes and edges to G(t−1) in order to build Gt.\n• For each entity e ∈ St, add e to the graph as a node if it does not exist in the graph yet. Also add ât to the graph as a node if it does not exist yet. • For each newly added node e, add a “self-loop” edge from e to itself. • For each entity e ∈ St, add a “forward” edge from e to ât. • For each entity e ∈ St, add a “backward” edge from ât to e. • For each entity e ∈ S1, i.e., the entities relevant to the first question, add a “backward” edge from ât to e.\nThe way we construct the Entity Transition Graph as described above is based on the following observations with focal entities: (1) A focal entity is often an answer entity to a previous question.\nTherefore we include all previous answer entities in the graph. (2) A focal entity is also likely to be an entity relevant to a previous question that has led to the answer entity. We therefore also include those entities in the query graphs into the Entity Transition Graph. (3) The focal entity tends to stay unchanged and thus has a “stickiness” property in a conversation. Thus we add a self-loop edge for each node. (4) The focal entity may often go back to some entity relevant to the first question. Therefore, we always add an edge from the latest answer entity to entities relevant to the first question. (5) If an entity is frequently discussed in the conversation history, it might be more likely to be a focal entity. We thus give such entities more connectivities in the graph.\nTo give a concrete example of the Entity Transition Graph, let us take a look at Figure 3. When we answer Q2, “Nick Carrayway” and “The Great Gatsby” are included in the graph because the top-ranked query graph of Q1 contains the entity “Nick Carrayway” and returns the entity “The Great Gatsby”. As the conversation proceeds, the Entity Transition Graph grows dynamically and we eventually obtain Figure 3 (d) when we answer Q5."
+    }, {
+      "heading" : "3.3 Conversation History Encoder",
+      "text" : "The objective of the Conversation History Encoder is to encode the textual context of the previous questions and their predicted answers, particularly information other than the entities (which is already captured by the Entity Transition Graph). The output of the Conversation History Encoder is a single vector and it will be fed into the Focal Entity Predictor as an additional input.\nSimilar to previous methods (Serban et al., 2017; Saha et al., 2018), we leverage a hierarchical encoder to encode the conversation history, where a lower layer encodes individual questions and predicted answers independently and an upper layer connects the sequence of questions and answers to derive a single vector. Specifically, suppose we have completed (t − 1) turns of the conversation. The lower-layer encoder employs a standard sequence encoder (in our case a BiLSTM) to encode each question and each predicted answer so far. Let qi ∈ Rd (1 ≤ i ≤ (t − 1)) denote the encoded vector representation of qi, and similarly, let âi ∈ Rd denote the encoded vector for âi. Next, the\nupper-layer encoder leverages a recurrent network to encode the vector sequence q1, â1,q2, â2, . . . and generate a sequence of hidden vectors. The last hidden vector, which we denote as ht−1 ∈ Rd, will be used as the representation of the conversation history.\nIt is worth noting that although our Conversation History Encoder is similar to how previous work encodes conversation history (Serban et al., 2017), previous work uses the representation ht−1 directly as part of the representation of the current question, which introduces noise. In contrast, we use it to help predict our focal entity distribution only."
+    }, {
+      "heading" : "3.4 Focal Entity Predictor",
+      "text" : "The Focal Entity Predictor employs a graph convolution network (GCN) (Kipf and Welling, 2017; Schlichtkrull et al., 2018) to derive a focal score for each node in the Entity Transition Graph at each turn of the conversation. First, we assume that each entity (i.e., node) e in the graph has a vector representation, and this representation is updated at each turn. Let us use et to represent this vector at the t-th turn. For each interaction relation label (i.e., “forward”, “backward” and “self-loop”), we also use a vector to represent it at each turn, which we denote as rt.\nAt the t-th turn, the vector representations of the entities and interaction relations are updated as follows:\net = ∑\n(r,e′)∈N (e)\nαre ′ t−1, (1)\nαr = softmax(r,e′)∈N (e)(h ᵀ t−1rt−1), (2)\nwhereN (e) is the set of nodes connect to e together with the connecting edges, and ht−1 is the output of the Conversation History Encoder as we have explained earlier. The formulas above show that the representation of e will be aggregated from the representations of its neighborhood entities from the last turn of the conversation, and the aggregation weights α are derived based on the conversation history ht−1 as well as the nature of the interaction relation.\nFor each node that is newly added to the Entity Transition Graph and each of the interaction relation labels, we initialize its vector representation to a random vector.\nTo derive the focal score of entity e at the current turn, we make use of both et and two additional features. Specifically, we obtain the out degree of\neach entity from the entire KB as one additional feature. We also assign a label to each entity to indicate whether it is from St (as defined in Section 3.2) or is ât. We denote these two features as eout-degree and etemporal, where eout-degree is a scalar and etemporal ∈ Rd is represented using embeddings.\nWe now concatenate et and etemporal as well as eout-degree to derive focal scores as follows:\nẽt = [et ⊕ etemporal ⊕ eout-degree], (3) FocalScoret(e) = softmaxe∈Gc(w ᵀ t ẽt + bt), (4)\nwhere ⊕ denotes concatenation, both wt and bt are parameters to be learned and they are specific to the t-th turn. Here FocalScoret(e) denotes the focal score, i.e., the probability that entity e would be the focal entity for the t-th question."
+    }, {
+      "heading" : "3.5 Training Objectives",
+      "text" : "Our training objective comes from two parts: First, we want to minimize the loss from incorrectly answering a question. For this, we use a standard cross entropy loss. Second, we want to supervise the training of the Focal Entity Predictor, but we do not have any ground truth for the focal entity distributions. We therefore produce pseudo ground truth as follows: If there is an entity that could generate at least one query graph resulting in the correct answer, we treat it as a correct focal entity for that question and assign a value of 1 to the entry for this entity in the distribution; otherwise, the value remains 0. Finally, we normalize the distribution and obtain a pseudo distribution. We then try to minimize the KL-divergence between this pseudo ground truth of focal entity distribution and our predicted focal entity distribution."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : "In this section, we first introduce two benchmark datasets and our experiment settings in Section 4.1 and Section 4.2. Next, we discuss the main results and analysis in Section 4.3 and Section 4.4. We further show the comparison with SOTA systems in Section 4.5 and some error analysis in Section 4.6."
+    }, {
+      "heading" : "4.1 Data Sets",
+      "text" : "We use two datasets to evaluate our proposed method. The latest WikiData dump3 is used as the KB for both datasets. Average accuracy and F1 score are employed to measure the performance.\n3https://query.wikidata.org\nConvQuestions: This is a large-scale conversational KBQA dataset4 created via Amazon Mechanical Turk (Christmann et al., 2019). The questions cover topics in five domains. Each conversation contains 5 sequential questions with annotated ground truth answers. There are many questions with missing information in the conversations, which makes the dataset very suitable for evaluating our method. The dataset contains 6K, 2K and 2K conversations for training, development and testing, each evenly distributed across domains.\nConvCSQA: This dataset comes from the the CSQA dataset5 (Saha et al., 2018), originally created for a setting similar to conversational KBQA. However, one of the focuses of the original CSQA data was complex questions, which is not related to our work. Also, the CSQA data contains many questions in a conversation that do not have connections with preceding questions. We therefore elaborately selected conversational questions from CSQA to suit our needs, using the following strategies: 1) We collected the topic entities as well as the answer entities in the conversation history. If a follow-up question contains one of these entities, we kept the question; otherwise, we omitted it. 2) If the question type description did not explicitly mention that this question contains an “indirect” subject, we removed it. 3) We also filtered out the conversations with a length smaller than 5. As a result, we obtained a subset of CSQA that consists of 7K, 0.5K and 1K conversations for training, development and testing, respectively. The average number of questions per conversation is 5.36. We call this the ConvCSQA dataset."
+    }, {
+      "heading" : "4.2 Experiment Settings",
+      "text" : "To evaluate the effectiveness of our proposed Entity Transition Graph and Focal Entity Predictor, we mainly compare the following three methods:\nSingleTurn: This is the method described in Section 2.2. Specifically, we first recognize the named entities in the questions via the AllenNLP NER tool6 and retrieve the corresponding entities via SPARQL. To generate candidate query graphs, we consider all subgraphs that are 1 hop or 2 hops away from the topic entities (or focal entities in\n4https://convex.mpi-inf.mpg.de/ 5https://amritasaha1812.github.io/\nCSQA/ 6https://demo.allennlp.org/ named-entity-recognition\nthe case when the SingleTurn system is used in our method). Next, we employ the Answer Predictor that consists of two BiLSTMs to encode the question as well as each candidate subgraph independently. The final score is computed via the dot product of these two vectors.\nConvHistory: This method follows a standard way of encoding the conversational history using a two-level hierarchical encoder (Serban et al., 2017). It does not explicitly model any focal entity.\nOur Method: This is our proposed method where we model the focal entities through the Entity Transition Graph and the Focal Entity Predictor. This method also uses the same hierarchical encoder as above to encode the conversation history.\nImplementation Details: We implement our method by PyTorch on Nvidia V440.64.00-32GB GPU cards. We employ GloVe7 as our initialized word embeddings and set the maximum number of GCN layers as 10. We apply grid search through pre-defined hyper-parameter spaces, specifically, hidden dimensionality amongst {200, 300, 400}, learning rate amongst {3e− 3, 3e− 4, 3e− 5} and dropout ratio amongst {0.2, 0.1, 0.0}. The best hyper-parameter configuration is based on the best F1 score on the development set. Eventually, for each neural network model, we set the hidden dimensionality to 300. A dropout layer is set before each MLP with a ratio of 0.1. We use the Adam optimizer (Kingma and Ba, 2015) with a learning rate of 3e− 5, and the batch size is 1. The training epoch number is 100."
+    }, {
+      "heading" : "4.3 Main Results",
+      "text" : "Table 1 shows the overall results. As we can see, our method clearly outperforms both SingleTurn and ConvHistory on both datasets. This confirms that with the additional components we added that model the focal entities, the method is able to make use of the conversation history more effectively to answer the follow-up questions compared with ConvHistory (which simply encode the entire history without specifically modeling focal entities). Surprisingly, we find that simply modeling the conversation history through a standard two-level hierarchical sequence model does not consistently\n7https://nlp.stanford.edu/projects/ glove/\nimprove the performance. It suggests that including all the historical conversation information in a brute-force manner may not capture the most important conversation contexts effectively."
+    }, {
+      "heading" : "4.4 Further Analysis",
+      "text" : "Ablation Studies. Next, we remove the major components in Our Method one at a time and show the ablation results conducted on ConvQuestions in Table 2. Specifically, we 1) remove the effect of modeling conversation history by replacing αr in Eqn. (1) with a uniform distribution; 2) remove graph information by replacing et with ht−1 in Eqn. (3); 3) remove entity property by omitting eout-degree in Eqn. (3). The results in Table 2 show that all the above information helps our method to predict focal entities accurately and achieve the best KBQA results.\nBreakdown by Turns of Conversation. Our method is specifically designed for follow-up questions. Therefore, it would be interesting to see how the method fares for questions at different turns of the conversation. Is it more difficult to answer a question at a later turn of the conversation than an earlier question? We therefore show the results breakdown by turns of conversation in Table 3. We observe that as expected, for questions at later turns of a conversation, the performance drops for all three methods. We believe that for both ConHistory and Our Method, this is partially due to error propagation. On the other hand, compared with SingleTurn and ConvHistory, Our Method is still more robust when handling the follow-up questions at later turns of a conversation.\nCase Studies. To verify if our predicted focal entities are meaningful, we use two concrete examples to conduct a case study. Figure 4 displays two example conversations from ConvQuestions. We show the focal entity distributions for the sequence of questions in bar charts. We can see that the predicted focal entity distribution indeed follows the flow of the conversation. For example, the entity with the largest focal score in the first conversation transits from “F.Scott Fitzgerald” to “Zelda Fitzgerald,” and then to “St. Patrick’s Cathedral,” while in the second conversation it remains as “Tupac Shakur” throughout the conversation."
+    }, {
+      "heading" : "4.5 Comparison with SOTA",
+      "text" : "We compare our proposed method with existing state-of-the-art systems in Table 4. Our method outperforms other systems on most questions and achieves overall 9.5 and 14.3 percentage points of improvement on ConvQuestions and ConvCSQA, respectively. CONVEX, Star and Chain employ expansion-based or rule-based strategies to identify the answer entities for follow-up questions. HRED+KVmem combines the hierarchical encoder with a Key-Value Memory network. D2A and MaSP are two seq2seq models to translate the questions into logical forms. Our system is developed based on a standard single-turn KBQA system. We strengthen it by modeling focal entity transitions, and it shows outstanding capability in answering co-referenced, ellipsis and verification questions."
+    }, {
+      "heading" : "4.6 Error Analysis",
+      "text" : "To better understand where our method has failed, we randomly sampled and analysed 100 questions with wrong predictions and manually inspected them. We find that the errors are mainly due to the following reasons. Mis-prediction of Relations (43%) The major errors come from relation mis-predictions. In our model, relation prediction is done by a simple answer predictor. We expect that employing a more advanced encoder could reduce this type of errors.\nQuery Generation Failure (29%) There are many cases where the correct query graphs are difficult to be collected from the KB due to the incompleteness of the KB or the limitation of the query generator. Mis-linking of Topic Entities (22%) The errors caused by wrong identification of the topic entities of questions also lead to incorrectness of the final answers, because if the entity linker links the question to a wrong entity, it is unlikely to answer the question correctly. This is a general challenge for KBQA."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "Single-turn KBQA task has been studied for decades. Traditional methods tried to retrieve the correct answers from the KB via either embeddingbased methods (Bordes et al., 2014; Xu et al., 2019; Sun et al., 2018, 2019; Qiu et al., 2020; He et al., 2021) or semantic parsing-based methods (Berant et al., 2013; Yih et al., 2015; Luo et al., 2018; Zhang et al., 2019; Lan and Jiang, 2020). Conversational KBQA is a relatively new direction that builds on top of single-turn KBQA.\n8Since the original D2A and MaSP codes leverage the ground truth topic entities and relations to pre-train the entity linker and relation predictor but we do not, we skip the pretraining procedure in our re-implementation.\nConversational KBQA is related to dialogue systems and conversational QA in general, which require techniques to sequentially generate responses based on the interactions with users (Ghazvininejad et al., 2018; Rajendran et al., 2018; Das et al., 2017). A conversation history can be encoded via different techniques such as a hierarchical neural network (Serban et al., 2017; Reddy et al., 2019) or modeling the flow of the conversation along with a passage (Huang et al., 2019; Gao et al., 2019, 2020). Our work also intends to capture the flow of the conversation but we specifically model the transitions of focal entities.\nRegarding conversational KBQA, Saha et al. (2018) proposed a model consisting of a hierarchical encoder, a key-value memory network and a decoder. Guo et al. (2018) and Shen et al. (2019) employed a seq2seq model to encode the conversation history then output a sequence of actions to form an executable command. Some follow-up work (Guo et al., 2019; Shen et al., 2020) focused on the meta-learning setting or the effective search strategy under weak supervision, which is beyond the focus of this paper. Christmann et al. (2019) detected frontier nodes by expanding a subgraph, which are potential answer entities to the current question.\nTheir motivation is relevant to ours but we target at modeling the focal entities in the conversation."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "In this paper, we present a method to model the transitions of focal entities in a conversation in order to improve conversational KBQA. Our method can outperform two baselines and achieve state-ofthe-art performance on two benchmark datasets."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "This research was supported by the Singapore Ministry of Education (MOE) Academic Research Fund (AcRF) Tier 1 grant."
+    } ],
+    "references" : [ {
+      "title" : "Semantic parsing on freebase from question-answer pairs",
+      "author" : [ "Jonathan Berant", "Andrew Chou", "Roy Frostig", "Percy Liang." ],
+      "venue" : "Proceedings of the 2013 Conference on Empirical Methods in Natural Language Processing, pages 1533–1544.",
+      "citeRegEx" : "Berant et al\\.,? 2013",
+      "shortCiteRegEx" : "Berant et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Question answering with subgraph embeddings",
+      "author" : [ "Antoine Bordes", "Sumit Chopra", "Jason Weston." ],
+      "venue" : "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing, pages 615–620.",
+      "citeRegEx" : "Bordes et al\\.,? 2014",
+      "shortCiteRegEx" : "Bordes et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Look before you hop: Conversational question answering over knowledge graphs using judicious context expansion",
+      "author" : [ "Philipp Christmann", "Rishiraj Saha Roy", "Abdalghani Abujabal", "Jyotsna Singh", "Gerhard Weikum." ],
+      "venue" : "Proceedings of the 28th",
+      "citeRegEx" : "Christmann et al\\.,? 2019",
+      "shortCiteRegEx" : "Christmann et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Visual Dialog",
+      "author" : [ "Abhishek Das", "Satwik Kottur", "Khushi Gupta", "Avi Singh", "Deshraj Yadav", "José M.F. Moura", "Devi Parikh", "Dhruv Batra." ],
+      "venue" : "Proceedings of 2017 IEEE Conference on Computer Vision and Pattern Recognition, pages 326–335.",
+      "citeRegEx" : "Das et al\\.,? 2017",
+      "shortCiteRegEx" : "Das et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Interconnected question generation with coreference alignment and conversation flow modeling",
+      "author" : [ "Yifan Gao", "Piji Li", "Irwin King", "Michael R. Lyu." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Gao et al\\.,? 2019",
+      "shortCiteRegEx" : "Gao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Explicit memory tracker with coarse-to-fine reasoning for conversational machine reading",
+      "author" : [ "Yifan Gao", "Chien-Sheng Wu", "Shafiq Joty", "Caiming Xiong", "Richard Socher", "Irwin King", "Michael R. Lyu", "Steven C.H. Hoi." ],
+      "venue" : "Proceedings of the 58th Annual",
+      "citeRegEx" : "Gao et al\\.,? 2020",
+      "shortCiteRegEx" : "Gao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A knowledge-grounded neural conversation model",
+      "author" : [ "Michel Galley." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, pages 5110– 5117.",
+      "citeRegEx" : "Galley.,? 2018",
+      "shortCiteRegEx" : "Galley.",
+      "year" : 2018
+    }, {
+      "title" : "Dialog-to-action: Conversational question answering over a large-scale knowledge base",
+      "author" : [ "Daya Guo", "Duyu Tang", "Nan Duan", "Ming Zhou", "Jian Yin." ],
+      "venue" : "Proceedings of the 32nd International Conference on Neural Information Processing Systems,",
+      "citeRegEx" : "Guo et al\\.,? 2018",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Coupling retrieval and metalearning for context-dependent semantic parsing",
+      "author" : [ "Daya Guo", "Duyu Tang", "Nan Duan", "Ming Zhou", "Jian Yin." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 855–",
+      "citeRegEx" : "Guo et al\\.,? 2019",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Improving multi-hop knowledge base question answering by learning intermediate supervision signals",
+      "author" : [ "Gaole He", "Yunshi Lan", "Jing Jiang", "Xin Zhao", "JiRong Wen." ],
+      "venue" : "Proceedings of the 14th ACM International Conference on Web Search and Data",
+      "citeRegEx" : "He et al\\.,? 2021",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "FlowQA: Grasping flow in history for conversational machine comprehension",
+      "author" : [ "Hsin-Yuan Huang", "Eunsol Choi", "Wen tau Yih." ],
+      "venue" : "Proceedings of International Conference on Learning Representations.",
+      "citeRegEx" : "Huang et al\\.,? 2019",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P. Kingma", "Jimmy Ba." ],
+      "venue" : "Proceedings of International Conference on Learning Representations.",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "Semisupervised classification with graph convolutional networks",
+      "author" : [ "Thomas N. Kipf", "Max Welling." ],
+      "venue" : "Proceedings of International Conference on Learning Representations.",
+      "citeRegEx" : "Kipf and Welling.,? 2017",
+      "shortCiteRegEx" : "Kipf and Welling.",
+      "year" : 2017
+    }, {
+      "title" : "Query graph generation for answering multi-hop complex questions from knowledge bases",
+      "author" : [ "Yunshi Lan", "Jing Jiang." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 969–974.",
+      "citeRegEx" : "Lan and Jiang.,? 2020",
+      "shortCiteRegEx" : "Lan and Jiang.",
+      "year" : 2020
+    }, {
+      "title" : "Knowledge base question answering with topic units",
+      "author" : [ "Yunshi Lan", "Shuohang Wang", "Jing Jiang." ],
+      "venue" : "Proceedings of the Twenty-Eighth International Joint Conference on Artificial Intelligence, pages 5046–5052.",
+      "citeRegEx" : "Lan et al\\.,? 2019",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "End-to-end neural coreference resolution",
+      "author" : [ "Kenton Lee", "Luheng He", "Mike Lewis", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 188–197.",
+      "citeRegEx" : "Lee et al\\.,? 2017",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Knowledge base question answering via encoding of complex query graphs",
+      "author" : [ "Kangqi Luo", "Fengli Lin", "Xusheng Luo", "Kenny Zhu." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 2185–2194.",
+      "citeRegEx" : "Luo et al\\.,? 2018",
+      "shortCiteRegEx" : "Luo et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Stepwise reasoning for multi-relation question answering over knowledge graph with weak supervision",
+      "author" : [ "Yunqi Qiu", "Yuanzhuo Wang", "Xiaolong Jin", "Kun Zhang." ],
+      "venue" : "Proceedings of the 13th International Conference on Web Search and Data Min-",
+      "citeRegEx" : "Qiu et al\\.,? 2020",
+      "shortCiteRegEx" : "Qiu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Learning endto-end goal-oriented dialog with multiple answers",
+      "author" : [ "Janarthanan Rajendran", "Jatin Ganhotra", "Satinder Singh", "Lazaros Polymenakos." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages",
+      "citeRegEx" : "Rajendran et al\\.,? 2018",
+      "shortCiteRegEx" : "Rajendran et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "CoQA: A conversational question answering challenge",
+      "author" : [ "Siva Reddy", "Danqi Chen", "Christopher D. Manning." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 7:249–266.",
+      "citeRegEx" : "Reddy et al\\.,? 2019",
+      "shortCiteRegEx" : "Reddy et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Complex sequential question answering: Towards learning to converse over linked question answer pairs with a knowledge graph",
+      "author" : [ "Amrita Saha", "Vardaan Pahuja", "Mitesh M. Khapra", "Karthik Sankaranarayanan", "Sarath Chandar." ],
+      "venue" : "Proceedings",
+      "citeRegEx" : "Saha et al\\.,? 2018",
+      "shortCiteRegEx" : "Saha et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Modeling relational data with graph convolutional networks",
+      "author" : [ "Michael Sejr Schlichtkrull", "Thomas N. Kipf", "Peter Bloem", "Rianne van den Berg", "Ivan Titov", "Max Welling." ],
+      "venue" : "Proceedings of European Semantic Web Conference, pages 593–607.",
+      "citeRegEx" : "Schlichtkrull et al\\.,? 2018",
+      "shortCiteRegEx" : "Schlichtkrull et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A hierarchical latent variable encoder-decoder model for generating dialogues",
+      "author" : [ "Iulian Vlad Serban", "Alessandro Sordoni", "Ryan Lowe", "Laurent Charlin", "Joelle Pineau", "Aaron Courville", "Yoshua Bengio." ],
+      "venue" : "Proceedings of the Thirty-First AAAI Conference on",
+      "citeRegEx" : "Serban et al\\.,? 2017",
+      "shortCiteRegEx" : "Serban et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Effective search of logical forms for weakly supervised knowledge-based question answering",
+      "author" : [ "Tao Shen", "Xiubo Geng", "Guodong Long", "Jing Jiang", "Chengqi Zhang", "Daxin Jiang." ],
+      "venue" : "Proceedings of the Twenty-Ninth International Joint Con-",
+      "citeRegEx" : "Shen et al\\.,? 2020",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Multi-task learning for conversational question answering over a large-scale knowledge base",
+      "author" : [ "Tao Shen", "Xiubo Geng", "Tao Qin", "Daya Guo", "Duyu Tang", "Nan Duan", "Guodong Long", "Daxin Jiang." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical",
+      "citeRegEx" : "Shen et al\\.,? 2019",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Pullnet: Open domain question answering with iterative retrieval on knowledge bases and text",
+      "author" : [ "Haitian Sun", "Tania Bedrax-Weiss", "William W. Cohen." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing",
+      "citeRegEx" : "Sun et al\\.,? 2019",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Open domain question answering using early fusion of knowledge bases and text",
+      "author" : [ "Haitian Sun", "Bhuwan Dhingra", "Manzil Zaheer", "Kathryn Mazaitis", "Ruslan Salakhutdinov", "William W. Cohen." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Meth-",
+      "citeRegEx" : "Sun et al\\.,? 2018",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Enhancing key-value memory neural networks for knowledge based question answering",
+      "author" : [ "Kun Xu", "Yuxuan Lai", "Yansong Feng", "Zhiguo Wang." ],
+      "venue" : "Proceedings of The 17th Annual Conference of the North American Chapter of the Association for Com-",
+      "citeRegEx" : "Xu et al\\.,? 2019",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Semantic parsing via staged query graph generation: Question answering with knowledge base",
+      "author" : [ "Wen-tau Yih", "Ming-Wei Chang", "Xiaodong He", "Jianfeng Gao." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Lin-",
+      "citeRegEx" : "Yih et al\\.,? 2015",
+      "shortCiteRegEx" : "Yih et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "The value of semantic parse labeling for knowledge base question answering",
+      "author" : [ "Wen-tau Yih", "Matthew Richardson", "Christopher Meek", "Ming-Wei Chang", "Jina Suh." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Yih et al\\.,? 2016",
+      "shortCiteRegEx" : "Yih et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Improved neural relation detection for knowledge base question answering",
+      "author" : [ "Mo Yu", "Wenpeng Yin", "Kazi Saidul Hasan", "Cicero dos Santos", "Bing Xiang", "Bowen Zhou." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational",
+      "citeRegEx" : "Yu et al\\.,? 2017",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Complex question decomposition for semantic parsing",
+      "author" : [ "Haoyu Zhang", "Jingjing Cai", "Jianjun Xu", "Ji Wang." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 4477–4486.",
+      "citeRegEx" : "Zhang et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 20,
+      "context" : "tion Answering (KBQA) has started to attract people’s attention (Saha et al., 2018; Christmann et al., 2019; Guo et al., 2018; Shen et al., 2019).",
+      "startOffset" : 64,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 2,
+      "context" : "tion Answering (KBQA) has started to attract people’s attention (Saha et al., 2018; Christmann et al., 2019; Guo et al., 2018; Shen et al., 2019).",
+      "startOffset" : 64,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 7,
+      "context" : "tion Answering (KBQA) has started to attract people’s attention (Saha et al., 2018; Christmann et al., 2019; Guo et al., 2018; Shen et al., 2019).",
+      "startOffset" : 64,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 24,
+      "context" : "tion Answering (KBQA) has started to attract people’s attention (Saha et al., 2018; Christmann et al., 2019; Guo et al., 2018; Shen et al., 2019).",
+      "startOffset" : 64,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 2,
+      "context" : "work (Christmann et al., 2019) believed that the answers to sequential questions should be closely connected to each other in the KB.",
+      "startOffset" : 5,
+      "endOffset" : 30
+    }, {
+      "referenceID" : 2,
+      "context" : "We evaluate our proposed method on two conversational KBQA datasets, ConvQuestions (Christmann et al., 2019) and ConvCSQA (which is a subset we derived from CSQA (Saha et al.",
+      "startOffset" : 83,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2019) and ConvCSQA (which is a subset we derived from CSQA (Saha et al., 2018)).",
+      "startOffset" : 61,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 29,
+      "context" : "Starting from these entities, the Query Generator generates a set of candidate query graphs (Yih et al., 2016) from K, which lead to",
+      "startOffset" : 92,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 30,
+      "context" : "an existing single-turn KBQA approach (Yu et al., 2017; Luo et al., 2018; Yih et al., 2016; Lan et al., 2019).",
+      "startOffset" : 38,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 16,
+      "context" : "an existing single-turn KBQA approach (Yu et al., 2017; Luo et al., 2018; Yih et al., 2016; Lan et al., 2019).",
+      "startOffset" : 38,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 29,
+      "context" : "an existing single-turn KBQA approach (Yu et al., 2017; Luo et al., 2018; Yih et al., 2016; Lan et al., 2019).",
+      "startOffset" : 38,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 14,
+      "context" : "an existing single-turn KBQA approach (Yu et al., 2017; Luo et al., 2018; Yih et al., 2016; Lan et al., 2019).",
+      "startOffset" : 38,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 22,
+      "context" : "Similar to previous methods (Serban et al., 2017; Saha et al., 2018), we leverage a hierarchical en-",
+      "startOffset" : 28,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 20,
+      "context" : "Similar to previous methods (Serban et al., 2017; Saha et al., 2018), we leverage a hierarchical en-",
+      "startOffset" : 28,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 22,
+      "context" : "It is worth noting that although our Conversation History Encoder is similar to how previous work encodes conversation history (Serban et al., 2017), previous work uses the representation ht−1 directly as part of the representation of the current question, which introduces noise.",
+      "startOffset" : 127,
+      "endOffset" : 148
+    }, {
+      "referenceID" : 12,
+      "context" : "The Focal Entity Predictor employs a graph convolution network (GCN) (Kipf and Welling, 2017; Schlichtkrull et al., 2018) to derive a focal score for each node in the Entity Transition Graph at each turn of the conversation.",
+      "startOffset" : 69,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 21,
+      "context" : "The Focal Entity Predictor employs a graph convolution network (GCN) (Kipf and Welling, 2017; Schlichtkrull et al., 2018) to derive a focal score for each node in the Entity Transition Graph at each turn of the conversation.",
+      "startOffset" : 69,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 2,
+      "context" : "3293 ConvQuestions: This is a large-scale conversational KBQA dataset4 created via Amazon Mechanical Turk (Christmann et al., 2019).",
+      "startOffset" : 106,
+      "endOffset" : 131
+    }, {
+      "referenceID" : 20,
+      "context" : "ConvCSQA: This dataset comes from the the CSQA dataset5 (Saha et al., 2018), originally created for a setting similar to conversational KBQA.",
+      "startOffset" : 56,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 22,
+      "context" : "ConvHistory: This method follows a standard way of encoding the conversational history using a two-level hierarchical encoder (Serban et al., 2017).",
+      "startOffset" : 126,
+      "endOffset" : 147
+    }, {
+      "referenceID" : 11,
+      "context" : "optimizer (Kingma and Ba, 2015) with a learning rate of 3e− 5, and the batch size is 1.",
+      "startOffset" : 10,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 2,
+      "context" : "Results of ConvQuestions are copied from (Christmann et al., 2019).",
+      "startOffset" : 41,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 1,
+      "context" : "Traditional methods tried to retrieve the correct answers from the KB via either embeddingbased methods (Bordes et al., 2014; Xu et al., 2019; Sun et al., 2018, 2019; Qiu et al., 2020; He et al., 2021) or semantic parsing-based methods (Berant et al.",
+      "startOffset" : 104,
+      "endOffset" : 201
+    }, {
+      "referenceID" : 27,
+      "context" : "Traditional methods tried to retrieve the correct answers from the KB via either embeddingbased methods (Bordes et al., 2014; Xu et al., 2019; Sun et al., 2018, 2019; Qiu et al., 2020; He et al., 2021) or semantic parsing-based methods (Berant et al.",
+      "startOffset" : 104,
+      "endOffset" : 201
+    }, {
+      "referenceID" : 17,
+      "context" : "Traditional methods tried to retrieve the correct answers from the KB via either embeddingbased methods (Bordes et al., 2014; Xu et al., 2019; Sun et al., 2018, 2019; Qiu et al., 2020; He et al., 2021) or semantic parsing-based methods (Berant et al.",
+      "startOffset" : 104,
+      "endOffset" : 201
+    }, {
+      "referenceID" : 9,
+      "context" : "Traditional methods tried to retrieve the correct answers from the KB via either embeddingbased methods (Bordes et al., 2014; Xu et al., 2019; Sun et al., 2018, 2019; Qiu et al., 2020; He et al., 2021) or semantic parsing-based methods (Berant et al.",
+      "startOffset" : 104,
+      "endOffset" : 201
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2021) or semantic parsing-based methods (Berant et al., 2013; Yih et al., 2015; Luo et al., 2018; Zhang et al., 2019; Lan and Jiang, 2020).",
+      "startOffset" : 42,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 28,
+      "context" : ", 2021) or semantic parsing-based methods (Berant et al., 2013; Yih et al., 2015; Luo et al., 2018; Zhang et al., 2019; Lan and Jiang, 2020).",
+      "startOffset" : 42,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2021) or semantic parsing-based methods (Berant et al., 2013; Yih et al., 2015; Luo et al., 2018; Zhang et al., 2019; Lan and Jiang, 2020).",
+      "startOffset" : 42,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 31,
+      "context" : ", 2021) or semantic parsing-based methods (Berant et al., 2013; Yih et al., 2015; Luo et al., 2018; Zhang et al., 2019; Lan and Jiang, 2020).",
+      "startOffset" : 42,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2021) or semantic parsing-based methods (Berant et al., 2013; Yih et al., 2015; Luo et al., 2018; Zhang et al., 2019; Lan and Jiang, 2020).",
+      "startOffset" : 42,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 18,
+      "context" : "tems and conversational QA in general, which require techniques to sequentially generate responses based on the interactions with users (Ghazvininejad et al., 2018; Rajendran et al., 2018; Das et al., 2017).",
+      "startOffset" : 136,
+      "endOffset" : 206
+    }, {
+      "referenceID" : 3,
+      "context" : "tems and conversational QA in general, which require techniques to sequentially generate responses based on the interactions with users (Ghazvininejad et al., 2018; Rajendran et al., 2018; Das et al., 2017).",
+      "startOffset" : 136,
+      "endOffset" : 206
+    }, {
+      "referenceID" : 22,
+      "context" : "different techniques such as a hierarchical neural network (Serban et al., 2017; Reddy et al., 2019) or modeling the flow of the conversation along with a passage (Huang et al.",
+      "startOffset" : 59,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 19,
+      "context" : "different techniques such as a hierarchical neural network (Serban et al., 2017; Reddy et al., 2019) or modeling the flow of the conversation along with a passage (Huang et al.",
+      "startOffset" : 59,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2019) or modeling the flow of the conversation along with a passage (Huang et al., 2019; Gao et al., 2019, 2020).",
+      "startOffset" : 70,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 8,
+      "context" : "Some follow-up work (Guo et al., 2019; Shen et al., 2020) focused on the meta-learning setting or the effective search strategy under weak supervision, which is beyond the focus of this paper.",
+      "startOffset" : 20,
+      "endOffset" : 57
+    }, {
+      "referenceID" : 23,
+      "context" : "Some follow-up work (Guo et al., 2019; Shen et al., 2020) focused on the meta-learning setting or the effective search strategy under weak supervision, which is beyond the focus of this paper.",
+      "startOffset" : 20,
+      "endOffset" : 57
+    } ],
+    "year" : 2021,
+    "abstractText" : "Conversational KBQA is about answering a sequence of questions related to a KB. Follow-up questions in conversational KBQA often have missing information referring to entities from the conversation history. In this paper, we propose to model these implied entities, which we refer to as the focal entities of the conversation. We propose a novel graph-based model to capture the transitions of focal entities and apply a graph neural network to derive a probability distribution of focal entities for each question, which is then combined with a standard KBQA module to perform answer ranking. Our experiments on two datasets demonstrate the effectiveness of our proposed method.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

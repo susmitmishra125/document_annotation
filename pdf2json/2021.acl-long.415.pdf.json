@@ -1,0 +1,770 @@
+{
+  "name" : "2021.acl-long.415.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Learning to Explain: Generating Stable Explanations Fast",
+    "authors" : [ "Xuelin Situ", "Ingrid Zukerman", "Cecile Paris", "Sameen Maruf", "Gholamreza Haffari" ],
+    "emails" : [ "firstname.lastname@monash.edu", "firstname.lastname@data61.csiro.au" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 5340–5355\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n5340\nThe importance of explaining the outcome of a machine learning model, especially a blackbox model, is widely acknowledged. Recent approaches explain an outcome by identifying the contributions of input features to this outcome. In environments involving large blackbox models or complex inputs, this leads to computationally demanding algorithms. Further, these algorithms often suffer from low stability, with explanations varying significantly across similar examples. In this paper, we propose a Learning to Explain (L2E) approach that learns the behaviour of an underlying explanation algorithm simultaneously from all training examples. Once the explanation algorithm is distilled into an explainer network, it can be used to explain new instances. Our experiments on three classification tasks, which compare our approach to six explanation algorithms, show that L2E is between 5 and 7.5 × 104 times faster than these algorithms, while generating more stable explanations, and having comparable faithfulness to the black-box model."
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Explaining the mechanisms and reasoning behind the outcome of complex machine learning models, such as deep neural networks (DNNs), is crucial. Such explanations can shed light on the potential flaws and biases within these powerful and widely applicable models, e.g., in medical diagnosis (Caruana et al., 2015) and judicial systems (Rich, 2016).\nExisting explainability methods mostly produce explanations, or rationales (DeYoung et al., 2020), which identify the attributions of features in an input example, e.g., are they contributing positively or negatively to the prediction of an outcome. For text classifiers, this means identifying words or phrases in an input document that account for a\nL2E are yellow-highlighted, and those from a baseline A are underlined. L2E considers words like ‘Microsoft’ and ‘Windows’ important in both examples. ŷx is the model’s prediction, and ŷxr· is the model’s prediction after removing important words in x.\nprediction. Current approaches are typically computationally demanding, requiring expensive operations, such as consulting a black-box model multiple times (Zeiler and Fergus, 2014), or generating samples to learn an approximate but explainable transparent model (Ribeiro et al., 2016). This computational demand reduces the utility of these explanation algorithms, especially for large black-box models, long documents and real-time scenarios (Kim et al., 2018). Further, these algorithms generate explanations for different examples independently. This may lead to the generation of different explanations for similar examples, which is undesirable. For example, a black-box predicts with similar confidence (99% and 98%) that the topic of the two semantically similar documents in Figure 1 is Sci/Tech. However, even though the words ‘Microsoft’ and ‘Windows’ appear in both documents, the baseline explainer A deems ‘Windows’ to be important for the top document, and ‘Microsoft’ for the bottom document (that is, mask-\ning these words results in a significant drop in the black-box’s confidence).\nIn this paper, we present a learning to explain (L2E) approach that efficiently learns the commonalities of the explanation process across different examples. This, in turn, leads to explanations that exhibit stability, i.e., important words are chosen consistently, without loss of faithfulness to the underlying black-box.1 Given a set of examples paired with their explanations produced by an existing method, e.g., LIME (Ribeiro et al., 2016), our approach uses a DNN to learn the explanation algorithm. DNNs are Turing complete (Pérez et al., 2019; Montufar et al., 2014); therefore, given enough training data and learning capacity, they should be able to learn the existing explanation algorithms. This is akin to Knowledge Distillation (Hinton et al., 2015), where a teacher, or in our case a teacher algorithm, distils knowledge into a student network.\nOur contributions are: (i) the L2E framework, which is general, and can successfully learn to produce explanations from several teacher explainers; (ii) two learning formulations, i.e., Ranking and Sequence Labelling, to enable L2E to circumvent the high variance of non-discrete teacher explanations via discretization; (iii) an experimental setup to compare L2E against six popular explanation algorithms, and a comprehensive evaluation to investigate the stability and faithfulness of L2E on three text classification tasks; (iv) a methodology that employs human rationales as proxies for the ground-truth explanations of a black-box model. The core of this method is a modified training protocol whereby the model makes neutral predictions if human rationales are absent."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "We consider two main approaches to explanation generation: algorithmic and model-based.\nAlgorithmic Approaches. These approaches can be broadly categorized into gradient-based, attention-based and perturbation-based methods.\nGradient-based methods (Simonyan et al., 2013; Sundararajan et al., 2017; Shrikumar et al., 2017; Erion et al., 2019) or backpropagation-based methods (Bach et al., 2015) require access to the blackbox, and are mostly applied to models with differentiable functions. Further, they may be sensitive\n1This approach does not aim to improve the transparency (Lipton, 2018) of the black-box model.\nto randomized model initializations or permuted data labels (Adebayo et al., 2018), which is undesirable. These methods can be computationally heavy in the case of complex black-box models (Wu and Ong, 2021), e.g., BERT (Devlin et al., 2018).\nAttention-based methods (Wiegreffe and Pinter, 2019) can only be applied to Transformer-based models (Vaswani et al., 2017), and their effectiveness is questionable (Jain and Wallace, 2019; Serrano and Smith, 2019).\nPerturbation-based methods approximate feature importance by observing changes in a model’s outcome after a feature is changed. They either consider changes in performance as an indicator of feature importance directly (Martens and Provost, 2014; Zeiler and Fergus, 2014; Schwab and Karlen, 2019), or they employ a higher-order approximation of the decision boundary (Ribeiro et al., 2016; Lundberg and Lee, 2017). Perturbation-based methods are typically computationally inefficient for explaining high-dimensional data, and they suffer from high variance due to perturbation randomness (Slack et al., 2020; Chen et al., 2019).\nModel-based Approaches. These approaches train the explainer with an objective function to improve efficiency at test time. The closest work to ours is by Schwab and Karlen (2019), who train an explainer using a causality-based explanation algorithm. However, these approaches do not learn from arbitrary algorithms or discretize feature weights — the high variation of continuous weights may impair the ability to capture the commonalities in an explanation algorithm. Jain et al. (2020) discretize the weights produced by an existing method, but they use these weights to build a faithful classifier for an underlying blackbox model, rather than using them to explain the model directly.\nOther works train a classifier and an explainer jointly in order to incorporate explainability directly into the classifier (Lei et al., 2016; Camburu et al., 2018). Unlike these approaches, we do not change the classifier or require an expensive process to collect human rationales, as done in (Camburu et al., 2018). Lastly, a few works use information-theoretic objectives to train an explainer directly from the underlying classifier (Chen et al., 2018; Bang et al., 2019). These explainers require careful training to select a low number of important features (Paranjape et al., 2020); hence, some input features do not have attributions.\nGoodness of Explanations. Researchers have quantified the goodness of an explanation in different ways, such as brevity, alignment to human rationales, contrastiveness and stability.\nMinimal (brief) explanations are generated in (Martens and Provost, 2014; Ribeiro et al., 2018; Alvarez-Melis et al., 2019; Bang et al., 2019). Explanations aligned with human rationales are produced in (Sen et al., 2020; Atanasova et al., 2020), and contrastive explanations are generated in (Miller, 2018; Alvarez-Melis et al., 2019).\nAccording to Atanasova et al. (2020), only a few algorithmic explanation methods produce stable explanations (Robnik-Šikonja and Bohanec, 2018), e.g., LIME (Ribeiro et al., 2016). To the best of our knowledge, we are the first to explore the stability of explanations in model-based approaches."
+    }, {
+      "heading" : "3 Learning to Explain (L2E)",
+      "text" : "L2E can be applied to any Natural Language Processing task to which an underlying feature-based explanation algorithm can be applied, such as Natural Language Inference and Question Answering (Wang et al., 2020). In this paper, we focus on explaining text classification models.\nOur setup requires two inputs: (i) a black-box text classification model ŷ = fθ(x), which assigns document x to a label ŷ ∈ Y , where Y is the label set; and (ii) an explanation algorithm A(x, ŷ, fθ) → w, which generates explanation w ∈ R|x| for the class of document x obtained by the black-box fθ(x). A can be any off-the-shelf explanation algorithm; and wi can be thought as the importance weight of xi – the ith token of a document.\nThe main idea of L2E is to train a separate explanation model gφ(x) to predict the explanation generated by A(.) for fθ(.) (Figures 2a and 2b). Intuitively, our approach distils the explanation algorithm A into the explanation model gφ . As confirmed by our experiments (§4.5), this has several benefits. Firstly, it leads to stable explanations, as gφ can captureA’s common patterns when generating explanations for different documents. Secondly, it speeds up the explanation generation process compared to many existing explanation algorithms, which rely on computationally heavy operations, such as consulting the black-box model multiple times, e.g., Occlusion (Zeiler and Fergus, 2014), or sampling, e.g., LIME (Ribeiro et al., 2016). Our approach, which learns a model with explanations\nAlgorithm 1 Learning to Explain (L2E) 1: D: a training set of documents 2: fθ : the original deep NN model 3: gφ : the explainer deep NN model 4: A: the underlying explanation method 5: procedure TRAINEXPLAINER(D, fθ ) 6: Z ← ∅ 7: for each input x ∈ D do 8: ŷ ← fθ(x) 9: w ← A(x, ŷ, fθ) 10: Z ← Z ∪ (x, ŷ,w) 11: end for 12: initialize φ randomly 13: t← 0 14: while a stopping condition is not met do 15: Randomly pick (xt, ŷt,wt) ∈ Z 16: φ ← φ − ηt∇φL(gφ(xt, ŷt),wt) 17: t← t+ 1 18: end while 19: return the explanation model gφ 20: end procedure\nof all training data, takes advantage of the computations done by A, and generates more stable explanations faster.\nOur approach to train the explanation model gφ is summarized in Algorithm 1. First, the algorithm generates training data in the form of triplets (x, ŷ,w) (lines 7–11), and then it trains the explanation model using supervised learning (lines 14–18). At test time, the trained model is deployed to generate explanations for unseen documents.\nA crucial component in training the explanation model under supervised learning is the loss function L(gφ(xt, ŷ),w). It penalizes a deviation of the predicted explanation gφ(xt, ŷ) from the ground truth explanation w. This loss function is determined by our supervised learning formulation.\nGiven thatw is a continuous-valued vector, learning the model gθ may be cast as a multivariate regression problem. However, the continuous feature attributions generated by existing explanation algorithms could be sensitive to initializations (Slack et al., 2020). Further, manually annotated rationales (highlighting important words in a document) are sufficient for people to understand/perform a classification task (Zaidan et al., 2007). So, instead of a regression formulation, we consider two supervised learning formulations for discretized outputs: Ranking and Sequence Labeling.\nRanking Formulation. In this formulation, the explanation model aims to learn the ranking of the document tokens from their importance weights. That is, we consider the ordering of the token weights induced by w, and train the explanation\nmodel gφ such that it induces the same ordering. Specifically, the loss function is as follows:\nL(gφ(x, ŷ),w) = − |x|−1∑ i=1 |x|∑ j=i+1 log evk evi + evj\nwhere vi (vj) is the ith (jth) component of the importance vector v = gφ(x, ŷ) predicted by the explanation model, and k = arg maxk′∈{i,j} |wk′ |. In other words, each pair of token weights is compared, and the parameters are learnt such that a token with a high importance weight under A also gets a high score under gφ .\nSequence Labeling Formulation. Here, explanation generation is treated as a sequence labeling problem, where the continuous importance weights are discretized according to the heuristic h, whereby the importance weights are partitioned along two dimensions, high/low and positive/neutral/negative, according to the mean value of the positive/negative weights from the baseline explanation method A. Thus, the labels are recoded to {high negative, low negative, neutral, low positive, high positive}. The explanation model gφ is then trained to predict the label of the tokens according to the following loss function:\nL(gφ(x, ŷ),w) = − |x|∑ i=1 log Pr(h(wi)|gφ,i(x, ŷ))\nwhere gφ,i(x, ŷ) is the predicted distribution over the labels of the ith token of the document, and h(wi) is the discrete label produced using the discretization heuristic h.\nOwing to the quadratic complexity of the Ranking formulation, compared to the linear complexity of Sequence Labeling, we recommend using Ranking when the input is short, and a fine-grained order\nof feature attributions is required. Otherwise, the Sequence Labeling formulation is a better option."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Tasks and Black-Box Models (fθ )",
+      "text" : "We conduct experiments on three classification tasks; each task has a different black-box classifier chosen based on the best accuracy on the selected dataset as reported in the literature.2 Dataset statistics are reported in Appendix A.\n• Topic Classification. The AG corpus (Zhang et al., 2015) comprises news articles on multiple topics. We separate 10% of the training documents for the dev set. The black-box classifier is a fine-tuned BERT model (Devlin et al., 2018) with 12 hidden layers and 12 attention heads. It achieves a 92.6% test accuracy.\n• Sentiment Analysis. The SST dataset (Socher et al., 2013) comprises movie reviews with positive and negative sentiments. The black-box classifier is a distilled BERT model (Sanh et al., 2019) with 6 layers and 12 attention heads from Hugging Face (Wolf et al., 2019). It achieves 90% test accuracy.\n• Linguistic Acceptability. The CoLA dataset (Warstadt et al., 2019) contains sentences that are deemed acceptable or unacceptable in terms of their grammatical correctness. The black-box classifier is a fine-tuned ALBERT model (Lan et al., 2020) with 12 attention heads and 12 layers. It achieves a 74% test accuracy.\n2All black-box models are open-sourced by TextAttack (Morris et al., 2020) unless otherwise stated.\n4.2 Baseline Explanation Methods (A) We use six baselines for our experimental setup: Occlusion (Zeiler and Fergus, 2014; Schwab and Karlen, 2019), Gradient (Simonyan et al., 2013), LRP (Bach et al., 2015), LIME (Ribeiro et al., 2016), Kernel SHAP (Lundberg and Lee, 2017) and Deep SHAP (Shrikumar et al., 2017; Lundberg and Lee, 2017). The detailed setup of these baselines is provided in Appendix B."
+    }, {
+      "heading" : "4.3 Explanation Models (gφ)",
+      "text" : "We use a Transformer encoder (Vaswani et al., 2017) with 4 blocks and 4 attention heads as gφ .3 All models are trained with a Stochastic Gradient Descent optimizer and a fixed learning rate (1e−4) until convergence. To balance the different statuses of model convergence, we train all models with three random parameter initializations and report the average values of their performance metrics.\nWe condition the explainer model gφ on the label ŷ predicted by the underlying black-box model fθ by appending ŷ to the start and the end of the input document before passing it to gφ (Figure 2a). Thus, gφ can leverage the predicted label in the attention computation. For the sequence labeling formulation, we also introduce a softmax layer on top to produce the labeling distribution over the discrete labels for each token, as detailed in Figure 2b."
+    }, {
+      "heading" : "4.4 Performance Metrics",
+      "text" : "Faithfulness. A standard approach to evaluate the faithfulness of an explanation to a black-box classification model is to measure the degree of agreement between the prediction given the full document and the prediction given the explanation (Ribeiro et al., 2016). However, the aim of L2E is to approximate an existing explanation method A, which constitutes a layer of separation from the original black-box fθ . Hence, we provide two faithfulness evaluations for our approach when the ground-truth explanation is unavailable:\n• Prediction based. We measure the agreement between: (a) the predictions of the black-box model fθ when the explanations generated by gφ are given as input, and (b) fθ ’s predictions when A’s explanations are given as input (instead of using the full document);4\n3We use the fairseq framework (Ott et al., 2019) for all our implementations of gφ . Our source code is available at https://github.com/situsnow/L2E.\n4We do not evaluate the faithfulness of L2E to A in terms\n• Confidence based. We adopt the ∆log-odds(x) metric used by Schwab and Karlen (2019), which measures the difference in the confidence of the fθ black-box model in a prediction before and after masking the words in an explanation.\nlog-odds(Pr(ŷ|fθ(x)))−log-odds(Pr(ŷ|fθ(x̃)))\nwhere ŷ is the predicted output of fθ(x), log-odds(Pr) = log Pr1−Pr , and x̃ is a version of input x where the tokens in the explanation are masked out. We expect a high ∆log-odds value if we mask positive important words in x̃, and a low value if we mask unimportant or negative important words.\nWe report the average of each of these metrics across the test documents.\nStability. We employ Intersection over Union (IoU) to measure explanation stability across similar instances. Specifically, for each test instance x, we select its nearest neighbors N (x) according to one of two pairwise document similarity metrics: semantic similarity – cosine of their BERT representations; and lexical similarity – ratio of overlapping n-grams. Details appear in Appendix C. IoU(x,N (x)) then measures the consistency of explanations of x and those of its neighbours,\n1 |N (x)| ∑\nx′∈N (x)\n∑ `∈L\n`6=neutral |v`x ∩ v`x′ |∑\n`∈L `6=neutral\n|v`x ∪ v`x′ | (1)\nwhere L is the discretized label set in the Sequence Labeling formulation or the top K words in the Ranking formulation, and v`x is the set of tokens with label ` in the predicted explanation gφ(x, ŷ). We report the average of IoU(x,N (x)) across documents in the test set."
+    }, {
+      "heading" : "4.5 Results and Discussion",
+      "text" : "We start by investigating the faithfulness of an explanation model to the black-box model fθ . Once faithfulness has been established, we investigate stability and speed compared to the underlying explanation methods A. We also include a Random baseline, which displays the performance obtained by randomly selecting the same K number of words as we select from explanations produced by L2E and A in each row of the table, and averaging it over the six comparisons.\nof token importance, because A is not always faithful to the black-box model.\nFaithfulness. For the Ranking formulation of L2E, we select the top 30% of the important words in each test sample.5 For the Sequence Labeling formulation, we select the same number of positive/negative words identified by L2E and A.\nTable 1 shows the Prediction-based agreement between the black-box model fθ and our method L2E, between fθ and the underlying explainer A, and between L2E and A. We see that the explanations generated by L2E are equally predictive of the output class as those generated by A in both the Ranking and the Sequence Labeling formulations. We also note that the L2E version that learns with the Ranking formulation is often less faithful, though not significantly, to the black-box model fθ than A compared to the version that learns with the Sequence Labeling formulation.6 For example, the percentage agreement of L2E-Ranking is lower than that of Occlusion for the three datasets, while the agreement of L2E-SequenceLabeling is higher than that of Occlusion for these datasets. Interestingly, when the baseline explanation algorithm does not perform well, e.g., Kernel SHAP on SST, L2E is still able to find words that are predictive of the output of fθ . In such circumstances, the agree-\n5We select 30% to ensure sufficient important words are selected in each dataset given their average document length. We use the same percentage in the Stability evaluation.\n6Statistical significance (α<0.05) was measured by performing the Wilcoxon Signed-Rank Test (Woolson, 2007) followed by a sequential Holm-Bonferroni correction (Holm, 1979; Abdi, 2010) for all pairs of comparisons in a table.\nment between L2E and A is quite low (“Both” is 58% and 51% for Ranking and Sequence Labeling respectively). The low performance of Kernel SHAP may be attributed to insufficient samples (103 in this case) in the kernel computation for SST, while L2E could still utilize all the samples during training.\nTable 2 presents the ∆log-odds results for positive explanation words in the Sequence Labeling formulation. Similar results are observed for negative explanation words in the same formulation, and top important words in the Ranking formulation. These results appear in Appendix D. They are obtained by randomly selecting 100 documents in the test set, and masking the same number of important words in each document based on the explanations generated by L2E and by A.\nWe observe that some baselines have inconsistent faithfulness for different datasets. For example, LRP and Deep SHAP perform worse than Kernel SHAP for the News dataset, but better for SST. We also note that, when one baseline performs worse than the other baselines, e.g., Kernel SHAP for SST, our method L2E still performs significantly better than that baseline. This result demonstrates that our model can learn important words that yield more faithful explanations than those learned by the teacher explainer. Interestingly, none of the results for the CoLA dataset, from the baseline A or L2E, significantly outperforms the Random baseline. This flags a drawback of evaluating explanation faithfulness on short documents.\nStability. For each test document, we consider the top-3 similar documents in the test set, and report the average IoU as explained in §4.4. Table 3 shows the results obtained using semantic similarity for the baselineA and L2E. Similar results with lexical similarity appear in Appendix C. From Table 3, we see that, in most cases, our method statistically significantly outperforms the baseline for all three datasets. For both formulations, Ranking and Sequence Labeling, L2E achieves a higher stability than the baseline A, even in cases where A’s IoU is comparable to that of the Random baseline, e.g., Gradient for SST and CoLA. These results show that learning the explanation process across different examples, as done by L2E, can capture more commonalities (higher stability) than generating explanation individually (baselines).\nOverall, the LIME baseline performs consistently better than most baselines in terms of faithfulness and stability across the three datasets. Therefore, L2E also performs better when it learns from LIME than when it learns from other baselines.\nComputational Efficiency. We now compare the efficiency of L2E against that of the baseline explanation algorithms A when generating explanations for test documents. In our experiments, the black-box is a transformer-based model comprising L layers, H attention-heads and D embedding dimensions. The complexity of this model when predicting a document of size N is then O(L×N ×D× (D +N +H)) (Gu et al., 2020). Various factors contribute to the computational demands of existing explanation algorithms (details in Appendix B), and make the complexity of these algorithms grow with the size of the black-box\nmodel. These factors include the size of the input document (Occlusion), the sample size (LIME, Kernel SHAP and Deep SHAP) etc. In contrast, L2E is a distillation of any explanation algorithm, employing a smaller architecture than the black-box, e.g., fewer layers and attention heads, and lower embedding dimensions.\nFigure 3 shows the inference time of L2ESequenceLabeling compared to that of the baseline explainers for the IMDB-R dataset.7 We only show the results obtained with Sequence Labeling, since the inference time of L2E models is independent of the learning formulation. As seen in Figure 3, L2E requires statistically significantly less time than any of the six baseline explanation algorithms for IMDB-R. Similar patterns were observed for the\n7All timing information is collected with the same hardware configuration: Intel Xeon E5-2680 v3, NVIDIA Tesla K80, 32 GB RAM.\nother three datasets (Appendix E). Finally, L2E only needs a forward pass through the explainer DNN. Comparing with Gradient and LRP, which require only one backpropagation through the black-box DNN, L2E is respectively 5 and 10 times faster for all datasets (all black-box sizes appear in §4.1 and Appendix F)."
+    }, {
+      "heading" : "5 Evaluation with Human Rationales",
+      "text" : "Evaluation of explanation methods for DNNs is challenging, as ground-truth explanations are often unavailable. In this section, we propose to address this issue using the IMDB-R dataset (Zaidan et al., 2007), which contains movie reviews x together with their sentiment y, as well as rationales r annotated by people for the sentiment label. Our use of rationales for evaluating explanations is related to that in (Osman et al., 2020), where synthetic data are generated from apriori fixed rationales. Specifically, we generate new data by assigning a “neutral” label to an example where the human rationales are masked. We then use both the original data (without masking) and the new data to train the black-box model, where the training protocol forces the classifier to make a “neutral” prediction when the human rationales are removed from the review. More formally, we maximize the following training objective,∑\n(x,r,y)∈D\nlog Pr(y = fθ(x))+\nlog Pr(NEUTRAL = fθ(x − r))\nwhere x − r denotes the input x with the rationale words r masked out, NEUTRAL is an extra label,8 and D is the training data. Our classifier achieves an accuracy of 83.83% on the training set, 79.68% on the validation set and 74.5% on the test set. Due to the large document sizes (Table 6 in Appendix A) and the quadratic time complexity of the Ranking formulation as a function of document size, we only train L2E with the Sequence Labeling formulation; we use lexical similarity to measure IoU, due to the timeconsuming computation of semantic similarity with BERT. Details about the dataset, the classifier and the explainer’s architecture appear in Appendix F.\nThe faithfulness and stability of the explanation methods are evaluated as follows.\n8It simulates abstaining from predicting any label from the original label set.\nFaithfulness. We select the top-K important words generated by an explanation method and compute the precision, recall and F1 against the human-annotated rationales. It is worth noting that our L2E explainer is not supervised by human rationales directly. Instead, we use the same experimental setup as in Section 4.5 to ensure the L2E explainer is learning from the baseline algorithms rather than the human rationales.\nTable 4 displays the average values over all test instances. As noted by Carton et al. (2020), the rationales in the original dataset are not exhaustively identified by human annotators. For a particular event, we expect to observe a lower precision than recall, since the black-box model might still be able to utilize the words not being annotated in addition to the words annotated by a human. The results in Table 4 align with this hypothesis. For instance, besides LRP for the positive reviews and Kernel SHAP for both reviews, all baselines and the corresponding L2E have higher recall than precision. Furthermore, L2E outperforms the corresponding baseline A significantly in most cases for both positive and negative reviews, except when comparing with LIME’s precision. This observation indicates that learning the explanations of multiple examples together, as done by L2E, achieves high faithfulness to human rationales, as well as to the blackbox model.\nStability. Table 5 displays stability computed in three ways: (1) no filtering (which extracts important words only, Table 3), (2) filtering nonannotated words, and (3) filtering stop-words. For the two filtering measures, prior to filtering, we\nensure the same number of important words is selected from the explanation produced by baseline A and L2E. Equation 1 is then used to compute the IoU value. To ensure a fair comparison, we select the same number of words in L2E and a comparable baseline A before filtering.\nSimilarly to the results in §4.5, as seen in Table 5, L2E yields more stable explanations than the corresponding baselines. The best stability, obtained with L2E (58.6 ± 0.27) by filtering non-annotated words when learning from Occlusion, is comparable to that of the human rationales. This is due to the high recall (92 and 82 for positive and negative reviews respectively in Table 4) in the explanations produced by L2E, which indicates they have high overlap with human rationales. Further, when measuring the IoU values, the L2E explanations of similar examples have the same intersection with the human rationales, but a lower union. This result indicates that people favour stable rationales in similar documents, and reinforces our findings regarding the greater consistency of the explanations produced by L2E compared to the baselines.\nLRP has been proven to have explanation continuity (Montavon et al., 2018), where the explanations of two nearly equivalent instances are also equivalent. However, we do not observe such a pattern in our experiments. We hypothesize that using perturbed instances as neighbours, as done by Montavon et al. (2018), does not necessarily follow the same distribution of the data. Instead, we posit that finding similar examples within a dataset, as done in our experiments, is a better proxy for stability evaluation."
+    }, {
+      "heading" : "6 Conclusions and Future Work",
+      "text" : "We have presented a Learning to Explain (L2E) approach to learn the commonalities of the explanation generation processes across different examples. We have further proposed Ranking and Sequence Labeling formulations to effectively learn the explainer model by discretizing feature weights produced by existing explanation algorithms.\nOur experimental results show that our method can generate more stable explanations (i.e., not vary much across similar documents) than those generated by the explainer baselines, while maintaining the same level of faithfulness to the underlying black-box model as the baseline algorithms. Moreover, our L2E approach produces explanations between 5 and 7.5 × 104 times faster than the six baselines, making it suitable for long documents and very large black-box models.\nOur L2E approach trains an explainer, a blackbox, to mimic the behaviour of an explanation method for an existing black-box model. A key challenge lies in the variation in the convergence status of such an explainer for different initializations. In order to mitigate this problem, we evaluate the performance of our explainer by averaging three different initializations.\nThe L2E approach opens up the possibility of distilling multiple explanation algorithms into one model. Although we focused on the stability, faithfulness and efficiency aspects of explanation generation, there are further desirable properties, e.g., transparency, comprehensibility and novelty (Robnik-Šikonja and Bohanec, 2018). Devising model-based explanation methods and their evaluation with these desiderata are interesting directions for future research."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "This research was supported in part by grant DP190100006 from the Australian Research Council. The first author was partly supported by CSIRO/Data61. The computational resources for this work were supported by the Multi-modal Australian ScienceS Imaging and Visualisation Environment (MASSIVE) (www.massive.org.au). We would like to thank the anonymous reviewers for their insightful comments."
+    }, {
+      "heading" : "Appendix A Datasets Statistics",
+      "text" : ""
+    }, {
+      "heading" : "Appendix B Baseline Explanation",
+      "text" : "Methods (A)\nIn this section, we describe our experimental setups for the six baselines.\n• Occlusion (Zeiler and Fergus, 2014; Schwab and Karlen, 2019). The occlusion method converts x into x̃ by masking token xi with a predefined token. The weight of xi is then determined by the difference of the output or loss from fθ(x̃) and fθ(x). In our experiments, we use the mask token from the corresponding black-box tokenizer, and measure the feature weight based on the changes between the loss functions before and after the masking. The time complexity for this baseline is O(|x|) at test time. • Gradient (Simonyan et al., 2013). The weight\nof token xi is given by the accumulated gradients of the highest probable prediction with regards to each dimension of the token in the embedding layer. We also multiply the corresponding embedding value before accumulation (Kindermans et al., 2016). Gathering the weights of all features in x requires one pass of backward propagation, and the time complexity for this baseline is dependent on the size of black-box model at test time.\n• LRP (Bach et al., 2015). Layer-wise Relevance Propagation decomposes a model’s outcome from the output layer into relevance scores of neurons in each intermediate layer until it reaches features in the input layer. The rule of decomposition is subject to the type of kernel and connectivity between neurons in adjacent layers, such as linear or attention layers. We follow the implementation by Wu and Ong (2021) to measure relevance score in variations of BERT model (Devlin et al., 2018).\n• LIME (Ribeiro et al., 2016). LIME samples the neighbors of x by perturbing different xi, and uses these samples to learn a linear separator which approximates the local behavior of the\nblack-box fθ . The weight of each xi is then given by the coefficients of the separator.\n• Kernel SHAP (Lundberg and Lee, 2017). The Shapley value (Shapley, 1953) is a concept from cooperative game theory which calculates the weight of feature xi by considering its interaction with all the other subsets of features. Kernel SHAP approximates the Shapley value by weighted sampling (kernel). The kernel is determined by the number of permutations of features. According to Lundberg and Lee (2017), LIME and Kernel SHAP only differ in the choice of kernel. We use cosine similarity in LIME and the size of subset permutations in Kernel SHAP for the kernel computation.\n• Deep SHAP (Shrikumar et al., 2017). This is another method to approximate the Shapley value. It computes the weight of xi as the effect on the output when xi is set to a reference value. Such an effect is achieved by linearizing the black-box model through back-propagation. Hence, the complexity of Deep SHAP is dependent on both the size of reference samples and the black-box, which makes it the most computationally expensive method among all our baselines. In our experiments, we use the API provided by Lundberg and Lee (2017) and set the reference value of xi to the corresponding value in each of the randomly selected samples. A sample size of 500/1000/1000/1000 respectively for datasets IMDB-R, AGNews, SST and CoLA is used in the baselines requiring sampling – LIME, Kernel SHAP and Deep SHAP."
+    }, {
+      "heading" : "Appendix C Document Similarity for",
+      "text" : "Intersection over Union\nThe first approach for computing IoU uses semantic similarity between two documents. This is measured by summing the token representations along hidden dimensions from a pre-trained BERT base model with uncased English, open-sourced by Hugging Face (Wolf et al., 2019).\nOur second approach is to compute the intersection over union for overlapping n-grams between two documents, referred to as lexical similarity. In our experiment, we sum this value up to 4-grams in two documents as the score of similarity. The results from this approach are reported in Table 7."
+    }, {
+      "heading" : "Appendix D Faithfulness",
+      "text" : "We present the negative explanation words of the Sequence Labeling formulation in Table 8 and the top important words of Ranking formulation in Table 9."
+    }, {
+      "heading" : "Appendix E Computational efficiency",
+      "text" : "Figures 4, 5 and 6 show that L2E is more efficient than all baselines for AGNews, SST and CoLA datasets."
+    }, {
+      "heading" : "Appendix F IMDB dataset with",
+      "text" : "human-annotated rationales\nThere are 900 positive and 900 negative movie reviews with rationales annotated by human in the original dataset from Zaidan et al. (2007). We randomly assign 160 and 200 examples to the vali-\ndation and test set respectively, with each set having an even distribution of positive and negative reviews. We also remove 8 very long documents from the training set for the sake of CUDA memory. For each example in the training and validation sets, we construct a new example by masking the rationales, i.e., we replace each words in the rationale with a mask token, and assign this new example to a third label, e.g., neutral, so as to ensure the classifier ‘pays attention’ to the rationale. The final dataset split appears in Table 6.\nThe classifier is trained by fine-tuning the last layer of a pre-trained Longformer (Beltagy et al., 2020) with 12 layers and 12 attention heads from Hugging Face (Wolf et al., 2019). It achieves 83.83%/79.68%/74.5% accuracy for the training/validation/test sets respectively after 40 epochs. The statistics of our experiment are measured on test examples that are predicted correctly by the classifier. For each L2E explainer that learns from a baseline explanation method, we use a Longformer with 4 layers, 4 attention heads."
+    }, {
+      "heading" : "Appendix G Precision and Recall on",
+      "text" : "Positive Reviews\nWe plot the precision versus recall from all the L2EA pairs in dataset IMDB-R in Figure 7. The results show that, in most case, L2E performs better than A in terms of faithfulness to the underlying blackbox and alignment with the human rationales."
+    } ],
+    "references" : [ {
+      "title" : "Holm’s sequential bonferroni procedure",
+      "author" : [ "Hervé Abdi." ],
+      "venue" : "Encyclopedia of research design, 1(8):1–8.",
+      "citeRegEx" : "Abdi.,? 2010",
+      "shortCiteRegEx" : "Abdi.",
+      "year" : 2010
+    }, {
+      "title" : "Sanity checks for saliency maps",
+      "author" : [ "Julius Adebayo", "Justin Gilmer", "Michael Muelly", "Ian Goodfellow", "Moritz Hardt", "Been Kim." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 9505–9515.",
+      "citeRegEx" : "Adebayo et al\\.,? 2018",
+      "shortCiteRegEx" : "Adebayo et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Weight of evidence as a basis for human-oriented explanations",
+      "author" : [ "David Alvarez-Melis", "Hal Daumé III", "Jennifer Wortman Vaughan", "Hanna Wallach." ],
+      "venue" : "NeurIPS Workshop on HCML.",
+      "citeRegEx" : "Alvarez.Melis et al\\.,? 2019",
+      "shortCiteRegEx" : "Alvarez.Melis et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A Diagnostic Study of Explainability Techniques for Text Classification",
+      "author" : [ "Pepa Atanasova", "Jakob Grue Simonsen", "Christina Lioma", "Isabelle Augenstein." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing",
+      "citeRegEx" : "Atanasova et al\\.,? 2020",
+      "shortCiteRegEx" : "Atanasova et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "On pixel-wise explanations for non-linear classifier decisions by layer-wise relevance propagation",
+      "author" : [ "Sebastian Bach", "Alexander Binder", "Grégoire Montavon", "Frederick Klauschen", "Klaus-Robert Müller", "Wojciech Samek." ],
+      "venue" : "PloS one, 10(7):e0130140.",
+      "citeRegEx" : "Bach et al\\.,? 2015",
+      "shortCiteRegEx" : "Bach et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Explaining a black-box using deep variational information bottleneck approach",
+      "author" : [ "Seojin Bang", "Pengtao Xie", "Heewook Lee", "Wei Wu", "Eric Xing" ],
+      "venue" : null,
+      "citeRegEx" : "Bang et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Bang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Longformer: The long-document transformer",
+      "author" : [ "Iz Beltagy", "Matthew E Peters", "Arman Cohan." ],
+      "venue" : "arXiv preprint arXiv:2004.05150.",
+      "citeRegEx" : "Beltagy et al\\.,? 2020",
+      "shortCiteRegEx" : "Beltagy et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "e-snli: Natural language inference with natural language explanations",
+      "author" : [ "Oana-Maria Camburu", "Tim Rocktäschel", "Thomas Lukasiewicz", "Phil Blunsom." ],
+      "venue" : "Advances in Neural Information Processing Systems 31, pages 9539–9549.",
+      "citeRegEx" : "Camburu et al\\.,? 2018",
+      "shortCiteRegEx" : "Camburu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Evaluating and characterizing human rationales",
+      "author" : [ "Samuel Carton", "Anirudh Rathore", "Chenhao Tan." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 9294–9307.",
+      "citeRegEx" : "Carton et al\\.,? 2020",
+      "shortCiteRegEx" : "Carton et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Intelligible models for healthcare: Predicting pneumonia risk and hospital 30-day readmission",
+      "author" : [ "Rich Caruana", "Yin Lou", "Johannes Gehrke", "Paul Koch", "Marc Sturm", "Noemie Elhadad." ],
+      "venue" : "Proceedings of the 21th ACM SIGKDD International Con-",
+      "citeRegEx" : "Caruana et al\\.,? 2015",
+      "shortCiteRegEx" : "Caruana et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Learning to explain: An information-theoretic perspective on model interpretation",
+      "author" : [ "Jianbo Chen", "Le Song", "Martin Wainwright", "Michael Jordan." ],
+      "venue" : "Proceedings of the 35th International Conference on Machine Learning, volume 80, pages",
+      "citeRegEx" : "Chen et al\\.,? 2018",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "L-shapley and c-shapley",
+      "author" : [ "Jianbo Chen", "Le Song", "Martin J. Wainwright", "Michael I. Jordan" ],
+      "venue" : null,
+      "citeRegEx" : "Chen et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Bert: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "arXiv preprint arXiv:1810.04805.",
+      "citeRegEx" : "Devlin et al\\.,? 2018",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "ERASER: A benchmark to evaluate rationalized NLP models",
+      "author" : [ "Jay DeYoung", "Sarthak Jain", "Nazneen Fatema Rajani", "Eric Lehman", "Caiming Xiong", "Richard Socher", "Byron C. Wallace." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for",
+      "citeRegEx" : "DeYoung et al\\.,? 2020",
+      "shortCiteRegEx" : "DeYoung et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Improving performance of deep learning models with axiomatic attribution priors and expected gradients",
+      "author" : [ "G Erion", "JD Janizek", "P Sturmfels", "S Lundberg", "SI Lee." ],
+      "venue" : "arXiv preprint arXiv:1906.10670.",
+      "citeRegEx" : "Erion et al\\.,? 2019",
+      "shortCiteRegEx" : "Erion et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "On the transformer growth for progressive bert training",
+      "author" : [ "Xiaotao Gu", "Liyuan Liu", "Hongkun Yu", "Jing Li", "Chen Chen", "Jiawei Han." ],
+      "venue" : "arXiv preprint arXiv:2010.12562.",
+      "citeRegEx" : "Gu et al\\.,? 2020",
+      "shortCiteRegEx" : "Gu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Distilling the knowledge in a neural network",
+      "author" : [ "Geoffrey Hinton", "Oriol Vinyals", "Jeffrey Dean." ],
+      "venue" : "NIPS Deep Learning and Representation Learning Workshop.",
+      "citeRegEx" : "Hinton et al\\.,? 2015",
+      "shortCiteRegEx" : "Hinton et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "A simple sequentially rejective multiple test procedure",
+      "author" : [ "S. Holm." ],
+      "venue" : "Scandinavian Journal of Statistics, 6(2):65–70.",
+      "citeRegEx" : "Holm.,? 1979",
+      "shortCiteRegEx" : "Holm.",
+      "year" : 1979
+    }, {
+      "title" : "Attention is not Explanation",
+      "author" : [ "Sarthak Jain", "Byron C. Wallace." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long and Short Pa-",
+      "citeRegEx" : "Jain and Wallace.,? 2019",
+      "shortCiteRegEx" : "Jain and Wallace.",
+      "year" : 2019
+    }, {
+      "title" : "Learning to faithfully rationalize by construction",
+      "author" : [ "Sarthak Jain", "Sarah Wiegreffe", "Yuval Pinter", "Byron C. Wallace." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 4459–4473.",
+      "citeRegEx" : "Jain et al\\.,? 2020",
+      "shortCiteRegEx" : "Jain et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Textual explanations for self-driving vehicles",
+      "author" : [ "Jinkyu Kim", "Anna Rohrbach", "Trevor Darrell", "John Canny", "Zeynep Akata." ],
+      "venue" : "Proceedings of the European conference on computer vision (ECCV), pages 563–578.",
+      "citeRegEx" : "Kim et al\\.,? 2018",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Investigating the influence of noise and distractors on the interpretation of neural networks",
+      "author" : [ "Pieter-Jan Kindermans", "Kristof Schütt", "Klaus-Robert Müller", "Sven Dähne." ],
+      "venue" : "arXiv preprint arXiv:1611.07270.",
+      "citeRegEx" : "Kindermans et al\\.,? 2016",
+      "shortCiteRegEx" : "Kindermans et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "ALBERT: A lite BERT for self-supervised learning of language representations",
+      "author" : [ "Zhenzhong Lan", "Mingda Chen", "Sebastian Goodman", "Kevin Gimpel", "Piyush Sharma", "Radu Soricut." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Lan et al\\.,? 2020",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Rationalizing neural predictions",
+      "author" : [ "Tao Lei", "Regina Barzilay", "Tommi Jaakkola." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 107–117.",
+      "citeRegEx" : "Lei et al\\.,? 2016",
+      "shortCiteRegEx" : "Lei et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "The mythos of model interpretability: In machine learning, the concept of interpretability is both important and slippery",
+      "author" : [ "Zachary C Lipton." ],
+      "venue" : "Queue, 16(3):31–57.",
+      "citeRegEx" : "Lipton.,? 2018",
+      "shortCiteRegEx" : "Lipton.",
+      "year" : 2018
+    }, {
+      "title" : "A unified approach to interpreting model predictions",
+      "author" : [ "Scott M Lundberg", "Su-In Lee." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 4765–4774.",
+      "citeRegEx" : "Lundberg and Lee.,? 2017",
+      "shortCiteRegEx" : "Lundberg and Lee.",
+      "year" : 2017
+    }, {
+      "title" : "Explaining data-driven document classifications",
+      "author" : [ "David Martens", "Foster Provost." ],
+      "venue" : "Mis Quarterly, 38(1):73–100.",
+      "citeRegEx" : "Martens and Provost.,? 2014",
+      "shortCiteRegEx" : "Martens and Provost.",
+      "year" : 2014
+    }, {
+      "title" : "Contrastive explanation: A structural-model approach",
+      "author" : [ "Tim Miller." ],
+      "venue" : "arXiv preprint arXiv:1811.03163.",
+      "citeRegEx" : "Miller.,? 2018",
+      "shortCiteRegEx" : "Miller.",
+      "year" : 2018
+    }, {
+      "title" : "Methods for interpreting and understanding deep neural networks",
+      "author" : [ "Grégoire Montavon", "Wojciech Samek", "KlausRobert Müller." ],
+      "venue" : "Digital Signal Processing, 73:1–15.",
+      "citeRegEx" : "Montavon et al\\.,? 2018",
+      "shortCiteRegEx" : "Montavon et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "On the number of linear regions of deep neural networks",
+      "author" : [ "Guido F Montufar", "Razvan Pascanu", "Kyunghyun Cho", "Yoshua Bengio." ],
+      "venue" : "Advances in neural information processing systems, pages 2924– 2932.",
+      "citeRegEx" : "Montufar et al\\.,? 2014",
+      "shortCiteRegEx" : "Montufar et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Textattack: A framework for adversarial attacks, data augmentation, and adversarial training in nlp",
+      "author" : [ "John X. Morris", "Eli Lifland", "Jin Yong Yoo", "Jake Grigsby", "Di Jin", "Yanjun Qi" ],
+      "venue" : null,
+      "citeRegEx" : "Morris et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Morris et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Towards ground truth evaluation of visual explanations",
+      "author" : [ "Ahmed Osman", "Leila Arras", "Wojciech Samek." ],
+      "venue" : "ArXiv:2003.07258.",
+      "citeRegEx" : "Osman et al\\.,? 2020",
+      "shortCiteRegEx" : "Osman et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Fairseq: A fast, extensible toolkit for sequence modeling",
+      "author" : [ "Myle Ott", "Sergey Edunov", "Alexei Baevski", "Angela Fan", "Sam Gross", "Nathan Ng", "David Grangier", "Michael Auli." ],
+      "venue" : "Proceedings of NAACL-HLT 2019: Demonstrations, pages 48–53.",
+      "citeRegEx" : "Ott et al\\.,? 2019",
+      "shortCiteRegEx" : "Ott et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "An information bottleneck approach for controlling conciseness in rationale extraction",
+      "author" : [ "Bhargavi Paranjape", "Mandar Joshi", "John Thickstun", "Hannaneh Hajishirzi", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of EMNLP, pages 1938–1952.",
+      "citeRegEx" : "Paranjape et al\\.,? 2020",
+      "shortCiteRegEx" : "Paranjape et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "On the turing completeness of modern neural network architectures",
+      "author" : [ "Jorge Pérez", "Javier Marinković", "Pablo Barceló." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Pérez et al\\.,? 2019",
+      "shortCiteRegEx" : "Pérez et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Why should i trust you?: Explaining the predictions of any classifier",
+      "author" : [ "Marco Tulio Ribeiro", "Sameer Singh", "Carlos Guestrin." ],
+      "venue" : "Proceedings of the 22nd ACM SIGKDD international conference on knowledge discovery and data mining,",
+      "citeRegEx" : "Ribeiro et al\\.,? 2016",
+      "shortCiteRegEx" : "Ribeiro et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Anchors: High-precision modelagnostic explanations",
+      "author" : [ "Marco Tulio Ribeiro", "Sameer Singh", "Carlos Guestrin." ],
+      "venue" : "AAAI, volume 18, pages 1527–1535.",
+      "citeRegEx" : "Ribeiro et al\\.,? 2018",
+      "shortCiteRegEx" : "Ribeiro et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Machine learning, automated suspicion algorithms, and the fourth amendment",
+      "author" : [ "Michael L Rich." ],
+      "venue" : "University of Pennsylvania Law Review, pages 871– 929.",
+      "citeRegEx" : "Rich.,? 2016",
+      "shortCiteRegEx" : "Rich.",
+      "year" : 2016
+    }, {
+      "title" : "Perturbation-based explanations of prediction models",
+      "author" : [ "Marko Robnik-Šikonja", "Marko Bohanec." ],
+      "venue" : "Human and machine learning, pages 159– 175. Springer.",
+      "citeRegEx" : "Robnik.Šikonja and Bohanec.,? 2018",
+      "shortCiteRegEx" : "Robnik.Šikonja and Bohanec.",
+      "year" : 2018
+    }, {
+      "title" : "Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter",
+      "author" : [ "Victor Sanh", "Lysandre Debut", "Julien Chaumond", "Thomas Wolf." ],
+      "venue" : "NeurIPS Workshop on EMC2.",
+      "citeRegEx" : "Sanh et al\\.,? 2019",
+      "shortCiteRegEx" : "Sanh et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Cxplain: Causal explanations for model interpretation under uncertainty",
+      "author" : [ "Patrick Schwab", "Walter Karlen." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 10220–10230.",
+      "citeRegEx" : "Schwab and Karlen.,? 2019",
+      "shortCiteRegEx" : "Schwab and Karlen.",
+      "year" : 2019
+    }, {
+      "title" : "Human attention maps for text classification: Do humans and neural networks focus on the same words",
+      "author" : [ "Cansu Sen", "Thomas Hartvigsen", "Biao Yin", "Xiangnan Kong", "Elke Rundensteiner" ],
+      "venue" : "In Proceedings of the 58th Annual Meeting of the Asso-",
+      "citeRegEx" : "Sen et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Sen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Is attention interpretable? In Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 2931–2951, Florence, Italy",
+      "author" : [ "Sofia Serrano", "Noah A. Smith." ],
+      "venue" : "Association for Computational Linguistics.",
+      "citeRegEx" : "Serrano and Smith.,? 2019",
+      "shortCiteRegEx" : "Serrano and Smith.",
+      "year" : 2019
+    }, {
+      "title" : "A value for n-person games",
+      "author" : [ "Lloyd S Shapley." ],
+      "venue" : "Contributions to the Theory of Games, 2(28):307– 317.",
+      "citeRegEx" : "Shapley.,? 1953",
+      "shortCiteRegEx" : "Shapley.",
+      "year" : 1953
+    }, {
+      "title" : "Learning important features through propagating activation differences",
+      "author" : [ "Avanti Shrikumar", "Peyton Greenside", "Anshul Kundaje." ],
+      "venue" : "Proceedings of Machine Learning Research, volume 70, International Convention Centre, Sydney, Australia.",
+      "citeRegEx" : "Shrikumar et al\\.,? 2017",
+      "shortCiteRegEx" : "Shrikumar et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Deep inside convolutional networks: Visualising image classification models and saliency maps",
+      "author" : [ "Karen Simonyan", "Andrea Vedaldi", "Andrew Zisserman." ],
+      "venue" : "arXiv preprint arXiv:1312.6034.",
+      "citeRegEx" : "Simonyan et al\\.,? 2013",
+      "shortCiteRegEx" : "Simonyan et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "How much should i trust you? modeling uncertainty of black box explanations",
+      "author" : [ "Dylan Slack", "Sophie Hilgard", "Sameer Singh", "Himabindu Lakkaraju." ],
+      "venue" : "arXiv preprint arXiv:2008.05030.",
+      "citeRegEx" : "Slack et al\\.,? 2020",
+      "shortCiteRegEx" : "Slack et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Recursive deep models for semantic compositionality over a sentiment treebank",
+      "author" : [ "Richard Socher", "Alex Perelygin", "Jean Wu", "Jason Chuang", "Christopher D Manning", "Andrew Y Ng", "Christopher Potts." ],
+      "venue" : "Proceedings of the 2013 conference on",
+      "citeRegEx" : "Socher et al\\.,? 2013",
+      "shortCiteRegEx" : "Socher et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Axiomatic attribution for deep networks",
+      "author" : [ "Mukund Sundararajan", "Ankur Taly", "Qiqi Yan." ],
+      "venue" : "Proceedings of the 34th International Conference on Machine Learning - Volume 70, page 3319–3328. JMLR.org.",
+      "citeRegEx" : "Sundararajan et al\\.,? 2017",
+      "shortCiteRegEx" : "Sundararajan et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in neural information processing systems, pages 5998–6008.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Gradient-based analysis of NLP models is manipulable",
+      "author" : [ "Junlin Wang", "Jens Tuyls", "Eric Wallace", "Sameer Singh." ],
+      "venue" : "Findings of the Association for Computational Linguistics: EMNLP 2020, Online. Association for Computational Linguistics.",
+      "citeRegEx" : "Wang et al\\.,? 2020",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Neural network acceptability judgments",
+      "author" : [ "Alex Warstadt", "Amanpreet Singh", "Samuel R. Bowman." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 7:625–641.",
+      "citeRegEx" : "Warstadt et al\\.,? 2019",
+      "shortCiteRegEx" : "Warstadt et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Attention is not not explanation",
+      "author" : [ "Sarah Wiegreffe", "Yuval Pinter." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natural Language Processing (EMNLP-",
+      "citeRegEx" : "Wiegreffe and Pinter.,? 2019",
+      "shortCiteRegEx" : "Wiegreffe and Pinter.",
+      "year" : 2019
+    }, {
+      "title" : "Huggingface’s transformers: State-of-the-art natural language processing",
+      "author" : [ "Teven Le Scao", "Sylvain Gugger", "Mariama Drame", "Quentin Lhoest", "Alexander M. Rush." ],
+      "venue" : "ArXiv, abs/1910.03771.",
+      "citeRegEx" : "Scao et al\\.,? 2019",
+      "shortCiteRegEx" : "Scao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Wilcoxon signed-rank test",
+      "author" : [ "RF Woolson." ],
+      "venue" : "Wiley encyclopedia of clinical trials, pages 1–3.",
+      "citeRegEx" : "Woolson.,? 2007",
+      "shortCiteRegEx" : "Woolson.",
+      "year" : 2007
+    }, {
+      "title" : "On explaining your explanations of bert: An empirical study with sequence classification",
+      "author" : [ "Zhengxuan Wu", "Desmond C Ong." ],
+      "venue" : "arXiv preprint arXiv:2101.00196.",
+      "citeRegEx" : "Wu and Ong.,? 2021",
+      "shortCiteRegEx" : "Wu and Ong.",
+      "year" : 2021
+    }, {
+      "title" : "Using “annotator rationales” to improve machine learning for text categorization",
+      "author" : [ "Omar Zaidan", "Jason Eisner", "Christine Piatko." ],
+      "venue" : "Human language technologies 2007: The conference of the North American chapter of the association for computa-",
+      "citeRegEx" : "Zaidan et al\\.,? 2007",
+      "shortCiteRegEx" : "Zaidan et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "Visualizing and understanding convolutional networks",
+      "author" : [ "Matthew D Zeiler", "Rob Fergus." ],
+      "venue" : "European conference on computer vision, pages 818–833. Springer.",
+      "citeRegEx" : "Zeiler and Fergus.,? 2014",
+      "shortCiteRegEx" : "Zeiler and Fergus.",
+      "year" : 2014
+    }, {
+      "title" : "Character-level convolutional networks for text classification",
+      "author" : [ "Xiang Zhang", "Junbo Zhao", "Yann LeCun." ],
+      "venue" : "Advances in neural information processing systems, pages 649–657.",
+      "citeRegEx" : "Zhang et al\\.,? 2015",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2015
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 9,
+      "context" : ", in medical diagnosis (Caruana et al., 2015) and judicial systems (Rich, 2016).",
+      "startOffset" : 23,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 13,
+      "context" : "Existing explainability methods mostly produce explanations, or rationales (DeYoung et al., 2020), which identify the attributions of features in an input example, e.",
+      "startOffset" : 75,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 57,
+      "context" : "Current approaches are typically computationally demanding, requiring expensive operations, such as consulting a black-box model multiple times (Zeiler and Fergus, 2014), or generating samples to learn an approximate but explainable transparent model (Ribeiro et al.",
+      "startOffset" : 144,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 35,
+      "context" : "Current approaches are typically computationally demanding, requiring expensive operations, such as consulting a black-box model multiple times (Zeiler and Fergus, 2014), or generating samples to learn an approximate but explainable transparent model (Ribeiro et al., 2016).",
+      "startOffset" : 251,
+      "endOffset" : 273
+    }, {
+      "referenceID" : 35,
+      "context" : ", LIME (Ribeiro et al., 2016), our approach uses a DNN to learn the explanation algorithm.",
+      "startOffset" : 7,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 34,
+      "context" : "DNNs are Turing complete (Pérez et al., 2019; Montufar et al., 2014); therefore, given enough training data and learning capacity, they should be able to learn the existing explanation algorithms.",
+      "startOffset" : 25,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 29,
+      "context" : "DNNs are Turing complete (Pérez et al., 2019; Montufar et al., 2014); therefore, given enough training data and learning capacity, they should be able to learn the existing explanation algorithms.",
+      "startOffset" : 25,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 16,
+      "context" : "tion (Hinton et al., 2015), where a teacher, or in our case a teacher algorithm, distils knowledge into a student network.",
+      "startOffset" : 5,
+      "endOffset" : 26
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2019) or backpropagation-based methods (Bach et al., 2015) require access to the blackbox, and are mostly applied to models with differentiable functions.",
+      "startOffset" : 41,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 24,
+      "context" : "This approach does not aim to improve the transparency (Lipton, 2018) of the black-box model.",
+      "startOffset" : 55,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 1,
+      "context" : "data labels (Adebayo et al., 2018), which is undesirable.",
+      "startOffset" : 12,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 55,
+      "context" : "These methods can be computationally heavy in the case of complex black-box models (Wu and Ong, 2021), e.",
+      "startOffset" : 83,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 52,
+      "context" : "Attention-based methods (Wiegreffe and Pinter, 2019) can only be applied to Transformer-based",
+      "startOffset" : 24,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 49,
+      "context" : "models (Vaswani et al., 2017), and their effectiveness is questionable (Jain and Wallace, 2019; Serrano and Smith, 2019).",
+      "startOffset" : 7,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 18,
+      "context" : ", 2017), and their effectiveness is questionable (Jain and Wallace, 2019; Serrano and Smith, 2019).",
+      "startOffset" : 49,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 42,
+      "context" : ", 2017), and their effectiveness is questionable (Jain and Wallace, 2019; Serrano and Smith, 2019).",
+      "startOffset" : 49,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 26,
+      "context" : "They either consider changes in performance as an indicator of feature importance directly (Martens and Provost, 2014; Zeiler and Fergus, 2014; Schwab and Karlen, 2019), or they employ a higher-order approxima-",
+      "startOffset" : 91,
+      "endOffset" : 168
+    }, {
+      "referenceID" : 57,
+      "context" : "They either consider changes in performance as an indicator of feature importance directly (Martens and Provost, 2014; Zeiler and Fergus, 2014; Schwab and Karlen, 2019), or they employ a higher-order approxima-",
+      "startOffset" : 91,
+      "endOffset" : 168
+    }, {
+      "referenceID" : 40,
+      "context" : "They either consider changes in performance as an indicator of feature importance directly (Martens and Provost, 2014; Zeiler and Fergus, 2014; Schwab and Karlen, 2019), or they employ a higher-order approxima-",
+      "startOffset" : 91,
+      "endOffset" : 168
+    }, {
+      "referenceID" : 23,
+      "context" : "Other works train a classifier and an explainer jointly in order to incorporate explainability directly into the classifier (Lei et al., 2016; Camburu et al., 2018).",
+      "startOffset" : 124,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 7,
+      "context" : "Other works train a classifier and an explainer jointly in order to incorporate explainability directly into the classifier (Lei et al., 2016; Camburu et al., 2018).",
+      "startOffset" : 124,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 7,
+      "context" : "Unlike these approaches, we do not change the classifier or require an expensive process to collect human rationales, as done in (Camburu et al., 2018).",
+      "startOffset" : 129,
+      "endOffset" : 151
+    }, {
+      "referenceID" : 10,
+      "context" : "works use information-theoretic objectives to train an explainer directly from the underlying classifier (Chen et al., 2018; Bang et al., 2019).",
+      "startOffset" : 105,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 5,
+      "context" : "works use information-theoretic objectives to train an explainer directly from the underlying classifier (Chen et al., 2018; Bang et al., 2019).",
+      "startOffset" : 105,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 33,
+      "context" : "These explainers require careful training to select a low number of important features (Paranjape et al., 2020); hence, some input features do not have attributions.",
+      "startOffset" : 87,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 41,
+      "context" : "Explanations aligned with human rationales are produced in (Sen et al., 2020; Atanasova et al., 2020), and contrastive explanations are generated",
+      "startOffset" : 59,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 3,
+      "context" : "Explanations aligned with human rationales are produced in (Sen et al., 2020; Atanasova et al., 2020), and contrastive explanations are generated",
+      "startOffset" : 59,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 38,
+      "context" : "(2020), only a few algorithmic explanation methods produce stable explanations (Robnik-Šikonja and Bohanec, 2018),",
+      "startOffset" : 79,
+      "endOffset" : 113
+    }, {
+      "referenceID" : 50,
+      "context" : "explanation algorithm can be applied, such as Natural Language Inference and Question Answering (Wang et al., 2020).",
+      "startOffset" : 96,
+      "endOffset" : 115
+    }, {
+      "referenceID" : 46,
+      "context" : "However, the continuous feature attributions generated by existing explanation algorithms could be sensitive to initializations (Slack et al., 2020).",
+      "startOffset" : 128,
+      "endOffset" : 148
+    }, {
+      "referenceID" : 56,
+      "context" : "Further, manually annotated rationales (highlighting important words in a document) are sufficient for people to understand/perform a classification task (Zaidan et al., 2007).",
+      "startOffset" : 154,
+      "endOffset" : 175
+    }, {
+      "referenceID" : 58,
+      "context" : "The AG corpus (Zhang et al., 2015) comprises news articles on multiple topics.",
+      "startOffset" : 14,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 12,
+      "context" : "The black-box classifier is a fine-tuned BERT model (Devlin et al., 2018)",
+      "startOffset" : 52,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 47,
+      "context" : "The SST dataset (Socher et al., 2013) comprises movie reviews with positive and negative sentiments.",
+      "startOffset" : 16,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 39,
+      "context" : "The black-box classifier is a distilled BERT model (Sanh et al., 2019) with 6 layers and 12 attention heads from Hugging Face (Wolf et al.",
+      "startOffset" : 51,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 51,
+      "context" : "The CoLA dataset (Warstadt et al., 2019) contains sentences that are deemed acceptable or unacceptable in terms of their grammatical correctness.",
+      "startOffset" : 17,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 22,
+      "context" : "The black-box classifier is a fine-tuned ALBERT model (Lan et al., 2020) with 12 attention heads and 12 layers.",
+      "startOffset" : 54,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 30,
+      "context" : "All black-box models are open-sourced by TextAttack (Morris et al., 2020) unless otherwise stated.",
+      "startOffset" : 52,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 57,
+      "context" : "Occlusion (Zeiler and Fergus, 2014; Schwab and Karlen, 2019), Gradient (Simonyan et al.",
+      "startOffset" : 10,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 40,
+      "context" : "Occlusion (Zeiler and Fergus, 2014; Schwab and Karlen, 2019), Gradient (Simonyan et al.",
+      "startOffset" : 10,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 45,
+      "context" : "Occlusion (Zeiler and Fergus, 2014; Schwab and Karlen, 2019), Gradient (Simonyan et al., 2013), LRP (Bach et al.",
+      "startOffset" : 71,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2013), LRP (Bach et al., 2015), LIME (Ribeiro et al.",
+      "startOffset" : 13,
+      "endOffset" : 32
+    }, {
+      "referenceID" : 35,
+      "context" : ", 2015), LIME (Ribeiro et al., 2016), Kernel SHAP (Lundberg and Lee, 2017) and Deep SHAP (Shrikumar et al.",
+      "startOffset" : 14,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2016), Kernel SHAP (Lundberg and Lee, 2017) and Deep SHAP (Shrikumar et al.",
+      "startOffset" : 21,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 44,
+      "context" : ", 2016), Kernel SHAP (Lundberg and Lee, 2017) and Deep SHAP (Shrikumar et al., 2017; Lundberg and Lee, 2017).",
+      "startOffset" : 60,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2016), Kernel SHAP (Lundberg and Lee, 2017) and Deep SHAP (Shrikumar et al., 2017; Lundberg and Lee, 2017).",
+      "startOffset" : 60,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 49,
+      "context" : "We use a Transformer encoder (Vaswani et al., 2017) with 4 blocks and 4 attention heads as gφ .",
+      "startOffset" : 29,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 35,
+      "context" : "classification model is to measure the degree of agreement between the prediction given the full document and the prediction given the explanation (Ribeiro et al., 2016).",
+      "startOffset" : 147,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 32,
+      "context" : "We use the fairseq framework (Ott et al., 2019) for all our implementations of gφ .",
+      "startOffset" : 29,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 54,
+      "context" : "05) was measured by performing the Wilcoxon Signed-Rank Test (Woolson, 2007) followed by a sequential Holm-Bonferroni correction (Holm, 1979; Abdi, 2010) for all pairs of comparisons in a table.",
+      "startOffset" : 61,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 17,
+      "context" : "05) was measured by performing the Wilcoxon Signed-Rank Test (Woolson, 2007) followed by a sequential Holm-Bonferroni correction (Holm, 1979; Abdi, 2010) for all pairs of comparisons in a table.",
+      "startOffset" : 129,
+      "endOffset" : 153
+    }, {
+      "referenceID" : 0,
+      "context" : "05) was measured by performing the Wilcoxon Signed-Rank Test (Woolson, 2007) followed by a sequential Holm-Bonferroni correction (Holm, 1979; Abdi, 2010) for all pairs of comparisons in a table.",
+      "startOffset" : 129,
+      "endOffset" : 153
+    }, {
+      "referenceID" : 15,
+      "context" : "The complexity of this model when predicting a document of size N is then O(L×N ×D× (D +N +H)) (Gu et al., 2020).",
+      "startOffset" : 95,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 56,
+      "context" : "In this section, we propose to address this issue using the IMDB-R dataset (Zaidan et al., 2007), which contains movie reviews x together with their sentiment y, as well as rationales r annotated by people for the sentiment label.",
+      "startOffset" : 75,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 31,
+      "context" : "of rationales for evaluating explanations is related to that in (Osman et al., 2020), where synthetic data are generated from apriori fixed rationales.",
+      "startOffset" : 64,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 28,
+      "context" : "LRP has been proven to have explanation continuity (Montavon et al., 2018), where the explanations of two nearly equivalent instances are also equivalent.",
+      "startOffset" : 51,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 38,
+      "context" : ", transparency, comprehensibility and novelty (Robnik-Šikonja and Bohanec, 2018).",
+      "startOffset" : 46,
+      "endOffset" : 80
+    } ],
+    "year" : 2021,
+    "abstractText" : "The importance of explaining the outcome of a machine learning model, especially a blackbox model, is widely acknowledged. Recent approaches explain an outcome by identifying the contributions of input features to this outcome. In environments involving large blackbox models or complex inputs, this leads to computationally demanding algorithms. Further, these algorithms often suffer from low stability, with explanations varying significantly across similar examples. In this paper, we propose a Learning to Explain (L2E) approach that learns the behaviour of an underlying explanation algorithm simultaneously from all training examples. Once the explanation algorithm is distilled into an explainer network, it can be used to explain new instances. Our experiments on three classification tasks, which compare our approach to six explanation algorithms, show that L2E is between 5 and 7.5 × 10 times faster than these algorithms, while generating more stable explanations, and having comparable faithfulness to the black-box model.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

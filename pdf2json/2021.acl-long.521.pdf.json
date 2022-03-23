@@ -1,0 +1,834 @@
+{
+  "name" : "2021.acl-long.521.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Language Model Augmented Relevance Score",
+    "authors" : [ "Ruibo Liu", "Jason Wei", "Soroush Vosoughi" ],
+    "emails" : [ "ruibo.liu.gr@dartmouth.edu", "jasonwei@google.com", "soroush.vosoughi@dartmouth.edu" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 6677–6690\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n6677\nIn this paper, we propose Language Model Augmented Relevance Score (MARS), a new context-aware metric for NLG evaluation. MARS leverages off-the-shelf language models, guided by reinforcement learning, to create augmented references that consider both the generation context and available human references, which are then used as additional references to score generated text. Compared with seven existing metrics in three common NLG tasks, MARS not only achieves higher correlation with human reference judgements, but also differentiates well-formed candidates from adversarial samples to a larger degree."
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Automated metrics such as BLEU (Papineni et al., 2002) and ROUGE (Lin, 2004) are popular methods for evaluating natural language generation (NLG) systems. Compared with human evaluation, they are cheaper and faster, and accordingly, they often serve as essential metrics for benchmarking the performance of NLG models (Novikova et al., 2017). Despite their widespread use, however, these automated metrics often poorly correlate with ratings given by human judges, particularly for datasets in which only a single human reference exists (Gupta et al., 2019; Novikova et al., 2017). Moreover, these automated metrics only capture\nsimilarities between generated sentences and reference candidates, crucially ignoring provided contexts that are relevant for evaluating the answer in contextual NLG tasks, such as story generation, news summarization, and question-answering (Tao et al., 2018; Nema and Khapra, 2018).\nTable 1 shows a story generation1 example that exemplifies some weaknesses of several common metrics. Perplexity (PPL) (Brown et al., 1992) successfully detects ungrammatical sentences, but it fails to distinguish legitimate novel continuations and copy-and-pasted ones. Relying on surface-level =-gram matching, BLEU-1 and ROUGE-L2 cannot detect reordering effectively, and wrongly score the well-formed candidate lower than its retrieval-based adversarial example. BERTScore (Zhang et al., 2019) leverages contextual embeddings from BERT (Devlin et al., 2019), thus mitigating the above challenges, but still does not fairly evaluate candidates that correctly align with the context but happen to differ\n1The ROC story generation task asks systems to generate a legitimate ending for a four-sentence story.\n2L stands for longest common sequence matching.\nContext. Wendy was driving down the road. She heard her car making a noise. She pulled over to examine the problem. There was nothing but oil all on the road from her car.\nHuman Reference. She called for help and waited to get her car fixed. PPL BLEU-1 ROUGE-L BERTScore MARS\nability). We boxed the cases where the adversarial example does not score lower than the well-formed candidate.\nfrom the provided reference example. In our example, the candidate “... her engine was smoking” is reasonable but deviates from the human reference, and so BERTScore rates it relatively low (0.338 out of 1.0), thus correlating poorly with human rating, which was high (5.05 out of 6.00).\nTo address the above issues, prior studies have proposed a number of promising remedies. One line of work has proposed to combine human ratings with automated metrics (Durmus et al., 2020; Chaganty et al., 2018, inter alia). For instance, in HUSE score, Hashimoto et al. (2019) leverages the differences between perplexity and human judgements to consider both quality and diversity of generated text. Another line has proposed training separate neural models to aid automated metrics (Mehri and Eskenazi, 2020; Yuma et al., 2020, inter alia). For instance, BLEURT (Sellam et al., 2020) fine-tunes BERT (Devlin et al., 2019) on synthetic reference-candidate pairs for machine translation. These methods, however, are often limited in practical use, because the high-cost human ratings are not always available for every dataset, and the data- or system-specific training is not easily extended to other domains (Zhang et al., 2019), and can even bias the evaluation (Freitag et al., 2020b).\nIn this paper, we present MARS (Language Model Augmented Relevance Score), a new NLG evaluation metric that requires neither supervision from human ratings nor additional training on specific domains. As shown in Figure 1, instead of comparing candidates only with human written references, as many prior metrics do, MARS uses a mixture of both human and augmented references. Specifically, MARS masks tokens in the reference to create templates, and then uses the context and templates to generate augmented references by infilling the masked parts with an LM guided by reinforcement learning. The augmented references thus\nincorporate information from both the context and the human reference, and are enriched with lexical and syntactic diversity, facilitating fairer evaluation of candidates. Finally, we compute the score as a weighted average of the similarity between the candidate and the set of augmented references in the contextual embedding space.\nThe advantages of MARS are three-fold. First, MARS correlates highly with human judgements. We apply MARS to three diverse NLG tasks, and demonstrate that, compared with seven popular NLG metrics, MARS better correlates with human judgements and is robust against adversarial attacks. Second, MARS is context-aware. Unlike existing metrics that only consider the given human reference, we use a constrained NLG approach to incorporate the generation context into augmented references, thus alleviating bias against diverse candidates. Third, MARS is easy to deploy and extend. Built on off-the-shelf LMs, MARS requires neither human supervision nor additional training for specific domains, and can therefore serve as a general-purpose metric for a broad range of NLG applications, as we will demonstrate for three common NLG tasks: story generation, news summarization, and question-answering."
+    }, {
+      "heading" : "2 Approach",
+      "text" : "MARS comprises three steps. First, we mask out non-important tokens from the human reference to produce templates for augmentation (§2.1). Second, we guide off-the-shelf LMs to generate reference augmentation on these templates via a reinforced self-planning algorithm (§2.2). Finally, we compute a weighted average score that reflects the overall similarity between the candidate and the set of augmented references (§2.3)."
+    }, {
+      "heading" : "2.1 Human Reference Token Masking",
+      "text" : "The first step in MARS is to take in the given human reference and generate templates—masked versions of the human reference—which can then be used to generate augmented references. Our masking procedure can be viewed as a reversed process of prior insertion- and template-based generation approaches (Zhang et al., 2020; Miao et al., 2019); whereas these generation approaches start with templates of important tokens and then fill in the details to generate complete sentences, our masking procedure starts with the complete sentence (i.e., the human reference) and then masks out unimportant tokens to generate templates. To better explain our masking procedure, we introduce two concepts, mask priority and mask cost:\nMask Priority. We compute a mask priority E8 for each token G8, which captures the priority of masking G8, where non-important words should receive higher priority. We compute E8 as a function of two things: the inverse document frequency (IDF) of G8 , and the part-of-speech (POS) of G8:\nE8 = U(POS [G8]) IDF(G8 , -) , (1)\nwhere U is a function that assigns a weight to each POS tag.3 Common tokens across the corpus - (e.g., stop words, with low IDF) will receive high mask priority. Tokens responsible for description details will also be assigned high mask priority based on their part-of-speech (e.g., adjectives are mainly used for details and so they are given higher priority of being masked).\nMask Cost. For each token G8 , we also compute a mask cost F8. Tokens that appear in both context and human reference should have high masking cost as they are deemed context-carrying. We use the longest common sequence (LCS) matching between the context and the human reference to identify these context-carrying tokens. In our experiments, we set the F8 of these tokens to 10 and the default F8 of all other tokens to 1. We use _ to denote the ratio of tokens to be masked in a sentence of # tokens, and define ,max = _ · # as the maximum cost allowed.\n3U varies for each task. Empirically, we find that it works well to assign adjectives, adverbs, and nouns higher weights than other parts-of-speech. For our setting, we assign weights of 4, 3, 2 to the above three types.\nDP-based Token Masking. Now that for each token we have a mask priority and a mask cost, we aim to choose a set of tokens to mask with the highest possible sum of priorities for which the sum of mask costs is not greater than,max. Given a function q(G8) = {1, 0} where 1 means token G8 is masked and 0 means it remains, the objective of token masking can be expressed as follows:\nmax #∑ 8=1 E8 · q(G8) ,\ns.t. #∑ 8=1 F8 · q(G8) ≤ ,max . (2)\nSuch a goal is actually a NP-complete combinatorial optimization problem, called the Knapsack problem (Pisinger, 1995), which we solve using dynamic-programming (DP). In general, the masking strategy aggressively harvests tokens of high mask priority while keeping the cost of masked tokens from exceeding the mask cost limitation,max. The detailed DP algorithm for solving this problem is shown in Appendix A.\n2.2 Self-planning Cloze Augmentation After creating the templates described in §2.1, we produce augmented reference examples based on both the templates as well as the generation context. This procedure can be seen as a mixture of hardand soft-constrained NLG, where the template tokens pre-exist with some blanks, and the system, conditioned on the context, aims to fill in the blanks. We henceforth refer this process of creating augmented references as cloze4 augmentation.\nBackground. Masked Language Models (MLM) such as RoBERTa (Liu et al., 2019) and BERT (Devlin et al., 2019) are trained to predict masked tokens within sentences, and thus are able to do cloze augmentation off-the-shelf. However, without architecture-level modification, MLMs are only able to infill a pre-determined number of missing tokens (Zhu et al., 2019). This is especially problematic since—if they are directly used to augment references—all the augmented references will have the same number of tokens as that of the original human reference. We believe this unnecessarily constrains augmentation diversity, and thus consider it as a Naive method in our evaluations (§4).\n4A cloze test (Taylor, 1953) is a language test where a portion of language is removed and the participant is asked to replace the missing language item.\nAutoregressive Language Models (ALM) such as GPT-2 (Radford et al., 2019), on the other hand, are trained to predict current step token given past tokens. They can generate sequences of varying lengths, but they cannot infill missing tokens within sentences effectively since they do not consider future context. To enable ALMs to infill blanks of unspecified length, prior work has proposed either retraining a new LM from scratch (Shen et al., 2020) or fine-tuning on specially prepared data (Donahue et al., 2020), which are costly and not easy to extend to new NLG tasks. As shown in Figure 2, we take a reinforcement learning (RL) approach that uses future words after the blank to guide current step infilling generation. Since such RL guidance only relies on the tokens within its own to-be-infilled template, we call it reinforced self-planning. Our method combines the advantages of both MLMs and ALMs, requiring neither re-training nor collecting new data, and thus is easier to extend to other off-the-shelf LMs.\nReinforced Self-planning. At each decoding step during generation, a vanilla ALM will pick the token GC that has the highest probability by applying an argmax over the softmax output of hidden states. We add a self-planning stage between the argmax and softmax function. Following the RL framework, we define the state at step C as the generated sequences before C (i.e., BC = G<C ), and the action at step C as the C-th output token (i.e.,\n0C = GC ). We take the softmax output of the last hidden states (with parameter \\) as the policy c\\ , since it is the probability of picking token GC (action 0C ) given the state BC = G<C . Similarly, we denote the policy after reinforced self-planning as c\\3 .\nTypically, the RL objective is to maximize the expectation of total reward , summed over ) steps on the trajectory g induced by c\\ :\n(\\) = Eg∼c\\ [ )∑ C=0 WCAC ] , (3)\nwhere W ∈ (0, 1] is the discounting factor, and A is the single-step reward. In text generation, however, such a reward definition requires sampling over the future generated sequence to estimate current step reward (Gong et al., 2019), which may cause the policy to end in zero reward region because of high variance of the gradient (Pang and He, 2021). Since we guide the generation in every step of decoding, we derive the C-th step policy gradient O\\ C (\\) as:\nECg∼c\\ [ nCO\\ log c\\ (0C |BC ) · A (G3C ) ] , (4)\nwith importance sampling weight nC to stabilize the optimization (Munos et al., 2016), which is:\nnC = c\\3 (0C |BC ) c\\ (0C |BC ) .\nIf we denote a certain token in future context as F ∈ {Ffuture}, single-step self-planning reward A (G3C ) can be approximated by the cosine similarity between C-th step hidden state and the embedded vector of F by the LM embedding layers, which is\nA (G3C ) = ∑\nF ∈Ffuture log(softmax(ℎ\\3<C ) · emb(F)) .\n(5) Given all above definitions, at C-th step, we up-\ndate c\\ towards the self-planned c\\3 as: \\3 ← \\ + [ :∑ 8=1 O\\ C (\\3/b) ‖O\\ C (\\3/b)‖ , (6)\nwhere [ is the learning rate and b is the temperature parameter to control the stochastic sampling during token decoding (Keskar et al., 2019). After : iterations of reinforced self-planning, the updated policy c\\3 should produce tokens approaching the future context in embedding space, since future context contributes to the calculation of reward A (Eq. 5).5 More details about how we handle edge cases during reinforced self-planning are presented in Appendix B.\n5In our setting, [, b and : are 0.02, 1.3, and 3 respectively."
+    }, {
+      "heading" : "2.3 Computing Contextual Similarity",
+      "text" : "After generating augmented reference sentences, the final MARS score is computed as a weighted average of the similarity between the candidate and each reference in the augmentation set (including the original human reference). One way to obtain similarity scores is using BERTScore (Zhang et al., 2019), but BERTScore requires training on external resources to make its outputs more readable. Therefore, in order to keep all the resources used by MARS off-the-shelf, we utilize SentenceBERT (Reimers and Gurevych, 2019), which uses the mean of all token embeddings in a sentence as the overall sentence-level encoding. As the sentence encoder, we use RoBERTa-large (Liu et al., 2019), a common choice in the literature (Zhang et al., 2019; Reimers and Gurevych, 2020). As shown in Eq. 7, we then compute MARS score as the average of the cosine similarities weighted using a geometric progression with a common ratio @ ∈ (0, 1] and a scale factor (start value) 0 ≠ 0:\nMARS = #_∑ 8=1 0@8−1 candT · ref8−1 ‖cand‖T ‖ref8−1‖\ns.t. #_∑ 8=1 0@8−1 = 1 ,\n(7)\nwhere the candidate encoding is cand, the reference encodings are ref8 (8 is the index of the augmented reference under a certain _, and ref0 marks the zeromask human reference), and #_ is the number of masking ratios we use in §2.1. Different @ values, as defined by the geometric progression, determine how much weight each reference contributes. By default, Eq. 7 assigns the largest weight to the human reference since it is the gold standard."
+    }, {
+      "heading" : "3 Tasks & Datasets",
+      "text" : "We evaluated MARS and compared it with several popular NLG metrics on the following three tasks:\nStory Generation. We use the ROC stories dataset6 for story generation, which requires candidate NLG systems to generate coherent endings to four-sentence stories (Mostafazadeh et al., 2016). The dataset consists of 96,198 examples of partially written stories; we take the human-rated subset (#=300) released by HUSE (Hashimoto et al., 2019), which contains continuances by (1)\n6https://cs.rochester.edu/nlp/rocstories/\nan industry-level system based on Apache Solr7, and (2) an Open-NMT model with global attention (McCann et al., 2017).\nNews Summarization. For the news summarization task, we use the Newsroom summary dataset.8 This dataset contains 1.3 million articles from 38 major publications (Grusky et al., 2018) and we use the subset with human ratings (#=540) released by the authors.9 This dataset contains outputs from summarization models: (1) TextRank: a sentencelevel summarization system inspired by Google PageRank (Page et al., 1999), (2) a Seq2Seq model with attention (Rush et al., 2015), and (3) PointerN: a pointer-based neural model (See et al., 2017) trained on Newsroom dataset.\nQuestion Answering. For question answering, we use the MOCHA dataset,10 which includes human ratings on outputs of five models trained on six QA datasets (Chen et al., 2020). We consider a distributionally-balanced subset (#=450) of these outputs from three systems: (1) finetuned GPT-2 (Radford et al., 2019), (2) a BackTranslation model (Sennrich et al., 2016), and (3) a MHPG model (Bauer et al., 2018) trained on NarrativeQA (Kočiskỳ et al., 2018) and MCScript (Ostermann et al., 2018) datasets.\nThe detailed statistics of these three datasets we used for this work are shown in Table 2. For pre-processing, we removed hashtags and urls in the text, but leave punctuation and stop words, which can affect LCS matching when computing mask costs. For all tasks, we use GPT-2 (large, with 774M parameters) as the language model for\n7https://lucene.apache.org/solr 8http://lil.nlp.cornell.edu/newsroom/ 9The subset includes human ratings on four perspectives: coherence, fluency, informative and relevance. We compute the average of the four scores as an overall human rating.\n10https://allennlp.org/mocha\nMARS, and RoBERTa-large for the Naive method. For the newsroom dataset, some news articles were longer than the max sequence length of 1024 BPE, and so we cut off the tail end of these examples. With a single RTX-2080 GPU, cloze augmentation with _ = {0 (human ref.), 20%, 40%, 60%, 80%} takes 0.8 seconds on average per reference, amounting to a total augmentation time of 17, 45, and 32 minutes for the ROC, Newsroom and MOCHA tasks respectively. We show how we pick the masking ratios for different tasks in §4.3."
+    }, {
+      "heading" : "4 Evaluation",
+      "text" : ""
+    }, {
+      "heading" : "4.1 MARS Better Correlates With Humans",
+      "text" : "As automated metrics are only helpful if they correlate sufficiently with human judgements, in this section we examine how MARS correlates with human judgements compared with prior metrics.\nSystem-level Correlation. Table 3 shows the correlations between human judgements and automated metrics for MARS and seven other unsupervised metrics, across all NLG systems studied in our three tasks. Compared with the other metrics, MARS achieves the highest correlation with human judgements for five of the seven systems (and comparable with the top in the other two systems), making considerable improvements over the next-best metric for many of the NLG systems (e.g., 0.370 ↑ for Back-Translation, and 0.231 ↑ for Solr). We\nalso notice that MARS has greater improvements on more open-ended tasks (e.g., story generation, which has low Ω), which corroborates MARS’s original objective of judging diverse candidates more fairly. As for the baselines, =-gram matching metrics such as BLEU correlate poorly with human ratings on such open-ended tasks; BERTScore performs better on short candidates and high-Ω tasks (e.g., QA); and perplexity, as expected, correlates weakly with human ratings. The Naive method, which uses multiple augmented references of the same length, improves over BERTScore, which only uses the original reference.\nAblation Study. As shown in the lower rows of Table 3, we see that the performance of MARS drops substantially when the crucial components are removed. Specifically, removing self-planning hurts performance more for tasks with longer references (e.g., story generation) since self-planning is more helpful when there are more blanks to in-fill, and removing context hurts performance more in tasks that are less open-ended (highΩ, such as QA) because there is no adequate input for a reasonable augmentation. We take these ablation study results as evidence that the techniques we propose in MARS are crucial for improving correlation with human judgements.\nTask-level Correlation Visualization. To visualize the correlation between automated metrics\nROC Story Generation Newsroom Summarization MOCHA Question Answering\nExisting Metrics Reorder (Δ) Retrieve (Δ) ref. Reorder (Δ) Retrieve (Δ) ref. Reorder (Δ) Retrieve (Δ) ref.\nand human judgements, we consider the MOCHA QA task as an example and plot the correlations of BERTScore (left) and MARS (right) with human judgements. As shown in Figure 3, compared with MARS, BERTScore has more candidates in the upper-left corner of the plot (i.e., low BERTScore but high human judgement). Many of these are generated by GPT-2 and MHPG, which, based on manual examination, tend to provide more details in the answer than the human reference. For instance, given a context about shopping, one question is “Did they need to buy any meat?”. The human reference answer is simply “Yes, they did.”, but GPT-2 returns “Yes, they bought chicken and a roast.”, which is more detailed, even containing item names derived from the context. Whereas BERTScore cannot evaluate such cases where the generated candidate is over-described with respect\nto the human reference, MARS uses augmented references enriched with information from the context to provide a fairer judgement."
+    }, {
+      "heading" : "4.2 Is MARS robust?",
+      "text" : "Good evaluation metrics ought to also be able to detect adversarial examples by assigning them lower scores than well-formed candidates. As shown in Table 4, uni-gram matching BLEU-1 cannot detect reordered sequences, while ROUGE-L scores reordered sequence higher occasionally if tokenswapping leads to more LCS. Sentence Mover’s Similarity combines word and sentence embeddings and thus is more capable of recognizing reordered samples than MoverScore. Perplexity can detect reordered examples effectively, but is unable to detect retrieved sentences, as they are usually well-formed. MARS, on the other hand, has the best robustness against adversarial samples, possibly because multiple context-infused augmented references help MARS detect adversarial samples more reliably. We also study the effects of contextual embeddings we use in §2.3—when switching to GloVe embeddings (Pennington et al., 2014), which are not contextual, MARS is less able to detect adversarial samples, especially reordered ones. The Naive method, which by default uses RoBERTa embedding, achieves comparable robustness as MARS but its task-level correlations with humans (ref.) are generally lower than MARS, potentially because its fixed-length cloze generation limits the diversity of augmented references."
+    }, {
+      "heading" : "4.3 Choosing Masking Ratios for MARS",
+      "text" : "The masking ratios for MARS are set using the hyperparameter {_}max, which corresponds to MARS using masking ratios from 0% to {_}max in increments of 20%, e.g., {_}max = 40% indicates _ ∈ {0%, 20%, 40%}. In preliminary experiments, we observed that {_}max varied for different datasets. Thus, for our three generation tasks, we evaluate MARS performance given different {_}max, as shown in Table 5. We find that tasks that were more open-ended (low Ω; e.g., story generation) benefited from higher {_}max, which created a more diverse set of augmented references, whereas tasks that were less open-ended (high Ω; e.g., QA) worked better with lower {_}max, which kept the augmented references more similar to the original."
+    }, {
+      "heading" : "4.4 Error Analysis",
+      "text" : "We analyzed cases where MARS score substantially differed from human judgements. From test set outputs, we found that errors could often be categorized into one of three types (shown in Table 6): (1) Out of Vocabulary errors, often induced by unknown tokens in the candidates, (2) Confusion errors, where candidates are simply copied from context, and (3) Inference errors, where the candidates are further inferences of the context based on commonsense knowledge. In these cases, human annotators tended to assign higher scores, whereas, MARS over-penalized them."
+    }, {
+      "heading" : "5 Human Judgement",
+      "text" : "We conducted human evaluation on Amazon Mechanical Turk (MTurk) to further study the quality of MARS augmentation. In total 150 participants were randomly assigned to evaluate the three tasks. Participants (61.3% male and 38.7% female) were all from the United States and above 18 years old, with an average age of 34.7 years old. Each participant was paid 75 cents for completing 14 questions in each questionnaire (average completion time per questionnaire was about 5.11 minutes).\nResults We conducted paired sample C-tests to examine how much the augmentation samples resemble the original human references regarding relevance to context and readability. As shown in Table 7, in terms of relevance to context, MARS had no statistically significant difference compared with original human references in Newsroom and MOCHA datasets, but was rated as even more relevant to the generation context than the human reference in the ROC dataset (MARS Mean = 5.07 > Human Ref. Mean = 4.95), possibly because reinforced self-planning guided the augmentation to be more related to the context. In terms of readabil-\nity, both MARS and Naive were rated lower than the original but not significantly; we take this as a compromise of cloze style augmentation. No statistically significant differences were seen between the original and MARS augmentation in overall ratings across the three tasks. These results further confirm that augmented examples from MARS are of similar quality to the original human references."
+    }, {
+      "heading" : "6 Related Metrics",
+      "text" : "Unsupervised Metrics. In addition to the metrics we directly compared with previously, other unsupervised metrics have also been proposed. TER (Snover et al., 2006), CharacTer (Wang et al., 2016), and chrF (Popović, 2017) focus on character-level overlaps instead of =-gram matching. Similar to BERTScore, YiSi (Lo, 2019) and BERTr (Mathur et al., 2019) leverage pre-trained contextual embeddings to better capture similarity. ΔBLEU (Galley et al., 2015) adds human annotated sentences as negative references. Bawden et al. (2020) find the gain from multiple references can be limited by inherent weaknesses in BLEU. We considered lessons from many of the above works while designing MARS.\nLearned Metrics. Compared with unsupervised metrics, learned metrics collect human supervisions (Freitag et al., 2020a; Chaganty et al., 2018) or train on specially prepared data of a certain domain (Sellam et al., 2020; Rei et al., 2020). Other approaches train on related tasks and use these models as metrics for the original task (Goodrich et al., 2019; Eyal et al., 2019). Whereas learned metrics may have limited applicability on tasks where no such resources are available, MARS fully exploits the few-shot learning abilities of off-the-shelf LMs\nand therefore does not require additional training.\nTask-specific Metrics. Finally, many metrics have been proposed for task-specific evaluation, such as LEIC (Cui et al., 2018) and CIDEr (Vedantam et al., 2015) for image captioning, PARENT (Dhingra et al., 2019) for table-to-text, and EASSE (Alva-Manchego et al., 2019) for sentence simplification. MARS, with some modifications, can potentially be extended to these tasks."
+    }, {
+      "heading" : "7 Limitations",
+      "text" : "MARS can be limited by the LM that it uses— for instance, the total length of context + reference/candidate is limited by the max sequence length of the LM used. Additionally, our work has focused on English, and MARS may require non-trivial modifications to handle cases where the context and reference/candidate are in different languages, such as machine translation. Future work, could potentially extend MARS to these scenarios using multi-lingual sequence-to-sequence models such as multilingual-T5 (Xue et al., 2020). We also analyzed errors and found that MARS sometimes under-scores candidates that contained unknown tokens or were copied directly from the context (see Appendix C for examples and further analysis)."
+    }, {
+      "heading" : "8 Conclusion",
+      "text" : "We have proposed MARS, a context-aware and easy-to-deploy NLG metric built upon an off-theshelf language model (GPT-2). On three contextual NLG tasks, we show that MARS better correlates with human judgements compared with seven other unsupervised metrics. Requiring neither costly human supervision nor additional training, MARS can be applied to a broad range of NLG tasks.\nEthical Considerations\nThe goal of MARS is to aid the evaluation of NLG models, and hence we draw attention to several ethical considerations. First, the augmented references of MARS can be affected by certain biases from the LM it is based on (e.g., GPT-2) (Liu et al., 2021), though those biases may be partially mitigated by the relatively narrow scope of cloze completion and by generations being guided by given context and human references. Second, MARS facilitates evaluation and therefore development of NLG models, for which a major ethical consideration is that they can mimic target properties in training data that are undesirable. This is especially true of models trained on non-contemporary data that does not represent current norms and practices. These biases can lead to ethical concerns if users or deployers of models are not aware of these issues or do not account for them. More generally, NLG models can also be used in malicious ways such as to generate fake news or spam, which we strongly discourage. Finally, our experiments and analysis are done in English, and therefore we do not claim that our findings will generalize across all languages, although our framework has potential to be extended to other languages with necessary modifications."
+    }, {
+      "heading" : "Appendix A: DP-based Token Masking Algorithm",
+      "text" : "As part of Eq.1 in the main paper, we define the IDF score given token G8 and a corpus - containing \" documents as:\nIDF(G8 , -) = − log 1 \" \"∑ 9=1 [G8 ∈ - 9] ,\nwhere [·] is the indicator function. We present our DP-based masking algorithm in Algorithm 1:\nAlgorithm 1: DP-based Token Masking Input: Human reference {G8}#8=1, masking\nratio _, and task-specific factor U. Compute E8 for each G8 with U (Eq. 1); Compute F8 depending on LCS for each G8; Init DP-table ) [# + 1] [,max + 1] with all 0; for 8 = 1, 2, . . . , # do\nfor 9 = 1, 2, . . . ,,max do if 9 − F8−1 < 0 then\n) [8] [ 9] = ) [8 − 1] [ 9]; Record masking choice q(G8); else ) [8] [ 9] = max() [8 − 1] [ 9], ) [8 − 1] [ 9 − F8−1] + E8−1); Record masking choice q(G8);\nend end\nend {q(G8)#8=1} ← backtracking via records; return best masking strategy {q(G8)#8=1};"
+    }, {
+      "heading" : "Appendix B: Generate, Judge, and Revise Algorithm",
+      "text" : "The complete procedure for augmenting human references is presented in Algorithm 2. For a given template, we first group the tokens into a blockby-block form with blank blocks ([B]) and text blocks ([T]). Then, we generate varying lengths of tokens, iteratively concatenating them with next text block, and judging them based on PPL, and finally revising current generations accordingly. We use the language modeling ability of LM to check the perplexity of the current sequence, and set a hyper-parameter f to control the maximum extended generation (for a lower PPL).\nDepending on whether there is a subsequent text block, the generation will switch between two\nAlgorithm 2: Generate, Judge and Revise Input: Template {q(G8)}#8=1, max guess f,\nand LM perplexity checker PPL. Group {q(G8)}#8=1 into [B] and [T]; Init final output B; foreach block do\n8 ← 0; Init priority queue @, buffer B′; if [T] then\nAppend [T] to B; else if [B] then\nwhile 8 < f + |[B]| do if next is [T] then\nF ← self-planning gen.; else\nF ← open-ended gen.; end B′← B + F; Record (PPL(B′ + [T]), B′) in @; 8 ← 8 + 1;\nend B← B + lowest PPL B′ pop from @;\nend end return augmented reference B;\nmodes: self-planning generation (if there is future context) and open-ended generation (otherwise). We use a priority queue to store each step generation and its corresponding PPL for quick revisions afterwards."
+    } ],
+    "references" : [ {
+      "title" : "EASSE: Easier automatic sentence simplification evaluation",
+      "author" : [ "Fernando Alva-Manchego", "Louis Martin", "Carolina Scarton", "Lucia Specia." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th In-",
+      "citeRegEx" : "Alva.Manchego et al\\.,? 2019",
+      "shortCiteRegEx" : "Alva.Manchego et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Commonsense for generative multi-hop question answering tasks",
+      "author" : [ "Lisa Bauer", "Yicheng Wang", "Mohit Bansal." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 4220–4230.",
+      "citeRegEx" : "Bauer et al\\.,? 2018",
+      "shortCiteRegEx" : "Bauer et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A study in improving BLEU reference coverage with diverse automatic paraphrasing",
+      "author" : [ "Rachel Bawden", "Biao Zhang", "Lisa Yankovskaya", "Andre Tättar", "Matt Post." ],
+      "venue" : "Findings of the Association for Computational Linguistics: EMNLP 2020,",
+      "citeRegEx" : "Bawden et al\\.,? 2020",
+      "shortCiteRegEx" : "Bawden et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "An estimate of an upper bound for the entropy of english",
+      "author" : [ "Peter F Brown", "Stephen A Della Pietra", "Vincent J Della Pietra", "Jennifer C Lai", "Robert L Mercer." ],
+      "venue" : "Computational Linguistics, 18(1):31–40.",
+      "citeRegEx" : "Brown et al\\.,? 1992",
+      "shortCiteRegEx" : "Brown et al\\.",
+      "year" : 1992
+    }, {
+      "title" : "The price of debiasing automatic metrics in natural language evalaution",
+      "author" : [ "Arun Chaganty", "Stephen Mussmann", "Percy Liang." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers),",
+      "citeRegEx" : "Chaganty et al\\.,? 2018",
+      "shortCiteRegEx" : "Chaganty et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Mocha: A dataset for training and evaluating generative reading comprehension metrics",
+      "author" : [ "Anthony Chen", "Gabriel Stanovsky", "Sameer Singh", "Matt Gardner." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Process-",
+      "citeRegEx" : "Chen et al\\.,? 2020",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Sentence mover’s similarity: Automatic evaluation for multi-sentence texts",
+      "author" : [ "Elizabeth Clark", "Asli Celikyilmaz", "Noah A. Smith." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 2748–2760, Florence,",
+      "citeRegEx" : "Clark et al\\.,? 2019",
+      "shortCiteRegEx" : "Clark et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Learning to evaluate image captioning",
+      "author" : [ "Yin Cui", "Guandao Yang", "Andreas Veit", "Xun Huang", "Serge Belongie." ],
+      "venue" : "Proceedings of the IEEE conference on computer vision and pattern recognition, pages 5804–5812.",
+      "citeRegEx" : "Cui et al\\.,? 2018",
+      "shortCiteRegEx" : "Cui et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Bert: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Handling divergent reference texts when evaluating table-to-text generation",
+      "author" : [ "Bhuwan Dhingra", "Manaal Faruqui", "Ankur Parikh", "Ming-Wei Chang", "Dipanjan Das", "William Cohen." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for",
+      "citeRegEx" : "Dhingra et al\\.,? 2019",
+      "shortCiteRegEx" : "Dhingra et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Enabling language models to fill in the blanks",
+      "author" : [ "Chris Donahue", "Mina Lee", "Percy Liang." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 2492– 2501, Online. Association for Computational Lin-",
+      "citeRegEx" : "Donahue et al\\.,? 2020",
+      "shortCiteRegEx" : "Donahue et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "FEQA: A question answering evaluation framework for faithfulness assessment in abstractive summarization",
+      "author" : [ "Esin Durmus", "He He", "Mona Diab." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 5055–",
+      "citeRegEx" : "Durmus et al\\.,? 2020",
+      "shortCiteRegEx" : "Durmus et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Question answering as an automatic evaluation metric for news article summarization",
+      "author" : [ "Matan Eyal", "Tal Baumel", "Michael Elhadad." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American",
+      "citeRegEx" : "Eyal et al\\.,? 2019",
+      "shortCiteRegEx" : "Eyal et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Human-paraphrased references improve neural machine translation",
+      "author" : [ "Markus Freitag", "George Foster", "David Grangier", "Colin Cherry." ],
+      "venue" : "Proceedings of the Fifth Conference on Machine Translation, pages 1183–1192, Online. Association for",
+      "citeRegEx" : "Freitag et al\\.,? 2020a",
+      "shortCiteRegEx" : "Freitag et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BLEU might be guilty but references are not innocent",
+      "author" : [ "Markus Freitag", "David Grangier", "Isaac Caswell." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 61–71, Online. Association for",
+      "citeRegEx" : "Freitag et al\\.,? 2020b",
+      "shortCiteRegEx" : "Freitag et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "deltaBLEU: A discriminative metric for generation tasks with intrinsically diverse targets",
+      "author" : [ "Michel Galley", "Chris Brockett", "Alessandro Sordoni", "Yangfeng Ji", "Michael Auli", "Chris Quirk", "Margaret Mitchell", "Jianfeng Gao", "Bill Dolan." ],
+      "venue" : "Proceed-",
+      "citeRegEx" : "Galley et al\\.,? 2015",
+      "shortCiteRegEx" : "Galley et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Reinforcement learning based text style transfer without parallel training corpus",
+      "author" : [ "Hongyu Gong", "Suma Bhat", "Lingfei Wu", "JinJun Xiong", "Wen-mei Hwu." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Gong et al\\.,? 2019",
+      "shortCiteRegEx" : "Gong et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Assessing the factual accuracy of text generation",
+      "author" : [ "Ben Goodrich", "Mohammad Ahmad Saleh", "Peter Liu", "Vinay Rao" ],
+      "venue" : null,
+      "citeRegEx" : "Goodrich et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Goodrich et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Newsroom: A dataset of 1.3 million summaries with diverse extractive strategies",
+      "author" : [ "Max Grusky", "Mor Naaman", "Yoav Artzi" ],
+      "venue" : "In Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics:",
+      "citeRegEx" : "Grusky et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Grusky et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Investigating evaluation of open-domain dialogue systems with human generated multiple references",
+      "author" : [ "Prakhar Gupta", "Shikib Mehri", "Tiancheng Zhao", "Amy Pavel", "Maxine Eskenazi", "Jeffrey P Bigham." ],
+      "venue" : "Proceedings of the 20th Annual SIG-",
+      "citeRegEx" : "Gupta et al\\.,? 2019",
+      "shortCiteRegEx" : "Gupta et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unifying human and statistical evaluation",
+      "author" : [ "Tatsunori Hashimoto", "Hugh Zhang", "Percy Liang" ],
+      "venue" : null,
+      "citeRegEx" : "Hashimoto et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Hashimoto et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Ctrl: A conditional transformer language model for controllable generation",
+      "author" : [ "Nitish Shirish Keskar", "Bryan McCann", "Lav R Varshney", "Caiming Xiong", "Richard Socher." ],
+      "venue" : "arXiv preprint arXiv:1909.05858.",
+      "citeRegEx" : "Keskar et al\\.,? 2019",
+      "shortCiteRegEx" : "Keskar et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The narrativeqa reading comprehension challenge",
+      "author" : [ "Tomáš Kočiskỳ", "Jonathan Schwarz", "Phil Blunsom", "Chris Dyer", "Karl Moritz Hermann", "Gábor Melis", "Edward Grefenstette." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 6:317–328.",
+      "citeRegEx" : "Kočiskỳ et al\\.,? 2018",
+      "shortCiteRegEx" : "Kočiskỳ et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "METEOR: An automatic metric for MT evaluation with high levels of correlation with human judgments",
+      "author" : [ "Alon Lavie", "Abhaya Agarwal." ],
+      "venue" : "Proceedings of the Second Workshop on Statistical Machine Translation, pages 228–231, Prague, Czech Repub-",
+      "citeRegEx" : "Lavie and Agarwal.,? 2007",
+      "shortCiteRegEx" : "Lavie and Agarwal.",
+      "year" : 2007
+    }, {
+      "title" : "Rouge: A package for automatic evaluation of summaries",
+      "author" : [ "Chin-Yew Lin." ],
+      "venue" : "Text summarization branches out, pages 74–81.",
+      "citeRegEx" : "Lin.,? 2004",
+      "shortCiteRegEx" : "Lin.",
+      "year" : 2004
+    }, {
+      "title" : "Automatic evaluation of machine translation quality using longest common subsequence and skip-bigram statistics",
+      "author" : [ "Chin-Yew Lin", "Franz Josef Och." ],
+      "venue" : "Proceedings of the 42nd Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Lin and Och.,? 2004",
+      "shortCiteRegEx" : "Lin and Och.",
+      "year" : 2004
+    }, {
+      "title" : "Mitigating political bias in language models through reinforced calibration",
+      "author" : [ "Ruibo Liu", "Chenyan Jia", "Jason Wei", "Guangxuan Xu", "Lili Wang", "Soroush Vosoughi." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence.",
+      "citeRegEx" : "Liu et al\\.,? 2021",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Roberta: A robustly optimized bert pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "arXiv preprint arXiv:1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "YiSi - a unified semantic MT quality evaluation and estimation metric for languages with different levels of available resources",
+      "author" : [ "Chi-kiu Lo." ],
+      "venue" : "Proceedings of the Fourth Conference on Machine Translation (Volume 2: Shared Task Papers, Day 1), pages",
+      "citeRegEx" : "Lo.,? 2019",
+      "shortCiteRegEx" : "Lo.",
+      "year" : 2019
+    }, {
+      "title" : "Putting evaluation in context: Contextual embeddings improve machine translation evaluation",
+      "author" : [ "Nitika Mathur", "Timothy Baldwin", "Trevor Cohn." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages",
+      "citeRegEx" : "Mathur et al\\.,? 2019",
+      "shortCiteRegEx" : "Mathur et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Learned in translation: Contextualized word vectors",
+      "author" : [ "Bryan McCann", "James Bradbury", "Caiming Xiong", "Richard Socher." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 6294–6305.",
+      "citeRegEx" : "McCann et al\\.,? 2017",
+      "shortCiteRegEx" : "McCann et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "USR: An unsupervised and reference free evaluation metric for dialog generation",
+      "author" : [ "Shikib Mehri", "Maxine Eskenazi." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 681–707, Online. Association for",
+      "citeRegEx" : "Mehri and Eskenazi.,? 2020",
+      "shortCiteRegEx" : "Mehri and Eskenazi.",
+      "year" : 2020
+    }, {
+      "title" : "Cgmh: Constrained sentence generation by metropolis-hastings sampling",
+      "author" : [ "Ning Miao", "Hao Zhou", "Lili Mou", "Rui Yan", "Lei Li." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, volume 33, pages 6834–6842.",
+      "citeRegEx" : "Miao et al\\.,? 2019",
+      "shortCiteRegEx" : "Miao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A corpus and cloze evaluation for deeper understanding of commonsense stories",
+      "author" : [ "Nasrin Mostafazadeh", "Nathanael Chambers", "Xiaodong He", "Devi Parikh", "Dhruv Batra", "Lucy Vanderwende", "Pushmeet Kohli", "James Allen." ],
+      "venue" : "Proceedings of the 2016",
+      "citeRegEx" : "Mostafazadeh et al\\.,? 2016",
+      "shortCiteRegEx" : "Mostafazadeh et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Safe and efficient off-policy reinforcement learning",
+      "author" : [ "Rémi Munos", "Tom Stepleton", "Anna Harutyunyan", "Marc Bellemare." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 1054–1062.",
+      "citeRegEx" : "Munos et al\\.,? 2016",
+      "shortCiteRegEx" : "Munos et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Towards a better metric for evaluating question generation systems",
+      "author" : [ "Preksha Nema", "Mitesh M. Khapra." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 3950–3959, Brussels, Belgium. Association",
+      "citeRegEx" : "Nema and Khapra.,? 2018",
+      "shortCiteRegEx" : "Nema and Khapra.",
+      "year" : 2018
+    }, {
+      "title" : "Why we need new evaluation metrics for NLG",
+      "author" : [ "Jekaterina Novikova", "Ondřej Dušek", "Amanda Cercas Curry", "Verena Rieser." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 2241–2252,",
+      "citeRegEx" : "Novikova et al\\.,? 2017",
+      "shortCiteRegEx" : "Novikova et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Mcscript: A novel dataset for assessing machine comprehension using script knowledge",
+      "author" : [ "Simon Ostermann", "Ashutosh Modi", "Michael Roth", "Stefan Thater", "Manfred Pinkal." ],
+      "venue" : "Proceedings of the Eleventh International Conference on Language Re-",
+      "citeRegEx" : "Ostermann et al\\.,? 2018",
+      "shortCiteRegEx" : "Ostermann et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "The pagerank citation ranking: Bringing order to the web",
+      "author" : [ "Lawrence Page", "Sergey Brin", "Rajeev Motwani", "Terry Winograd." ],
+      "venue" : "Technical report, Stanford InfoLab.",
+      "citeRegEx" : "Page et al\\.,? 1999",
+      "shortCiteRegEx" : "Page et al\\.",
+      "year" : 1999
+    }, {
+      "title" : "Text generation by learning from off-policy demonstrations",
+      "author" : [ "Richard Yuanzhe Pang", "He He." ],
+      "venue" : "International Conference on Learning Representations (ICLR 21’).",
+      "citeRegEx" : "Pang and He.,? 2021",
+      "shortCiteRegEx" : "Pang and He.",
+      "year" : 2021
+    }, {
+      "title" : "Bleu: a method for automatic evaluation of machine translation",
+      "author" : [ "Kishore Papineni", "Salim Roukos", "Todd Ward", "WeiJing Zhu." ],
+      "venue" : "Proceedings of the 40th annual meeting of the Association for Computational Linguistics, pages 311–318.",
+      "citeRegEx" : "Papineni et al\\.,? 2002",
+      "shortCiteRegEx" : "Papineni et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "GloVe: Global vectors for word representation",
+      "author" : [ "Jeffrey Pennington", "Richard Socher", "Christopher Manning." ],
+      "venue" : "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1532–1543, Doha,",
+      "citeRegEx" : "Pennington et al\\.,? 2014",
+      "shortCiteRegEx" : "Pennington et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Algorithms for knapsack problems",
+      "author" : [ "David Pisinger" ],
+      "venue" : null,
+      "citeRegEx" : "Pisinger.,? \\Q1995\\E",
+      "shortCiteRegEx" : "Pisinger.",
+      "year" : 1995
+    }, {
+      "title" : "chrF++: words helping character n-grams",
+      "author" : [ "Maja Popović." ],
+      "venue" : "Proceedings of the Second Conference on Machine Translation, pages 612–618, Copenhagen, Denmark. Association for Computational Linguistics.",
+      "citeRegEx" : "Popović.,? 2017",
+      "shortCiteRegEx" : "Popović.",
+      "year" : 2017
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "Alec Radford", "Jeffrey Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever." ],
+      "venue" : "OpenAI Blog, 1(8):9.",
+      "citeRegEx" : "Radford et al\\.,? 2019",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "COMET: A neural framework for MT evaluation",
+      "author" : [ "Ricardo Rei", "Craig Stewart", "Ana C Farinha", "Alon Lavie." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 2685–2702, Online. Associa-",
+      "citeRegEx" : "Rei et al\\.,? 2020",
+      "shortCiteRegEx" : "Rei et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Sentencebert: Sentence embeddings using siamese bertnetworks",
+      "author" : [ "Nils Reimers", "Iryna Gurevych." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing. Association for Computational Linguistics.",
+      "citeRegEx" : "Reimers and Gurevych.,? 2019",
+      "shortCiteRegEx" : "Reimers and Gurevych.",
+      "year" : 2019
+    }, {
+      "title" : "Making monolingual sentence embeddings multilingual using knowledge distillation",
+      "author" : [ "Nils Reimers", "Iryna Gurevych." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing. Association for Computa-",
+      "citeRegEx" : "Reimers and Gurevych.,? 2020",
+      "shortCiteRegEx" : "Reimers and Gurevych.",
+      "year" : 2020
+    }, {
+      "title" : "A neural attention model for abstractive sentence summarization",
+      "author" : [ "Alexander M. Rush", "Sumit Chopra", "Jason Weston." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 379–389, Lisbon, Portugal.",
+      "citeRegEx" : "Rush et al\\.,? 2015",
+      "shortCiteRegEx" : "Rush et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Get to the point: Summarization with pointergenerator networks",
+      "author" : [ "Abigail See", "Peter J Liu", "Christopher D Manning." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1073–",
+      "citeRegEx" : "See et al\\.,? 2017",
+      "shortCiteRegEx" : "See et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "BLEURT: Learning robust metrics for text generation",
+      "author" : [ "Thibault Sellam", "Dipanjan Das", "Ankur Parikh." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 7881–7892, Online. Association for Computa-",
+      "citeRegEx" : "Sellam et al\\.,? 2020",
+      "shortCiteRegEx" : "Sellam et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Improving neural machine translation models with monolingual data",
+      "author" : [ "Rico Sennrich", "Barry Haddow", "Alexandra Birch." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages",
+      "citeRegEx" : "Sennrich et al\\.,? 2016",
+      "shortCiteRegEx" : "Sennrich et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Blank language models",
+      "author" : [ "Tianxiao Shen", "Victor Quach", "Regina Barzilay", "Tommi Jaakkola." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 5186–5198, Online. Association for Computa-",
+      "citeRegEx" : "Shen et al\\.,? 2020",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A study of translation edit rate with targeted human annotation",
+      "author" : [ "Matthew Snover", "Bonnie Dorr", "Richard Schwartz", "Linnea Micciulla", "John Makhoul." ],
+      "venue" : "Proceedings of association for machine translation in the Americas, volume 200. Cambridge, MA.",
+      "citeRegEx" : "Snover et al\\.,? 2006",
+      "shortCiteRegEx" : "Snover et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "Ruber: An unsupervised method for automatic evaluation of open-domain dialog systems",
+      "author" : [ "Chongyang Tao", "Lili Mou", "Dongyan Zhao", "Rui Yan." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, volume 32.",
+      "citeRegEx" : "Tao et al\\.,? 2018",
+      "shortCiteRegEx" : "Tao et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "cloze procedure”: A new tool for measuring readability",
+      "author" : [ "Wilson L Taylor." ],
+      "venue" : "Journalism quarterly, 30(4):415–433.",
+      "citeRegEx" : "Taylor.,? 1953",
+      "shortCiteRegEx" : "Taylor.",
+      "year" : 1953
+    }, {
+      "title" : "Cider: Consensus-based image description evaluation",
+      "author" : [ "Ramakrishna Vedantam", "C Lawrence Zitnick", "Devi Parikh." ],
+      "venue" : "Proceedings of the IEEE conference on computer vision and pattern recognition, pages 4566–4575.",
+      "citeRegEx" : "Vedantam et al\\.,? 2015",
+      "shortCiteRegEx" : "Vedantam et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "CharacTer: Translation edit rate on character level",
+      "author" : [ "Weiyue Wang", "Jan-Thorsten Peter", "Hendrik Rosendahl", "Hermann Ney." ],
+      "venue" : "Proceedings of the First Conference on Machine Translation: Volume 2, Shared Task Papers, pages 505–510, Berlin, Ger-",
+      "citeRegEx" : "Wang et al\\.,? 2016",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "mt5: A massively multilingual pre-trained text-to-text transformer",
+      "author" : [ "Linting Xue", "Noah Constant", "Adam Roberts", "Mihir Kale", "Rami Al-Rfou", "Aditya Siddhant", "Aditya Barua", "Colin Raffel." ],
+      "venue" : "arXiv preprint arXiv:2010.11934.",
+      "citeRegEx" : "Xue et al\\.,? 2020",
+      "shortCiteRegEx" : "Xue et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "uBLEU: Uncertainty-aware automatic evaluation method for open-domain dialogue systems",
+      "author" : [ "Tsuta Yuma", "Naoki Yoshinaga", "Masashi Toyoda." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics: Student Re-",
+      "citeRegEx" : "Yuma et al\\.,? 2020",
+      "shortCiteRegEx" : "Yuma et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bertscore: Evaluating text generation with bert",
+      "author" : [ "Tianyi Zhang", "Varsha Kishore", "Felix Wu", "Kilian Q Weinberger", "Yoav Artzi" ],
+      "venue" : null,
+      "citeRegEx" : "Zhang et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "POINTER: Constrained progressive text generation",
+      "author" : [ "Yizhe Zhang", "Guoyin Wang", "Chunyuan Li", "Zhe Gan", "Chris Brockett", "Bill Dolan" ],
+      "venue" : null,
+      "citeRegEx" : "Zhang et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "MoverScore: Text generation evaluating with contextualized embeddings and earth mover distance",
+      "author" : [ "Wei Zhao", "Maxime Peyrard", "Fei Liu", "Yang Gao", "Christian M. Meyer", "Steffen Eger." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in",
+      "citeRegEx" : "Zhao et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Text infilling",
+      "author" : [ "Wanrong Zhu", "Zhiting Hu", "Eric Xing." ],
+      "venue" : "arXiv preprint arXiv:1901.00158.",
+      "citeRegEx" : "Zhu et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhu et al\\.",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 40,
+      "context" : "Automated metrics such as BLEU (Papineni et al., 2002) and ROUGE (Lin, 2004) are popular methods for evaluating natural language generation (NLG) systems.",
+      "startOffset" : 31,
+      "endOffset" : 54
+    }, {
+      "referenceID" : 24,
+      "context" : ", 2002) and ROUGE (Lin, 2004) are popular methods for evaluating natural language generation (NLG) systems.",
+      "startOffset" : 18,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 36,
+      "context" : "Compared with human evaluation, they are cheaper and faster, and accordingly, they often serve as essential metrics for benchmarking the performance of NLG models (Novikova et al., 2017).",
+      "startOffset" : 163,
+      "endOffset" : 186
+    }, {
+      "referenceID" : 19,
+      "context" : "Despite their widespread use, however, these automated metrics often poorly correlate with ratings given by human judges, particularly for datasets in which only a single human reference exists (Gupta et al., 2019; Novikova et al., 2017).",
+      "startOffset" : 194,
+      "endOffset" : 237
+    }, {
+      "referenceID" : 36,
+      "context" : "Despite their widespread use, however, these automated metrics often poorly correlate with ratings given by human judges, particularly for datasets in which only a single human reference exists (Gupta et al., 2019; Novikova et al., 2017).",
+      "startOffset" : 194,
+      "endOffset" : 237
+    }, {
+      "referenceID" : 54,
+      "context" : "ence candidates, crucially ignoring provided contexts that are relevant for evaluating the answer in contextual NLG tasks, such as story generation, news summarization, and question-answering (Tao et al., 2018; Nema and Khapra, 2018).",
+      "startOffset" : 192,
+      "endOffset" : 233
+    }, {
+      "referenceID" : 35,
+      "context" : "ence candidates, crucially ignoring provided contexts that are relevant for evaluating the answer in contextual NLG tasks, such as story generation, news summarization, and question-answering (Tao et al., 2018; Nema and Khapra, 2018).",
+      "startOffset" : 192,
+      "endOffset" : 233
+    }, {
+      "referenceID" : 3,
+      "context" : "Perplexity (PPL) (Brown et al., 1992) successfully detects ungrammatical sentences, but it fails to distinguish legitimate novel continuations and copy-and-pasted ones.",
+      "startOffset" : 17,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 60,
+      "context" : "BERTScore (Zhang et al., 2019) leverages contextual embeddings from BERT (Devlin et al.",
+      "startOffset" : 10,
+      "endOffset" : 30
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2019) leverages contextual embeddings from BERT (Devlin et al., 2019), thus mitigating the above challenges, but still does not fairly evaluate candidates that cor-",
+      "startOffset" : 50,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 50,
+      "context" : "For instance, BLEURT (Sellam et al., 2020) fine-tunes BERT (Devlin et al.",
+      "startOffset" : 21,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2020) fine-tunes BERT (Devlin et al., 2019) on synthetic reference-candidate pairs for machine translation.",
+      "startOffset" : 24,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 60,
+      "context" : "These methods, however, are often limited in practical use, because the high-cost human ratings are not always available for every dataset, and the data- or system-specific training is not easily extended to other domains (Zhang et al., 2019), and can even bias the evaluation (Freitag et al.",
+      "startOffset" : 222,
+      "endOffset" : 242
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2019), and can even bias the evaluation (Freitag et al., 2020b).",
+      "startOffset" : 42,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 61,
+      "context" : "eration approaches (Zhang et al., 2020; Miao et al., 2019); whereas these generation approaches start with templates of important tokens and then fill in the details to generate complete sentences, our masking procedure starts with the complete sen-",
+      "startOffset" : 19,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 32,
+      "context" : "eration approaches (Zhang et al., 2020; Miao et al., 2019); whereas these generation approaches start with templates of important tokens and then fill in the details to generate complete sentences, our masking procedure starts with the complete sen-",
+      "startOffset" : 19,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 42,
+      "context" : "Such a goal is actually a NP-complete combinatorial optimization problem, called the Knapsack problem (Pisinger, 1995), which we solve using dynamic-programming (DP).",
+      "startOffset" : 102,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 27,
+      "context" : "Masked Language Models (MLM) such as RoBERTa (Liu et al., 2019) and BERT (Devlin et al.",
+      "startOffset" : 45,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2019) and BERT (Devlin et al., 2019) are trained to predict masked tokens within sentences, and thus are able to do cloze augmentation off-the-shelf.",
+      "startOffset" : 17,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 63,
+      "context" : "However, without architecture-level modification, MLMs are only able to infill a pre-determined number of missing tokens (Zhu et al., 2019).",
+      "startOffset" : 121,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 55,
+      "context" : "4A cloze test (Taylor, 1953) is a language test where a portion of language is removed and the participant is asked to replace the missing language item.",
+      "startOffset" : 14,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 44,
+      "context" : "Autoregressive Language Models (ALM) such as GPT-2 (Radford et al., 2019), on the other hand, are trained to predict current step token given past tokens.",
+      "startOffset" : 51,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2020) or fine-tuning on specially prepared data (Donahue et al., 2020), which are costly and not easy to extend to new NLG tasks.",
+      "startOffset" : 50,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 16,
+      "context" : "In text generation, however, such a reward definition requires sampling over the future generated sequence to estimate current step reward (Gong et al., 2019), which may cause the policy to end in zero reward region because of high",
+      "startOffset" : 139,
+      "endOffset" : 158
+    }, {
+      "referenceID" : 34,
+      "context" : "with importance sampling weight nC to stabilize the optimization (Munos et al., 2016), which is:",
+      "startOffset" : 65,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 21,
+      "context" : "where [ is the learning rate and b is the temperature parameter to control the stochastic sampling during token decoding (Keskar et al., 2019).",
+      "startOffset" : 121,
+      "endOffset" : 142
+    }, {
+      "referenceID" : 60,
+      "context" : "One way to obtain similarity scores is using BERTScore (Zhang et al., 2019), but BERTScore requires training on",
+      "startOffset" : 55,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 46,
+      "context" : "Therefore, in order to keep all the resources used by MARS off-the-shelf, we utilize SentenceBERT (Reimers and Gurevych, 2019), which uses the mean of all token embeddings in a sentence as",
+      "startOffset" : 98,
+      "endOffset" : 126
+    }, {
+      "referenceID" : 27,
+      "context" : "As the sentence encoder, we use RoBERTa-large (Liu et al., 2019), a common choice in the literature (Zhang et al.",
+      "startOffset" : 46,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 60,
+      "context" : ", 2019), a common choice in the literature (Zhang et al., 2019; Reimers and Gurevych, 2020).",
+      "startOffset" : 43,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 47,
+      "context" : ", 2019), a common choice in the literature (Zhang et al., 2019; Reimers and Gurevych, 2020).",
+      "startOffset" : 43,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 20,
+      "context" : "The dataset consists of 96,198 examples of partially written stories; we take the human-rated subset (#=300) released by HUSE (Hashimoto et al., 2019), which contains continuances by (1)",
+      "startOffset" : 126,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 30,
+      "context" : "an industry-level system based on Apache Solr7, and (2) an Open-NMT model with global attention (McCann et al., 2017).",
+      "startOffset" : 96,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 18,
+      "context" : "3 million articles from 38 major publications (Grusky et al., 2018) and we use the subset with human ratings (#=540) released by the authors.",
+      "startOffset" : 46,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 38,
+      "context" : "level summarization system inspired by Google PageRank (Page et al., 1999), (2) a Seq2Seq model with attention (Rush et al.",
+      "startOffset" : 55,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 48,
+      "context" : ", 1999), (2) a Seq2Seq model with attention (Rush et al., 2015), and (3) PointerN: a pointer-based neural model (See et al.",
+      "startOffset" : 44,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 49,
+      "context" : ", 2015), and (3) PointerN: a pointer-based neural model (See et al., 2017) trained on Newsroom dataset.",
+      "startOffset" : 56,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 5,
+      "context" : "For question answering, we use the MOCHA dataset,10 which includes human ratings on outputs of five models trained on six QA datasets (Chen et al., 2020).",
+      "startOffset" : 134,
+      "endOffset" : 153
+    }, {
+      "referenceID" : 44,
+      "context" : "We consider a distributionally-balanced subset (#=450) of these outputs from three systems: (1) finetuned GPT-2 (Radford et al., 2019), (2) a BackTranslation model (Sennrich et al.",
+      "startOffset" : 112,
+      "endOffset" : 134
+    }, {
+      "referenceID" : 51,
+      "context" : ", 2019), (2) a BackTranslation model (Sennrich et al., 2016), and (3) a MHPG model (Bauer et al.",
+      "startOffset" : 37,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2016), and (3) a MHPG model (Bauer et al., 2018) trained on NarrativeQA (Kočiskỳ et al.",
+      "startOffset" : 30,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2018) trained on NarrativeQA (Kočiskỳ et al., 2018) and MCScript (Ostermann et al.",
+      "startOffset" : 31,
+      "endOffset" : 53
+    }, {
+      "referenceID" : 40,
+      "context" : "BLEU-1 (Papineni et al., 2002), METEOR (Lavie and Agarwal, 2007), and ROUGE-L (Lin and Och, 2004) use =-gram matching.",
+      "startOffset" : 7,
+      "endOffset" : 30
+    }, {
+      "referenceID" : 23,
+      "context" : ", 2002), METEOR (Lavie and Agarwal, 2007), and ROUGE-L (Lin and Och, 2004) use =-gram matching.",
+      "startOffset" : 16,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2002), METEOR (Lavie and Agarwal, 2007), and ROUGE-L (Lin and Och, 2004) use =-gram matching.",
+      "startOffset" : 55,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 6,
+      "context" : "Sentence Mover’s Similarity (Clark et al., 2019) and MoverScore (Zhao et al.",
+      "startOffset" : 28,
+      "endOffset" : 48
+    }, {
+      "referenceID" : 62,
+      "context" : ", 2019) and MoverScore (Zhao et al., 2019) measure similarity using earth mover’s distance.",
+      "startOffset" : 23,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 60,
+      "context" : "BERTScore (Zhang et al., 2019) leverages contextual embeddings from pre-trained LMs.",
+      "startOffset" : 10,
+      "endOffset" : 30
+    }, {
+      "referenceID" : 41,
+      "context" : "3—when switching to GloVe embeddings (Pennington et al., 2014), which are not contextual, MARS is less able to detect adversarial samples, especially reordered ones.",
+      "startOffset" : 37,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 43,
+      "context" : ", 2016), and chrF (Popović, 2017) focus on character-level overlaps instead of =-gram matching.",
+      "startOffset" : 18,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 28,
+      "context" : "Similar to BERTScore, YiSi (Lo, 2019) and BERTr (Mathur et al.",
+      "startOffset" : 27,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 29,
+      "context" : "Similar to BERTScore, YiSi (Lo, 2019) and BERTr (Mathur et al., 2019) leverage pre-trained contextual embeddings to better capture similarity.",
+      "startOffset" : 48,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 15,
+      "context" : "ΔBLEU (Galley et al., 2015) adds human annotated sentences as negative references.",
+      "startOffset" : 6,
+      "endOffset" : 27
+    }, {
+      "referenceID" : 13,
+      "context" : "Compared with unsupervised metrics, learned metrics collect human supervisions (Freitag et al., 2020a; Chaganty et al., 2018) or train on specially prepared data of a certain domain (Sellam et al.",
+      "startOffset" : 79,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 4,
+      "context" : "Compared with unsupervised metrics, learned metrics collect human supervisions (Freitag et al., 2020a; Chaganty et al., 2018) or train on specially prepared data of a certain domain (Sellam et al.",
+      "startOffset" : 79,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 50,
+      "context" : ", 2018) or train on specially prepared data of a certain domain (Sellam et al., 2020; Rei et al., 2020).",
+      "startOffset" : 64,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 45,
+      "context" : ", 2018) or train on specially prepared data of a certain domain (Sellam et al., 2020; Rei et al., 2020).",
+      "startOffset" : 64,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 17,
+      "context" : "Other approaches train on related tasks and use these models as metrics for the original task (Goodrich et al., 2019; Eyal et al., 2019).",
+      "startOffset" : 94,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 12,
+      "context" : "Other approaches train on related tasks and use these models as metrics for the original task (Goodrich et al., 2019; Eyal et al., 2019).",
+      "startOffset" : 94,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 7,
+      "context" : "Finally, many metrics have been proposed for task-specific evaluation, such as LEIC (Cui et al., 2018) and CIDEr (Vedan-",
+      "startOffset" : 84,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2015) for image captioning, PARENT (Dhingra et al., 2019) for table-to-text, and EASSE (Alva-Manchego et al.",
+      "startOffset" : 37,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2019) for table-to-text, and EASSE (Alva-Manchego et al., 2019) for sentence simplification.",
+      "startOffset" : 37,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 58,
+      "context" : "could potentially extend MARS to these scenarios using multi-lingual sequence-to-sequence models such as multilingual-T5 (Xue et al., 2020).",
+      "startOffset" : 121,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 26,
+      "context" : ", GPT-2) (Liu et al., 2021), though those biases may be partially mitigated by the relatively narrow scope of cloze completion and by generations being guided by given context and",
+      "startOffset" : 9,
+      "endOffset" : 27
+    } ],
+    "year" : 2021,
+    "abstractText" : "Although automated metrics are commonly used to evaluate NLG systems, they often correlate poorly with human judgements. Newer metrics such as BERTScore have addressed many weaknesses in prior metrics such as BLEU and ROUGE, which rely on =-gram matching. These newer methods, however, are still limited in that they do not consider the generation context, so they cannot properly reward generated text that is correct but deviates from the given reference. In this paper, we propose Language Model Augmented Relevance Score (MARS), a new context-aware metric for NLG evaluation. MARS leverages off-the-shelf language models, guided by reinforcement learning, to create augmented references that consider both the generation context and available human references, which are then used as additional references to score generated text. Compared with seven existing metrics in three common NLG tasks, MARS not only achieves higher correlation with human reference judgements, but also differentiates well-formed candidates from adversarial samples to a larger degree.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

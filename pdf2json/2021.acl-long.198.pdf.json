@@ -1,0 +1,719 @@
+{
+  "name" : "2021.acl-long.198.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "LGESQL: Line Graph Enhanced Text-to-SQL Model with Mixed Local and Non-Local Relations",
+    "authors" : [ "Ruisheng Cao", "Lu Chen", "Zhi Chen", "Yanbin Zhao", "Su Zhu", "Kai Yu" ],
+    "emails" : [ "211314@sjtu.edu.cn", "chenlusz@sjtu.edu.cn", "kai.yu@sjtu.edu.cn" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 2541–2555\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n2541"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "The text-to-SQL task (Zhong et al., 2017; Xu et al., 2017) aims to convert a natural language question into a SQL query, given the corresponding database schema. It has been widely studied in both academic and industrial communities to build natural language interfaces to databases (NLIDB, Androutsopoulos et al., 1995).\nOne daunting problem is how to jointly encode the question words and database schema items (including tables and columns), as well as various relations among these heterogeneous inputs. Typically, previous literature utilizes a node-centric graph neural network (GNN, Scarselli et al., 2008)\n∗The corresponding authors are Lu Chen and Kai Yu.\nto aggregate information from neighboring nodes. GNNSQL (Bogin et al., 2019a) adopts a relational graph convolution network (RGCN, Schlichtkrull et al., 2018) to take into account different edge types between schema items, such as T-HAS-C relationship 1, primary key and foreign key constraints. However, these edge features are directly retrieved from a fixed-size parameter matrix and may suffer from the drawback: unaware of contextualized information, especially the structural topology of edges. Meta-path is defined as a composite relation linking two objects, which can be used to capture multi-hop semantics. For example, in Figure 1(a), relation Q-EXACTMATCH-C and C-BELONGSTO-T can form a 2-hop meta-path indicating that some table t has one column exactly mentioned in the question.\nAlthough RATSQL (Wang et al., 2020a) introduces some useful meta-paths such as CSAMETABLE-C, it treats all relations, either 1-hop\n1For abbreviation, Q represents QUESTION node, while T and C represent TABLE and COLUMN nodes.\nor multi-hop, in the same manner (relative position embedding, Shaw et al., 2018) in a complete graph. Without distinguishing local and non-local neighbors, see Figure 1(b), each node will attend to all the other nodes equally, which may lead to the notorious over-smoothing problem (Chen et al., 2020a). Besides, meta-paths are currently constructed by domain experts or explored by breadthfirst search (Kong et al., 2012). Unfortunately, the number of possible meta-paths increases exponentially with the path length, and selecting the most important subset among them is an NP-complete problem (Lao and Cohen, 2010).\nTo address the above limitations, we propose a Line Graph Enhanced Text-to-SQL model (LGESQL), which explicitly considers the topological structure of edges. According to the definition of a line graph (Gross and Yellen, 2005), we firstly construct an edge-centric graph from the original node-centric graph. These two graphs capture the structural topology of nodes and edges, respectively. Iteratively, each node in either graph gathers information from its neighborhood and incorporates edge features from the dual graph to update its representation. As for the node-centric graph, we combine both local and non-local edge features into the computation. Local edge features denote 1-hop relations and are dynamically provided by node embeddings in the line graph, while non-local edge features are directly extracted from a parameter matrix. This distinction encourages the model to pay more attention to local edge features while maintaining information from multihop neighbors. Additionally, we propose an auxiliary task called graph pruning. It introduces an inductive bias that the heterogeneous graph encoder of text-to-SQL should be intelligent to extract the golden schema items related to the question from the entire database schema graph.\nExperimental results on benchmark Spider (Yu et al., 2018b) demonstrate that our LGESQL model promotes the exact set match accuracy to 62.8% (with GLOVE, Pennington et al. 2014) and 72.0% (with pretrained language model ELECTRA, Clark et al. 2020). Our main contributions are summarized as follows:\n• We propose to model the 1-hop edge features with a line graph in text-to-SQL. Both nonlocal and local features are integrated during the iteration process of node embeddings.\n• We design an auxiliary task called graph prun-\ning, which aims to determine whether each node in the database schema graph is relevant to the given question.\n• Empirical results on dataset Spider demonstrate that our model is effective, and we achieve state-of-the-art performances both without and with pre-trained language models."
+    }, {
+      "heading" : "2 Preliminaries",
+      "text" : "Problem definition Given a natural language question Q = (q1, q2, · · · , q|Q|) with length |Q| and the corresponding database schema S = T ∪ C, the target is to generate a SQL query y. The database schema S contains multiple tables T = {t1, t2, · · · } and columns C = {ct11 , c t1 2 , · · · , c t2 1 , c t2 2 , · · · }. Each table ti is described by its name and is further composed of several words (ti1, ti2, · · · ). Similarly, we use word phrase (ctij1, c ti j2, · · · ) to represent column c ti j ∈ ti. Besides, each column ctij also has a type field c ti j0 to constrain its cell values (e.g. TEXT and NUMBER). The entire input node-centric heterogeneous graphGn = (V n, Rn) consists of all three types of nodes mentioned above, that is V n = Q ∪ T ∪ C with the number of nodes |V n| = |Q|+ |T |+ |C|, where |T | and |C| are the number of tables and columns respectively.\nMeta-path As shown in Figure 1(a), a meta-path represents a path τ1 r1→ τ2 r2→ · · · rl→ τl+1, where the target vertex type of previous relation ri−1 equals to the source vertex type τi of the current relation ri. It describes a composite relation r = r1 ◦r2 · · · ◦rl between nodes with type τ1 and τl+1. In this work, τi ∈ {QUESTION,TABLE,COLUMN}. Throughout our discussion, we use the term local to denote relations with path length 1, while nonlocal relations refer to meta-paths longer than 1. The relational adjacency matrix Rn contains both local and non-local relations, see Appendix A for enumeration.\nLine Graph Each vertex vei , i = 1, 2, · · · , |V e| in the line graph Ge = (V e, Re) can be uniquely mapped to a directed edge rnst ∈ Rn, or vns → vnt , in the original node-centric graph Gn = (V n, Rn). Function f maps the source and target node index tuple (s, t) into the “edge” index i = f(s, t) in Ge. The reverse mapping is f -1. In the line graph Ge, a directed edge reij ∈ Re exists from node vei to vej , iff the target node of edge r n f -1(i) and the\nsource node of edge rnf -1(j) in G n are exactly the same node. Actually, reij captures the information flow in meta-path rnf -1(i) ◦ r n f -1(j). We prevent backtracking cases where two reverse edges will not be connected in Ge, illustrated in Figure 2.\nWe only utilize local relations in Rn as the node set V e to avoid creating too many nodes in the line graph Ge. Symmetrically, each edge in Re can be uniquely identified by the node in V n. For example, in the upper right part of Figure 2, the edge between nodes “e1” and “e2” in the line graph can be represented by the middle node with double solid borderlines in the original graph."
+    }, {
+      "heading" : "3 Method",
+      "text" : "After constructing the line graph, we utilize the classic encoder-decoder architecture (Sutskever et al., 2014; Bahdanau et al., 2015) as the backbone of our model. LGESQL consists of three parts: a graph input module, a line graph enhanced hidden module, and a graph output module (see Figure 3 for an overview). The first two modules aim to map the input heterogeneous graph Gn into node embeddings X ∈ R|V n|×d, where d is the graph hidden size. The graph output module retrieves and transforms X into the target SQL query y."
+    }, {
+      "heading" : "3.1 Graph Input Module",
+      "text" : "This module aims to provide the initial embeddings for both nodes and edges. Initial local edge features Z0 ∈ R|V e|×d and non-local edge features Znlc ∈ R(|R\nn|−|V e|)×d are directly retrieved from a parameter matrix. For nodes, we can obtain their representations from either word vectors GLOVE (Pennington et al., 2014) or a pre-trained language model (PLM) such as BERT (Devlin et al., 2019).\nGLOVE Each word qi in the question Q or schema item ti ∈ T or ctij ∈ C can be initialized by looking up the embedding dictionary without considering the context. Then, these vectors are passed into three type-ware bidirectional LSTMs (BiLSTM, Hochreiter and Schmidhuber, 1997) respectively to attain contextual information. We concatenate the forward and backward hidden states for each question word qi as the graph input x0qi . As for table ti, after feeding (ti0, ti1, ti2, · · · ) into the BiLSTM (special type ti0 = “table”, ∀i), we concatenate the last hidden states in both directions as the graph input x0ti (similarly for column ctij ). These node representations are stacked together to form the initial node embeddings matrix X0 ∈ R|V n|×d.\nPLM Firstly, we flatten all question words and schema items into a sequence, where columns belong to the same table are clustered together 2: [CLS]q1q2 · · · q|Q|[SEP]t10t1ct110c t1 1 c t1 20c t1 2 · · · t20t2c t2 10c t2 1 c t2 20c t2 2 · · ·[SEP]. The type information ti0 or c ti j0 is inserted before each schema item. Since each word w is tokenized into sub-words, we append a subword attentive pooling layer after PLM to obtain word-level representations. Concretely, given the output sequence of subword features ws1,w s 2, · · · ,ws|w| for each subword w s i in w, the word-level representation w is 3\nai =softmaxi tanh(wsiWs)v T s , w = ∑ i aiw s i ,\nwhere vs and Ws are trainable parameters. After obtaining the word vectors, we also feed them into three BiLSTMs according to the node types and get the graph inputs X0 for all nodes."
+    }, {
+      "heading" : "3.2 Line Graph Enhanced Hidden Module",
+      "text" : "It contains a stack of L dual relational graph attention network (Dual RGAT) layers. In each layer l, two RGATs (Wang et al., 2020b) capture the structure of the original graph and line graph, respectively. Node embeddings in one graph play the role of edge features in another graph. For example, the edge features used in graph Gn are provided by the node embeddings in graph Ge.\nWe use Xl ∈ R|V n|×d to denote the input node embedding matrix of graph Gn in the l-th\n2We randomly shuffle the order of tables and columns in different mini-batches to discourage over-fitting.\n3Vectors throughout this paper are all row vectors.\nlayer, l ∈ {0, 1, · · · , L − 1}. As for each specific node vni ∈ V n, we use xli. Similarly, matrix Zl ∈ R|V e|×d and vector zli are used to denote node embeddings in the line graph. Following RATSQL (Wang et al., 2020a), we use multi-head scaled dot-product (Vaswani et al., 2017) to calculate the attention weights. For brevity, we formulate the entire computation in one layer as two basic modules:\nXl+1 =RGATn(Xl, [Zl;Znlc], Gn),\nZl+1 =RGATe(Zl,Xl, Ge),\nwhere Znlc is the aforementioned non-local edge features in the original graph Gn."
+    }, {
+      "heading" : "3.2.1 RGAT for the Original Graph",
+      "text" : "Given the node-centric graph Gn, the output representation xl+1i of the l-th layer is computed by\nα̃hji =(x l iW h q )(x l jW h k + [ψ(r n ji)] H h ) T,\nαhji =softmaxj(α̃ h ji/\n√ d/H),\nx̃li =\nHn\nh=1 ∑ vnj ∈Nni αhji(x l jW h v + [ψ(r n ji)] H h ),\nx̃l+1i =LayerNorm(x l i + x̃ l iWo), xl+1i =LayerNorm(x̃ l+1 i + FFN(x̃ l+1 i )),\nwhere ‖ represents vector concatenation, matrices Whq ,W h k ,W h v ∈ Rd×d/H ,Wo ∈ Rd×d are trainable parameters, H is the number of heads and FFN(·) denotes a feedforward neural network. N ni\nrepresents the receptive field of node vni and function ψ(rnji) returns a d-dim feature vector of relation rnji. Operator [·]Hh first evenly splits the vector into H parts and returns the h-th partition. Since there are two genres of relations (local and nonlocal), we design two schemes to integrate them:\nMixed Static and Dynamic Embeddings If rnji is a local relation, ψ(rnji) returns the node embedding zlf(j,i) from the line graph\n4. Otherwise, ψ(rnji) directly retrieves the vector from the non-local embedding matrix Znlc, see Figure 4. The neighborhood function N ni for node vni returns the entire node set V n and is shared across different heads.\nMulti-head Multi-view Concatenation An alternative is to split the muli-head attention module into two parts. In half of the heads, the neighborhood function N ni of node vni only contains nodes that are reachable within 1-hop. In this case, ψ(rnji) returns the layer-wise updated feature zlf(j,i) from\n4Function f maps the tuple of source and target node indices in Gn into the corresponding node index in Ge.\nZl. In the other heads, each node has access to both local and non-local neighbors, and ψ(·) always returns static entries in the embedding matrix Znlc ∪ Z0, see Figure 5 for illustration.\nIn either scheme, the RGAT module treats local and non-local relations differently and relatively manipulates the local edge features more carefully."
+    }, {
+      "heading" : "3.2.2 RGAT for the Line Graph",
+      "text" : "Symmetrically, given edge-centric graph Ge, the updated node representation zl+1i from z l i is calculated similarly with little modifications:\nβ̃hji =(z l iU h q + [φ(r e ji)] H h )(z l jU h k) T,\nβhji =softmaxj(β̃ h ji/\n√ d/H),\nz̃li =\nHn\nh=1 ∑ vej∈N ei βhji(z l jU h v + [φ(r e ji)] H h ),\nz̃l+1i =LayerNorm(z l i + z̃ l iUo), zl+1i =LayerNorm(z̃ l+1 i + FFN(z̃ l+1 i )).\nHere φ(reji) returns the feature vector of relation reji in G\ne. Since we only consider local relations in the line graph, N ei only includes 1-hop neighbous and φ(reji) equals to the source node embedding in Xl of edge vei . Attention that the relational feature is added on the “query” side instead of the “key” side when computing attention logits β̃hji cause it is irrelevant to the incoming edges. For example, in Figure 3, the connecting nodes of two edge pairs (1-4, 4-5) and (2-4, 4-5) are the same node with index 4. Uhq ,U h k ,U h v ∈ Rd×d/H ,Uo ∈ Rd×d are trainable parameters. The output matrices of the final layer L are the desired outputs of the encoder: X = XL,Z = ZL."
+    }, {
+      "heading" : "3.3 Graph Output Module",
+      "text" : "This module includes two tasks: one decoder for the main focus text-to-SQL and the other one to perform an auxiliary task called graph pruning. We use the subscript to denote the collection of node\nembeddings with a specific type, e.g., Xq is the matrix of all question node embeddings."
+    }, {
+      "heading" : "3.3.1 Text-to-SQL Decoder",
+      "text" : "We adopt the grammar-based syntactic neural decoder (Yin and Neubig, 2017) to generate the abstract syntax tree (AST) of the target query y in depth-first-search order. The output at each decoding timestep is either 1) an APPLYRULE action that expands the current non-terminal node in the partially generated AST, or 2) SELECTTABLE or SELECTCOLUMN action that chooses one schema item xsi from the encoded memory Xs = Xt∪Xc. Mathematically, P (y|X) = ∏ j P (aj |a<j ,X), where aj is the action at the j-th timestep. For more implementation details, see Appendix B."
+    }, {
+      "heading" : "3.3.2 Graph Pruning",
+      "text" : "We hypothesize that a powerful encoder should distinguish irrelevant schema items from golden schema items used in the target query. In Figure 6, the question-oriented schema sub-graph (above the shadow region) can be easily extracted. The intent c2 and the constraint c5 are usually explicitly mentioned in the question, identified by dot-product attention mechanism or schema linking. The linking nodes such as t1, c3, c4, t2 can be inferred by the 1-hop connections of the schema graph to form a connected component. To introduce this inductive bias, we design an auxiliary task that aims to classify each schema node si ∈ S = T ∪ C based on its relevance with the question and the sparse structure of the schema graph.\nFirstly, we compute the context vector x̃si from the question node embeddings Xq for each schema\nnode si via multi-head attention.\nγhji =softmaxj (xsiW\nh sq)(xqjW h sk) T√ d/H ,\nx̃si =(\nHn\nh=1 ∑ j γhjixqjW h sv)Wso,\nwhere Whsq,W h sk,W h sv ∈ Rd×d/H and Wso ∈ Rd×d are network parameters. Then, a biaffine (Dozat and Manning, 2017) binary classifier is used to determine whether the compressed context vector x̃si and the schema node embedding xsi are correlated.\nBiaffine(x1,x2) =x1UsxT2 + [x1;x2]Ws + bs,\nP gp(ysi |xsi ,Xq) =σ(Biaffine(xsi , x̃si)).\nThe ground truth label ygsi of a schema item is 1 iff si appears in the target SQL query. The training object can be formulated as\nLgp = − ∑ si [ygsi logP gp(ysi |xsi ,Xq)\n+ (1− ygsi) log(1− P gp(ysi |xsi ,Xq))].\nThis auxiliary task is combined with the main text-to-SQL task in a multitasking way. Similar ideas (Bogin et al., 2019b; Yu et al., 2020) and other association schemes are discussed in Appendix C."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : "In this section, we evaluate our LGESQL model in different settings. Codes are public available 5."
+    }, {
+      "heading" : "4.1 Experiment Setup",
+      "text" : "Dataset Spider (Yu et al., 2018b) is a largescale cross-domain zero-shot text-to-SQL benchmark 6. It contains 8659 training examples across 146 databases in total, and covers several domains from other datasets such as Restaurants (Popescu et al., 2003), GeoQuery (Zelle and Mooney, 1996), Scholar (Iyer et al., 2017), Academic (Li and Jagadish, 2014), Yelp and IMDB (Yaghmazadeh et al., 2017) datasets. The detailed statistics are shown in Table 1. We follow the common practice to report the exact set match accuracy on the validation and test dataset. The test dataset contains 2147 samples with 40 unseen databases but is not public available. We submit our model to the organizer of the challenge for evaluation.\n5https://github.com/rhythmcao/ text2sql-lgesql.git.\n6Leaderboard of the challenge: https://yale-lily. github.io//spider.\nImplementations We preprocess the questions, table names, and column names with toolkit Stanza (Qi et al., 2020) for tokenization and lemmatization. Our model is implemented with Pytorch (Paszke et al., 2019), and the original and line graphs are constructed with library DGL (Wang et al., 2019a). Within the encoder, we use GLOVE (Pennington et al., 2014) word embeddings with dimension 300 or pretrained language models (PLMs), BERT (Devlin et al., 2019) or ELECTRA (Clark et al., 2020), to leverage contextual information. With GLOVE, embeddings of the most frequent 50 words in the training set are fixed during training while the remaining will be finetuned. The schema linking strategy is borrowed from RATSQL (Wang et al., 2020a), which is also our baseline system. During evaluation, we adopt beam search decoding with beam size 5.\nHyper-parameters In the encoder, the GNN hidden size d is set to 256 for GLOVE and 512 for PLMs. The number of GNN layers L is 8. In the decoder, the dimension of hidden state, action embedding and node type embedding are set to 512, 128 and 128 respectively. The recurrent dropout rate (Gal and Ghahramani, 2016) is 0.2 for decoder LSTM. The number of heads in multi-head attention is 8 and the dropout rate of features is set to 0.2 in both the encoder and decoder. Throughout the experiments, we use AdamW (Loshchilov and Hutter, 2019) optimizer with linear warmup scheduler. The warmup ratio of total training steps is 0.1. For GLOVE, the learning rate is 5e-4 and the weight decay coefficient is 1e-4; For PLMs, we use smaller leaning rate 2e-5 (base) or 1e-5 (large), and larger weight decay rate 0.1. The optimization of the PLM encoder is carried out more carefully with layer-wise learning rate decay coefficient 0.8. Batch size is 20 and the maximum gradient norm is 5. The number of training epochs is 100 for GLOVE, and 200 for PLMs respectively."
+    }, {
+      "heading" : "4.2 Main Results",
+      "text" : "The main results of the test set are provided in Table 2. Our proposed line graph enhanced text-toSQL (LGESQL) model achieves state-of-the-art results in all configurations at the time of writing. With word vectors GLOVE, the performance increases from 57.2% to 62.8%, 5.6% absolute improvements. With PLM bert-large-wwm, LGESQL also surpasses all previous methods, including the ensemble model, and attains 68.3% accuracy. Recently, more advanced approaches all leverage the benefits of larger PLMs, more task adaptive data (text-table pairs), and tailored pretraining tasks. For example, GAP (Shi et al., 2020) designs some task adaptive self-supervised tasks such as column prediction and column recovery to better address the downstream joint encoding problem. We utilize electra-large for its compatibility with our model and achieves 72.0% accuracy.\nTaking one step further, we compare more finegrained performances of our model to the baseline system RATSQL (Wang et al., 2020a) classified by the level of difficulty in Table 3. We observe that LGESQL surpasses RATSQL across all subdivisions in both the validation and test datasets regardless of the application of a PLM, especially at the Medium and Extra Hard levels. This validates the superiority of our model by exploiting the structural relations among edges in the line graph."
+    }, {
+      "heading" : "4.3 Ablation Studies",
+      "text" : "In this section, we investigate the contribution of each design choice. We report the average accuracy on the validation dataset with 5 random seeds."
+    }, {
+      "heading" : "4.3.1 Different Components of LGESQL",
+      "text" : "RGATSQL is our baseline system where the line graph is not utilized. It can be viewed as a variant of RATSQL with our tailored grammar-based decoder. From Table 4, we can discover that: 1) if non-local relations or meta-paths are removed (w/o NLC), the performance will decrease roughly by 2 points in LGESQL, while 3 points drop in RGATSQL. However, our LGESQL with merely local relations is still competitive. It consolidates our motivation that by exploiting the structure among edges, the line graph can capturing long-range relations to some extent. 2) graph pruning task con-\ntributes more in LGESQL (+1.2%) than RGATSQL (+0.7%) on account of the fact that local relations are more critical to structural inference. 3) Two strategies of combining local and non-local relations introduced in § 3.2.1 (w/ MSDE or MMC) are both beneficial to the eventual performances of LGESQL (2.0% and 2.1% gains, respectively). It corroborates the assumption that local and nonlocal relations should be treated with distinction. However, the performance remains unchanged in RGATSQL, when merging a different view of the graph (w/ MMC) into multi-head attention. This may be caused by the over-smoothing problem of a complete graph."
+    }, {
+      "heading" : "4.3.2 Pre-trained Language Models",
+      "text" : "In this part, we analyze the effects of different pre-trained language models in Table 5. From the overall results, we can see that: 1) by involving the line graph into computation, LGESQL outperforms the baseline model RGATSQL with different PLMs, further demonstrating the effectiveness of explicitly modeling edge features. 2) large series PLMs consistently perform better than base models on account of their model capacity and generalization capability to unseen domains. 3) Task adaptive PLMs especially ELECTRA are superior to vanilla BERT irrespective of the upper GNN architecture. We hypothesize the reason is that ELECTRA is pre-trained with a tailored binary classification task, which aims to individually distinguish whether each input word is substituted given the context. Essentially, this self-supervised task is similar to our proposed graph pruning task, which focuses on enhancing the discriminative capability of the encoder."
+    }, {
+      "heading" : "4.4 Case Studies",
+      "text" : "In Figure 7, we compare the SQL queries generated by our LGESQL model with those created by the baseline model RGATSQL. We notice that\nLGESQL performs better than the baseline system, especially on examples that involve the JOIN operation of multiple tables. For instance, in the second case where the connection of three tables are included, RGATSQL fails to identify the existence of table flights. Thus, it is unable to predict the WHERE condition about the destination city and does repeat work. In the third case, our LGESQL still successfully constructs a connected schema sub-graph by linking table “template” to “documents”. Sadly, the RGATSQL model neglects the occurrence of “documents” again. However, in the last case, our LGESQL is stupid to introduce an unnecessary table “airports”. It ignores the situation that table “flights” has one column “source airport” which already satisfies the requirement."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "Encoding Problem for Text-to-SQL To tackle the joint encoding problem of the question and database schema, Xu et al. (2017) proposes “column attention” strategy to gather information from columns for each question word. TypeSQL (Yu et al., 2018a) incorporates prior knowledge of column types and schema linking as additional input\nfeatures. Bogin et al. (2019a) and Chen et al. (2021) deal with the graph structure of database schema via GNN. EditSQL (Zhang et al., 2019b) considers “co-attention” between question words and database schema nodes similar to the common practice in text matching (Chen et al., 2017). BRIDGE (Lin et al., 2020) further leverages the database content to augment the column representation. The most advanced method RATSQL (Wang et al., 2020a), utilizes a complete relational graph attention neural network to handle various pre-defined relations. In this work, we further consider both local and non-local, dynamic and static edge features among different types of nodes with a line graph.\nHeterogeneous Graph Neural Network Apart from the structural topology, a heterogeneous graph (Shi et al., 2016) also contains multiple types of nodes and edges. To address the heterogeneity of node attributes, Zhang et al. (2019a) designs a type-based content encoder and Fu et al. (2020) utilizes a type-specific linear transformation. For edges, relational graph convolution network (RGCN, Schlichtkrull et al., 2018) and relational graph attention network (RGAT, Wang et al., 2020b) have been proposed to parameterize different relations. HAN (Wang et al., 2019b) converts the original heterogeneous graph into multiple homogeneous graphs and applies a hierarchical attention mechanism to the meta-path-based sub-graphs. Similar ideas have been adopted in dialogue state tracking (Chen et al., 2020b, 2019a), dialogue policy learning (Chen et al., 2018) and text matching (Chen et al., 2020c; Lyu et al., 2021) to handle heterogeneous inputs. In another branch, Chen et al. (2019b), Zhu et al. (2019) and Zhao et al. (2020) construct the line graph of the original graph and explicitly model the computation over edge features. In this work, we borrow the idea of a line graph and update both node and edge features via iteration over dual graphs."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "In this work, we utilize the line graph to update the edge features in the heterogeneous graph for the text-to-SQL task. Through the iteration over the structural connections in the line graph, local edges can incorporate multi-hop relational features and capture significant meta-paths. By further integrating non-local relations, the encoder can learn from multiple views and attend to remote nodes with shortcuts. In the future, we will investigate\nmore useful meta-paths and explore more effective methods to deal with different meta-path-based neighbors."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We thank Tao Yu, Yusen Zhang and Bo Pang for their careful assistance with the evaluation. We also thank the anonymous reviewers for their thoughtful comments. This work has been supported by Shanghai Municipal Science and Technology Major Project (2021SHZDZX0102), No.SKLMCPTS2020003 Project and Startup Fund for Youngman Research at SJTU (SFYR at SJTU)."
+    }, {
+      "heading" : "A Local and Non-Local Relations",
+      "text" : "In this work, meta-paths with length 1 are local relations, and other meta-paths are non-local relations. Specifically, Table 6 provides the list of all local relations according to the types of source and target nodes. Notice that we preserve the NOMATCH relation because there is no overlapping between the entire question and any schema item in some cases. This relaxation will dramatically increase the number of edges in the line graph. To resolve it, we remove edges in the line graph that the source and target nodes both represent relation types of MATCH series. In other words, we prevent information propagating between these bipartite connections during the iteration of the line graph.\nThe checklist in Table 6 is only a subset of all relations defined in RATSQL (Wang et al., 2020a). For the remaining relations, we treat them as nonlocal relations for a fair comparison to the baseline system RATSQL."
+    }, {
+      "heading" : "B Details of Text-to-SQL Decoder",
+      "text" : "B.1 ASDL Grammar The complete grammar used to translate the SQL into a series of actions is provided in Figure 8. Here are some criteria when we design the abstract syntax description language (ASDL, Wang et al., 1997) for the target SQL queries:\n1. Keep the length of the action sequence short to prevent the long-term forgetting problem in the auto-regressive decoder. To achieve this goal, we remove the optional operator “?” defined in Wang et al. (1997) and extend the number of constructors by enumeration. For example, we expand all solutions of type sql unit according to the existence of different clauses.\n2. Hierarchically, group and re-use the same type in a top-down manner for parameter sharing. For example, we use the same type col unit when choosing columns in different clauses and create the type val unit such that both the SELECT clause and CONDITION clauses can refer to it.\n3. When generating a list of items of the same type, instead of emitting a special action REDUCE as the symbol of termination (Yin and Neubig, 2017), we enumerate all possible number of occurrences in the training set (see\nthe constructors for type select and from in Figure 8). Then, we generate each item based on this quantitative limitation. Preliminary experimental results prove that thinking in advance is better than a lazy decision.\nOur grammar can cover 98.7% and 98.2% cases in the training and validation dataset, respectively.\nB.2 Decoder Architecture Given the encoded memory X = [Xq;Xt;Xc] ∈ R|V n|×d, where |V n| = |Q|+|T |+|C|, the goal of a text-to-SQL decoder is to produce a sequence of actions which can construct the corresponding AST of the target SQL query. In our experiments, we utilize a single layer ordered neurons LSTM (ONLSTM, Shen et al., 2019) as the auto-regressive decoder. Firstly, we initialize the decoder state h0 via attentive pooling over the memory X.\nai =softmaxi tanh(xiW0)vT0 , h̃0 = ∑ i aixi,\nh0 =tanh(h̃0W1),\nwhere v0 is a trainable row vector and W0,W1 are parameter matrices. Then, in the structured ONLSTM decoder, the hidden states at each timestep j is updated as\nmj ,hj = ON-LSTM([aj−1;apj ;hpj ;nj ],\nmj−1,hj−1),\nwhere mj is the cell state of the j-th timestep, aj−1 is the embedding of the previous action, apj is the embedding of parent action, hpt is the embedding of parent hidden state, and nj denotes the type embedding of the current frontier node 7. Given the current decoder state hj , we adopt multi-head attention (8 heads) mechanism to calculate the context vector h̃j over X. This context vector is concatenated with hj and passed into a 2-layer MLP with tanh activation unit to obtain the attention vector hattj . The dimension of h att j is 512.\nFor APPLYRULE action, the probability distribution is computed by a softmax classification layer:\nP (aj = APPLYRULE[R]|a<j ,X) = softmaxR(hattj WR).\n7The frontier node is the current non-terminal node in the partially generated AST to be expanded and we maintain an embedding for each node type.\nFor SELECTTABLE action, we directly copy the table ti from the encoded memory Xt.\nζhji =softmaxi(h att j W h tq)(xtiW h tk) T,\nP (aj =SELECTTABLE[ti]|a<j ,X) = 1\nH H∑ h=1 ζhji.\nTo be consistent, we also apply the multi-head attention mechanism here with H = 8 heads. The calculation of SELECTCOLUMN action is similar with different network parameters."
+    }, {
+      "heading" : "C Graph Pruning",
+      "text" : "Similar ideas have been proposed by Bogin et al. (2019b) and Yu et al. (2020). Our proposed task differs from their methods in two aspects:\nPrediction target Yu et al. (2020) devises several syntactic roles for schema items and performs multi-class classification instead of binary discrimination. Based on our assumption, the encoder is responsible for the discrimination capability while the decoder organizes different schema items and components into a complete semantic frame. Thus, we simplify the training target into binary labels.\nCombination method Bogin et al. (2019b) utilizes another RGCN to calculate the relevance score for each schema item in Global-GNNSQL. This score is incorporated into the encoder RGCN as a soft input coefficient. Different from this cascaded method, graph pruning is employed in a multitasking manner. We have tried different approaches to combine this auxiliary module with the primary\ntext-to-SQL model in our preliminary experiments, such as:\n1) Similar to Bogin et al. (2019b), we utilize a separate graph encoder to conduct graph pruning firstly, and use another refined graph encoder (the same architecture, e.g., RGAT) to jointly encode the pruned schema graph and the question. These two encoders can share network parameters of only the embeddings or more upper GNN layers. If they share all 8 layers, the entire encoder will degenerate from the pipelined mode into our multitasking fashion. Empirical results in Table 7 demonstrate that when these two encoders share more layers, the performance of the text-to-SQL model is better.\n2) We can constrain the text-to-SQL decoder to only attend and retrieve schema items from the pruned encoded memory when calculating attention vectors and select columns or tables. In other words, the graph pruning module and the text-to-SQL decoder are connected in a cascaded way. Through pilot experiments, we observe the flagrant training-inference inconsistency problem. The text-to-SQL decoder is trained upon the golden\nschema items, but it depends on the predicted options from the graph pruning module during evaluation. Even if we endeavor various samplingbased methods (such as random sampling, sampling from current module predictions, or sampling from neighboring nodes of the golden schema graph) to inject some noise during training, the performance is merely competitive to that with multitasking. Therefore, based on Occam’s Razor Theorem, we only treat graph pruning as an auxiliary output module."
+    } ],
+    "references" : [ {
+      "title" : "Natural language interfaces to databases-an introduction",
+      "author" : [ "Ion Androutsopoulos", "Graeme D Ritchie", "Peter Thanisch." ],
+      "venue" : "arXiv preprint cmplg/9503016.",
+      "citeRegEx" : "Androutsopoulos et al\\.,? 1995",
+      "shortCiteRegEx" : "Androutsopoulos et al\\.",
+      "year" : 1995
+    }, {
+      "title" : "Neural machine translation by jointly learning to align and translate",
+      "author" : [ "Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio." ],
+      "venue" : "3rd International Conference on Learning Representations, ICLR 2015, San Diego, CA, USA, May 7-9, 2015,",
+      "citeRegEx" : "Bahdanau et al\\.,? 2015",
+      "shortCiteRegEx" : "Bahdanau et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Representing schema structure with graph neural networks for text-to-SQL parsing",
+      "author" : [ "Ben Bogin", "Jonathan Berant", "Matt Gardner." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 4560–4565, Florence,",
+      "citeRegEx" : "Bogin et al\\.,? 2019a",
+      "shortCiteRegEx" : "Bogin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Global reasoning over database structures for textto-SQL parsing",
+      "author" : [ "Ben Bogin", "Matt Gardner", "Jonathan Berant." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Confer-",
+      "citeRegEx" : "Bogin et al\\.,? 2019b",
+      "shortCiteRegEx" : "Bogin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Measuring and relieving the oversmoothing problem for graph neural networks from the topological view",
+      "author" : [ "Deli Chen", "Yankai Lin", "Wei Li", "Peng Li", "Jie Zhou", "Xu Sun." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, volume 34,",
+      "citeRegEx" : "Chen et al\\.,? 2020a",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Agentgraph: Towards universal dialogue management with structured deep reinforcement learning",
+      "author" : [ "Lu Chen", "Zhi Chen", "Bowen Tan", "Sishan Long", "Milica Gasic", "Kai Yu." ],
+      "venue" : "CoRR, abs/1905.11259.",
+      "citeRegEx" : "Chen et al\\.,? 2019a",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Schema-guided multi-domain dialogue state tracking with graph attention neural networks",
+      "author" : [ "Lu Chen", "Boer Lv", "Chi Wang", "Su Zhu", "Bowen Tan", "Kai Yu." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, volume 34, pages 7521–7528.",
+      "citeRegEx" : "Chen et al\\.,? 2020b",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Structured dialogue policy with graph neural networks",
+      "author" : [ "Lu Chen", "Bowen Tan", "Sishan Long", "Kai Yu." ],
+      "venue" : "Proceedings of the 27th International Conference on Computational Linguistics (COLING), pages 1257—-1268.",
+      "citeRegEx" : "Chen et al\\.,? 2018",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Neural graph matching networks for Chinese short text matching",
+      "author" : [ "Lu Chen", "Yanbin Zhao", "Boer Lyu", "Lesheng Jin", "Zhi Chen", "Su Zhu", "Kai Yu." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages",
+      "citeRegEx" : "Chen et al\\.,? 2020c",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Enhanced LSTM for natural language inference",
+      "author" : [ "Qian Chen", "Xiaodan Zhu", "Zhen-Hua Ling", "Si Wei", "Hui Jiang", "Diana Inkpen." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers),",
+      "citeRegEx" : "Chen et al\\.,? 2017",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Supervised community detection with line graph neural networks",
+      "author" : [ "Zhengdao Chen", "Lisha Li", "Joan Bruna." ],
+      "venue" : "7th International Conference on Learning Representations, ICLR 2019, New Orleans, LA, USA, May 6-9, 2019. OpenReview.net.",
+      "citeRegEx" : "Chen et al\\.,? 2019b",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "ShadowGNN: Graph projection neural network for text-to-SQL parser",
+      "author" : [ "Zhi Chen", "Lu Chen", "Yanbin Zhao", "Ruisheng Cao", "Zihan Xu", "Su Zhu", "Kai Yu." ],
+      "venue" : "Proceedings of the 2021 Conference of the North American Chapter of the Association for",
+      "citeRegEx" : "Chen et al\\.,? 2021",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "ELECTRA: pretraining text encoders as discriminators rather than generators",
+      "author" : [ "Kevin Clark", "Minh-Thang Luong", "Quoc V. Le", "Christopher D. Manning." ],
+      "venue" : "8th International Conference on Learning Representations, ICLR 2020, Addis Ababa,",
+      "citeRegEx" : "Clark et al\\.,? 2020",
+      "shortCiteRegEx" : "Clark et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Structure-grounded pretraining for text-to-SQL",
+      "author" : [ "Xiang Deng", "Ahmed Hassan Awadallah", "Christopher Meek", "Oleksandr Polozov", "Huan Sun", "Matthew Richardson." ],
+      "venue" : "Proceedings of the 2021 Conference of the North American Chapter of the Asso-",
+      "citeRegEx" : "Deng et al\\.,? 2021",
+      "shortCiteRegEx" : "Deng et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Deep biaffine attention for neural dependency parsing",
+      "author" : [ "Timothy Dozat", "Christopher D. Manning." ],
+      "venue" : "5th International Conference on Learning",
+      "citeRegEx" : "Dozat and Manning.,? 2017",
+      "shortCiteRegEx" : "Dozat and Manning.",
+      "year" : 2017
+    }, {
+      "title" : "Magnn: metapath aggregated graph neural network for heterogeneous graph embedding",
+      "author" : [ "Xinyu Fu", "Jiani Zhang", "Ziqiao Meng", "Irwin King." ],
+      "venue" : "Proceedings of The Web Conference 2020, pages 2331–2341.",
+      "citeRegEx" : "Fu et al\\.,? 2020",
+      "shortCiteRegEx" : "Fu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A theoretically grounded application of dropout in recurrent neural networks",
+      "author" : [ "Yarin Gal", "Zoubin Ghahramani." ],
+      "venue" : "Advances in Neural Information Processing Systems 29: Annual Conference on Neural Information Processing Systems 2016, De-",
+      "citeRegEx" : "Gal and Ghahramani.,? 2016",
+      "shortCiteRegEx" : "Gal and Ghahramani.",
+      "year" : 2016
+    }, {
+      "title" : "Graph theory and its applications",
+      "author" : [ "Jonathan L Gross", "Jay Yellen." ],
+      "venue" : "CRC press.",
+      "citeRegEx" : "Gross and Yellen.,? 2005",
+      "shortCiteRegEx" : "Gross and Yellen.",
+      "year" : 2005
+    }, {
+      "title" : "Towards complex text-to-SQL in crossdomain database with intermediate representation",
+      "author" : [ "Jiaqi Guo", "Zecheng Zhan", "Yan Gao", "Yan Xiao", "Jian-Guang Lou", "Ting Liu", "Dongmei Zhang." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the",
+      "citeRegEx" : "Guo et al\\.,? 2019",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Long short-term memory",
+      "author" : [ "Sepp Hochreiter", "Jürgen Schmidhuber." ],
+      "venue" : "Neural computation, 9(8):1735–1780.",
+      "citeRegEx" : "Hochreiter and Schmidhuber.,? 1997",
+      "shortCiteRegEx" : "Hochreiter and Schmidhuber.",
+      "year" : 1997
+    }, {
+      "title" : "Learning a neural semantic parser from user feedback",
+      "author" : [ "Srinivasan Iyer", "Ioannis Konstas", "Alvin Cheung", "Jayant Krishnamurthy", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1:",
+      "citeRegEx" : "Iyer et al\\.,? 2017",
+      "shortCiteRegEx" : "Iyer et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Meta path-based collective classification in heterogeneous information networks",
+      "author" : [ "Xiangnan Kong", "Philip S Yu", "Ying Ding", "David J Wild." ],
+      "venue" : "Proceedings of the 21st ACM international conference on Information and knowledge management, pages",
+      "citeRegEx" : "Kong et al\\.,? 2012",
+      "shortCiteRegEx" : "Kong et al\\.",
+      "year" : 2012
+    }, {
+      "title" : "Relational retrieval using a combination of path-constrained random walks",
+      "author" : [ "Ni Lao", "William W Cohen." ],
+      "venue" : "Machine learning, 81(1):53–67.",
+      "citeRegEx" : "Lao and Cohen.,? 2010",
+      "shortCiteRegEx" : "Lao and Cohen.",
+      "year" : 2010
+    }, {
+      "title" : "Constructing an interactive natural language interface for relational databases",
+      "author" : [ "Fei Li", "HV Jagadish." ],
+      "venue" : "Proceedings of the VLDB Endowment, 8:73–84.",
+      "citeRegEx" : "Li and Jagadish.,? 2014",
+      "shortCiteRegEx" : "Li and Jagadish.",
+      "year" : 2014
+    }, {
+      "title" : "Bridging textual and tabular data for crossdomain text-to-SQL semantic parsing",
+      "author" : [ "Xi Victoria Lin", "Richard Socher", "Caiming Xiong." ],
+      "venue" : "Findings of the Association for Computational Linguistics: EMNLP 2020, pages 4870–4888, Online. Associa-",
+      "citeRegEx" : "Lin et al\\.,? 2020",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Decoupled weight decay regularization",
+      "author" : [ "Ilya Loshchilov", "Frank Hutter." ],
+      "venue" : "7th International Conference on Learning Representations, ICLR 2019, New Orleans, LA, USA, May 6-9, 2019. OpenReview.net.",
+      "citeRegEx" : "Loshchilov and Hutter.,? 2019",
+      "shortCiteRegEx" : "Loshchilov and Hutter.",
+      "year" : 2019
+    }, {
+      "title" : "Let: Linguistic knowledge enhanced graph transformer for chinese short text matching",
+      "author" : [ "Boer Lyu", "Lu Chen", "Su Zhu", "Kai Yu" ],
+      "venue" : null,
+      "citeRegEx" : "Lyu et al\\.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Lyu et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Pytorch: An imperative style, high-performance deep learning library",
+      "author" : [ "jani", "Sasank Chilamkurthy", "Benoit Steiner", "Lu Fang", "Junjie Bai", "Soumith Chintala" ],
+      "venue" : "In Advances in Neural Information Processing Systems",
+      "citeRegEx" : "jani et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "jani et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "GloVe: Global vectors for word representation",
+      "author" : [ "Jeffrey Pennington", "Richard Socher", "Christopher Manning." ],
+      "venue" : "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1532–1543, Doha,",
+      "citeRegEx" : "Pennington et al\\.,? 2014",
+      "shortCiteRegEx" : "Pennington et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Towards a theory of natural language interfaces to databases",
+      "author" : [ "Ana-Maria Popescu", "Oren Etzioni", "Henry Kautz." ],
+      "venue" : "Proceedings of the 8th international conference on Intelligent user interfaces, pages 149–157.",
+      "citeRegEx" : "Popescu et al\\.,? 2003",
+      "shortCiteRegEx" : "Popescu et al\\.",
+      "year" : 2003
+    }, {
+      "title" : "Stanza: A python natural language processing toolkit for many human languages",
+      "author" : [ "Peng Qi", "Yuhao Zhang", "Yuhui Zhang", "Jason Bolton", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational",
+      "citeRegEx" : "Qi et al\\.,? 2020",
+      "shortCiteRegEx" : "Qi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "SmBoP: Semi-autoregressive bottom-up semantic parsing",
+      "author" : [ "Ohad Rubin", "Jonathan Berant." ],
+      "venue" : "Proceedings of the 2021 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies,",
+      "citeRegEx" : "Rubin and Berant.,? 2021",
+      "shortCiteRegEx" : "Rubin and Berant.",
+      "year" : 2021
+    }, {
+      "title" : "The graph neural network model",
+      "author" : [ "Franco Scarselli", "Marco Gori", "Ah Chung Tsoi", "Markus Hagenbuchner", "Gabriele Monfardini." ],
+      "venue" : "IEEE transactions on neural networks, 20(1):61–80.",
+      "citeRegEx" : "Scarselli et al\\.,? 2008",
+      "shortCiteRegEx" : "Scarselli et al\\.",
+      "year" : 2008
+    }, {
+      "title" : "Modeling relational data with graph convolutional networks",
+      "author" : [ "Michael Schlichtkrull", "Thomas N Kipf", "Peter Bloem", "Rianne Van Den Berg", "Ivan Titov", "Max Welling." ],
+      "venue" : "European semantic web conference, pages 593–607. Springer.",
+      "citeRegEx" : "Schlichtkrull et al\\.,? 2018",
+      "shortCiteRegEx" : "Schlichtkrull et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Self-attention with relative position representations",
+      "author" : [ "Peter Shaw", "Jakob Uszkoreit", "Ashish Vaswani." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-",
+      "citeRegEx" : "Shaw et al\\.,? 2018",
+      "shortCiteRegEx" : "Shaw et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Ordered neurons: Integrating tree structures into recurrent neural networks",
+      "author" : [ "Yikang Shen", "Shawn Tan", "Alessandro Sordoni", "Aaron C. Courville." ],
+      "venue" : "7th International Conference on Learning Representations, ICLR 2019, New Orleans, LA, USA, May",
+      "citeRegEx" : "Shen et al\\.,? 2019",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A survey of heterogeneous information network analysis",
+      "author" : [ "Chuan Shi", "Yitong Li", "Jiawei Zhang", "Yizhou Sun", "S Yu Philip." ],
+      "venue" : "IEEE Transactions on Knowledge and Data Engineering, 29(1):17–37.",
+      "citeRegEx" : "Shi et al\\.,? 2016",
+      "shortCiteRegEx" : "Shi et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Learning contextual representations for semantic parsing with generation-augmented pre-training",
+      "author" : [ "Peng Shi", "Patrick Ng", "Zhiguo Wang", "Henghui Zhu", "Alexander Hanbo Li", "Jun Wang", "Cı́cero Nogueira dos Santos", "Bing Xiang" ],
+      "venue" : null,
+      "citeRegEx" : "Shi et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Shi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Sequence to sequence learning with neural networks",
+      "author" : [ "Ilya Sutskever", "Oriol Vinyals", "Quoc V. Le." ],
+      "venue" : "Advances in Neural Information Processing Systems 27: Annual Conference on Neural Information Processing Systems 2014, December 8-13 2014,",
+      "citeRegEx" : "Sutskever et al\\.,? 2014",
+      "shortCiteRegEx" : "Sutskever et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Lukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "arXiv preprint arXiv:1706.03762.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "RATSQL: Relation-aware schema encoding and linking for text-to-SQL parsers",
+      "author" : [ "Bailin Wang", "Richard Shin", "Xiaodong Liu", "Oleksandr Polozov", "Matthew Richardson." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computa-",
+      "citeRegEx" : "Wang et al\\.,? 2020a",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "The zephyr abstract syntax description language",
+      "author" : [ "Daniel C Wang", "Andrew W Appel", "Jeffrey L Korn", "Christopher S Serra." ],
+      "venue" : "DSL, volume 97, pages 17–17.",
+      "citeRegEx" : "Wang et al\\.,? 1997",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 1997
+    }, {
+      "title" : "Relational graph attention network for aspect-based sentiment analysis",
+      "author" : [ "Kai Wang", "Weizhou Shen", "Yunyi Yang", "Xiaojun Quan", "Rui Wang." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 3229–",
+      "citeRegEx" : "Wang et al\\.,? 2020b",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Heterogeneous graph attention network",
+      "author" : [ "Xiao Wang", "Houye Ji", "Chuan Shi", "Bai Wang", "Yanfang Ye", "Peng Cui", "Philip S Yu." ],
+      "venue" : "The World Wide Web Conference, pages 2022–2032.",
+      "citeRegEx" : "Wang et al\\.,? 2019b",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Optimizing deeper transformers on small datasets",
+      "author" : [ "Peng Xu", "Dhruv Kumar", "Wei Yang", "Wenjie Zi", "Keyi Tang", "Chenyang Huang", "Jackie Chi Kit Cheung", "Simon J.D. Prince", "Yanshuai Cao" ],
+      "venue" : null,
+      "citeRegEx" : "Xu et al\\.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Sqlnet: Generating structured queries from natural language without reinforcement learning",
+      "author" : [ "Xiaojun Xu", "Chang Liu", "Dawn Song." ],
+      "venue" : "arXiv preprint arXiv:1711.04436.",
+      "citeRegEx" : "Xu et al\\.,? 2017",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Sqlizer: query synthesis from natural language",
+      "author" : [ "Navid Yaghmazadeh", "Yuepeng Wang", "Isil Dillig", "Thomas Dillig." ],
+      "venue" : "Proceedings of the ACM on Programming Languages, 1:1–26.",
+      "citeRegEx" : "Yaghmazadeh et al\\.,? 2017",
+      "shortCiteRegEx" : "Yaghmazadeh et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "A syntactic neural model for general-purpose code generation",
+      "author" : [ "Pengcheng Yin", "Graham Neubig." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 440–450, Vancouver, Canada.",
+      "citeRegEx" : "Yin and Neubig.,? 2017",
+      "shortCiteRegEx" : "Yin and Neubig.",
+      "year" : 2017
+    }, {
+      "title" : "TypeSQL: Knowledgebased type-aware neural text-to-SQL generation",
+      "author" : [ "Tao Yu", "Zifan Li", "Zilin Zhang", "Rui Zhang", "Dragomir Radev." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Compu-",
+      "citeRegEx" : "Yu et al\\.,? 2018a",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Grappa: Grammar-augmented pre-training for table semantic parsing",
+      "author" : [ "Tao Yu", "Chien-Sheng Wu", "Xi Victoria Lin", "Bailin Wang", "Yi Chern Tan", "Xinyi Yang", "Dragomir R. Radev", "Richard Socher", "Caiming Xiong." ],
+      "venue" : "CoRR, abs/2009.13845.",
+      "citeRegEx" : "Yu et al\\.,? 2020",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Spider: A largescale human-labeled dataset for complex and cross",
+      "author" : [ "Tao Yu", "Rui Zhang", "Kai Yang", "Michihiro Yasunaga", "Dongxu Wang", "Zifan Li", "James Ma", "Irene Li", "Qingning Yao", "Shanelle Roman", "Zilin Zhang", "Dragomir Radev" ],
+      "venue" : null,
+      "citeRegEx" : "Yu et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Learning to parse database queries using inductive logic programming",
+      "author" : [ "John M Zelle", "Raymond J Mooney." ],
+      "venue" : "Proceedings of the national conference on artificial intelligence, pages 1050–1055.",
+      "citeRegEx" : "Zelle and Mooney.,? 1996",
+      "shortCiteRegEx" : "Zelle and Mooney.",
+      "year" : 1996
+    }, {
+      "title" : "Heterogeneous graph neural network",
+      "author" : [ "Chuxu Zhang", "Dongjin Song", "Chao Huang", "Ananthram Swami", "Nitesh V Chawla." ],
+      "venue" : "Proceedings of the",
+      "citeRegEx" : "Zhang et al\\.,? 2019a",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Editing-based SQL query generation for cross-domain context-dependent questions",
+      "author" : [ "Rui Zhang", "Tao Yu", "Heyang Er", "Sungrok Shim", "Eric Xue", "Xi Victoria Lin", "Tianze Shi", "Caiming Xiong", "Richard Socher", "Dragomir Radev." ],
+      "venue" : "Pro-",
+      "citeRegEx" : "Zhang et al\\.,? 2019b",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Line graph enhanced AMR-to-text generation with mix-order graph attention networks",
+      "author" : [ "Yanbin Zhao", "Lu Chen", "Zhi Chen", "Ruisheng Cao", "Su Zhu", "Kai Yu." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational",
+      "citeRegEx" : "Zhao et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Grounded adaptation for zeroshot executable semantic parsing",
+      "author" : [ "Victor Zhong", "Mike Lewis", "Sida I. Wang", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 6869–",
+      "citeRegEx" : "Zhong et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhong et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Seq2sql: Generating structured queries from natural language using reinforcement learning",
+      "author" : [ "Victor Zhong", "Caiming Xiong", "Richard Socher." ],
+      "venue" : "arXiv preprint arXiv:1709.00103.",
+      "citeRegEx" : "Zhong et al\\.,? 2017",
+      "shortCiteRegEx" : "Zhong et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Relation structure-aware heterogeneous graph neural network",
+      "author" : [ "Shichao Zhu", "Chuan Zhou", "Shirui Pan", "Xingquan Zhu", "Bin Wang." ],
+      "venue" : "2019 IEEE International Conference on Data Mining (ICDM), pages 1534–1539.",
+      "citeRegEx" : "Zhu et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "2019b) utilizes another RGCN to calculate the relevance score for each schema item in Global-GNNSQL",
+      "author" : [ "Bogin" ],
+      "venue" : null,
+      "citeRegEx" : "Bogin,? \\Q2019\\E",
+      "shortCiteRegEx" : "Bogin",
+      "year" : 2019
+    }, {
+      "title" : "2019b), we utilize a separate graph encoder to conduct graph pruning firstly, and use another refined graph encoder (the same architecture, e.g., RGAT) to jointly encode the pruned schema graph and the question",
+      "author" : [ "Bogin" ],
+      "venue" : null,
+      "citeRegEx" : "Bogin,? \\Q2019\\E",
+      "shortCiteRegEx" : "Bogin",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 57,
+      "context" : "The text-to-SQL task (Zhong et al., 2017; Xu et al., 2017) aims to convert a natural language question into a SQL query, given the corresponding database schema.",
+      "startOffset" : 21,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 46,
+      "context" : "The text-to-SQL task (Zhong et al., 2017; Xu et al., 2017) aims to convert a natural language question into a SQL query, given the corresponding database schema.",
+      "startOffset" : 21,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 2,
+      "context" : "GNNSQL (Bogin et al., 2019a) adopts a relational graph convolution network (RGCN, Schlichtkrull",
+      "startOffset" : 7,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 41,
+      "context" : "Although RATSQL (Wang et al., 2020a) introduces some useful meta-paths such as CSAMETABLE-C, it treats all relations, either 1-hop",
+      "startOffset" : 16,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 4,
+      "context" : "Without distinguishing local and non-local neighbors, see Figure 1(b), each node will attend to all the other nodes equally, which may lead to the notorious over-smoothing problem (Chen et al., 2020a).",
+      "startOffset" : 180,
+      "endOffset" : 200
+    }, {
+      "referenceID" : 22,
+      "context" : "Besides, meta-paths are currently constructed by domain experts or explored by breadthfirst search (Kong et al., 2012).",
+      "startOffset" : 99,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 23,
+      "context" : "Unfortunately, the number of possible meta-paths increases exponentially with the path length, and selecting the most important subset among them is an NP-complete problem (Lao and Cohen, 2010).",
+      "startOffset" : 172,
+      "endOffset" : 193
+    }, {
+      "referenceID" : 18,
+      "context" : "definition of a line graph (Gross and Yellen, 2005), we firstly construct an edge-centric graph from the original node-centric graph.",
+      "startOffset" : 27,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 29,
+      "context" : "For nodes, we can obtain their representations from either word vectors GLOVE (Pennington et al., 2014) or a pre-trained language model (PLM) such as BERT (Devlin et al.",
+      "startOffset" : 78,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2014) or a pre-trained language model (PLM) such as BERT (Devlin et al., 2019).",
+      "startOffset" : 59,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 43,
+      "context" : "In each layer l, two RGATs (Wang et al., 2020b) capture the structure of the original graph and line graph, respectively.",
+      "startOffset" : 27,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 41,
+      "context" : "Following RATSQL (Wang et al., 2020a), we use multi-head scaled dot-product (Vaswani et al.",
+      "startOffset" : 17,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 40,
+      "context" : ", 2020a), we use multi-head scaled dot-product (Vaswani et al., 2017) to calculate the attention weights.",
+      "startOffset" : 47,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 48,
+      "context" : "We adopt the grammar-based syntactic neural decoder (Yin and Neubig, 2017) to generate the abstract syntax tree (AST) of the target query y in depth-first-search order.",
+      "startOffset" : 52,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 15,
+      "context" : "Then, a biaffine (Dozat and Manning, 2017) binary classifier is used to determine whether the compressed con-",
+      "startOffset" : 17,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 3,
+      "context" : "Similar ideas (Bogin et al., 2019b; Yu et al., 2020) and other association schemes are discussed in Appendix C.",
+      "startOffset" : 14,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 50,
+      "context" : "Similar ideas (Bogin et al., 2019b; Yu et al., 2020) and other association schemes are discussed in Appendix C.",
+      "startOffset" : 14,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 30,
+      "context" : "It contains 8659 training examples across 146 databases in total, and covers several domains from other datasets such as Restaurants (Popescu et al., 2003), GeoQuery (Zelle and Mooney, 1996),",
+      "startOffset" : 133,
+      "endOffset" : 155
+    }, {
+      "referenceID" : 21,
+      "context" : "Scholar (Iyer et al., 2017), Academic (Li and Jagadish, 2014), Yelp and IMDB (Yaghmazadeh et al.",
+      "startOffset" : 8,
+      "endOffset" : 27
+    }, {
+      "referenceID" : 24,
+      "context" : ", 2017), Academic (Li and Jagadish, 2014), Yelp and IMDB (Yaghmazadeh et al.",
+      "startOffset" : 18,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 47,
+      "context" : ", 2017), Academic (Li and Jagadish, 2014), Yelp and IMDB (Yaghmazadeh et al., 2017) datasets.",
+      "startOffset" : 57,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 31,
+      "context" : "Stanza (Qi et al., 2020) for tokenization and lemmatization.",
+      "startOffset" : 7,
+      "endOffset" : 24
+    }, {
+      "referenceID" : 29,
+      "context" : "GLOVE (Pennington et al., 2014) word embeddings with dimension 300 or pretrained language models (PLMs), BERT (Devlin et al.",
+      "startOffset" : 6,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2014) word embeddings with dimension 300 or pretrained language models (PLMs), BERT (Devlin et al., 2019) or ELECTRA (Clark et al.",
+      "startOffset" : 86,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2019) or ELECTRA (Clark et al., 2020), to leverage contextual information.",
+      "startOffset" : 19,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 41,
+      "context" : "The schema linking strategy is borrowed from RATSQL (Wang et al., 2020a), which is also our baseline system.",
+      "startOffset" : 52,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 26,
+      "context" : "the experiments, we use AdamW (Loshchilov and Hutter, 2019) optimizer with linear warmup scheduler.",
+      "startOffset" : 30,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 11,
+      "context" : "With Task Adaptive PLM ShadowGNN (Chen et al., 2021) 72.",
+      "startOffset" : 33,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 38,
+      "context" : "For example, GAP (Shi et al., 2020) designs some task adaptive self-supervised tasks such as column prediction and column recovery to better address the downstream joint encoding problem.",
+      "startOffset" : 17,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 41,
+      "context" : "Taking one step further, we compare more finegrained performances of our model to the baseline system RATSQL (Wang et al., 2020a) classified by the level of difficulty in Table 3.",
+      "startOffset" : 109,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 41,
+      "context" : "Table 3: A detailed comparison to the reported results in the original paper RATSQL (Wang et al., 2020a) according to the level of difficulty.",
+      "startOffset" : 84,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 49,
+      "context" : "TypeSQL (Yu et al., 2018a) incorporates prior knowledge of column types and schema linking as additional input",
+      "startOffset" : 8,
+      "endOffset" : 26
+    }, {
+      "referenceID" : 54,
+      "context" : "EditSQL (Zhang et al., 2019b) considers “co-attention” between question words and database schema nodes similar to the common practice in text matching (Chen et al.",
+      "startOffset" : 8,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2019b) considers “co-attention” between question words and database schema nodes similar to the common practice in text matching (Chen et al., 2017).",
+      "startOffset" : 131,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 25,
+      "context" : "BRIDGE (Lin et al., 2020) further leverages the database content to augment the column representation.",
+      "startOffset" : 7,
+      "endOffset" : 25
+    }, {
+      "referenceID" : 41,
+      "context" : "The most advanced method RATSQL (Wang et al., 2020a), utilizes a complete relational graph attention neural network to handle various pre-defined relations.",
+      "startOffset" : 32,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 37,
+      "context" : "from the structural topology, a heterogeneous graph (Shi et al., 2016) also contains multiple types of nodes and edges.",
+      "startOffset" : 52,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 44,
+      "context" : "HAN (Wang et al., 2019b) converts the original heterogeneous graph into multiple homogeneous graphs and applies a hierarchical attention mechanism to the meta-path-based sub-graphs.",
+      "startOffset" : 4,
+      "endOffset" : 24
+    }, {
+      "referenceID" : 7,
+      "context" : ", 2020b, 2019a), dialogue policy learning (Chen et al., 2018) and text matching (Chen et al.",
+      "startOffset" : 42,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2018) and text matching (Chen et al., 2020c; Lyu et al., 2021) to handle heterogeneous inputs.",
+      "startOffset" : 26,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 27,
+      "context" : ", 2018) and text matching (Chen et al., 2020c; Lyu et al., 2021) to handle heterogeneous inputs.",
+      "startOffset" : 26,
+      "endOffset" : 64
+    } ],
+    "year" : 2021,
+    "abstractText" : "This work aims to tackle the challenging heterogeneous graph encoding problem in the text-to-SQL task. Previous methods are typically node-centric and merely utilize different weight matrices to parameterize edge types, which 1) ignore the rich semantics embedded in the topological structure of edges, and 2) fail to distinguish local and nonlocal relations for each node. To this end, we propose a Line Graph Enhanced Text-toSQL (LGESQL) model to mine the underlying relational features without constructing metapaths. By virtue of the line graph, messages propagate more efficiently through not only connections between nodes, but also the topology of directed edges. Furthermore, both local and non-local relations are integrated distinctively during the graph iteration. We also design an auxiliary task called graph pruning to improve the discriminative capability of the encoder. Our framework achieves state-of-theart results (62.8% with GLOVE, 72.0% with ELECTRA) on the cross-domain text-to-SQL benchmark Spider at the time of writing.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

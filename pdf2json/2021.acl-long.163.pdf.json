@@ -1,0 +1,479 @@
+{
+  "name" : "2021.acl-long.163.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Optimizing Deeper Transformers on Small Datasets",
+    "authors" : [ "Peng Xu", "Dhruv Kumar", "Wei Yang", "Wenjie Zi", "Keyi Tang", "Chenyang Huang", "Jackie Chi", "Kit Cheung", "Simon J.D. Prince", "Yanshuai Cao" ],
+    "emails" : [ "yanshuai.cao}@borealisai.com", "dhruv.kumar@uwaterloo.ca,", "chuang8@ualberta.ca,", "jcheung@cs.mcgill.ca" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 2089–2102\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n2089"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "In recent years, large-scale pre-trained language models (Radford et al., 2019; Devlin et al., 2018; Liu et al., 2019b) trained with transformers (Vaswani et al., 2017) have become standard building blocks of modern NLP systems to help improve generalization when task-specific annotations are limited. In practice, it has been found that deeper transformers generally yield better results with sufficient training data (Lan et al., 2019),\n∗Work done while the author was an intern in Borealis AI. 1The code to reproduce our results can be found in:\nhttps://github.com/BorealisAI/DT-Fixup\nespecially on tasks involving reasoning and structural understanding. This suggests that additional transformer layers should be employed in conjunction with pre-trained models, instead of simple and shallow neural components, such as a classifier head, currently used by models of many NLP tasks. However, the common belief in the literature is that training deep transformers from scratch requires large datasets, and few attempts have been made on small datasets, to the best of our knowledge. One implication is that although extra transformer layers on top of pre-trained models should help with more challenging problems in principle, it does not work in practice due to limited training data. We show that after resolving several optimization issues with the method proposed in this work, it is possible to train very deep transformers with improved generalization even on small datasets.\nOne advantage of pre-trained models is the reduced computational resources needed when finetuning on small datasets. For instance, it allows practitioners to finetune on a single GPU and obtain strong performance on a downstream task. However, the large size of pre-trained models limits the batch size that can be used in training new transformer layers on a small computational budget. Despite their broad applications, training transformer models is known to be difficult (Popel and Bojar, 2018). The standard transformer training approach leverages learning rate warm-up, layer normalization (Ba et al., 2016) and a large batch size, and models typically fail to learn when missing any one of these components. The restricted batch size aggravates the training difficulties. Even if a large batch size can be feasibly employed, poorer generalization results are often observed (Keskar et al., 2016), especially when the dataset size is only several times larger than the batch size. Furthermore, many recent works noticed a performance gap in this training approach due to layer normalization\n(Xu et al., 2019; Nguyen and Salazar, 2019; Zhang et al., 2019a; Wang et al., 2019b; Liu et al., 2020; Huang et al., 2020).\nInspired by the recent T-Fixup by Huang et al. (2020), which eliminates the need for learning rate warm-up and layer normalization to train vanilla transformers, we derive a data-dependent initialization strategy by applying different analyses to address several key limitations of T-Fixup. We call our method the Data-dependent Transformer Fixed-update initialization scheme, DT-Fixup. In the mixed setup of additional yet-to-be-trained transformers on top of pre-trained models, DTFixup enables the training of significantly deeper transformers, and is generally applicable to different neural architectures. Our derivation also extends beyond vanilla transformers to transformers with relational encodings (Shaw et al., 2018), allowing us to apply the results to one variant called relation-aware transformer (Wang et al., 2019a). By applying DT-Fixup on different tasks, we show that the impression that deep transformers do not work on small datasets stems from the optimization procedure rather than the architecture. With proper initialization and optimization, training extra transformer layers is shown to facilitate the learning of complex relations and structures in the data.\nWe verify the effectiveness of DT-Fixup on Spider (Yu et al., 2018), a complex and cross-domain Text-to-SQL semantic parsing benchmark, and ReColr (Yu et al., 2020b), a reading comprehension dataset requiring logical reasoning. While Text-toSQL semantic parsing is inherently different from reading comprehension, they share similar characteristics which require certain levels of reasoning and structural understanding ability. Meanwhile, the sizes of both datasets are less than 10k training samples, which is tiny by deep learning standards and renders large-batch training undesirable due to poor generalization2.\nOn both datasets, DT-Fixup consistently outperforms the standard approach with better generalization and allows the training of significantly deeper transformer models. For Spider, we successfully apply DT-Fixup to train a Text-to-SQL parser containing 48 transformer layers, with 24 relation-aware layers trained from scratch on top of 24 pre-trained layers from pre-trained RoBERTa\n2For a comparison, T-Fixup applies batch sizes of more than 1k on machine translation to stabilize the training, which would hurt the generalization significantly on our datasets whose sizes are less than 10k.\n(Liu et al., 2019b). Our parser achieves 70.9% exact match accuracy on the Spider test set, which is the state of the art at the time of writing. At the same time, it requires less training steps and no task-specific pre-training as compared to the prior art (Yu et al., 2020a). For ReClor, we rank the second on the public leaderboard by simply adding 4 transformer layers on top of RoBERTa. Further error analysis shows that the performance improvements by increasing the depth mainly come from better generalization on the harder cases requiring reasoning and structural understanding. Even the failed predictions from the deep models are more reasonable than from the shallow ones."
+    }, {
+      "heading" : "2 Background",
+      "text" : "In this section, we present the necessary background by first introducing the relation-aware transformer layer, which outperforms the vanilla transformer layer with limited data by injecting additional inductive bias (Wang et al., 2019a). Then, we introduce the T-Fixup technique (Huang et al., 2020) for optimizing deeper vanilla transformers and discuss why it does not directly apply in the mixed transformer optimization setup."
+    }, {
+      "heading" : "2.1 Relative Position and Relational Encodings in Transformers",
+      "text" : "Consider a set of inputs X = [x1, . . . ,xn] where xi ∈ Rdx . A transformer, introduced by Vaswani et al. (2017), is a stack of blocks, with each block consisting of a multi-head self-attention layer, layer normalizations, a multi-layer perceptron and skip connections. Each block (with one head in selfattention for notational simplicity) transforms each xi into y i ∈ Rdx as follows:\nαij = softmax ( xiq(xjk) > /√ dz ) (1)\nz i = ∑n j=1αijxjv; (2) ỹ i = LayerNorm(xi + z iw >) (3) y i = LayerNorm(ỹ i + MLP(ỹ i)) (4)\nwhere the softmax operation is applied across the index j, MLP is a two-layer perceptron, LayerNorm is a layer normalization (Ba et al., 2016) layer, and q,k,v ∈ Rdx×dz ,w ∈ Rdx×dz .\nIn order to bias the transformer toward some pre-existing relational features between the inputs, Shaw et al. (2018) described a way to represent relative position information in a self-attention layer\nby changing Equation 1-2 as follows:\nαij = softmax\n( xiq(xjk + r k ij) >\n√ dz ) z i = ∑n j=1αij(xjv + r v ij)\n(5)\nHere the rij ∈ Rdz terms encode the known relationship between two elements xi and xj in the input. Wang et al. (2019a) adapted this framework to effectively encode the schema information using rij’s for Text-to-SQL parsers, and called it relationaware transformer (RAT)."
+    }, {
+      "heading" : "2.2 T-Fixup and its Limitations",
+      "text" : "Huang et al. (2020) found that the requirement for the warmup during the early stage training of the transformers comes from a combined effect of high variance in the Adam optimizer and backpropagation through layer normalization. Bounding the gradient updates would reduce the variance and make training stable, which can be achieved by appropriately initializing the model weights.\nThey derived a weight initialization scheme called T-Fixup for the vanilla transformer that fully eliminates the need for layer normalization and learning rate warmup, and stabilizes the training to avoid harmful plateaus of poor generalization. T-Fixup requires the inputs x to be Gaussian randomly initialized embeddings with variance d− 1 2 where d is the embedding dimension. Then, the input and parameters of the encoder, x, v ,w in the vanilla self-attention blocks as well as the weight matrices in the MLP blocks defined in Eq. 1-4 are re-scaled by multiplying with a factor of 0.67N− 1 4 , where N are the number of transformer layers. However, there are two restrictions of T-Fixup narrowing down the range of its application. First, T-Fixup is only designed for vanilla transformer but not other variants like the relative position or relation-aware version described previously. Second, they make the critical assumption that the inputs x can be freely initialized then scaled to the same magnitude as v , w and MLP weights. This renders the method inapplicable for the mixed setup where the inputs to the yet-to-be-trained transformer layers depend on the outputs from the pretrained models. The first issue can be addressed by re-deriving the scaling factor following the methodology of T-Fixup but taking into account the additional relational term. However, to lift the second restriction requires changing the assumption and more dramatic modification to the analysis."
+    }, {
+      "heading" : "3 Our Approach",
+      "text" : "We now follow the analysis framework of T-Fixup (Huang et al., 2020), but derive the conditions to bound the gradient updates of the self-attention block in the presence of a pre-trained model. Based on the derivation, we propose a data-dependent initialization strategy for the mixed setup of the new transformers on pre-trained encodings."
+    }, {
+      "heading" : "3.1 Applicable Architectures",
+      "text" : "Our analysis applies to the general architecture type illustrated in Figure 1, where the input passes through a pre-transformer, a main transformer, and a post-transformer module before outputting. The pre and post transformer modules can be any architectures that can be stably trained with Adam (Kingma and Ba, 2014), including MLP, LSTM, CNN, or a pre-trained deep transformer module which can be stably fine-tuned with a learning rate significantly smaller than the main learning rate used for the main transformer module. For this work, we will just consider the case of the main transformer containing only the encoder for simplicity, while our decoder will be an LSTM which can be viewed as part of the post-transformer module. Extending our analysis to include deep transformer decoder is straightforward following the framework of Huang et al. (2020).\nWe use fe to denote the pre-transformer mod-\nule (e for pre-trained encoder), and its parameters θe; similarly fo for post-transformer module (o for output) with parameters θo. The main transformer module fG is a stack of L transformer blocks, each consisting of a self-attention block and a MLP block. Let Gl, l = 1, . . . , 2N denote individual self-attention or MLP layers in the blocks (Gl’s do not include the skip connections), with parameters θ l and let L = 2N , fG’s parameters are denoted\nby θG = L⋃ l=1 θ l."
+    }, {
+      "heading" : "3.2 Theoretical Results for Stable Update",
+      "text" : "Let the whole model with the output softmax layer(s) and all layer normalization blocks removed be denoted by f(·;θ) and the loss function by L, where θ are all the learnable parameters. Following Huang et al. (2020), we aim to derive a condition under which, per each SGD update with learning rate η, the model output changes by Θ(η), i.e. ‖∆f‖ = Θ(η) where ∆f = f(·;θ−η ∂L\n∂θ )−f(·;θ).\nBy Taylor expansion, the SGD update is:\n∆f = ∂f\n∂θo ∆θo +\n∂f\n∂θG ∆θG +\n∂f ∂θe ∆θe+\nO(‖θo‖2 + ‖θG‖2 + ‖θe‖2)\n=− η(∂fo ∂θo ∂fo ∂θo > ∂L ∂fo > +\n∂fo ∂fG ∂fG ∂θG ∂fG ∂θG > ∂fo ∂fG > ∂L ∂fo > +\n∂fo ∂fG ∂fG ∂fe ∂fe ∂θe ∂fe ∂θe >∂fG ∂fe > ∂fo ∂fG > ∂L ∂fo > ) +O(η2) (6)\nAs assumed in Sec. 3.1, we can stably train fe and fo coupled with L, i.e, ‖ ∂L∂fo ‖ = ‖ ∂fo ∂θo ‖ = ‖ ∂fe ∂θe ‖ = ‖ ∂fo∂fG ‖ = ‖ ∂fG ∂fe ‖ = Θ(1), we only need to bound the magnitudes of ∂fG ∂θG\nto bound the overall SGD update. Since what we care is the magnitude of the update as it relates to the depth, we can assume all parameters to be scalars, i.e, q l, k l, v l,w l, r k l , r v l reduce to scalars ql, kl, vl, wl, r k l , r v l ∈ R. The next theorem states the condition under which, ‖ ∂fG ∂θG ‖ is bounded by Θ(1), achieving the overall ‖∆f‖ = Θ(η). Theorem 3.1 Assuming ‖x‖ = Θ(µ) for some µ 1, then ‖ ∂fG\n∂θG ‖ = Θ(1) if ‖vl‖ = ‖wl‖ = ‖rvl ‖ = Θ ( ((4µ2 + 2µ+ 2)N)− 1 2 ) for all encoder layers l in relation-aware transformers; and\n‖vl‖ = ‖wl‖ = Θ ( (4µ2N)− 1 2 ) in the case of vanilla transformers.\nThe proof is in Appendix A. One important immediate observation is that our scaling as the depth N is to the power of −1/2, whereas T-Fixup has a scaling with power of −1/4.\nWhile this theorem is all we need for deriving our DT-Fixup approach, it is not immediately intuitive. So next we inspect what it takes to bound the change in a individual layer output ‖∆Gl‖ to Θ(η/L) in each gradient update. This will shine some light on the particular form of the expressions in Theorem 3.1:\nTheorem 3.2 Let x l = [xl1, . . . , xln] be the input into l-th layer, and assume that ‖∂L/∂Gl‖ = Θ(1), i.e. the gradient signal from the layers above is bounded, then ∆Gl = Gl(xl−η ∂L∂xl ;θ l−η ∂L ∂θl\n)− Gl(xl;θ l) satisfies ‖∆Gl‖ = Θ(η/L) when for all i = 1, . . . , n:\n2‖vl‖2‖xli‖2 + 2‖vl‖‖rvl ‖‖xli‖+ ‖rvl ‖2\n+ ‖wl‖2(1 + 2‖xli‖2) = Θ(1/N) (7)\nfor relation-aware transformers. Alternatively, in the case of vannilla transformers:\n‖vl‖2‖xli‖2 + ‖wl‖2‖xli‖2 = Θ(1/L) (8)\nIn this case, the proof is straightforward by taking partial derivatives ofGl with respect to each parameter, and keep the terms with the lowest powers as they dominate the norm when the scale is smaller than one. Appendix B gives the detailed proof. The insight from this theorem is: if the input xl has the same norm as x, setting parameters vl, wl, rvl to have the same norm and solve the equations would yield the scale factors in Theorem 3.1.\nRemark: In T-Fixup, the corresponding condition to Eq. 8 keeps the term ‖vl‖2‖wl‖2 which is dropped by ours. It is due to the fact that T-Fixup assumes ‖xi‖ can be controlled to be the same scale as vl and wl, so the lowest power terms (which are dominating the norms here) are the quartic (4th power) ones. For us, ‖x‖ is treated separately by a constant to be estimated from data, so the lowest power terms are the quadratic ones in vl, wl, rvl in Eq. 7 and 8, and ‖vl‖2‖wl‖2 are dropped. Another important distinction from T-Fixup is that we assume the estimated ‖x‖ to be much larger than the scale of vl and wl, unlike the case when they are also controlled to be the same scale. As we will\nsee next, these changes imply our proposed method employs more aggressive scaling for initialization as compared to T-Fixup, and the assumption that ‖x‖ has larger scale is satisfied naturally."
+    }, {
+      "heading" : "3.3 Proposed Method: DT-Fixup",
+      "text" : "Unlike previous works (Zhang et al., 2019b; Huang et al., 2020), appropriate initialization is not enough to ensure Eq. 7 and 8 during the early stage of the training. This is due to the fact that the input x often depends on the pre-trained model weights instead of being initialized by ourselves. Empirically, we observe that the input norm ‖x‖ are relatively stable throughout the training but difficulty to control directly by re-scaling. Based on this observation, we treat ‖x‖ as a constant and estimate it by a forward pass on all the training examples as µ = maxj [‖xj‖]. We then use this estimated µ in the factors of Theorem 3.1 to obtain the scaling needed for initialization. Since parameters of all layers are initialized to the same scale, we drop index l for brevity in this section. In practice, µ is on the order of 10 for pre-trained models, hence v, w and rvi are naturally two orders of magnitude smaller. DT-Fixup is described as follows:\n• Apply Xavier initialization (Glorot and Bengio, 2010) on all free parameters except loaded weights from the pre-training models;\n• Remove the learning rate warm-up and all layer normalization in the transformer layers, except those in the pre-trained transformer;\n• Forward-pass on all the training examples to get the max input norm µ = maxj [‖xj‖];\n• Inside each transformer layer, scale v, w, rv in the attention block and weight matrices in the MLP block by (N ∗ (4µ2 + 2µ + 2))− 1 2\nfor relation-aware transformer layer; or scale v, w in the attention block and weight matrices in the MLP block by N− 1 2 /(2µ) for vanilla transformer layer."
+    }, {
+      "heading" : "4 Applications",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Text-to-SQL Semantic Parsing",
+      "text" : "We first apply DT-Fixup on the task of crossdomain Text-to-SQL semantic parsing. Given an unseen schema S for a database during training, our goal is to translate the natural question Q to the target SQL T . The correct prediction depends\non the interplay between the questions and the schema structures and the generalization over unseen schemas during inference. As a result, reasoning and structural understanding are crucial to perform well on this task, especially for the more challenging cases. We denote our baseline model as SQL-SP3 and henceforth.\nImplementation. For modeling Text-to-SQL generation, we adopt the encoder-decoder framework which can be directly fit into the architecture shown in Fig. 1. First, the pre-transformer module fe is a pre-trained language model which embeds the inputs Q and S into joint representations xi for each column, table si ∈ S and question word qi ∈ Q respectively. The joint representations are passed into a sequence of N relation-aware transformer layers. The post-transformer module fo is a grammar-guided LSTM decoder, which uses the transformer output y i to predict the target SQL T . We follow prior arts (Wang et al., 2019a; Guo et al., 2019; Yin and Neubig, 2018) to implement SQLSP. The implementation details and hyperparameter settings are described in Appendix C.\nDataset. We evaluate SQL-SP on Spider (Yu et al., 2018), a complex and cross-domain Textto-SQL semantic parsing benchmark. The dataset size is relatively small by deep learning standards, with only 10,181 questions and 5,693 queries covering 200 databases in 138 domains."
+    }, {
+      "heading" : "4.2 Logical Reading Comprehension",
+      "text" : "The second task where we apply DT-Fixup is multichoice reading comprehension requiring logical reasoning. Given a context, a question and four options, the task is to select the right or most suitable answer. Rather than extracting relevant information from a long context, this task relies heavily on the logical reasoning ability of the models.\nImplementation. On top of the pre-trained encodings of the input context, question and options, a stack of N vanilla transformer layers are added before the final linear layer which gives the predictions. The implementation details and hyperparamter settings are described in Appendix D\nDataset. We evaluate on ReClor (Yu et al., 2020b), a newly curated reading comprehension dataset requiring logical reasoning. The dataset contains logical reasoning questions taken from\n3SQL Semantic Parser.\nstandardized exams (such as GMAT and LSAT) that are designed for students who apply for admission to graduate schools. Similar to Spider, this dataset is also small, with only 6,139 questions."
+    }, {
+      "heading" : "5 Experiments",
+      "text" : "All the experiments in this paper are conducted with a signle 16GB Nvidia P100 GPU."
+    }, {
+      "heading" : "5.1 Semantic Parsing: Spider Results",
+      "text" : "As the test set of Spider is only accessible through an evaluation server, most of our analyses are performed on the development set. We use the exact match accuracy4 on all examples following Yu et al. (2018), which omits evaluation of generated values in the SQL queries.\nWe present our results on the Spider leaderboard5 in Table 1, where SQL-SP trained with DTFixup outperforms all the other approaches and\n4We use the evaluation script provided in this repo: https://github.com/taoyds/spider\n5https://yale-lily.github.io/spider\nachieves the new state of the art performance. Notably, the top four submissions on the previous leaderboard are all occupied by models leveraging relation-aware transformers and task-specific pretraining. Table 2 compares our proposed models with the publicly available works. With enough training steps, our baseline model trained with the standard optimization strategy achieves the same level of performance as compared to RAT-SQL. However, models trained with standard optimization strategy obtain much lower performance with the same epochs6 of training as compared to models trained with DT-Fixup and require more training steps to achieve the best accuracy. At the same time, by adding more relation-aware transformer layers, further gains can be obtained for models trained with DT-Fixup, which achieves the stateof-the-art performance without any task-specific pre-training on additional data sources. As mentioned in Section 2.2, in the mixed setup, there is no way to apply T-Fixup as it was originally proposed. The closest thing to compare is to drop its constraints on the inputs, but training then becomes highly unstable and fails to converge 4 times out of 5 runs. These results demonstrate the necessity and effectiveness of DT-Fixup to improve and accelerate the transformer training for Text-to-SQL parsers.\nTable 3 shows the accuracy of our best model as compared to other approaches7 with different level of hardness defined by Yu et al. (2018). We can see that a large portion of the improvement of our model comes from the medium level on both dev and test set. Interestingly, while our model obtains similar performance for the extra hard level on the dev set, our model performs significantly better on the unseen test set. As most of the extra\n6One epoch iterates over the whole training set once. Wang et al. (2019a) trained with a batch size of 20 for 90,000 steps, which is around 200 epochs on the Spider training set. Yu et al. (2020a) trained with a batch size of 24 for 40, 000 steps, which is around 100 epochs on the Spider training set.\n7We choose the top two submissions which also report the breakdown of the accuracy on the test set.\nhard cases involves implicit reasoning steps and complicated structures, it shows that our proposed models possess stronger reasoning and structural understanding ability, yielding better generalization over unseen domains and database schemas."
+    }, {
+      "heading" : "5.2 Reading Comprehension: ReClor Results",
+      "text" : "For ReClor, we choose the best model in Yu et al. (2020b) as the baseline which employs a linear classifier on top of RoBERTa. From the results presented in Table 4, we can see that simply stacking additional vanilla transformer layers outperforms the baseline and adding DT-Fixup further improves the accuracy, which ranks the second on the public leaderboard at the time of this submission8. The result further validates the benefit of adding extra transformer layers and the effectiveness of DT-Fixup."
+    }, {
+      "heading" : "5.3 Ablation Studies",
+      "text" : "For fair comparisons and better understanding, we conduct multiple sets of ablation with the same architecture and implementation to validate the advantages of DT-Fixup over the standard optimization strategy. Note that, the batch sizes in our experiments are relatively small (16 for Spider and 24 for ReClor) due to the size of the pre-trained models, while batch sizes for masked language modelling (Liu et al., 2019b) and machine translation (Huang et al., 2020) are commonly larger than 1024.\nDeeper Models. As we can see from Table 5, the standard optimization strategy fails completely to train deep transformers whose depths are larger than 8 on both Spider and ReClor, showing that it struggles to properly train the transformer model as the depth increases. At the same time, DT-Fixup can successfully train deeper transformers up to 32 layers and consistently achieves better performance than models trained by the standard optimization strategy with the same depth on both Spider and ReClor. With DT-Fixup, deep models generally\n8https://eval.ai/web/challenges/challenge-page/503/\nachieve better performance than the shallow ones even there are only thousands of training examples. It contradicts the common belief that increasing depth of the transformer model is helpful only when there are enough training data.\nFaster Convergence. Demonstrated by the validation curves on Spider plotted in Figure 2, models trained with DT-Fixup converges to the same level of performance much faster than models trained with the standard optimization strategy. While standard optimization strategy struggles as the models become deeper, DT-Fixup can keep the model training smooth, showing that DT-Fixup can effectively accelerate the convergence of the transformer training, especially for the deep ones.\nBatch Sizes When Dataset Size is Small. As shown in Table 7, increasing batch size on Spider from 16 to 120, the average performance from five runs drops from 73.24 to 71.08 and the gap with the standard training approach becomes much narrower. It empirically verifies that large-batch training has a negative impact on the generalization when the dataset size is small, confirming the need to stablize small batch training."
+    }, {
+      "heading" : "5.4 Source of the Improvements",
+      "text" : "From the results on the Spider benchmark, we can see significant improvements by applying DTFixup and increasing the depth of the transformer model. However, why and where they help Textto-SQL semantic parsing are still unclear. As an attempt to answer these questions, we investigate into the predicted results from three variants of our proposed model: Baseline, the best model (N = 4) trained with the standard training approach; Shallow, a shallow model (N = 4) trained with DTFixup; Deep, our best model (N = 24) trained with DT-Fixup, which is much deeper.\nTo better understand the models’ behavior, we manually examine all the failed cases predicted by these models and classify the errors into four categories: 1) Correct: equivalent in meaning but with different SQL syntax (e.g., ORDER BY X LIMIT 1 and SELECT MIN(X)); 2) Column: the SQL structure is correct but there existed mispredicted columns; 3) Sketch: the SQL structure is predicted different from the ground truth, while the aligned column prediction are correct; 4) Both: there exist both sketch and column errors in the prediction. Table 6 presents the overall statistics of our error analysis. Due to logically equivalent\nBase Shallow Deep False neg. 39 35 42 Column err. only 51 60 53 Sketch err. only 92 83 77 Both err. 124 105 88 All 306 283 260\nTable 6: Failures in each category.\nFigure 3: Error breakdown on examples where all models are wrong.\nqueries, there are a number of false negatives for all three models, confirming that the current Spider evaluation metric is not ideal. At first glance, the improvements by applying DT-Fixup and increasing the depth seem to come from correcting Sketch and Both errors, while the three models make similar number of Column only errors. It provides evidence that applying DT-Fixup and increasing the depth can help the transformer model handle hard examples which are mispredicted completely (errors in Both category) by the baseline model. Typically, correct predictions on these hard examples require a certain level of reasoning and structural understanding ability.\nFine-grained Error Analysis. In order to better understand the errors made, we look into the com-\nposition of error types by each model on mistaken examples common to all models, as well as on examples where at least one model is wrong. In Fig. 3-4, “Column” means “proportion with column errors” (i.e., Column or Both); “Sketch” means “proportion with sketch errors” (i.e., Sketch or Both). There are 190 examples mispredicted by all the three models and 387 examples which at least one of the three models mispredict. Fig. 3-4 exclude false negatives due to equivalent logic queries, we can see the real improvements from the deep model are even more significant than what the exact match accuracy shows. Furthermore, among the common mistakes to all three models, the deep model has a much smaller proportion in the sketch mistakes which usually involve more logic and structure understanding. Some of column mistakes are due to missing domain knowledge or common sense, which is harder to improve without external data or knowledge. This shows that even among the failed cases, deeper transformer model can make more reasonable predictions."
+    }, {
+      "heading" : "6 Related Work",
+      "text" : "Many research efforts have been devoted to understanding the training and improving the opti-\nmization of the transformer models. In particular, transformer models often fail to learn unless a gradual learning rate warm-up is applied at the beginning of training. Chen et al. (2018); Nguyen and Salazar (2019); Wang et al. (2019b) noticed a performance gap due to layer normalization, and introduced various architecture changes as remedy. Zhang et al. (2019b,a); Liu et al. (2020) proposed initialization schemes to stabilize training, allowing either to remove layer normalization or learning rate warmup. Liu et al. (2019a) demonstrated the instability of the Adam optimizer during early stages of optimization. Based on these results, Huang et al. (2020) proposed a weight initialization schema for the transformer that eliminates the need for layer normalization and warmup completely."
+    }, {
+      "heading" : "7 Conclusion",
+      "text" : "Despite the broad applications of the transformer model, it struggles to perform well for some NLP tasks with limited training data. In this work, we propose a theoretically justified optimization strategy DT-Fixup to train deeper transformer model with improved generalization and faster convergence speed on small datasets, which is generally applicable to different neural architectures. On two important tasks, Text-to-SQL semantic parsing and logical reading comprehension that require reasoning and structural understanding, applying DT-Fixup achieves SOTA or near-SOTA results by simplying using extra transformer layers on top of the pre-trained models. Such observations suggest even boarder applicability of deeper transformers."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "We thank all the anonymous reviewers and area chair for their valuable inputs."
+    }, {
+      "heading" : "A Full Proof",
+      "text" : "Theorem 3.1 Assuming ‖x‖ = Θ(µ) for some µ 1, then ‖ ∂fG\n∂θG ‖ = Θ(1) if ‖vl‖ = ‖wl‖ = ‖rvl ‖ = Θ ( ((4µ2 + 2µ+ 2)N)− 1 2 ) for all encoder layers l in relational transformers; and ‖vl‖ = ‖wl‖ =\nΘ ( (4µ2N)− 1 2 ) in the case of vanilla transformers.\nProof. First, let’s inspect the feedforward pass through the transformer blocks, which have nonlinear layers Gl’s and skip connections: x1 = x; x2 = x1 +G1(x1, θ1); . . . ; xl+1 = xl +Gl(xl, θ l) For l%2 = 1 (i.e. odd layers), Gl is a (relational) self-attention layer, whereas for even layers, Gl is a MLP layer. Using Θ= to denote bounded in norm as in Huang et al. (2020), then at initialization:\nxl+1 Θ = xl + vlwlxl + wlr v l For relational self-attention (9) xl+1 Θ = xl + vlwlxl For vanilla self-attention and MLP (10)\nThis is due to the fact that the probability from softmax sums to one, so does not alter the overall norm; at initialization, values are at the linear identity range of the nonlinearities. Therefore, for all three types of layers: ∂xl+1∂xl Θ = 1 + vlwl and ∂Gl∂xl Θ = vlwl. And for relational self-attention: ∂xl+1 ∂θl = ∂Gl ∂θl Θ = [wlxl, vlxl + r v l , wl,0], where 0 are due to q, k, r\nk which appear only inside the softmax and do not asymptotically affect the norm. And for vanilla self-attention and MLP, ∂xl+1\n∂θl = ∂Gl ∂θl Θ = [wlxl, vlxl,0].\nNext, let’s look at ∂fG ∂θG = [∂fG ∂θ1 , . . . , ∂fG ∂θl , . . . , ∂fG ∂θL ]. First note that:\nfG(x,θG) = x1 +G1(x1, θ1) +G2(x2, θ2) + . . .+GL(x2, θL) (11)\nWorking backwards, for the last layer, ∂fG ∂θL = ∂GL ∂θL . For ∂fG ∂θl , terms with index lower than l vanish, so:\n∂fG/∂θ l = ∂Gl/∂θ l + ∂Gl+1/∂xl+1∂xl+1/∂θ l + . . .+ ∂GL/∂xL∂xL/∂xL−1 . . . ∂xl+1/∂θ l (12) Θ = (1 + vl+1wl+1 + . . .+ vLwL(1 + vL−1wL−1) . . . (1 + vl+1wl+1)) ∂Gl/∂θ l (13)\nAssuming v1 Θ = v2 . . . Θ = vL and w1 Θ = w2 . . . Θ = wL, and both 1, then the above reduces to:\n∂fG/∂θ l Θ = (1 + (L− l)vlwl)∂Gl/∂θ l (14)\nRecall that we want to bound ∂fG ∂θG ∂fG ∂θG\n> = ∑\nl ∂fG ∂θl ∂fG ∂θl\n> . For vanilla self-attention or MLP layers:\n∂fG ∂θ l ∂fG ∂θ l\n> Θ = ( ‖wl‖2‖xl‖2 + ‖vl‖2‖xl‖2 ) (1 + (L− l)‖vl‖‖wl‖)2 (15)\nAnd for relational self-attention:\n∂fG ∂θ l ∂fG ∂θ l\n> Θ = ( ‖wl‖2‖xl‖2+‖vl‖2‖xl‖2+2‖vl‖‖xl‖‖rvl ‖+‖rvl ‖2+‖wl‖2 ) (1+(L−l)‖vl‖‖wl‖)2 (16)\nAt initialization, we want vl, wl, rvl of all layers to have the same norm, i.e. ‖vl‖ Θ = ‖wl‖ Θ = ‖rvl ‖ Θ = ‖vj‖ Θ = ‖wj‖ Θ = ‖rvj ‖ for all l and j, so denoting them using ξ. And recall that N is the number of transformer blocks, with each block containing two layers, so that 2N = L. So we have:\n∂fG ∂θG ∂fG ∂θG\n> Θ = ∑\nl%2=0\n( 2ξ2‖xl‖2 ) ( 1+(L−l)ξ2 ) + ∑\nl%2=1\n( 2ξ2‖xl‖2+2ξ2‖xl‖+2ξ2 )( 1+(L−l)ξ2 ) Θ = ∑N\nl=1\n( 4ξ2‖xl‖2 + 2ξ2‖xl‖+ 2ξ2 ) (1 + (2N − l)ξ2) (17)\nSimilarly if fG is vanilla transformer instead of a relational one, we have:\n∂fG ∂θG ∂fG ∂θG\n> Θ = ∑N\nl=1\n( 4ξ2‖xl‖2 ) (1 + (2N − l)ξ2) (18)\nThe only variable that still depends on l is xl, which by expanding the recursion in Eq. 9-10, gives:\nxl Θ = (1 + ξ2)lx Θ = (1 + lξ2 + Θ(ξ4))x For vanillla transformer (19) xl Θ = (1 + ξ2)lx + l/2ξ2 Θ = (1 + lξ2 + Θ(ξ4))x + l/2ξ2 For relational transformer (20)\nNow let ‖x‖ Θ= µ , and we have assumed that µ 1, which is very common for output of pre-trained encoders, and due to the high dimensionality. And let\nξ = ( N(4µ2 + 2µ+ 2) )− 1 2 (21)\nThen substituting it into Eq. 19-20, we have xl Θ = x for all types of layers. Similarly, plugging Eq. 21 into the expression (1 + (2N − l)ξ2) in Eq. 17 yields (1 + (2N − l)ξ2) Θ= 1, together with xl Θ = x, and Eq. 21, Eq. 17 becomes:\n∂fG ∂θG ∂fG ∂θG\n> Θ = ∑N\nl=1\n4µ2\nN (4µ2 + 2µ+ 2) +\n2µ\nN (4µ2 + 2µ+ 2) +\n2\nN (4µ2 + 2µ+ 2)\nΘ = ∑N\nl=11/N = Θ(1)\nThis concludes the proof for relational transformers. For vanilla transformers, with ξ = ( N(4µ2) )− 1 2 ,\nand following the same steps, but plugging into Eq. 18, we have ∂fG ∂θG ∂fG ∂θG\n> Θ = 1. Q.E.D."
+    }, {
+      "heading" : "B Proof of Theorem 3.2",
+      "text" : "For brevity, we drop the layer index. But for the relation embeddings, for clarity, we will consider the individual components of rv, rk instead of considering the scalar case.\nProof. We will focus the self-attention layer, as the skip connection and MLP layers are analyzed in Huang et al. (2020). As mentioned in the main text, since what we care is the magnitude of the update, we assume dx = 1 and drop layer index l without loss of generality. In this case, the projection matrices q,k,v,w reduce to scalars q, k, v, w ∈ R. The input x and the relational embeddings rk, rv are n × 1 vectors. For a single query input x′ ∈ x, the attention layer (without skip connection) is defined as follows:\nG(x′) = softmax (\n1√ dx x′q(kx + rk)>\n) (xv + rv)w = ∑n i=1 ex ′q(kxi+rki )∑n\nj=1e x′q(kxj+rkj )\n(xiv + r v i )w\nNote that we are abusing the notation and take G to be just the self-attention layer output here. Let si = e x′q(kxi+rki )/ ∑n j=1e x′q(kxj+rkj ) and δij = 1 if i = j and 0 otherwise, we can get:\n∂G/∂k = x′qw ∑n\ni=1(xiv + r v i )si ( xi − ∑n j=1xjsj ) ∂G/∂q = x′w ∑n i=1(xiv + r v i )si ( kxi + r k i − ∑n j=1(kxj + r k j )sj\n) ∂G/∂rki = x ′qw ( −(xiv + rvi )si + ∑n j=1(xjv + r v j )sj ) ; ∂G/∂v = w ∑n i=1xisi\n∂G/∂w = ∑n\ni=1(xiv + r v i )si ; ∂G/∂r v i = wsi ; ∂G/∂xi = vwsi + w ∑n j=1∂sj/∂xi(xjv + r v j )\nWhen xi 6= x′, we have: ∂sj∂xi = sj(δij − si)x ′qk; When xi = x′, we have: ∂sj ∂xi = q ( (1 + δij)kxi + r k i ) sj − ∑n t=1q ( (1 + δit)kxt + r k t ) sjst Using Taylor expansion, we get that the SGD update ∆G is proportional to the magnitude of the gradient:\n∆G = −η ∂L ∂G\n( ∂G\n∂k\n∂G\n∂k\n> + ∂G\n∂q\n∂G\n∂q\n> + ∂G\n∂v\n∂G\n∂v\n> + ∂G\n∂w\n∂G\n∂w\n>\n+ ∑n\ni=1\n∂G\n∂rki\n∂G\n∂rki\n> + ∑n\ni=1\n∂G ∂rvi ∂G ∂rvi\n> + ∑n\ni=1\n∂G\n∂xi\n∂G\n∂xi\n> )\n+O(η2)\nBy the assumption that ‖η ∂L∂G‖ = Θ(η), we need to bound the term inside the main parentheses by Θ(1/L). The desired magnitude Θ(1/L) is smaller than 1 so terms with lower power are dominating. With si ≥ 0 and ∑ si = 1, the following terms have the lowest power inside the main parentheses:\n∂G ∂v ∂G ∂v\n> = w2( ∑n i=1xisi) 2 = Θ(‖w‖2‖xi‖2), i = 1, . . . , n\n∂G ∂w ∂G ∂w\n> = ( ∑n i=1(xiv + r v i )si)\n2 = Θ(‖v‖2‖xi‖2) + 2Θ(‖v‖‖rvi ‖‖xi‖) + Θ(‖rvi ‖2), i = 1, . . . , n∑n i=1 ∂G\n∂rvi\n∂G ∂rvi\n> = w2 ∑n i=1s 2 i = Θ(‖w‖2).\nFor the MLP layer, all terms related to rvi disappear, including the single Θ(‖w‖2) in the last row. By combining the update norm terms from both the self-attention and the MLP layers give the result. Q.E.D. Note: The above theorem and analysis applies to a single layer, not the whole transformer module of many layers. In order to derive the scaling factor, one needs ensure that the output scale for each block is bounded by its input scale. This indeed holds for our scheme, but the complete proof is in Sec. A.\nC Implementation Details of SQL-SP Given a schema S for a relational database, our goal is to translate the natural question Q to the target SQL T . Here the question Q = q1 . . . q|Q| is a sequence of words, and the schema S = {s1, . . . , s|S|} consists of tables and their columns. s ∈ S can be either a table name or a column name containing words si,1, . . . , si,|si|. Following Wang et al. (2019a), a directed graph G = 〈V, E〉 can be constructed to represent the relations between the inputs. Its nodes V = Q ∪ S include question tokens (each labeled with a corresponding token) and the columns and tables of the schema (each labeled with the words in its name). The edges E are defined following Wang et al. (2019a). The target SQL T is represented as an abstract syntax tree in the context-free grammar of SQL.\nC.1 Encoder Following (Wang et al., 2019a; Guo et al., 2019), our pre-transformer module fe leverages pre-trained language models to obtain the input X to the main transformer module. First, the sequence of words in the question Q are concatenated with all the items (either a column or a table) in the schema S. In order to prevent our model from leveraging potential spurious correlations based on the order of the items, the items in the schema are concatenated in random order during training. We feed the concatenation into the pre-trained model and extract the last hidden states x(q)i and hi = hi,1, . . . ,hi,|si| for each word in Q and each item in S respectively. For each item si in the schema, we run an additional bidirectional LSTM (BiLSTM) (Hochreiter and Schmidhuber, 1997) over the hidden states of the words in its name hi. We then add the average hidden state and the final hidden state of the BiLSTM as the schema representations x (s) i . X is the set of all the obtained representations from Q ∪ S: X = (x (q) 1 , . . . ,x (q) |Q|,x (s) 1 , . . . ,x (s) |S|). Along with the relational embeddings rk, rv specified by G, X is passed into the main transformer module.\nC.2 Schema Linking The goal of schema linking is to identify the implicit relations between Q and S. The relations are defined by whether there exist column/table references in the question to the corresponding schema columns/tables, given certain heuristics. Following Wang et al. (2019a), possible relations for each (i, j) where xi ∈ Q, xj ∈ S (or vice versa) can be ExactMatch, PartialMatch, or NoMatch, which are based on name-based linking. Depending on the type of xi and xj , the above three relations are further expanded to four types: Question-Column, Question-Table, Column-Question, or Table-Question. We also use the value-based linking from Wang et al. (2019a) and Guo et al. (2019) to augment the ExactMatch relation by database content and external knowledge.\nC.3 Decoder For our decoder (as the post-transformer module) fo, we employ a transition-based abstract syntax decoder following Yin and Neubig (2018). It requires a transition system to converts between the surface SQL and a AST-tree constructing action sequences, and can ensure grammarticality of generation. The neural model then predicts the action sequences. There are three types of actions to generate the target SQL T ,\nincluding (i) ApplyRule which applies a production rule to the last generated node; (ii) Reduce which completes a leaf node; (iii) SelectColumn which chooses a column from the schema. For our transition system, each column is attached with their corresponding table so that the tables in the target SQL T can be directly inferred from the predicted columns. As a result, action SelectTable can be omitted from the generation. Formally, the generation process can be formulated as Pr(T |Y) = ∏ t Pr(at|a<t,Y) where Y is the outputs of the last layer of the relational transformers. We use a parent-feeding LSTM as the decoder. The LSTM state is updated as mt,ht = fLSTM([at−1‖z t−1‖hpt‖apt‖npt ],mt−1,ht−1), wheremt is the LSTM cell state, ht is the LSTM output at step t, at−1 is the action embedding of the previous step, z t−1 is the context feature computed using multi-head attention on ht−1 over Y , pt is the step corresponding to the parent AST node of the current node, and n is the node type embedding. For ApplyRule[R], we compute Pr(at = ApplyRule[R]|a<t, y) = softmaxR(g(z t)) where g(·) is a 2-layer MLP. For SelectColumn, we use the memory augmented pointer net Guo et al. (2019).\nC.4 Regularization Besides using dropout (Srivastava et al., 2014) employed on X and z t to help regularize the model, we further apply uniform label smoothing (Szegedy et al., 2016) on the objective of predicting SelectColumn. Formally, the cross entropy for a ground-truth column c∗ we optimize becomes: (1− ) ∗ log p(c∗) + /K ∗ ∑ c log p(c), where K is the number of columns in the schema, is the weight of the label smoothing term, and p(·) , Pr(at = SelectColumn[·]|a<t, y). C.5 Experiment Configuration We choose RoBERTa (Liu et al., 2019b) as the pre-trained language models. A sequence of 24 relationaware transformer layers are stacked on top of fe. The Adam optimizer (Kingma and Ba, 2014) with the default hyperparameters is used to train the model with an initial learning rate η of 4×10−4. η is annealed to 0 with 4× 10−4(1− steps/max steps)0.5. A separate learning rate is used to fine-tune the RoBERTa by multiplying η a factor of 8× 10−3. The BiLSTM to encode the schema representations has hidden size 128 per direction. For each transformer layer, dx = dz = 256, H = 8 and the inner layer dimension of the position-wise MLP is 1024. For the decoder, we use action embeddings of size 128, node type embeddings of size of 64, and LSTM hidden state of size 512. We apply dropout rate of 0.6 on the input to the relational transformers X and the context representation z t. The weight of the label smoothing term is set to be 0.2. We use a batch size of 16 and train 60 epochs (around 25, 000 steps). During inference, beam search is used with beam size as 5. Most of the hyperparameters are chosen following Wang et al. (2019a). We only tune the learning rate (4 × 10−4 to 8 × 10−4 with step size 1 × 10−4), dropout (0.3, 0.4, 0.5, 0.6), the weight of the label smoothing (0.0, 0.1, 0.2) by grid search. The average runtime is around 30 hours and the number of parameters is around 380 millions.\nD Implementation Details for Logical Reading Comprehension We build on the code9 by Yu et al. (2020b) and use it for evaluation. For each example, the encoder embeds the input context, question and options which are then passed to the linear layer for classification. The exact input format to the encoder is “〈s〉 Context 〈/s〉〈/s〉 Question || Option 〈pad〉 . . . ”, where “||” denotes concatenation. The linear layer uses the embedding of the first token 〈s〉 for classification. D.1 Experimental Configuration RoBERT is chosen as the pre-trained model, and we stack 4 transformer layers on top. The Adam optimizer (Kingma and Ba, 2014) with = 10−6 and betas of (0.9, 0.98) is used. The learning rate to finetune RoBERTa is 1× 10−5 while the learning rate for the additional transformer layers is 3× 10−4. For all models in our ablation study, the learning rate for the additional transformer layers is 1×10−4. The learning rate is annealed linearly to 0 with weight decay of 0.01. We use a batch size of 24 and fine-tune for 12 epochs. For each transformer layer, dx = dz = 1024, H = 8 and the inner layer dimension of the position-wise MLP is 2048. We use dropout rate of 0.4 on the input to the additional transformer layers and 0.1 for the linear layer. We follow the hyperparameters used in Yu et al. (2020b) for the pretrained language model. For the additional transformer layers, we only tune the dropout values (0.3, 0.4, 0.5, 0.6). The average runtime is around 6 hours and the number of parameters is around 39 millions.\n9https://github.com/yuweihao/reclor"
+    } ],
+    "references" : [ {
+      "title" : "Layer normalization",
+      "author" : [ "Jimmy Lei Ba", "Jamie Ryan Kiros", "Geoffrey E Hinton." ],
+      "venue" : "arXiv preprint arXiv:1607.06450.",
+      "citeRegEx" : "Ba et al\\.,? 2016",
+      "shortCiteRegEx" : "Ba et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "The best of both worlds: Combining recent advances in neural machine translation",
+      "author" : [ "Mia Xu Chen", "Orhan Firat", "Ankur Bapna", "Melvin Johnson", "Wolfgang Macherey", "George Foster", "Llion Jones", "Mike Schuster", "Noam Shazeer", "Niki Parmar" ],
+      "venue" : null,
+      "citeRegEx" : "Chen et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Bert: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "arXiv preprint arXiv:1810.04805.",
+      "citeRegEx" : "Devlin et al\\.,? 2018",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Understanding the difficulty of training deep feedforward neural networks",
+      "author" : [ "Xavier Glorot", "Yoshua Bengio." ],
+      "venue" : "Proceedings of the thirteenth international conference on artificial intelligence and statistics, pages 249–256.",
+      "citeRegEx" : "Glorot and Bengio.,? 2010",
+      "shortCiteRegEx" : "Glorot and Bengio.",
+      "year" : 2010
+    }, {
+      "title" : "Towards complex text-to-sql in cross-domain database with intermediate representation",
+      "author" : [ "Jiaqi Guo", "Zecheng Zhan", "Yan Gao", "Yan Xiao", "Jian-Guang Lou", "Ting Liu", "Dongmei Zhang." ],
+      "venue" : "ACL.",
+      "citeRegEx" : "Guo et al\\.,? 2019",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Long short-term memory",
+      "author" : [ "Sepp Hochreiter", "Jürgen Schmidhuber." ],
+      "venue" : "Neural computation, 9(8):1735–1780.",
+      "citeRegEx" : "Hochreiter and Schmidhuber.,? 1997",
+      "shortCiteRegEx" : "Hochreiter and Schmidhuber.",
+      "year" : 1997
+    }, {
+      "title" : "Improving transformer optimization through better initialization",
+      "author" : [ "Xiao Shi Huang", "Felipe Pérez", "Jimmy Ba", "Maksims Volkovs." ],
+      "venue" : "ICML.",
+      "citeRegEx" : "Huang et al\\.,? 2020",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "On large-batch training for deep learning: Generalization gap and sharp minima",
+      "author" : [ "Nitish Shirish Keskar", "Dheevatsa Mudigere", "Jorge Nocedal", "Mikhail Smelyanskiy", "Ping Tak Peter Tang." ],
+      "venue" : "arXiv preprint arXiv:1609.04836.",
+      "citeRegEx" : "Keskar et al\\.,? 2016",
+      "shortCiteRegEx" : "Keskar et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P Kingma", "Jimmy Ba." ],
+      "venue" : "arXiv preprint arXiv:1412.6980.",
+      "citeRegEx" : "Kingma and Ba.,? 2014",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2014
+    }, {
+      "title" : "RACE: Large-scale ReAding comprehension dataset from examinations",
+      "author" : [ "Guokun Lai", "Qizhe Xie", "Hanxiao Liu", "Yiming Yang", "Eduard Hovy." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages",
+      "citeRegEx" : "Lai et al\\.,? 2017",
+      "shortCiteRegEx" : "Lai et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Albert: A lite bert for self-supervised learning of language representations",
+      "author" : [ "Zhenzhong Lan", "Mingda Chen", "Sebastian Goodman", "Kevin Gimpel", "Piyush Sharma", "Radu Soricut." ],
+      "venue" : "arXiv preprint arXiv:1909.11942.",
+      "citeRegEx" : "Lan et al\\.,? 2019",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "On the variance of the adaptive learning rate and beyond",
+      "author" : [ "Liyuan Liu", "Haoming Jiang", "Pengcheng He", "Weizhu Chen", "Xiaodong Liu", "Jianfeng Gao", "Jiawei Han." ],
+      "venue" : "arXiv preprint arXiv:1908.03265.",
+      "citeRegEx" : "Liu et al\\.,? 2019a",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Understanding the difficulty of training transformers",
+      "author" : [ "Liyuan Liu", "Xiaodong Liu", "Jianfeng Gao", "Weizhu Chen", "Jiawei Han." ],
+      "venue" : "EMNLP.",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Roberta: A robustly optimized bert pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "arXiv preprint arXiv:1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019b",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Transformers without tears: Improving the normalization of self-attention",
+      "author" : [ "Toan Q Nguyen", "Julian Salazar." ],
+      "venue" : "arXiv preprint arXiv:1910.05895.",
+      "citeRegEx" : "Nguyen and Salazar.,? 2019",
+      "shortCiteRegEx" : "Nguyen and Salazar.",
+      "year" : 2019
+    }, {
+      "title" : "Training tips for the transformer model",
+      "author" : [ "Martin Popel", "Ondřej Bojar." ],
+      "venue" : "The Prague Bulletin of Mathematical Linguistics, 110(1):43–70.",
+      "citeRegEx" : "Popel and Bojar.,? 2018",
+      "shortCiteRegEx" : "Popel and Bojar.",
+      "year" : 2018
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "Alec Radford", "Jeffrey Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever." ],
+      "venue" : "OpenAI Blog, 1(8):9.",
+      "citeRegEx" : "Radford et al\\.,? 2019",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Self-attention with relative position representations",
+      "author" : [ "Peter Shaw", "Jakob Uszkoreit", "Ashish Vaswani." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-",
+      "citeRegEx" : "Shaw et al\\.,? 2018",
+      "shortCiteRegEx" : "Shaw et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Learning contextual representations for semantic parsing with generation-augmented pre-training",
+      "author" : [ "Peng Shi", "Patrick Ng", "Zhiguo Wang", "Henghui Zhu", "Alexander Hanbo Li", "Jun Wang", "Cicero Nogueira dos Santos", "Bing Xiang." ],
+      "venue" : "arXiv",
+      "citeRegEx" : "Shi et al\\.,? 2020",
+      "shortCiteRegEx" : "Shi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Dropout: a simple way to prevent neural networks from overfitting",
+      "author" : [ "Nitish Srivastava", "Geoffrey Hinton", "Alex Krizhevsky", "Ilya Sutskever", "Ruslan Salakhutdinov." ],
+      "venue" : "The journal of machine learning research, 15(1):1929–1958.",
+      "citeRegEx" : "Srivastava et al\\.,? 2014",
+      "shortCiteRegEx" : "Srivastava et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Rethinking the inception architecture for computer vision",
+      "author" : [ "Christian Szegedy", "Vincent Vanhoucke", "Sergey Ioffe", "Jon Shlens", "Zbigniew Wojna." ],
+      "venue" : "Proceedings of the IEEE conference on computer vision and pattern recognition, pages 2818–2826.",
+      "citeRegEx" : "Szegedy et al\\.,? 2016",
+      "shortCiteRegEx" : "Szegedy et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in neural information processing systems, pages 5998–6008.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Rat-sql: Relation-aware schema encoding and linking for text-to-sql parsers",
+      "author" : [ "Bailin Wang", "Richard Shin", "Xiaodong Liu", "Oleksandr Polozov", "Matthew Richardson." ],
+      "venue" : "arXiv preprint arXiv:1911.04942.",
+      "citeRegEx" : "Wang et al\\.,? 2019a",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Learning deep transformer models for machine translation",
+      "author" : [ "Qiang Wang", "Bei Li", "Tong Xiao", "Jingbo Zhu", "Changliang Li", "Derek F Wong", "Lidia S Chao." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Lin-",
+      "citeRegEx" : "Wang et al\\.,? 2019b",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Lipschitz constrained parameter initialization for deep transformers",
+      "author" : [ "Hongfei Xu", "Qiuhui Liu", "Josef van Genabith", "Deyi Xiong", "Jingyi Zhang." ],
+      "venue" : "arXiv preprint arXiv:1911.03179.",
+      "citeRegEx" : "Xu et al\\.,? 2019",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Tranx: A transition-based neural abstract syntax parser for semantic parsing and code generation",
+      "author" : [ "Pengcheng Yin", "Graham Neubig." ],
+      "venue" : "arXiv preprint arXiv:1810.02720.",
+      "citeRegEx" : "Yin and Neubig.,? 2018",
+      "shortCiteRegEx" : "Yin and Neubig.",
+      "year" : 2018
+    }, {
+      "title" : "Grappa: Grammar-augmented pre-training for table semantic parsing",
+      "author" : [ "Tao Yu", "Chien-Sheng Wu", "Xi Victoria Lin", "Bailin Wang", "Yi Chern Tan", "Xinyi Yang", "Dragomir Radev", "Richard Socher", "Caiming Xiong." ],
+      "venue" : "arXiv preprint arXiv:2009.13845.",
+      "citeRegEx" : "Yu et al\\.,? 2020a",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Spider: A large-scale human-labeled dataset for complex and cross-domain semantic parsing and text-to-sql",
+      "author" : [ "Tao Yu", "Rui Zhang", "Kai Yang", "Michihiro Yasunaga", "Dongxu Wang", "Zifan Li", "James Ma", "Irene Li", "Qingning Yao", "Shanelle Roman" ],
+      "venue" : null,
+      "citeRegEx" : "Yu et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Reclor: A reading comprehension dataset requiring logical reasoning",
+      "author" : [ "Weihao Yu", "Zihang Jiang", "Yanfei Dong", "Jiashi Feng." ],
+      "venue" : "arXiv preprint arXiv:2002.04326.",
+      "citeRegEx" : "Yu et al\\.,? 2020b",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Improving deep transformer with depth-scaled initialization and merged attention",
+      "author" : [ "Biao Zhang", "Ivan Titov", "Rico Sennrich." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International",
+      "citeRegEx" : "Zhang et al\\.,? 2019a",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Fixup initialization: Residual learning without normalization",
+      "author" : [ "Hongyi Zhang", "Yann N Dauphin", "Tengyu Ma." ],
+      "venue" : "ICLR.",
+      "citeRegEx" : "Zhang et al\\.,? 2019b",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Gp: Context-free grammar pre-training for text-tosql parsers",
+      "author" : [ "Liang Zhao", "Hexin Cao", "Yunsong Zhao." ],
+      "venue" : "arXiv preprint arXiv:2101.09901.",
+      "citeRegEx" : "Zhao et al\\.,? 2021",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "2019a), a directed graph G = 〈V, E〉 can be constructed to represent the relations between the inputs. Its nodes V = Q ∪ S include question tokens",
+      "author" : [ "si", "|si|. Following Wang" ],
+      "venue" : null,
+      "citeRegEx" : "si and Wang,? \\Q2019\\E",
+      "shortCiteRegEx" : "si and Wang",
+      "year" : 2019
+    }, {
+      "title" : "columns/tables, given certain heuristics",
+      "author" : [ "Wang" ],
+      "venue" : null,
+      "citeRegEx" : "Wang,? \\Q2019\\E",
+      "shortCiteRegEx" : "Wang",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 6,
+      "context" : "We achieve this by deriving a novel Data-dependent Transformer Fixedupdate initialization scheme (DT-Fixup), inspired by the prior T-Fixup work (Huang et al., 2020).",
+      "startOffset" : 144,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 16,
+      "context" : "In recent years, large-scale pre-trained language models (Radford et al., 2019; Devlin et al., 2018; Liu et al., 2019b) trained with transformers (Vaswani et al.",
+      "startOffset" : 57,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 2,
+      "context" : "In recent years, large-scale pre-trained language models (Radford et al., 2019; Devlin et al., 2018; Liu et al., 2019b) trained with transformers (Vaswani et al.",
+      "startOffset" : 57,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 13,
+      "context" : "In recent years, large-scale pre-trained language models (Radford et al., 2019; Devlin et al., 2018; Liu et al., 2019b) trained with transformers (Vaswani et al.",
+      "startOffset" : 57,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2019b) trained with transformers (Vaswani et al., 2017) have become standard building blocks of modern NLP systems to help improve generalization when task-specific annotations are limited.",
+      "startOffset" : 35,
+      "endOffset" : 57
+    }, {
+      "referenceID" : 10,
+      "context" : "In practice, it has been found that deeper transformers generally yield better results with sufficient training data (Lan et al., 2019),",
+      "startOffset" : 117,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 15,
+      "context" : "Despite their broad applications, training transformer models is known to be difficult (Popel and Bojar, 2018).",
+      "startOffset" : 87,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 0,
+      "context" : "The standard transformer training approach leverages learning rate warm-up, layer normalization (Ba et al., 2016) and a large batch size, and models typically fail to learn when missing any one of these components.",
+      "startOffset" : 96,
+      "endOffset" : 113
+    }, {
+      "referenceID" : 7,
+      "context" : "Even if a large batch size can be feasibly employed, poorer generalization results are often observed (Keskar et al., 2016), especially when the dataset size is only several times larger than the batch size.",
+      "startOffset" : 102,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 17,
+      "context" : "Our derivation also extends beyond vanilla transformers to transformers with relational encodings (Shaw et al., 2018), allowing us to apply the results to one variant called relation-aware transformer (Wang et al.",
+      "startOffset" : 98,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2018), allowing us to apply the results to one variant called relation-aware transformer (Wang et al., 2019a).",
+      "startOffset" : 91,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 27,
+      "context" : "We verify the effectiveness of DT-Fixup on Spider (Yu et al., 2018), a complex and cross-domain Text-to-SQL semantic parsing benchmark, and ReColr (Yu et al.",
+      "startOffset" : 50,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 28,
+      "context" : ", 2018), a complex and cross-domain Text-to-SQL semantic parsing benchmark, and ReColr (Yu et al., 2020b), a reading comprehension dataset requiring logical reasoning.",
+      "startOffset" : 87,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 26,
+      "context" : "At the same time, it requires less training steps and no task-specific pre-training as compared to the prior art (Yu et al., 2020a).",
+      "startOffset" : 113,
+      "endOffset" : 131
+    }, {
+      "referenceID" : 22,
+      "context" : "In this section, we present the necessary background by first introducing the relation-aware transformer layer, which outperforms the vanilla transformer layer with limited data by injecting additional inductive bias (Wang et al., 2019a).",
+      "startOffset" : 217,
+      "endOffset" : 237
+    }, {
+      "referenceID" : 6,
+      "context" : "Then, we introduce the T-Fixup technique (Huang et al., 2020) for optimizing deeper vanilla transformers and discuss why it does not directly apply in the mixed transformer optimization setup.",
+      "startOffset" : 41,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 0,
+      "context" : "where the softmax operation is applied across the index j, MLP is a two-layer perceptron, LayerNorm is a layer normalization (Ba et al., 2016) layer, and q,k,v ∈ Rdx×dz ,w ∈ Rdx×dz .",
+      "startOffset" : 125,
+      "endOffset" : 142
+    }, {
+      "referenceID" : 6,
+      "context" : "We now follow the analysis framework of T-Fixup (Huang et al., 2020), but derive the conditions to bound the gradient updates of the self-attention block in the presence of a pre-trained model.",
+      "startOffset" : 48,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 8,
+      "context" : "The pre and post transformer modules can be any architectures that can be stably trained with Adam (Kingma and Ba, 2014), including MLP, LSTM, CNN, or a pre-trained deep transformer module which can be stably fine-tuned with a learning rate significantly smaller than the main learning rate used for the main transformer module.",
+      "startOffset" : 99,
+      "endOffset" : 120
+    }, {
+      "referenceID" : 30,
+      "context" : "Unlike previous works (Zhang et al., 2019b; Huang et al., 2020), appropriate initialization is not enough to ensure Eq.",
+      "startOffset" : 22,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 6,
+      "context" : "Unlike previous works (Zhang et al., 2019b; Huang et al., 2020), appropriate initialization is not enough to ensure Eq.",
+      "startOffset" : 22,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 3,
+      "context" : "• Apply Xavier initialization (Glorot and Bengio, 2010) on all free parameters except loaded weights from the pre-training models;",
+      "startOffset" : 30,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 22,
+      "context" : "We follow prior arts (Wang et al., 2019a; Guo et al., 2019; Yin and Neubig, 2018) to implement SQLSP.",
+      "startOffset" : 21,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 4,
+      "context" : "We follow prior arts (Wang et al., 2019a; Guo et al., 2019; Yin and Neubig, 2018) to implement SQLSP.",
+      "startOffset" : 21,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 25,
+      "context" : "We follow prior arts (Wang et al., 2019a; Guo et al., 2019; Yin and Neubig, 2018) to implement SQLSP.",
+      "startOffset" : 21,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 27,
+      "context" : "We evaluate SQL-SP on Spider (Yu et al., 2018), a complex and cross-domain Textto-SQL semantic parsing benchmark.",
+      "startOffset" : 29,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 28,
+      "context" : "We evaluate on ReClor (Yu et al., 2020b), a newly curated reading comprehension dataset requiring logical reasoning.",
+      "startOffset" : 22,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 28,
+      "context" : "Model Dev Test no extra layers∗ (Yu et al., 2020b) 62.",
+      "startOffset" : 32,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 28,
+      "context" : "Star∗ is the best baseline model result reported in (Yu et al., 2020b) without using the additional RACE dataset (Lai et al.",
+      "startOffset" : 52,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2020b) without using the additional RACE dataset (Lai et al., 2017).",
+      "startOffset" : 51,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 13,
+      "context" : "Note that, the batch sizes in our experiments are relatively small (16 for Spider and 24 for ReClor) due to the size of the pre-trained models, while batch sizes for masked language modelling (Liu et al., 2019b) and machine translation (Huang et al.",
+      "startOffset" : 192,
+      "endOffset" : 211
+    }, {
+      "referenceID" : 6,
+      "context" : ", 2019b) and machine translation (Huang et al., 2020) are commonly larger than 1024.",
+      "startOffset" : 33,
+      "endOffset" : 53
+    } ],
+    "year" : 2021,
+    "abstractText" : "It is a common belief that training deep transformers from scratch requires large datasets. Consequently, for small datasets, people usually use shallow and simple additional layers on top of pre-trained models during finetuning. This work shows that this does not always need to be the case: with proper initialization and optimization, the benefits of very deep transformers can carry over to challenging tasks with small datasets, including Textto-SQL semantic parsing and logical reading comprehension. In particular, we successfully train 48 layers of transformers, comprising 24 fine-tuned layers from pre-trained RoBERTa and 24 relation-aware layers trained from scratch. With fewer training steps and no task-specific pre-training, we obtain the state-of-the-art performance on the challenging cross-domain Text-to-SQL parsing benchmark Spider1. We achieve this by deriving a novel Data-dependent Transformer Fixedupdate initialization scheme (DT-Fixup), inspired by the prior T-Fixup work (Huang et al., 2020). Further error analysis shows that increasing depth can help improve generalization on small datasets for hard cases that require reasoning and structural understanding.",
+    "creator" : "LaTeX with hyperref package"
+  }
+}

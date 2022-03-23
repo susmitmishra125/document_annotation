@@ -1,0 +1,491 @@
+{
+  "name" : "2021.acl-long.284.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Value-Agnostic Conversational Semantic Parsing",
+    "authors" : [ "Emmanouil Antonios Platanios", "Adam Pauls", "Subhro Roy", "Yuchen Zhang", "Alex Kyte", "Alan Guo", "Sam Thomson", "Jayant Krishnamurthy", "Jason Wolfe", "Jacob Andreas", "Dan Klein" ],
+    "emails" : [ "sminfo@microsoft.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 3666–3681\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n3666"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Conversational semantic parsers, which translate natural language utterances into executable programs while incorporating conversational context, play an increasingly central role in systems for interactive data analysis (Yu et al., 2019), instruction following (Guu et al., 2017), and task-oriented dialogue (Zettlemoyer and Collins, 2009). An example of this task is shown in Figure 1. Typical models are based on an autoregressive sequence prediction approach, in which a detailed representation of the dialogue history is concatenated to the input sequence, and predictors condition on this sequence and all previously generated components of\nthe output (Suhr et al., 2018). While this approach can capture arbitrary dependencies between inputs and outputs, it comes at the cost of sample- and computational inefficiency.\nWe propose a new “value-agnostic” approach to contextual semantic parsing driven by type-based representations of the dialogue history and functionbased representations of the generated programs. Types and functions have long served as a foundation for formal reasoning about programs, but their use in neural semantic parsing has been limited, e.g., to constraining the hypothesis space (Krishnamurthy et al., 2017), guiding data augmentation (Jia and Liang, 2016), and coarsening in coarse-to-fine models (Dong and Lapata, 2018). We show that representing conversation histories and partial programs via the types and functions they contain enables fast, accurate, and sample-efficient contextual semantic parsing. We propose a neural encoder– decoder contextual semantic parsing model which, in contrast to prior work:\n1. uses a compact yet informative representation of discourse context in the encoder that considers only the types of salient entities that were predicted by the model in previous turns or that appeared in the execution results of the predicted programs, and\n2. conditions the decoder state on the sequence of function invocations so far, without conditioning on any concrete values passed as arguments to the functions.\nOur model substantially improves upon the best published results on the SMCALFLOW (Semantic Machines et al., 2020) and TREEDST (Cheng et al., 2020) conversational semantic parsing datasets, improving model performance by 7.3% and 10.6%, respectively, in terms of absolute accuracy. In further experiments aimed at quantifying sample efficiency,\nit improves accuracy by 12.4% and 6.4% respectively when trained on only a thousand examples from each dataset. Our model is also effective at non-contextual semantic parsing, matching state-ofthe-art results on the JOBS, GEOQUERY, and ATIS datasets (Dong and Lapata, 2016). This is achieved while also reducing the test time computational cost by a factor of 10 (from 80ms per utterance down to 8ms when running on the same machine; more details are provided in Appendix H), when compared to our fastest baseline, which makes it usable as part of a real-time conversational system.\nOne conclusion from these experiments is that most semantic parses have structures that depend only weakly on the values that appear in the dialogue history or in the programs themselves. Our experiments find that hiding values alone results in a 2.6% accuracy improvement in the low-data regime. By treating types and functions, rather than values, as the main ingredients in learned representations for semantic parsing, we improve model accuracy and sample efficiency across a diverse set of language understanding problems, while also significantly reducing computational costs."
+    }, {
+      "heading" : "2 Proposed Model",
+      "text" : "Our goal is to map natural language utterances to programs while incorporating context from dialogue histories (i.e., past utterances and their asso-\nciated programs and execution results). We model a program as a sequenceo of function invocations, each consisting of a function and zero or more argument values, as illustrated at the lower right of Figure 1. The argument values can be either literal values or references to results of previous function invocations. The ability to reference previous elements of the sequence, sometimes called a target-side copy, allows us to construct programs that involve re-entrancies. Owing to this referential structure, a program can be equivalently represented as a directed acyclic graph (see e.g., Jones et al., 2012; Zhang et al., 2019).\nWe propose a Transformer-based (Vaswani et al., 2017) encoder–decoder model that predicts programs by generating function invocations sequentially, where each invocation can draw its arguments from an inventory of values (§2.5)—possibly copied from the utterance—and the results of previous function invocations in the current program. The encoder (§2.2) transforms a natural language utterance and a dialogue history to a continuous representation. Subsequently, the decoder (§2.3) uses this representation to define an autoregressive distribution over function invocation sequences and chooses a high-probability sequence by performing beam search. As our experiments (§3) will show, a naı̈ve encoding of the complete dialogue history and program results in poor model accuracy."
+    }, {
+      "heading" : "2.1 Preliminaries",
+      "text" : "Our approach assumes that programs have type annotations on all values and function calls, similar to the setting of Krishnamurthy et al. (2017).1 Furthermore, we assume that program prediction is local in that it does not require program fragments to be copied from the dialogue history (but may still depend on history in other ways). Several formalisms, including the typed references of Zettlemoyer and Collins (2009) and the meta-computation operators of Semantic Machines et al. (2020), make it possible to produce local program annotations even for dialogues like the one depicted in Figure 2, which reuse past computations. We transformed the datasets in our experiments to use such metacomputation operators (see Appendix C).\nWe also optionally make use of entity proposers, similar to Krishnamurthy et al. (2017), which annotate spans from the current utterance with typed values. For example, the span “one” in “Change it to one” might be annotated with the value 1 of type Number. These values are scored by the decoder along with other values that it considers (§2.5) when predicting argument values for function invocations. Using entity proposers aims to\n1This requirement can be trivially satisfied by assigning all expressions the same type, but in practice defining a set of type declarations for the datasets in our experiments was not difficult (refer to Appendix C for details).\nhelp the model generalize better to previously unseen values that can be recognized in the utterance using hard-coded heuristics (e.g., regular expressions), auxiliary training data, or other runtime information (e.g., a contact list). In our experiments we make use of simple proposers that recognize numbers, months, holidays, and days of the week, but one could define proposers for arbitrary values (e.g., song titles). As described in §2.5, certain values can also be predicted directly without the use of an entity proposer."
+    }, {
+      "heading" : "2.2 Encoder",
+      "text" : "The encoder, shown in Figure 3, maps a natural language utterance to a continuous representation. Like many neural sequence-to-sequence models, we produce a contextualized token representation of the utterance, Hutt ∈ RU×henc , where U is the number of tokens and henc is the dimensionality of their embeddings. We use a Transformer encoder (Vaswani et al., 2017), optionally initialized using the BERT pretraining scheme (Devlin et al., 2019). Next, we need to encode the dialogue history and combine its representation with Hutt to produce history-contextualized utterance token embeddings.\nPrior work has incorporated history information by linearizing it and treating it as part of the input utterance (Cheng et al., 2018; Semantic Machines et al., 2020; Aghajanyan et al., 2020). While flexible and easy to implement, this approach presents a number of challenges. In complex dialogues, history encodings can grow extremely long relative to the user utterance, which: (i) increases the risk of overfitting, (ii) increases computational costs (because attentions have to be computed over long sequences), and (iii) necessitates using small batch sizes during training, making optimization difficult.\nThanks to the predictive locality of our representations (§2.1), our decoder (§2.3) never needs to retrieve values or program fragments from the dialogue history. Instead, context enters into programs primarily when programs use referring expressions that point to past computations, or revision expressions that modify them. Even though this allows us to dramatically simplify the dialogue history representation, effective generation of referring expressions still requires knowing something about the past. For example, for the utterance “What’s next?” the model needs to determine what “What” refers to. Perhaps more interestingly, the presence of dates in recent\nturns (or values that have dates, such as meetings) should make the decoder more eager to generate referring calls that retrieve dates from the dialogue history; especially so if other words in the current utterance hint that dates may be useful and yet date values cannot be constructed directly from the current utterance. Subsequent steps of the decoder which are triggered by these other words can produce functions that consume the referred dates.\nWe thus hypothesize that it suffices to strip the dialogue history down to its constituent types, hiding all other information.2 Specifically, we extract a set T of types that appear in the dialogue history up to m turns back, where m = 1 in our experiments.3 Our encoder then transformsHutt into a sequence of history-contextualized embeddingsHenc by allowing each token to attend over T . This is motivated by the fact that, in many cases, dialogue history is important for determining the meaning of specific tokens in the utterance, rather than the whole utterance. Specifically, we learn embeddings T ∈ R|T |×htype for the extracted types, where htype is the embedding size, and use the attention mechanism of Vaswani et al. (2017) to contextualizeHutt:\nHenc ,Hutt + MHA(Hutt︸︷︷︸ Queries , T︸︷︷︸ Keys , T︸︷︷︸ Values ), (1)\nwhere “MHA” stands for multi-head attention, and each head applies a separate linear transformation to the queries, keys, and values. Intuitively,\n2For the previous example, if the type List[Event] appeared in the history then we may infer that “What” probably refers to an Event.\n3We experimented with different values of m and found that increasing it results in worse performance, presumably due to overfitting.\neach utterance-contextualized token is further contextualized in (1) by adding to it a mixture of embeddings of elements in T , where the mixture coefficients depends only on that utterancecontextualized token. This encoder is illustrated in Figure 3. As we show in §3.1, using this mechanism performs better than the naı̈ve approach of appending a set-of-types vector toHutt."
+    }, {
+      "heading" : "2.3 Decoder: Programs",
+      "text" : "The decoder uses the history-contextualized representationHenc of the current utterance to predict a distribution over the program π that corresponds to that utterance. Each successive “line” πi of π invokes a function fi on an argument value tuple (vi1, vi2, . . . , viAi), where Ai is the number of (formal) arguments of fi. Applying fi to this ordered tuple results in the invocation fi(ai1 = vi1, ai2 = vi2, . . .), where (ai1, ai2, . . . , aiAi) name the formal arguments of fi. Each predicted value vij can be the result of a previous function invocation, a constant value, a value copied from the current utterance, or a proposed entity (§2.1), as illustrated in the lower right corner of Figure 1. These different argument sources are described in §2.5. Formally, the decoder defines a distribution of programs π:\np(π |Henc) = P∏ i=1 p(πi | f<i,Henc), (2)\nwhere P is the number of function invocations in the program, and f<i , {f1, . . . , fi−1}. Additionally, we assume that argument values are conditionally independent given fi and f<i, resulting in:\np(πi | f<i) = p(fi |f<i)︸ ︷︷ ︸ function scoring\nAi∏ j=1 p(vij |f<i, fi)︸ ︷︷ ︸ argument value\nscoring\n, (3)\nwhere we have elided the conditioning on Henc. Here, functions depend only on previous functions\n(not their argument values or results) and argument values depend only on their calling function (not on one another or any of the previous argument values).4 This is illustrated in Figure 4. In addition to providing an important inductive bias, these independence assumptions allow our inference procedure to efficiently score all possible function invocations at step i, given the ones at previous steps, at once (i.e., function and argument value assignments together), resulting in an efficient search algorithm (§2.6). Note that there is also a corresponding disadvantage (as in many machine translation models) that a meaningful phrase in the utterance could be independently selected for multiple arguments, or not selected at all, but we did not encounter this issue in our experiments; we rely on the model training to evade this problem through the dependence onHenc."
+    }, {
+      "heading" : "2.4 Decoder: Functions",
+      "text" : "In Equation 3, the sequence of functions f1, f2, . . . in the current program is modeled by∏ i p(fi |f<i,Henc). We use a standard autoregressive Transformer decoder that can also attend to the utterance encoding Henc (§2.2), as done by Vaswani et al. (2017). Our decoder generates sequences over the vocabulary of functions. This means that each function fi needs an embedding fi (used as both an input to the decoder and an output), which we construct compositionally.\nWe assume that each unique function f has a type signature that specifies a name n, a list of type parameters {τ1, . . . , τT } (to support polymorphism),5 a list of argument names and types ((a1, t1), . . . , (aA, tA)), and a result type r. An\n4We also tried defining a jointly normalized distribution over entire function invocations (Appendix A), but found that it results in a higher training cost for no accuracy benefits.\n5The type parameters could themselves be parameterized, but we ignore this here for simplicity of exposition.\nexample is shown in Figure 5. We encode the function and argument names using the utterance encoder of §2.2 and learn embeddings for the types, to obtain (n, r), {τ1, . . . , τT }, and {(a1, t1), . . . , (aA, tA)}. Then, we construct an embedding for each function as follows:\na = Pool(a1 + t1, . . . ,aA + tA), (4)\nf = n+ Pool(τ1, . . . , τT ) + a+ r, (5)\nwhere “Pool” is the max-pooling operation which is invariant to the arguments’ order.\nOur main motivation for this function embedding mechanism is the ability to take cues from the user utterance (e.g., due to a function being named similarly to a word appearing in the utterance). If the functions and their arguments have names that are semantically similar to corresponding utterance parts, then this approach enables zero-shot generalization.6 However, there is an additional potential benefit from parameter sharing due to the compositional structure of the embeddings (see e.g., Baroni, 2020)."
+    }, {
+      "heading" : "2.5 Decoder: Argument Values",
+      "text" : "This section describes the implementation of the argument predictor p(vij | f<i, fi). There are four different kinds of sources that can be used to fill each available argument slot: references to previous function invocations, constants from a static vocabulary, copies that copy string values from the utterance, and entities that come from entity proposers (§2.1). Many sources might propose the same value, including multiple sources of the same kind. For example, there may be multiple spans in the utterance that produce the same string value in a program, or an entity may be proposed that is also available as a constant. To address this, we marginalize over the sources of each value:\np(vij | f<i, fi)= ∑\ns∈S(vij)\np(vij , s |f<i, fi), (6)\nwhere vij represents a possible value for the argument named aij , and s ∈ S(vij) ranges over the possible sources for that value. For example, given the utterance “Change that one to 1:30pm” and the value 1, the set S(1) may contain entities that correspond to both “one” and “1” from the utterance.\n6The data may contain overloaded functions that have the same name but different type signatures (e.g., due to optional arguments). The overloads are given distinct identifiers f , but they often share argument names, resulting in at least partially shared embeddings.\nThe argument scoring mechanism considers the last-layer decoder state hidec that was used to predict fi via p(fi |f<i) ∝ exp(f>i hidec). We specialize this decoder state to argument aij as follows:\nh i,aij dec , ĥ i dec tanh(fi + aij), (7)\nwhere represents elementwise multiplication, fi is the embedding of the current function fi, aij is the encoding of argument aij as defined in §2.4, and ĥdec is a projection of hdec to the necessary dimensionality. Intuitively, tanh(fi + aij) acts as a gating function over the decoder state, deciding what is relevant when scoring values for argument aij . This argument-specific decoder state is then combined with a value embedding to produce a probability for each (sourced) value assignment:\np(v, s | f<i, fi) ∝ exp { ṽ>(hi,adec +w kind(s) a ) + b kind(s) a } , (8)\nwhere a is the argument name aij , kind(s) ∈ {REFERENCE, CONSTANT, COPY, ENTITY}, ṽ is the embedding of (v, s) which is described next, and wka and b k a are model parameters that are specific to a and the kind of the source s.\nReferences. References are pointers to the return values of previous function invocations. If the source s for the proposed value v is the result of the kth invocation (where k < i), we take its embedding ṽ to be a projection of hkdec that was used to predict that invocation’s function and arguments.\nConstants. Constants are values that are always proposed, so the decoder always has the option of generating them. If the source s for the proposed value v is a constant, we embed it by applying the utterance encoder on a string rendering of the value. The set of constants is automatically extracted from the training data (see Appendix B).\nCopies. Copies are string values that correspond to substrings of the user utterance (e.g., person names). String values can only enter the program through copying, as they are not in the set of constants (i.e., they cannot be “hallucinated” by the model; see Pasupat and Liang, 2015; Nie et al., 2019). One might try to construct an approach based on a standard token-based copy mechanism (e.g., Gu et al., 2016). However, this would allow copying non-contiguous spans and would also require marginalizing over identical tokens as opposed to spans, resulting in more ambiguity. Instead, we propose a mechanism that enables the\ndecoder to copy contiguous spans directly from the utterance. Its goal is to produce a score for each of the U(U + 1)/2 possible utterance spans. Naı̈vely, this would result in a computational cost that is quadratic in the utterance length U , and so we instead chose a simple scoring model that avoids it. Similar to Stern et al. (2017) and Kuribayashi et al. (2019), we assume that the score for a span factorizes, and define the embedding of each span value as the concatenation of the contextual embeddings of the first and last tokens of the span, ṽ = [hkstartutt ;h kend utt ]. To compute the copy scores we also concatenate hi,adec with itself in Equation 8.\nEntities. Entities are treated the same way as copies, except that instead of scoring all spans of the input, we only score spans proposed by the external entity proposers discussed in §2.1. Specifically, the proposers provide the model with a list of candidate entities that are each described by an utterance span and an associated value. The candidates are scored using an identical mechanism to the one used for scoring copies. This means that, for example, the string “sept” could be linked to the value Month.September even though the string representations do not match perfectly.\nType Checking. When scoring argument values for function fi, we know the argument types, as they are specified in the function’s signature. This enables us to use a type checking mechanism that allows the decoder to directly exclude values with mismatching types. For references, the value types can be obtained by looking up the result types of the corresponding function signatures. Additionally, the types are always pre-specified for constants and entities, and copies are only supported for a subset of types (e.g., String, PersonName; see Appendix B). The type checking mechanism sets p(vij | f<i, fi) = 0 whenever vij has a different type than the expected type for aij . Finally, because copies can correspond to multiple types, we also add a type matching term to the copy score. This term is defined as the inner product of the argument type embedding and a (learnable) linear projection of hkstartutt and h kend utt concatenated, where kstart and kend denote the span start and end indices."
+    }, {
+      "heading" : "2.6 Decoder: Search",
+      "text" : "Similar to other sequence-to-sequence models, we employ beam search over the sequence of function invocations when decoding. However, in contrast to other models, our assumptions (§2.3) allow us to\nefficiently implement beam search over complete function invocations, by leveraging the fact that:\nmax πi p(πi)=max fi\n{ p(fi) Ai∏ j=1 max vij p(vij |fi) } , (9)\nwhere we have omitted the dependence on f<i. This computation is parallelizable and it also allows the decoder to avoid choosing a function if there are no high scoring assignments for its arguments (i.e., we are performing a kind of lookahead). This also means that the paths explored during the search are shorter for our model than for models where each step corresponds to a single decision, allowing for smaller beams and more efficient decoding."
+    }, {
+      "heading" : "3 Experiments",
+      "text" : "We first report results on SMCALFLOW (Semantic Machines et al., 2020) and TREEDST (Cheng et al., 2020), two recently released large-scale conversational semantic parsing datasets. Our model makes use of type information in the programs, so we manually constructed a set of type declarations for each dataset and then used a variant of the HindleyMilner type inference algorithm (Damas and Milner, 1982) to annotate programs with types. As mentioned in §2.1, we also transformed TREEDST to introduce meta-computation operators for references and revisions (more details can be found in Appendix C).7 We also report results on nonconversational semantic parsing datasets in §3.2. We use the same hyperparameters across all experiments (see Appendix E), and we use BERTmedium (Turc et al., 2019) to initialize our encoder."
+    }, {
+      "heading" : "3.1 Conversational Semantic Parsing",
+      "text" : "Test set results for SMCALFLOW and TREEDST are shown in Table 1. Our model significantly outperforms the best published numbers in each case.\n7The transformed datasets are available at https: //github.com/microsoft/task_oriented_dialogue_ as_dataflow_synthesis/tree/master/datasets.\nIn order to further understand the performance characteristics of our model and quantify the impact of each modeling contribution, we also compare to a variety of other models and ablated versions of our model. We implemented the following baselines:\n– Seq2Seq: The OpenNMT (Klein et al., 2017) implementation of a pointer-generator network (See et al., 2017) that predicts linearized plans represented as S-expressions and is able to copy tokens from the utterance while decoding. This model is very similar to the model used by Semantic Machines et al. (2020) and represents the current state-of-the-art for SMCALFLOW.8 – Seq2Tree: The same as Seq2Seq, except that it generates invocations in a top-down, pre-order program traversal. Each invocation is embedded as a unique item in the output vocabulary. Note that SMCALFLOW contains re-entrant programs represented with LISP-style let bindings. Both the Seq2Tree and Seq2Seq are unaware of the special meaning of let and predict calls to let as any other function, and references to bound 8Semantic Machines et al. (2020) used linearized plans to represent the dialogue history, but our implementation uses previous user and agent utterances. We found no difference in performance.\nvariables as any other literal. – Seq2Tree++: An enhanced version of the model\nby Krishnamurthy et al. (2017) that predicts typed programs in a top-down fashion. Unlike Seq2Seq and Seq2Tree, this model can only produce well-formed and well-typed programs. It also makes use of the same entity proposers (§2.1) similar to our model, and it can atomically copy spans of up to 15 tokens by treating them as additional proposed entities. Furthermore, it uses the linear history encoder that is described in the next paragraph. Like our model, re-entrancies are represented as references to previous outputs in the predicted sequence.\nWe also implemented variants of Seq2Seq and Seq2Tree that use BERT-base9 (Devlin et al., 2019) as the encoder. Our results are shown in Table 2a. Our model outperforms all baselines on both datasets, showing particularly large gains in the low data regime, even when using BERT. Finally, we implemented the following ablations, with more details provided in Appendix G:\n– Value Dependence: Introduces a unique function for each value in the training data (except for copies) and transforms the data so that values are always produced by calls to these functions, allowing the model to condition on them. – No Name Embedder: Embeds functions and constants atomically instead of using the approach of §2.4 and the utterance encoder. – No Types: Collapses all types to a single type, which effectively disables type checking (§2.5). – No Span Copy: Breaks up span-level copies into token-level copies which are put together using a special concatenate function. Note that our model is value-agnostic and so this ablated model cannot condition on previously copied tokens when copying a span token-by-token. – No Entity Proposers: Removes the entity proposers, meaning that previously entity-linked values have to be generated as constants. – No History: SetsHenc =Hutt (§2.2). – Previous Turn: Replaces the type-based history\nencoding with the previous turn user and system utterances or linearized system actions. – Linear Encoder: Replaces the history attention\n9We found that BERT-base worked best for these baselines, but was no better than the smaller BERT-medium when used with our model. Also, unfortunately, incorporating BERT in Seq2Tree++ turned out to be challenging due to the way that model was originally implemented.\nmechanism with a linear function over a multihot embedding of the history types.\nThe results, shown in Table 2b, indicate that all of our features play a role in improving accuracy. Perhaps most importantly though, the “value dependence” ablation shows that our function-based program representations are indeed important, and the “previous turn” ablation shows that our typebased program representations are also important. Furthermore, the impact of both these modeling decisions grows larger in the low data regime, as does the impact of the span copy mechanism."
+    }, {
+      "heading" : "3.2 Non-Conversational Semantic Parsing",
+      "text" : "Our main focus is on conversational semantic parsing, but we also ran experiments on nonconversational semantic parsing benchmarks to show that our model is a strong parser irrespective of context. Specifically, we manually annotated the JOBS, GEOQUERY, and ATIS datasets with typed declarations (Appendix C) and ran experiments comparing with multiple baseline and state-of-the-art methods. The results, shown in Table 3, indicate that our model meets or exceeds state-of-the-art performance in each case."
+    }, {
+      "heading" : "4 Related Work",
+      "text" : "Our approach builds on top of a significant amount of prior work in neural semantic parsing and also context-dependent semantic parsing.\nNeural Semantic Parsing. While there was a brief period of interest in using unstructured sequence models for semantic parsing (e.g., Andreas\net al., 2013; Dong and Lapata, 2016), most research on semantic parsing has used tree- or graph-shaped decoders that exploit program structure. Most such approaches use this structure as a constraint while decoding, filling in function arguments one-at-atime, in either a top-down fashion (e.g., Dong and Lapata, 2016; Krishnamurthy et al., 2017) or a bottom-up fashion (e.g., Misra and Artzi, 2016; Cheng et al., 2018). Both directions can suffer from exposure bias and search errors during decoding: in top-down when there’s no way to realize an argument of a given type in the current context, and in bottom-up when there are no functions in the programming language that combine the predicted arguments. To this end, there has been some work on global search with guarantees for neural semantic parsers (e.g., Lee et al., 2016) but it is expensive and makes certain strong assumptions. In contrast to this prior work, we use program structure not just as a decoder constraint but as a source of independence assumptions: the decoder explicitly decouples some decisions from others, resulting in good inductive biases and fast decoding algorithms.\nPerhaps closest to our work is that of Dong and Lapata (2018), which is also about decoupling decisions, but uses a dataset-specific notion of an abstracted program sketch along with different independence assumptions, and underperforms our model in comparable settings (§3.2). Also close are the models of Cheng et al. (2020) and Zhang et al. (2019). Our method differs in that our beam search uses larger steps that predict functions together with their arguments, rather than predicting the argument values serially in separate dependent steps. Similar to Zhang et al. (2019), we use a target-side copy mechanism for generating references to function invocation results. However, we extend this mechanism to also predict constants, copy spans from the user utterance, and link externally proposed entities. While our span copy mechanism is novel, it is inspired by prior attempts to copy spans instead of tokens (e.g., Singh et al., 2020). Finally, bottom-up models with similarities to ours include SMBOP (Rubin and Berant, 2020) and BUSTLE (Odena et al., 2020).\nContext-Dependent Semantic Parsing. Prior work on conversational semantic parsing mainly focuses on the decoder, with few efforts on incorporating the dialogue history information in the encoder. Recent work on context-dependent semantic parsing (e.g., Suhr et al., 2018; Yu et al., 2019)\nconditions on explicit representations of user utterances and programs with a neural encoder. While this results in highly expressive models, it also increases the risk of overfitting. Contrary to this, Zettlemoyer and Collins (2009), Lee et al. (2014) and Semantic Machines et al. (2020) do not use context to resolve references at all. They instead predict context-independent logical forms that are resolved in a separate step. Our approach occupies a middle ground: when combined with local program representations, types, even without any value information, provide enough information to resolve context-dependent meanings that cannot be derived from isolated sentences. The specific mechanism we use to do this “infuses” contextual type information into input sentence representations, in a manner reminiscent of attention flow models from the QA literature (e.g., Seo et al., 2016)."
+    }, {
+      "heading" : "5 Conclusion",
+      "text" : "We showed that abstracting away values while encoding the dialogue history and decoding programs significantly improves conversational semantic parsing accuracy. In summary, our goal in this work is to think about types in a new way. Similar to previous neural and non-neural methods, types are an important source of constraints on the behavior of the decoder. Here, for the first time, they are also the primary ingredient in the representation of both the parser actions and the dialogue history.\nOur approach, which is based on type-centric encodings of dialogue states and function-centric encodings of programs (§2), outperforms prior work by 7.3% and 10.6%, on SMCALFLOW and TREEDST, respectively (§3), while also being more computationally efficient than competing methods. Perhaps more importantly, it results in even more significant gains in the low-data regime. This indicates that choosing our representations carefully and making appropriate independence assumptions can result in increased accuracy and computational efficiency."
+    }, {
+      "heading" : "6 Acknowledgements",
+      "text" : "We thank the anonymous reviewers for their helpful comments, Jason Eisner for his detailed feedback and suggestions on an early draft of the paper, Abulhair Saparov for helpful conversations and pointers about semantic parsing baselines and prior work, and Theo Lanman for his help in scaling up some of our experiments."
+    }, {
+      "heading" : "C Dataset Preparation",
+      "text" : "We now describe how we processed the datasets to satisfy the requirements mentioned in §2.1. We have made the processed datasets available at https: //github.com/microsoft/task_oriented_dialogue_ as_dataflow_synthesis/tree/master/datasets.\nC.1 Type Declarations\nWe manually specified the necessary type declarations by inspection of all functions in the training data. In some cases, we found it helpful to transform the data into an equivalent set of function calls that simplified the resulting programs, while maintaining a one-to-one mapping with the original representations. For example, SMCALFLOW contains a function called get that takes in an object of some type and a Path, which specifies a field of that object, and acts as an accessor. For example, the object could be an Event and the specified path may be \"subject\". We transform such invocations into invocations of functions that are instantiated separately for each unique combination of the object type and the provided path. For the aforementioned example, the corresponding new function would be defined as:\ndef Event.subject(obj: Event): String\nAll such transformations are invertible, so we can convert back to the original format after prediction.\nC.2 Meta-Computation Operators\nThe meta-computation operators are only required for the conversational semantic parsing datasets, and SMCALFLOW already makes use of them. Therefore, we only had to convert TREEDST. To this end, we introduced two new operators:\ndef refer[T](): T\ndef revise[T, R]( root: Root[T], path: Path[R], revision: R => R, ): T\nrefer goes through the programs and system actions in the dialogue history, starting at the most recent turn, finds the first sub-program that evaluates to type T, and replaces its invocation with that sub-program. Similarly, revise finds the first program whose root matches the specified root, walks down the tree along the specified path, and applies the provided revision on the sub-program rooted at the end of that path. It then replaces its invocation with this revised program. We performed an automated heuristic transformation of TREEDST so that it makes use of these meta-operators. We only applied the extracted transformations when executing them on the transformed programs using the gold dialogue history resulted in the original program (i.e., before applying any of our transformations). Therefore, when using the gold dialogue history, this transformation is also guaranteed to be invertible. We emphasize that we execute these meta-computation operators before computing accuracy so that our final evaluation results are comparable to prior work.\nC.3 Annotation Errors While preparing the datasets for our experiments using our automated transformations, we noticed that they contain some inconsistencies. For example, in TREEDST, the tree fragment: ...restaurant.book.restaurant.book...\nseemed to be interchangeable with: ...restaurant.object.equals...\nThe annotation and checking mechanisms we employ impose certain regularity requirements on the data that are violated by such examples. Therefore, we had three choices for such examples: (i) we could add additional type declarations, (ii) we could discard them, or (iii) we could collapse the two annotations together, resulting in a lossy conversion. We used our best judgment when choosing among these options, preferring option (iii) where it was possible to do so automatically. We believe that all such cases are annotation errors, but we cannot know for certain without more information about how the TREEDST dataset was constructed. Overall, about 122 dialogues (0.4%) did not pass\nour checks for SMCALFLOW, and 585 dialogues (3.0%) for TREEDST. When converting back to the original format, we tally an error for each discarded example, and select the most frequent version of any lossily collapsed annotation.\nOur approach also provides two simple yet effective consistency checks for the training data: (i) running type inference using the provided type declarations to detect ill-typed examples, and (ii) using the constraints described Appendix B to detect other forms of annotation errors. We found that these two checks together caught 68 potential annotation errors (<0.5%) in SMCALFLOW and ∼1,000 potential errors (∼6%) in TREEDST. TREEDST was particularly interesting as we found a whole class of examples where user utterances were replaced with system utterances.\nNote that our model does not technically require any of these checks. It is possible to generate type signatures that permit arbitrary function/argument pairs based on observed data and to configure our model so that any observed value may be generated as a constant (i.e., not imposing the constraints described in Appendix B). In practice we found that constraining the space of programs provides useful sanity checks in addition to accuracy gains.\nC.4 Non-Conversational Semantic Parsing\nWe obtained the JOBS, GEOQUERY, and ATIS datasets from the repository of Dong and Lapata (2016). For each dataset, we defined a library that specifies function and type declarations."
+    }, {
+      "heading" : "D Evaluation Details",
+      "text" : "To compare with prior work for SMCALFLOW (Semantic Machines et al., 2020) and TREEDST (Cheng et al., 2020), we replicated their setups. For SMCALFLOW, we predict plans always conditioning on the gold dialogue history for each utterance, but we consider any predicted plan wrong if the refer are correct flag is set to false. This flag is meant to summarize the accuracy of a hypothetical model for resolving calls to refer, but is not relevant to the problem of program prediction. We also canonicalize plans by sorting keyword arguments and normalizing numbers (so that 30.0 and 30 are considered equivalent, for example). For TREEDST, our model predicts programs that use the refer and revise operators, and we execute them against the dialogue history that consists of predicted programs and gold (oracle) system\nactions (following Cheng et al. (2020)) when converting back to the original tree representation. We canonicalize the resulting trees by lexicographically sorting the children of each node.\nFor our baseline comparisons and ablations (shown in Tables 2a and 2b), we decided to ignore the refer are correct flag for SMCALFLOW because it assumes that refer is handled by some other model and for these experiments we are only interested in evaluating program prediction. Also, for TREEDST we use the gold plans for the dialogue history in order to focus on the semantic parsing problem, as opposed to the dialogue state tracking problem. For the non-conversational semantic parsing datasets we replicated the evaluation approach of Dong and Lapata (2016), and so we also canonicalize the predicted programs."
+    }, {
+      "heading" : "E Model Hyperparameters",
+      "text" : "We use the same hyperparameters for all of our conversational semantic parsing experiments. For the encoder, we use either BERT-medium (Turc et al., 2019) or a non-pretrained 2-layer Transformer (Vaswani et al., 2017) with a hidden size of 128, 4 heads, and a fully connected layer size of 512, for the non-BERT experiments. For the decoder we use a 2-layer Transformer with a hidden size of 128, 4 heads, and a fully connected layer size of 512, and set htype to 128, and harg to 512. For the non-conversational semantic parsing experiments we use a hidden size of 32 throughout the model as the corresponding datasets are very small. We also use a dropout of 0.2 for all experiments.\nFor training, we use the Adam optimizer (Kingma and Ba, 2017), performing global gradient norm clipping with the maximum allowed norm set to 10. For batching, we bucket the training examples by utterance length and adapt the batch size so that the total number of tokens in each batch is 10,240. Finally, we average the log-likelihood function over each batch, instead of summing it.\nExperiments with BERT. We use a pre-training phase for 2,000 training steps, where we freeze the parameters of the utterance encoder and only train the dialogue history encoder and the decoder. Then, we train the whole model for another 8,000 steps. This because our model is not simply adding a linear layer on top of BERT, and so, unless initialized properly, we may end up losing some of the information contained in the pre-trained BERT model. During the pre-training phase, we linearly\nwarm up the learning rate to 2× 10−3 during the first 1,000 steps. We then decay it exponentially by a factor of 0.999 every 10 steps. During the full training phase, we linearly warm up the learning rate to 1 × 10−4 during the first 1,000 steps, and then decay it exponentially in the same fashion.\nExperiments without BERT. We use a single training phase for 30,000 steps, where we linearly warm up the learning rate to 5× 10−3 during the first 1,000 steps, and then we decay it exponentially by a factor of 0.999 every 10 steps. We need a larger number of training steps in this case because none of the model components have been pre-trained. Also, the encoder is now much smaller, meaning that we can afford a higher learning rate.\nEven though these hyperparameters may seem very specific, we emphasize that our model is robust to the choice of hyperparameters and this setup was chosen once and shared across all experiments."
+    }, {
+      "heading" : "F Baseline Models",
+      "text" : "Seq2Seq. This model predicts linearized, tokenized S-expressions using the OpenNMT implementation of a Transformer-based (Vaswani et al., 2017) pointer-generator network (See et al., 2017). For example, the following program:\n+(length(\"some string\"), 1)\nwould correspond to the space-separated sequence:\n( + ( length \" some string \" ) 1 )\nIn contrast to the model proposed in this paper, in this case tokens that belong to functions and values (i.e., that are outside of quotes) can also be copied directly from the utterance. Furthermore, there is no guarantee that this baseline will produce a well-formed program.\nSeq2Tree. This model uses the same underlying implementation as our Seq2Seq baseline—also with no guarantee that it will produce a well-formed program—but it predicts a different sequence. For example, the following program:\n+(+(1, 2), 3)\nwould be predicted as the sequence:\n+(<NT>, 3) +(1, 2)\nEach item in the sequence receives a unique embedding in the output vocabulary and so, \"+(1,2)\" and \"+(<NT>, 3)\" share no parameters. <NT> is\na special placeholder symbol that represents a substitution point when converting the linearized sequence back to a tree. Furthermore, copies are not inlined into invocations, but broken out into token sequences. For example, the following program: +(length(\"some string\"), 1)\nwould be predicted as the sequence: +(<NT>, 1) length(<NT>) \" some string \"\nSeq2Tree++. This is a re-implementation of Krishnamurthy et al. (2017) with some differences: (i) our implementation’s entity linking embeddings are computed over spans, including type information (as in the original paper) and a span embedding computed based on the LSTM hidden state at the start and end of each entity span, (ii) copies are treated as entities by proposing all spans up to length 15, and (iii) we use the linear dialogue history encoder described in §3.1."
+    }, {
+      "heading" : "G Ablations",
+      "text" : "The “value dependence” and the “no span copy” ablations are perhaps the most important in our experiments, and so we provide some more details about them in the following paragraphs.\nValue Dependence. The goal of this ablation is to quantify the impact of the dependency structure we propose in Equation 3. To this end, we first convert all functions to a curried form, where each argument is provided as part of a separate function invocation. For example, the following invocation: [0] event(subject = s0, start = t0, end = t1)\nis transformed to the following program fragment: [0] value(s0) [1] event_0(subject = [0]) [2] value(t0) [3] event_1(curried = [1], start = [2]) [4] value(t1) [5] event_2(curried = [3], end = [4])\nWhen choosing a function, our decoder does not condition on the argument values of the previous invocations. In order to enable such conditioning without modifying the model implementation, we also transform the value function invocations whose underlying values are not copies, such that there exists a unique function for each unique value. This results in the following program:\n[0] value_s0(s0) [1] event_0(subject = [0]) [2] value_t0(t0) [3] event_1(curried = [1], start = [2]) [4] value_t1(t1) [5] event_2(curried = [3], end = [4])\nNote that we keep the value s0, value t0, and value t1 function arguments because they allow the model to marginalize over multiple possible value sources (§2.5). The reason we do not transform the value functions that correspond to copies is because we attempted doing that on top of the span copy ablation, but it performed poorly and we decided that it may be a misrepresentation. Overall, this ablation offers us a way to obtain a bottom-up parser that maintains most properties of the proposed model, except for its dependency structure.\nNo Span Copy. In order to ablate the proposed span copy mechanism we implemented a data transformation that replaces all copied values with references to the result of a copy function (for spans of length 1) or the result of a concatenate function called on the results of 2 or more calls to copy. For example, the function invocation: [0] event(subject = \"water the plant\")\nis converted to: [0] copy(\"water\") [1] copy(\"the\") [2] concatenate([0], [1]) [3] copy(\"plant\") [4] concatenate([2], [3]) [5] event(subject = [4])\nWhen applied on its own and not combined with other ablation, the single token copies are further inlined to produce the following program: [0] concatenate(\"water\", \"the\") [1] concatenate([0], \"plant\") [2] event(subject = [1])"
+    }, {
+      "heading" : "H Computational Efficiency",
+      "text" : "For comparing model performance we computed the average utterance processing time across all of the SMCALFLOW validation set, using a single Nvidia V100 GPU. The fastest baseline required about 80ms per utterance, while our model only required about 8ms per utterance. This can be attributed to multiple reasons, such as the facts that: (i) our independence assumptions allow us to predict the argument value distributions in parallel, (ii) we avoid enumerating all possible utterance spans when computing the normalizing constant for the argument values, and (iii) we use ragged tensors to avoid unnecessary padding and computation."
+    } ],
+    "references" : [ {
+      "title" : "Conversational Semantic Parsing",
+      "author" : [ "Armen Aghajanyan", "Jean Maillard", "Akshat Shrivastava", "Keith Diedrick", "Michael Haeger", "Haoran Li", "Yashar Mehdad", "Veselin Stoyanov", "Anuj Kumar", "Mike Lewis", "Sonal Gupta" ],
+      "venue" : null,
+      "citeRegEx" : "Aghajanyan et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Aghajanyan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Semantic Parsing as Machine Translation",
+      "author" : [ "Jacob Andreas", "Andreas Vlachos", "Stephen Clark" ],
+      "venue" : "In Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers),",
+      "citeRegEx" : "Andreas et al\\.,? \\Q2013\\E",
+      "shortCiteRegEx" : "Andreas et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Linguistic Generalization and Compositionality in Modern Artificial Neural Networks",
+      "author" : [ "Marco Baroni" ],
+      "venue" : "Philosophical Transactions of the Royal Society B,",
+      "citeRegEx" : "Baroni.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Baroni.",
+      "year" : 2020
+    }, {
+      "title" : "Conversational Semantic Parsing for Dialog State Tracking",
+      "author" : [ "Johannsen" ],
+      "venue" : "In Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP),",
+      "citeRegEx" : "2020.,? \\Q2020\\E",
+      "shortCiteRegEx" : "2020.",
+      "year" : 2020
+    }, {
+      "title" : "Learning an Executable Neural Semantic Parser",
+      "author" : [ "Jianpeng Cheng", "Siva Reddy", "Vijay Saraswat", "Mirella Lapata" ],
+      "venue" : "Computational Linguistics,",
+      "citeRegEx" : "Cheng et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Cheng et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Principal TypeSchemes for Functional Programs",
+      "author" : [ "Luis Damas", "Robin Milner" ],
+      "venue" : "In Proceedings of the 9th ACM SIGPLAN-SIGACT Symposium on Principles of Programming Languages,",
+      "citeRegEx" : "Damas and Milner.,? \\Q1982\\E",
+      "shortCiteRegEx" : "Damas and Milner.",
+      "year" : 1982
+    }, {
+      "title" : "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova" ],
+      "venue" : "In Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Language to Logical Form with Neural Attention",
+      "author" : [ "Li Dong", "Mirella Lapata" ],
+      "venue" : "In Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers),",
+      "citeRegEx" : "Dong and Lapata.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Dong and Lapata.",
+      "year" : 2016
+    }, {
+      "title" : "Coarse-to-Fine Decoding for Neural Semantic Parsing",
+      "author" : [ "Li Dong", "Mirella Lapata" ],
+      "venue" : null,
+      "citeRegEx" : "Dong and Lapata.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Dong and Lapata.",
+      "year" : 2018
+    }, {
+      "title" : "Incorporating Copying Mechanism in Sequence-to-Sequence Learning",
+      "author" : [ "Jiatao Gu", "Zhengdong Lu", "Hang Li", "Victor O.K. Li" ],
+      "venue" : "In Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Gu et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Gu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "From language to programs: Bridging reinforcement learning and maximum marginal likelihood. ArXiv, abs/1704.07926",
+      "author" : [ "Kelvin Guu", "Panupong Pasupat", "E. Liu", "Percy Liang" ],
+      "venue" : null,
+      "citeRegEx" : "Guu et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Guu et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Data recombination for neural semantic parsing. In Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)",
+      "author" : [ "Robin Jia", "Percy Liang" ],
+      "venue" : null,
+      "citeRegEx" : "Jia and Liang.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Jia and Liang.",
+      "year" : 2016
+    }, {
+      "title" : "Semantics-Based Machine Translation with Hyperedge Replacement Grammars",
+      "author" : [ "Bevan Jones", "Jacob Andreas", "Daniel Bauer", "Karl Moritz Hermann", "Kevin Knight" ],
+      "venue" : "In Proceedings of COLING",
+      "citeRegEx" : "Jones et al\\.,? \\Q2012\\E",
+      "shortCiteRegEx" : "Jones et al\\.",
+      "year" : 2012
+    }, {
+      "title" : "Adam: A Method for Stochastic Optimization. arXiv:1412.6980 [cs.LG",
+      "author" : [ "Diederik P. Kingma", "Jimmy Ba" ],
+      "venue" : null,
+      "citeRegEx" : "Kingma and Ba.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2017
+    }, {
+      "title" : "OpenNMT: Opensource toolkit for neural machine translation",
+      "author" : [ "Guillaume Klein", "Yoon Kim", "Yuntian Deng", "Jean Senellart", "Alexander Rush" ],
+      "venue" : "In Proceedings of ACL 2017, System Demonstrations,",
+      "citeRegEx" : "Klein et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Klein et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Neural Semantic Parsing with Type Constraints for Semi-Structured Tables",
+      "author" : [ "Jayant Krishnamurthy", "Pradeep Dasigi", "Matt Gardner" ],
+      "venue" : "In Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Krishnamurthy et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Krishnamurthy et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "An Empirical Study of Span Representations in Argumentation Structure Parsing",
+      "author" : [ "Tatsuki Kuribayashi", "Hiroki Ouchi", "Naoya Inoue", "Paul Reisert", "Toshinori Miyoshi", "Jun Suzuki", "Kentaro Inui" ],
+      "venue" : "In Proceedings of the 57th Annual Meeting of the Asso-",
+      "citeRegEx" : "Kuribayashi et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Kuribayashi et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Context-dependent Semantic Parsing for Time Expressions",
+      "author" : [ "Kenton Lee", "Yoav Artzi", "Jesse Dodge", "Luke Zettlemoyer" ],
+      "venue" : "In Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Lee et al\\.,? \\Q2014\\E",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Global Neural CCG Parsing with Optimality Guarantees",
+      "author" : [ "Kenton Lee", "Mike Lewis", "Luke Zettlemoyer" ],
+      "venue" : "In Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Lee et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "BART: Denoising Sequence-to-Sequence Pretraining for Natural Language Generation, Transla",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Neural Shift-Reduce CCG Semantic Parsing",
+      "author" : [ "Dipendra Kumar Misra", "Yoav Artzi" ],
+      "venue" : "In Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Misra and Artzi.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Misra and Artzi.",
+      "year" : 2016
+    }, {
+      "title" : "A Simple Recipe towards Reducing Hallucination in Neural Surface Realisation",
+      "author" : [ "Feng Nie", "Jin-Ge Yao", "Jinpeng Wang", "Rong Pan", "Chin-Yew Lin" ],
+      "venue" : "In Proceedings of the 57th Annual Meeting of the Association",
+      "citeRegEx" : "Nie et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Nie et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "BUSTLE: Bottomup Program Synthesis Through Learning-guided Exploration",
+      "author" : [ "Augustus Odena", "Kensen Shi", "David Bieber", "Rishabh Singh", "Charles Sutton" ],
+      "venue" : null,
+      "citeRegEx" : "Odena et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Odena et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Compositional Semantic Parsing on Semi-Structured Tables",
+      "author" : [ "Panupong Pasupat", "Percy Liang" ],
+      "venue" : "In Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Lan-",
+      "citeRegEx" : "Pasupat and Liang.,? \\Q2015\\E",
+      "shortCiteRegEx" : "Pasupat and Liang.",
+      "year" : 2015
+    }, {
+      "title" : "Abstract Syntax Networks for Code Generation and Semantic Parsing",
+      "author" : [ "Maxim Rabinovich", "Mitchell Stern", "Dan Klein" ],
+      "venue" : "In Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Rabinovich et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Rabinovich et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "SmBoP: Semi-autoregressive Bottom-up Semantic Parsing. arXiv:2010.12412 [cs",
+      "author" : [ "Ohad Rubin", "Jonathan Berant" ],
+      "venue" : null,
+      "citeRegEx" : "Rubin and Berant.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Rubin and Berant.",
+      "year" : 2020
+    }, {
+      "title" : "Probabilistic Generative Grammar for Semantic Parsing",
+      "author" : [ "Abulhair Saparov", "Vijay Saraswat", "Tom Mitchell" ],
+      "venue" : "In Proceedings of the 21st Conference on Computational Natural Language Learning",
+      "citeRegEx" : "Saparov et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Saparov et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Get to the point: Summarization with pointergenerator networks. In Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)",
+      "author" : [ "Abigail See", "Peter J. Liu", "Christopher D. Manning" ],
+      "venue" : null,
+      "citeRegEx" : "See et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "See et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Task-Oriented Dialogue as Dataflow Synthesis",
+      "author" : [ "Ben Snyder", "Stephon Striplin", "Yu Su", "Zachary Tellman", "Sam Thomson", "Andrei Vorobev", "Izabela Witoszko", "Jason Wolfe", "Abby Wray", "Yuchen Zhang", "Alexander Zotov" ],
+      "venue" : null,
+      "citeRegEx" : "Snyder et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Snyder et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bidirectional Attention Flow for Machine Comprehension",
+      "author" : [ "Minjoon Seo", "Aniruddha Kembhavi", "Ali Farhadi", "Hannaneh Hajishirzi" ],
+      "venue" : null,
+      "citeRegEx" : "Seo et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Seo et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "CopyNext: Explicit Span Copying and Alignment in Sequence to Sequence Models",
+      "author" : [ "Abhinav Singh", "Patrick Xia", "Guanghui Qin", "Mahsa Yarmohammadi", "Benjamin Van Durme" ],
+      "venue" : "In Proceedings of the Fourth Workshop on Structured Prediction",
+      "citeRegEx" : "Singh et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Singh et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A Minimal Span-Based Neural Constituency Parser",
+      "author" : [ "Mitchell Stern", "Jacob Andreas", "Dan Klein" ],
+      "venue" : "In Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers),",
+      "citeRegEx" : "Stern et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Stern et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Learning to Map Context-Dependent Sentences to Executable Formal Queries",
+      "author" : [ "Alane Suhr", "Srinivasan Iyer", "Yoav Artzi" ],
+      "venue" : "In Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics:",
+      "citeRegEx" : "Suhr et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Suhr et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Well-Read Students Learn Better: On the Importance of Pre-training Compact Models. arXiv:1908.08962 [cs.CL",
+      "author" : [ "Iulia Turc", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova" ],
+      "venue" : null,
+      "citeRegEx" : "Turc et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Turc et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Morpho-syntactic Lexical Generalization for CCG Semantic Parsing",
+      "author" : [ "Adrienne Wang", "Tom Kwiatkowski", "Luke Zettlemoyer" ],
+      "venue" : "In Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP),",
+      "citeRegEx" : "Wang et al\\.,? \\Q2014\\E",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "TRANX: A Transition-based Neural Abstract Syntax Parser for Semantic Parsing and Code Generation",
+      "author" : [ "Pengcheng Yin", "Graham Neubig" ],
+      "venue" : "In Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing: System Demon-",
+      "citeRegEx" : "Yin and Neubig.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Yin and Neubig.",
+      "year" : 2018
+    }, {
+      "title" : "SParC: Cross-Domain Semantic Parsing in Context",
+      "author" : [ "Dragomir Radev" ],
+      "venue" : "In Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Radev.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Radev.",
+      "year" : 2019
+    }, {
+      "title" : "Online Learning of Relaxed CCG Grammars for Parsing to Logical Form",
+      "author" : [ "Luke Zettlemoyer", "Michael Collins" ],
+      "venue" : "In Proceedings of the 2007 Joint Conference on Empirical Methods in Natural Language Processing and Computational Natural Lan-",
+      "citeRegEx" : "Zettlemoyer and Collins.,? \\Q2007\\E",
+      "shortCiteRegEx" : "Zettlemoyer and Collins.",
+      "year" : 2007
+    }, {
+      "title" : "Learning Context-Dependent Mappings from Sentences to Logical Form",
+      "author" : [ "Luke Zettlemoyer", "Michael Collins" ],
+      "venue" : "In Proceedings of the Joint Conference of the 47th Annual Meeting of the ACL and the 4th International Joint Conference on Natural",
+      "citeRegEx" : "Zettlemoyer and Collins.,? \\Q2009\\E",
+      "shortCiteRegEx" : "Zettlemoyer and Collins.",
+      "year" : 2009
+    }, {
+      "title" : "AMR Parsing as Sequence-toGraph Transduction",
+      "author" : [ "Sheng Zhang", "Xutai Ma", "Kevin Duh", "Benjamin Van Durme" ],
+      "venue" : "In Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Zhang et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Type-Driven Incremental Semantic Parsing with Polymorphism",
+      "author" : [ "Kai Zhao", "Liang Huang" ],
+      "venue" : "In Proceedings of the 2015 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies,",
+      "citeRegEx" : "Zhao and Huang.,? \\Q2015\\E",
+      "shortCiteRegEx" : "Zhao and Huang.",
+      "year" : 2015
+    }, {
+      "title" : "For each dataset, we defined a library that specifies function and type declarations",
+      "author" : [ "We obtained the JOBS", "GEOQUERY", "ATIS datasets from the repository of Dong", "Lapata" ],
+      "venue" : "D Evaluation Details",
+      "citeRegEx" : "JOBS et al\\.,? 2016",
+      "shortCiteRegEx" : "JOBS et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "2020)) when converting back to the original tree representation. We canonicalize the resulting trees by lexicographically sorting the children",
+      "author" : [ "Cheng" ],
+      "venue" : null,
+      "citeRegEx" : "Cheng,? \\Q2020\\E",
+      "shortCiteRegEx" : "Cheng",
+      "year" : 2020
+    }, {
+      "title" : "2017) with some differences: (i) our implementation’s entity linking embeddings are computed over spans, including type information (as in the original paper) and a span",
+      "author" : [ "Krishnamurthy" ],
+      "venue" : null,
+      "citeRegEx" : "Krishnamurthy,? \\Q2017\\E",
+      "shortCiteRegEx" : "Krishnamurthy",
+      "year" : 2017
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 10,
+      "context" : ", 2019), instruction following (Guu et al., 2017), and task-oriented dialogue (Zettlemoyer and Collins, 2009).",
+      "startOffset" : 31,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 38,
+      "context" : ", 2017), and task-oriented dialogue (Zettlemoyer and Collins, 2009).",
+      "startOffset" : 36,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 32,
+      "context" : "Typical models are based on an autoregressive sequence prediction approach, in which a detailed representation of the dialogue history is concatenated to the input sequence, and predictors condition on this sequence and all previously generated components of the output (Suhr et al., 2018).",
+      "startOffset" : 270,
+      "endOffset" : 289
+    }, {
+      "referenceID" : 15,
+      "context" : ", to constraining the hypothesis space (Krishnamurthy et al., 2017), guiding data augmentation (Jia and Liang, 2016), and coarsening in coarse-to-fine models (Dong and Lapata, 2018).",
+      "startOffset" : 39,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 11,
+      "context" : ", 2017), guiding data augmentation (Jia and Liang, 2016), and coarsening in coarse-to-fine models (Dong and Lapata, 2018).",
+      "startOffset" : 35,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2017), guiding data augmentation (Jia and Liang, 2016), and coarsening in coarse-to-fine models (Dong and Lapata, 2018).",
+      "startOffset" : 98,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 7,
+      "context" : "Our model is also effective at non-contextual semantic parsing, matching state-ofthe-art results on the JOBS, GEOQUERY, and ATIS datasets (Dong and Lapata, 2016).",
+      "startOffset" : 138,
+      "endOffset" : 161
+    }, {
+      "referenceID" : 39,
+      "context" : "Owing to this referential structure, a program can be equivalently represented as a directed acyclic graph (see e.g., Jones et al., 2012; Zhang et al., 2019).",
+      "startOffset" : 107,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 6,
+      "context" : ", 2017), optionally initialized using the BERT pretraining scheme (Devlin et al., 2019).",
+      "startOffset" : 66,
+      "endOffset" : 87
+    }, {
+      "referenceID" : 4,
+      "context" : "Prior work has incorporated history information by linearizing it and treating it as part of the input utterance (Cheng et al., 2018; Semantic Machines et al., 2020; Aghajanyan et al., 2020).",
+      "startOffset" : 113,
+      "endOffset" : 190
+    }, {
+      "referenceID" : 0,
+      "context" : "Prior work has incorporated history information by linearizing it and treating it as part of the input utterance (Cheng et al., 2018; Semantic Machines et al., 2020; Aghajanyan et al., 2020).",
+      "startOffset" : 113,
+      "endOffset" : 190
+    }, {
+      "referenceID" : 21,
+      "context" : "String values can only enter the program through copying, as they are not in the set of constants (i.e., they cannot be “hallucinated” by the model; see Pasupat and Liang, 2015; Nie et al., 2019).",
+      "startOffset" : 98,
+      "endOffset" : 195
+    }, {
+      "referenceID" : 5,
+      "context" : "Our model makes use of type information in the programs, so we manually constructed a set of type declarations for each dataset and then used a variant of the HindleyMilner type inference algorithm (Damas and Milner, 1982) to annotate programs with types.",
+      "startOffset" : 198,
+      "endOffset" : 222
+    }, {
+      "referenceID" : 33,
+      "context" : "We use the same hyperparameters across all experiments (see Appendix E), and we use BERTmedium (Turc et al., 2019) to initialize our encoder.",
+      "startOffset" : 95,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 14,
+      "context" : "– Seq2Seq: The OpenNMT (Klein et al., 2017) implementation of a pointer-generator network (See et al.",
+      "startOffset" : 23,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 27,
+      "context" : ", 2017) implementation of a pointer-generator network (See et al., 2017) that predicts linearized plans represented as S-expressions and is able to copy tokens from the utterance while decoding.",
+      "startOffset" : 54,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 6,
+      "context" : "We also implemented variants of Seq2Seq and Seq2Tree that use BERT-base9 (Devlin et al., 2019) as the encoder.",
+      "startOffset" : 73,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 19,
+      "context" : "(2020) use BART (Lewis et al., 2020), a large pretrained encoder.",
+      "startOffset" : 16,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 15,
+      "context" : "Most such approaches use this structure as a constraint while decoding, filling in function arguments one-at-atime, in either a top-down fashion (e.g., Dong and Lapata, 2016; Krishnamurthy et al., 2017) or a bottom-up fashion (e.",
+      "startOffset" : 145,
+      "endOffset" : 202
+    }, {
+      "referenceID" : 25,
+      "context" : "Finally, bottom-up models with similarities to ours include SMBOP (Rubin and Berant, 2020) and BUSTLE (Odena et al.",
+      "startOffset" : 66,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 22,
+      "context" : "Finally, bottom-up models with similarities to ours include SMBOP (Rubin and Berant, 2020) and BUSTLE (Odena et al., 2020).",
+      "startOffset" : 102,
+      "endOffset" : 122
+    } ],
+    "year" : 2021,
+    "abstractText" : "Conversational semantic parsers map user utterances to executable programs given dialogue histories composed of previous utterances, programs, and system responses. Existing parsers typically condition on rich representations of history that include the complete set of values and computations previously discussed. We propose a model that abstracts over values to focus prediction on typeand function-level context. This approach provides a compact encoding of dialogue histories and predicted programs, improving generalization and computational efficiency. Our model incorporates several other components, including an atomic span copy operation and structural enforcement of well-formedness constraints on predicted programs, that are particularly advantageous in the low-data regime. Trained on the SMCALFLOW and TREEDST datasets, our model outperforms prior work by 7.3% and 10.6% respectively in terms of absolute accuracy. Trained on only a thousand examples from each dataset, it outperforms strong baselines by 12.4% and 6.4%. These results indicate that simple representations are key to effective generalization in conversational semantic parsing.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

@@ -1,0 +1,649 @@
+{
+  "name" : "2021.acl-long.54.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "SocAoG: Incremental Graph Parsing for Social Relation Inference in Dialogues",
+    "authors" : [ "Liang Qiu", "Yuan Liang", "Yizhou Zhao", "Pan Lu", "Baolin Peng", "Zhou Yu", "Ying Nian Wu", "Song-Chun Zhu" ],
+    "emails" : [ "liangqiu@ucla.edu" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 658–670\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n658"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Social relations form the basic structure of our society, defining not only our self-images but also our relationships (Sztompka, 2002). Robots with a higher emotional quotient (EQ) have the potential to understand users’ social relations better and act appropriately. Given a dialogue as context and a set of entities, the task of Dialogue Relation Extraction (DRE) predicts the relation types between the entities from a predefined relation set. Table 5 shows such an example from the dataset DialogRE (Yu et al., 2020).\nExisting researches using BERT-based models (Devlin et al., 2018; Yu et al., 2020; Xue et al., 2020a) or graph-based models (Xue et al., 2020b;\n1The code is released at https://github.com/ Liang-Qiu/SocAoG-dialogues.\nChen et al., 2020) focus on identifying entities’ relations from the semantics of dialogues—they utilize either the attention mechanism or a refined token graph to locate informative words (e.g., “dad” and “mom”) that imply the argument pairs’ relations. However, there are still three missing parts in current models for social relation inference according to our observations. First, current models lack the explicit modeling of the relational consistency among a group of people—such consistency helps humans reason about the social relation of two targets by using their relations with a third person. For the example in Table 5, by knowing S2 and S3 are S1’s parents and S3 is S1’s mother, we can infer that S2 is S1’s dad. Second, the personal attribute cues (e.g., gender and profession) can also aid the relational inference but are not fully utilized. In the above example, besides inferring S3 is S1’ mother according to S3’s feminine attribute, we can also have a guess that Gunther is a waiter, which might be useful for the future socialrelational inference. Third, since the BERT-based\nand token-graph-based models take dialogues as a whole for relation prediction, they cannot perform dynamic inference—updating the relational belief with an incoming dialogic utterance. This can limit their ability to track the evolving relations along social interactions, e.g., strangers become friends over a good chat (Kukleva et al., 2020), unveiling intermediate reasoning results, or dealing with long dialogues.\nMotivated by these observations, we propose to model social relation as an attributed And-Or graph (AoG) (Zhu et al., 1998; Zhu and Mumford, 2007; Wu and Zhu, 2011; Shu et al., 2016; Qi et al., 2018), named SocAoG, and develop an incremental graph parsing algorithm to jointly infer human attributes and social relations from a dialogue. In specific, SocAoG describes social relations and personal attributes with contextual constraints of groups and hierarchical representations. To incrementally parse SocAoG and track social relations, we apply Markov Chain Monte Carlo (MCMC) to sample from the posterior probability calculated by three complementary processes (α–β–γ) (Qu et al., 2020; Zayaraz et al., 2015). Figure 1 schematically demonstrates a graph update of both relations (i.e., disambiguating mom/dad and adding a new party) and attributes (e.g., gender and profession) with the utterance “S2: Your mother just added him to the list.” from the example dialogue in Table 5.\nWe evaluate our method on two datasets of DialogRE (Yu et al., 2020) and MovieGraph (Vicol et al., 2018) for relation inference, and the results show that our method outperforms the state-of-theart (SoTA) ones. Overall, we make the following contributions: (i) We propose to model and infer social relations and individual’s attributes jointly with SocAoG for the consistency of attributes and social relations among a group. To the best of our knowledge, it is the first time done in the dialogue do-\nmain; (ii) The MCMC sampling from α–β–γ posterior enables dynamic inference—incrementally parsing the social relation graph, which can be useful for tracking relational evolution, reflecting the reasoning process, and handling long dialogues; (iii) We perform an ablation study on each process of α–β–γ to investigate the information contribution, and perform case studies to show the effectiveness of our dynamic reasoning."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "We review the related works on the social relation inference from documents, which is a well-studied task, and those from dialogues, which is the emerging task that our work is focused on."
+    }, {
+      "heading" : "2.1 Relation Inference from Documents",
+      "text" : "Most of the existing literature focus on relation extraction from professional edited news reports or websites. They typically output a set of “subjectpredicate-object” triples after reading the entire document (Bach and Badaskar, 2007; Mintz et al., 2009; Kumar, 2017). While early works mostly utilize feature-based methods (Kambhatla, 2004; Miwa and Sasaki, 2014; Gormley et al., 2015) and kernel-based methods (Zelenko et al., 2003; Zhao and Grishman, 2005; Mooney and Bunescu, 2006), more recent studies use deep learning methods such as recurrent neural networks or transformers (Kumar, 2017). For example, Zhou et al. (2016) propose bidirectional LSTM model to capture the longterm dependency between entity pairs, Zhang et al. (2017) present PA-LSTM to encode global position information, and Alt et al. (2019); Papanikolaou et al. (2019) fine-tune pre-trained transformer language models for relation extraction.\nTwo streams of work are closely related to our method. Regarding social network modeling, while most works treat pairs of entities isolated (Yu et al.,\n2020; Xue et al., 2020b; Chen et al., 2020), Srivastava et al. (2016) formulate the interpersonal relation inference as structured prediction (Belanger and McCallum, 2016; Qiu et al., 2020; Zhao et al., 2020), inferring the collective assignment of relations among all entities from a document (Li et al., 2020; Jin et al., 2020). Regarding relation evolution, a few works are aimed to learn the dynamics in social networks, i.e., the development of relations, from narratives by Hidden Markov Models (Chaturvedi et al., 2017), Recurrent Neural Networks (Kim and Klinger, 2019), deep recurrent autoencoders (Iyyer et al., 2016). Our method differs from the aforementioned works by modeling the structured social relations and their changes concurrently, which can be useful for the task of tracking social network evolution (Doreian and Stokman, 1997) and unveiling the reasoning process of relations. We achieve this by parsing the graph incrementally per utterance with the proposed α–β–γ strategy."
+    }, {
+      "heading" : "2.2 Relation Inference from Dialogues",
+      "text" : "Recently, Yu et al. (2020) introduce the first human-annotated dialogue-based relation extraction dataset DialogRE, in which relations are annotated between arguments that appear in a dialogue session. Compared with traditional relation extraction tasks, DialogRE emphasizes the importance of tracking speaker-related information within the context across multiple sentences. SoTA methods can be categorized into token-graph models and pre-trained language models. For typical tokengraph models, Chen et al. (2020) present a token graph attention network, and Xue et al. (2020b) further generate a latent multi-view graph to capture relationships among tokens, which is then refined to select important words for relation extraction. For pre-trained models, Yu et al. (2020) evaluate a BERT-based baseline model (Devlin et al., 2018) and a modified version BERTs, which takes speaker arguments into consideration. Xue et al. (2020a) propose a simple yet effective BERT-based model, SimpleRE, that takes a novel input format to capture the interrelations among all pairs of entities.\nBoth categories of SoTA models take a discriminative approach, whereas ignoring two key constraints on relations: (i) social relation consistency in a group and (ii) human attributes. Different from them, our method formulates the task as dialogue generation from an attributed relation graph, so\nthat the posterior relation estimation models both two constraints. Moreover, SoTA models also assume the relations are static—they cannot learn the dynamics of the relations, while the incremental graph updating strategy naturally enables the dynamic relation inference."
+    }, {
+      "heading" : "3 Problem Formulation",
+      "text" : "Our goal is to construct a social network through utterances in dialogue. The network is a heterogeneous physical system (Yongqiang et al., 1997) with particles representing entities and different types of edges representing social relations. Each entity is associated with multiple types of attributes, while each type of relation is governed by a potential function defined in human attribute and value space, acting as the social norm. The relations are often asymmetric, e.g., A is B’s father does not mean B is A’s father. To model the network, we utilize an attributed And-Or Graph (A-AoG), a probabilistic grammar model with attributes on nodes. Such design takes advantage of the reconfigurability of its probabilistic context-free grammar to reflect the alternative attributes and relations, and the contextual relations defined on Markov Random Field to model the social norm constraints.\nThe social network graph, named SocAoG, is diagrammatically shown in Figure 2. Formally, SocAoG is defined as a 5-tuple:\nG =< S, V,E,X, P > (1)\n, where S is the root node for representing the interested society. V = Vand∪Vor∪V eT ∪V aT denotes all nodes’ collection. Among them, And-nodes Vand represent the set of social communities, which can be decomposed to a set of entity terminal nodes, V eT , representing human members. Community detection is based on the social network analysis (Bedi and Sharma, 2016; Du et al., 2007), and can benefit the modeling of loosely connected social relations. Each human entity is associated with an And-node that breakdowns the attributes into subtypes such as gender, age, and profession. All the subtypes consist of an Or-node set, Vor, for representing branches to alternatives of attribute values. Meanwhile, all the attribute values are represented as a set of terminal nodes V aT . We denote E to be the edge set describing social relations,X(vi) to be the attributes associated with node vi, and X(~eij) to be the social relation type of edge ~eij ∈ E.\nGiven P to be the probability model defined on SocAoG, a parse graph pg is an instantiation of SocAoG with determined attribute selections for every Or-node and relation types for every edge. For a dialogue session with T turns DT = {D(1), D(2), ..., D(T )}, where D(t) is the utterance at turn t, our method infers the attributes and social relations incrementally over turns:\nGT = {pg(1), pg(2), ..., pg(T )} (2)\n, where pg(t) represents the belief of SocAoG at the dialogue turn t. We incrementally update the pg by maximizing the posterior probability:\npg∗ = argmax pg p(pg|D; θ) (3)\n, where pg∗ is the optimum social relation belief, and θ is the set of model parameters."
+    }, {
+      "heading" : "4 Algorithm",
+      "text" : ""
+    }, {
+      "heading" : "4.1 α–β–γ for Graph Inference",
+      "text" : "For simplicity, we denote X(vi) as vi and X(~eij) as eij in the rest of the paper. We introduce three processes, i.e., α, β, and γ process, to infer any SocAoG belief pg∗. We start by rewriting the posterior probability as a Gibbs distribution:\np(pg|D; θ) ∝ p(D|pg; θ)p(pg; θ)\n= 1\nZ exp{−E(D|pg; θ)− E(pg; θ)}\n(4) , where Z is the partition function. E(D|pg; θ) and E(pg; θ) are dialogue- and social norm-based energy potentials respectively, measuring the cost of assigning a graph instantiation.\nDenoting a dialogue as a sequence of words: D = {w1, w2, ..., wT }, the dialogue likelihood energy term E(D|pg; θ) can be expressed with a language model conditioned on the parse graph:\nE(D|pg; θ) = T∑ t=1 E(wt|ct, pg)\n= T∑ t=1 − log(p(wt|ct, pg)) (5)\n, where ct = [w1, ..., wt−1] is the context vector. Intuitively, the word selection depends on the word context, the entities’ attributes and their interpersonal relations. We approximate the likelihood by finetuning a BERT-based transformer with a customized input format 〈[CLS]D[SEP]vi0ei0j0vj0 ...vineinjnvjnv0v0...vn vn[SEP]〉, which is a concatenation of the dialogue history D and a flattened parse graph string encoding the current belief. We call the estimation of pg from the dialogue likelihood p(wt|ct, pg) to be the α process. α process lacks the explicit constraints for social norms related to interpersonal relations and human attributes.\nFor the social norm-based potential, we design it to be composed of three potential terms:\nE(pg; θ) =− β ∑\nvi,vj∈V (pg)\nlog(p(eij |vi,vj))\n− γl ∑\n~eij∈E(pg)\nlog(p(vi|eij))\n− γr ∑\n~eij∈E(pg)\nlog(p(vj |eij))\n(6) , where V (pg) and E(pg) are the set of terminal nodes and relations in the parse graph, respectively.\nWe call the term p(eij |vi,vj) the β process, in which we bind the attributes of node vi and vj to update their relation edge eij , in order to model the constraint on relations from human attributes. Reversely, we call the terms p(vi|eij) and p(vj |eij) the γ process, in which we use the social relation edge eij to update the attributes of node vi and vj . This models the impact of relation to the attributes of related entities. β, γl, and γr are weight factors balancing α, β and γ processes. Figure 3(a) shows the graph inference schema with the three processes. Combining equation 4, 5, and 6, we get a posterior probability estimation p(pg|D; θ) of parse graph pg, with the guarantee of the attribute and social norm consistencies.\nHere we also provide a reduced version of our model, SocAoGreduced, which applies when characters’ attributes annotation are not available for training2. With the same dialogue-based energy potential, We define the parse graph prior energy over a set of relation triangles:\nE(pg; θ) = −β ∑\n~eij ,~eik,~ejk∈E(pg)\nlog(p(eij |eik, ejk)).\n(7) The method directly models the constraint of two entities’ relation from their relations to others, with the inference schema demonstrated in Figure 3(b)."
+    }, {
+      "heading" : "4.2 Incremental Graph Parsing",
+      "text" : "Incrementally parsing the SocAoG is accomplished by repeatedly sampling a new parse graph pg(t)\n2Both SocAoG and SocAoGreduced do not need attribute annotation during inference once trained.\nAlgorithm 1: Incremental SocAoG Parsing for Social Relation Inference\nInput: dialogue DT = {D(1), D(2), ..., D(T )}, target argument pairs {a1, a2}. Initialize pg(0). Initialize vi and eij . for t = 1, ..., T do\nfor s = 1, ..., S do Compute the posterior p(pg|D(t); θ). Make proposal moves with probabilities q1, q2 to get a new parse graph pg′.\nCompute the posterior p(pg′|D(t); θ). Compute acceptance rate α(pg′|pg,D(t); θ). Accept/reject pg′ according to the acceptance rate.\nend for return ea1,a2 from the average of accepted pg samples.\nend for\nfrom the posterior probability p(pg(t)|D(t); θ). We utilize a Markov Chain Monte Carlo (MCMC) sampler to update our parse graph since the complexity of the problem caused by multiple energy terms.\nAt each dialogue turn t, we initialize the parse graph with the α classification process, by replacing all the Or-Node tokens with a special token [CLS]. We sample the parse graph for S steps and use the average value of obtained samples as an approximation of pg(t). We design two types of Markov chain dynamics used at random probabilities qi, i = 1, 2 to make proposal moves:\n• Dynamics q1: randomly pick a relation edge ~eij under the uniform distribution, flip its social relation type eij according to the prior distribution given by β process:∏\nvi,vj∈V (pg)\np(eij |vi,vj). (8)\n• Dynamics q2: randomly pick a terminal node vi and its attribute subtype under the uniform distribution, and flip the one-hot value of attribute vi according to the prior distribution given by γ process:∏\n~eij∈E(pg)\np(vi|eij) ∏\n~eji∈E(pg)\np(vi|eji). (9)\nUsing the Metropolis-Hastings algorithm (Chib and Greenberg, 1995), the proposed new parse graph pg′ is accepted according to the following accep-\ntance probability:\nα(pg′|pg,D; θ) = min(1, p(pg ′|D; θ)p(pg|pg′)\np(pg|D; θ)p(pg′|pg) )\n= min(1, p(pg′|D; θ) p(pg|D; θ) )\n(10) , where the proposal probability rate is cancelled out since the proposal moves are symmetric in probability. We summarize the incremental SocAoG parsing in Algorithm 1. Dialogues give a continuously evolving energy landscape: at the beginning of iterations, p(pg(0)|D; θ) is a “hot” distribution with a large energy value; by iterating the α–β–γ processes for pg updates through the dialogue, the pg converges to the pg∗, which is much cooler."
+    }, {
+      "heading" : "5 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "5.1 Datasets",
+      "text" : "We use DialogRE (V2)3 (Yu et al., 2020) and MovieGraph4 (Vicol et al., 2018) for evaluating our method. Detailed descriptions on the two datasets, e.g., relation and attribute types, are provided in Appendix A.\nDialogRE contains 36 relation types (17 of them are interpersonal) that exist between pairs of arguments. For the joint parsing of relation and attribute, we further annotate the entity arguments with attributes from four subtypes (by following the practice of MovieGraph (Vicol et al., 2018)): gender, age, profession, and ethnicity, according to Friends Central in Fandom5. DialogRE is split into training (1073), validation (358), and test (357). Following previous works (Yu et al., 2020; Xue et al., 2020b), we report macro F1 scores in both the standard and conversational settings (F1c).\nMovieGraph provides graph-based annotations of social situations from 51 movies. Each graph comprises nodes representing the characters, their emotional and physical attributes, relationships, and interactions. We use a subset (40) of MovieGraph with available full transcripts and split the dataset into training (26), validation (6), and test (8). For MovieGraph, we only evaluate with F1 since the trigger word annotation for computing F1c is not available.\n3https://github.com/nlpdata/dialogre 4http://moviegraphs.cs.toronto.edu/ 5https://friends.fandom.com/wiki/Friends Wiki"
+    }, {
+      "heading" : "5.2 Experiment Settings",
+      "text" : "We learn the SocAoG model with a contrastive loss (Hadsell et al., 2006) comparing the posterior of a positive parse graph against a negative one. All parameters are learned by gradient descent using the Adam optimizer (Kingma and Ba, 2014). During the inference stage, for each utterance, we run the MCMC for S = min{w × (KM + K(K − 1)N), Smax} steps given K entities, M attributes, N relations, and a sweep number of w. The probability of flipping the relation q1 is set to 0.7 to bias towards the relation prediction at first."
+    }, {
+      "heading" : "5.3 Baseline Models",
+      "text" : "We compare our method with both transformerbased (BERT, BERTS, SimpleRE) and graphbased (GDPNet) models. Given dialogue history D and target argument pair (vi, vj), BERT (Devlin et al., 2018) takes input sequences formatted as 〈[CLS]d[SEP]vi[SEP]vj[SEP]〉. BERTS (Yu et al., 2020) is a speaker-aware modification of BERT, which also takes speaker information into consideration by converting it into a special token. SimpleRE (Xue et al., 2020a) models the relations between each pair of entities with a customized input format. GDPNet (Xue et al., 2020b) takes in token representations from BERT and constructs a multi-view graph with a Gaussian Graph Generator. The graph is then refined through graph convolution and DTWPool to identify indicative words."
+    }, {
+      "heading" : "5.4 Performance Comparison",
+      "text" : "Table 2 shows the performance comparison between different methods on the two datasets. It clearly shows that both of our models, SocAoG and SocAoGreduced, outperform the existing methods by all the metrics. In specific, without using any additional information of attributes, SocAoGreduced surpasses the state-of-the-art method (SimpleRE) by 1.9% (F1)/2.1% (F1c) on DialogRE testing set, and by 5.1% (F1c) on MovieGraph testing set. Such improvement shows the importance of relational consistency for the modeling, and proves the effectiveness of our SocAoG formulation to introduce the social norm constraints.\nMoreover, by comparing between SocAoG and SocAoGreduced, we see that SocAoG further improves most of the metrics by leveraging the attribute information for relation reasoning, e.g., 69.1% vs. 68.6% for DialogRE testing F1 and\n64.1% vs. 63.2% for MovieGraph testing F1. The results demonstrate our method can effectively take advantage of the attributes as cues for social relation predictions. We compare our SocAoG model with the existing model of highest accuracy (SimpleRE) by relation types, and see consistent improvements for all types. A part of the results are shown in Figure 4. We also observe that there are larger accuracy boosts for relations between human entities than non-human entities (e.g., humanplace), by an average of +2.5% vs. +1.8% in F1, which is also reflected from Figure 4 (left 10 bars vs. right 10 bars). This can be explained as relation/attribute constraints are more meaningful for interpersonal relations, e.g., there are more constraints for the relation between three humans than the relation between two humans and a place.\nTable 2 also sees more accuracy improvement on MovieGraph dataset than DialogRE (+3.2% vs. +6.0% in test F1c using SimpleRE as baseline). This is possibly because the dynamic inference nature of our method makes it effective for dealing with dialogues with more turns: while existing methods either truncate dialogues or use sliding windows, our method continuously updates the relation graph given an incoming turn. We case study the dynamic inference in the next subsection."
+    }, {
+      "heading" : "5.5 Case Study on Dynamic Inference",
+      "text" : "Our method incrementally updates the relation and attribute information for a group of entities upon per utterance input with the proposed α–β–γ strategy. Such dynamic inference can potentially help reflect the evolving relations, unveil the reasoning process, and deal with long dialogues. Figure 5 shows the parse graph sequence by SocAoG inferring from a DialogRE testing dialogue as shown in Table 3. We can see that the method continuously refines the relation/attributes from an initial guess with incoming contexts, e.g. S2-S3: friends→parents in turn 5. Besides, the case also shows that attributes can aid relation predictions,\n665\ne.g., the inferred age of Emma clarifies her relation with S3. Moreover, since our method models the relation consistency among a group, it can predict the relation between two humans that do not talk directly. For example, S1 and S2 are inferred to be a couple by their dialogues with S5 in turn 7.\nFigure 5 also plots the average MCMC acceptance rate for the case, as defined in Formula 10, indicting the convergence of the inference. We see that the algorithm only needs to update the current graph belief slightly with a new perceived utterance. A peak in the curve can indicate that a key piece of information is detected that contradicts the existing belief: e.g., there is a peak of convergence curve in turn 7, which corresponds to “S5: Hey Mr. and Mrs. Geller!”, indicating that S1 and S2 are a couple rather than friends. As such, we can see the algorithm get several relations updated accordingly. We also show the convergence plots for 50 random testing cases from DialogRE in Figure 6, and the mean/standard deviation convergence rate as the black line/blue shade. We prove that our updating algorithm is robust for the converged results.\nTable 1\n1 2 3 4 5 6 7 8 9 10 1 1 1 0.7978 0.7054 0.4666 0.3754 0.3044 0.261 0.1992\n1 1 1 0.7439942268479510.6455631469778710.3754932001462470.2529254174076060.259005000458064.1692094220299180. 54806582580251\n1 1 1 0.77 0.69 0.48 0.56 0.2 0.28 0.23 1 1 1 0.84 0.69 0.46 0.33 0.33 0.39 0.28 1 1 1 0.83 0.64 0.53 0.36 0.31 0.35 0.23 1 1 1 0.75 0.77 0.47 0.5 0.31 0.12 0.24 1 1 1 0.78 0.69 0.53 0.36 0.24 0.14 0.2 1 1 1 0.85 0.77 0.34 0.26 0.24 0.21 0.22 1 1 1 0.83 0.67 0.5 0.22 0.23 0.17 0.25 1 1 1 0.89 0.74 0.51 0.52 0.29 0.36 0.19 1 1 1 0.85 0.73 0.36 0.2 0.26 0.29 0.21 1 1 1 0.75 0.69 0.59 0.51 0.39 0.14 0.21 1 1 1 0.82 0.7 0.35 0.42 0.32 0.3 0.14 1 1 1 0.89 0.6 0.58 0.2 0.36 0.28 0.21 1 1 1 0.82 0.63 0.4 0.41 0.36 0.34 0.14 1 1 1 0.81 0.79 0.53 0.4 0.28 0.27 0.18 1 1 1 0.8 0.65 0.38 0.44 0.33 0.11 0.17 1 1 1 0.81 0.74 0.55 0.21 0.38 0.19 0.26 1 1 1 0.79 0.74 0.49 0.46 0.26 0.36 0.29 1 1 1 0.76 0.68 0.5 0.27 0.2 0.21 0.15 1 1 1 0.73 0.62 0.3 0.32 0.33 0.34 0.28 1 1 1 0.7 0.71 0.59 0.3 0.32 0.1 0.17 1 1 1 0.74 0.77 0.54 0.37 0.3 0.38 0.23 1 1 1 0.86 0.77 0.34 0.23 0.39 0.36 0.2 1 1 1 0.8 0.75 0.56 0.33 0.35 0.12 0.17 1 1 1 0.86 0.74 0.58 0.57 0.36 0.33 0.16 1 1 1 0.7 0.76 0.52 0.32 0.34 0.19 0.14 1 1 1 0.79 0.76 0.36 0.28 0.33 0.38 0.13 1 1 1 0.74 0.66 0.5 0.29 0.23 0.37 0.21 1 1 1 0.71 0.77 0.44 0.59 0.31 0.28 0.15 1 1 1 0.87 0.75 0.37 0.56 0.36 0.18 0.14 1 1 1 0.75 0.65 0.52 0.26 0.32 0.31 0.14 1 1 1 0.75 0.74 0.36 0.34 0.32 0.37 0.25 1 1 1 0.71 0.76 0.57 0.52 0.27 0.39 0.27 1 1 1 0.74 0.73 0.32 0.4 0.33 0.11 0.21 1 1 1 0.84 0.6 0.38 0.36 0.3 0.25 0.17 1 1 1 0.89 0.79 0.57 0.54 0.32 0.27 0.15 1 1 1 0.81 0.78 0.3 0.46 0.25 0.17 0.16 1 1 1 0.7 0.68 0.52 0.54 0.39 0.34 0.25 1 1 1 0.76 0.79 0.54 0.23 0.33 0.17 0.12 1 1 1 0.82 0.62 0.55 0.38 0.31 0.15 0.19 1 1 1 0.81 0.73 0.57 0.25 0.21 0.36 0.15 1 1 1 0.84 0.6 0.41 0.24 0.31 0.22 0.19 1 1 1 0.76 0.66 0.54 0.29 0.32 0.24 0.2 1 1 1 0.83 0.61 0.58 0.45 0.28 0.18 0.22 1 1 1 0.78 0.75 0.36 0.26 0.3 0.38 0.2 1 1 1 0.86 0.79 0.49 0.3 0.22 0.27 0.17 1 1 1 0.77 0.66 0.45 0.38 0.28 0.22 0.25 1 1 1 0.82 0.74 0.53 0.39 0.33 0.3 0.25 1 1 1 0.79 0.66 0.44 0.3 0.3 0.29 0.22 1 1 1 0.84 0.62 0.31 0.58 0.23 0.15 0.19 1 1 1 0.88 0.64 0.37 0.51 0.39 0.37 0.23 0 0 0 0.0538057731520494.05983685302212870.09110679985375320.1163949995419360.05147458259239430.0917905779700816.0443934174197491 1 1 1 0.85160577315205.7652368530221290.5577067998537530.4917949995419360. 558745825923940.352790577970082.243593417419749 1 1 1 0.7439942268479510.6455631469778710.3754932001462470.259005000458064.2529254174076060.1 92094220299180. 54806582580251\n0\n0.2\n0.4\n0.6\n0.8\n1\n1 2 3 4 5 6 7 8 9 10\nAc ce\npt an\nce P\nro ba\nbi lit\ny\nDialogue Turns\nFigure 6: MCMC acceptance rate of the incremental parsing process. Dotted lines, black line, and blue shade are for samples, mean, and standard deviation, respectively."
+    }, {
+      "heading" : "5.6 Ablation Study on α–β–γ",
+      "text" : "The α–β–γ strategy is designed to update relations and attributes jointly, having the input information flowing through the parse graph for the consistency of predictions. To validate the design, we ablate the processes on DialogRE to evaluate their impact on performance. Table 4 shows that α process, which is the discriminative model, makes the fundamental contribution, whereas β and γ processes alone cannot recognize social relations since they cannot perceive information from dialogues. Significantly, removing either one of the two processes will decrease the overall performance since the inference efficiency is reduced."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "The paper proposes a SocAoG model with α–β– γ processes for the consistent inference of social relations in dialogues. The model can also leverage attribute information to assist the inference. MCMC is proposed to parse the relation graph incrementally, enabling the dynamic inference upon any incoming utterance. Experiments show that our model outperforms state-of-the-art methods; case studies and ablation studies are provided for analysis. In the future, we will further explore how different initialization of the parse graph could help warm start the inference under various situations and how multi-modal cues could be leveraged."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "Y. W. is partially supported by NSF DMS 2015577. We would like to thank Yaofang Zhang and Qian Long for help discussion. We also thank the outstanding reviewers for their helpful comments to improve our manuscript.\nEthical Considerations\nEndowing AI to understand social relations is an essential step towards building emotionally intelligent agents. By jointly inferring individual attributes and social relations, our incremental parsing algorithm enables consistent and dynamic relational inference in dialogue systems, which can be remarkably useful for a wide range of applications such as a chatbot that constantly perceives new information and conducts social relation inference.\nHowever, we never forget the other side of the coin. We emphasize that an ethical design principle must be in place throughout all stages of the development and evaluation. First, as discussed in Larson (2017), we model the attributes as a social construct from a performative view. For example, “gender performativity is not merely performance, but rather performances that correspond to, or are constrained by, norms or conventions and simultaneously reinforce them. Second, our model relies upon the attribute-category ascription provided by MovieGraph (Vicol et al., 2018) and Friends Central in Fandom. However, we acknowledge that the annotation could be prone to a partial understanding of human relationships, and the real situation could be more complicated. Lastly, selfidentification should be the gold standard for ascribing attribute categories. Practitioners are suggested to prompt users to provide self-identification and respect the difficulties of respondents when asking. Our model helps increase the interpretability of the relational inference process by tracking the attributes and updating the relational belief. We expect that the biases from relation recognition can be easier to measure, and our α–β–γ processes may provide a multidimensional way for correcting them."
+    } ],
+    "references" : [ {
+      "title" : "Fine-tuning pre-trained transformer language models to distantly supervised relation extraction",
+      "author" : [ "Christoph Alt", "Marc Hübner", "Leonhard Hennig." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the",
+      "citeRegEx" : "Alt et al\\.,? 2019",
+      "shortCiteRegEx" : "Alt et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A review of relation extraction",
+      "author" : [ "Nguyen Bach", "Sameer Badaskar." ],
+      "venue" : "Literature review for Language and Statistics II, 2:1–15.",
+      "citeRegEx" : "Bach and Badaskar.,? 2007",
+      "shortCiteRegEx" : "Bach and Badaskar.",
+      "year" : 2007
+    }, {
+      "title" : "Community detection in social networks",
+      "author" : [ "Punam Bedi", "Chhavi Sharma." ],
+      "venue" : "Wiley Interdisciplinary Reviews: Data Mining and Knowledge Discovery, 6(3):115–135.",
+      "citeRegEx" : "Bedi and Sharma.,? 2016",
+      "shortCiteRegEx" : "Bedi and Sharma.",
+      "year" : 2016
+    }, {
+      "title" : "Structured prediction energy networks",
+      "author" : [ "David Belanger", "Andrew McCallum." ],
+      "venue" : "International Conference on Machine Learning, pages 983–992. PMLR.",
+      "citeRegEx" : "Belanger and McCallum.,? 2016",
+      "shortCiteRegEx" : "Belanger and McCallum.",
+      "year" : 2016
+    }, {
+      "title" : "Unsupervised learning of evolving relationships between literary characters",
+      "author" : [ "Snigdha Chaturvedi", "Mohit Iyyer", "Hal Daume III." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, volume 31.",
+      "citeRegEx" : "Chaturvedi et al\\.,? 2017",
+      "shortCiteRegEx" : "Chaturvedi et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Dialogue relation extraction with document-level heterogeneous graph attention networks",
+      "author" : [ "Hui Chen", "Pengfei Hong", "Wei Han", "Navonil Majumder", "Soujanya Poria." ],
+      "venue" : "arXiv preprint arXiv:2009.05092.",
+      "citeRegEx" : "Chen et al\\.,? 2020",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Understanding the metropolis-hastings algorithm",
+      "author" : [ "Siddhartha Chib", "Edward Greenberg." ],
+      "venue" : "The american statistician, 49(4):327–335.",
+      "citeRegEx" : "Chib and Greenberg.,? 1995",
+      "shortCiteRegEx" : "Chib and Greenberg.",
+      "year" : 1995
+    }, {
+      "title" : "Bert: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "arXiv preprint arXiv:1810.04805.",
+      "citeRegEx" : "Devlin et al\\.,? 2018",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "The dynamics and evolution of social networks",
+      "author" : [ "Patrick Doreian", "Frans N Stokman." ],
+      "venue" : "Evolution of social networks, 1(1).",
+      "citeRegEx" : "Doreian and Stokman.,? 1997",
+      "shortCiteRegEx" : "Doreian and Stokman.",
+      "year" : 1997
+    }, {
+      "title" : "Community detection in large-scale social networks",
+      "author" : [ "Nan Du", "Bin Wu", "Xin Pei", "Bai Wang", "Liutong Xu." ],
+      "venue" : "Proceedings of the 9th WebKDD and 1st SNA-KDD 2007 workshop on Web mining and social network analysis, pages 16–25.",
+      "citeRegEx" : "Du et al\\.,? 2007",
+      "shortCiteRegEx" : "Du et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "Improved relation extraction with feature-rich compositional embedding models",
+      "author" : [ "Matthew R. Gormley", "Mo Yu", "Mark Dredze." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 1774–1784, Lis-",
+      "citeRegEx" : "Gormley et al\\.,? 2015",
+      "shortCiteRegEx" : "Gormley et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Dimensionality reduction by learning an invariant mapping",
+      "author" : [ "Raia Hadsell", "Sumit Chopra", "Yann LeCun." ],
+      "venue" : "2006 IEEE Computer Society Conference on Computer Vision and Pattern Recognition (CVPR’06), volume 2, pages 1735–1742. IEEE.",
+      "citeRegEx" : "Hadsell et al\\.,? 2006",
+      "shortCiteRegEx" : "Hadsell et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "Feuding families and former Friends",
+      "author" : [ "Mohit Iyyer", "Anupam Guha", "Snigdha Chaturvedi", "Jordan Boyd-Graber", "Hal Daumé III" ],
+      "venue" : null,
+      "citeRegEx" : "Iyyer et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Iyyer et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Relation of the relations: A new paradigm of the relation extraction problem",
+      "author" : [ "Zhijing Jin", "Yongyi Yang", "Xipeng Qiu", "Zheng Zhang." ],
+      "venue" : "arXiv preprint arXiv:2006.03719.",
+      "citeRegEx" : "Jin et al\\.,? 2020",
+      "shortCiteRegEx" : "Jin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Combining lexical, syntactic, and semantic features with maximum entropy models for information extraction",
+      "author" : [ "Nanda Kambhatla." ],
+      "venue" : "Proceedings of the ACL Interactive Poster and Demonstration Sessions, pages 178–181, Barcelona, Spain. Association for",
+      "citeRegEx" : "Kambhatla.,? 2004",
+      "shortCiteRegEx" : "Kambhatla.",
+      "year" : 2004
+    }, {
+      "title" : "Frowning Frodo, wincing Leia, and a seriously great friendship: Learning to classify emotional relationships of fictional characters",
+      "author" : [ "Evgeny Kim", "Roman Klinger." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Asso-",
+      "citeRegEx" : "Kim and Klinger.,? 2019",
+      "shortCiteRegEx" : "Kim and Klinger.",
+      "year" : 2019
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P Kingma", "Jimmy Ba." ],
+      "venue" : "arXiv preprint arXiv:1412.6980.",
+      "citeRegEx" : "Kingma and Ba.,? 2014",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2014
+    }, {
+      "title" : "Learning interactions and relationships between movie characters",
+      "author" : [ "Anna Kukleva", "Makarand Tapaswi", "Ivan Laptev." ],
+      "venue" : "Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 9849–9858.",
+      "citeRegEx" : "Kukleva et al\\.,? 2020",
+      "shortCiteRegEx" : "Kukleva et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A survey of deep learning methods for relation extraction",
+      "author" : [ "Shantanu Kumar." ],
+      "venue" : "arXiv preprint arXiv:1705.03645.",
+      "citeRegEx" : "Kumar.,? 2017",
+      "shortCiteRegEx" : "Kumar.",
+      "year" : 2017
+    }, {
+      "title" : "Gender as a variable in naturallanguage processing: Ethical considerations",
+      "author" : [ "Brian Larson." ],
+      "venue" : "Proceedings of the First ACL Workshop on Ethics in Natural Language Processing, pages 1–11, Valencia, Spain. Association for Computational Linguistics.",
+      "citeRegEx" : "Larson.,? 2017",
+      "shortCiteRegEx" : "Larson.",
+      "year" : 2017
+    }, {
+      "title" : "High-order semantic role labeling",
+      "author" : [ "Zuchao Li", "Hai Zhao", "Rui Wang", "Kevin Parnow." ],
+      "venue" : "Findings of the Association for Computational Linguistics: EMNLP 2020, pages 1134–1151, Online. Association for Computational Linguistics.",
+      "citeRegEx" : "Li et al\\.,? 2020",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Distant supervision for relation extraction without labeled data",
+      "author" : [ "Mike Mintz", "Steven Bills", "Rion Snow", "Daniel Jurafsky." ],
+      "venue" : "Proceedings of the Joint Conference of the 47th Annual Meeting of the ACL and the 4th International Joint Conference",
+      "citeRegEx" : "Mintz et al\\.,? 2009",
+      "shortCiteRegEx" : "Mintz et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Modeling joint entity and relation extraction with table representation",
+      "author" : [ "Makoto Miwa", "Yutaka Sasaki." ],
+      "venue" : "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1858–1869, Doha, Qatar. Associa-",
+      "citeRegEx" : "Miwa and Sasaki.,? 2014",
+      "shortCiteRegEx" : "Miwa and Sasaki.",
+      "year" : 2014
+    }, {
+      "title" : "Subsequence kernels for relation extraction",
+      "author" : [ "Raymond J Mooney", "Razvan C Bunescu." ],
+      "venue" : "Advances in neural information processing systems, pages 171–178.",
+      "citeRegEx" : "Mooney and Bunescu.,? 2006",
+      "shortCiteRegEx" : "Mooney and Bunescu.",
+      "year" : 2006
+    }, {
+      "title" : "Deep bidirectional transformers for relation extraction without supervision",
+      "author" : [ "Yannis Papanikolaou", "Ian Roberts", "Andrea Pierleoni." ],
+      "venue" : "Proceedings of the 2nd Workshop on Deep Learning Approaches for Low-Resource NLP (DeepLo 2019),",
+      "citeRegEx" : "Papanikolaou et al\\.,? 2019",
+      "shortCiteRegEx" : "Papanikolaou et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Human-centric indoor scene synthesis using stochastic grammar",
+      "author" : [ "Siyuan Qi", "Yixin Zhu", "Siyuan Huang", "Chenfanfu Jiang", "Song-Chun Zhu." ],
+      "venue" : "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition, pages 5899–5908.",
+      "citeRegEx" : "Qi et al\\.,? 2018",
+      "shortCiteRegEx" : "Qi et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Structured attention for unsupervised dialogue structure induction",
+      "author" : [ "Liang Qiu", "Yizhou Zhao", "Weiyan Shi", "Yuan Liang", "Feng Shi", "Tao Yuan", "Zhou Yu", "Song-Chun Zhu." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural",
+      "citeRegEx" : "Qiu et al\\.,? 2020",
+      "shortCiteRegEx" : "Qiu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Few-shot relation extraction via bayesian meta-learning on relation graphs",
+      "author" : [ "Meng Qu", "Tianyu Gao", "Louis-Pascal Xhonneux", "Jian Tang." ],
+      "venue" : "International Conference on Machine Learning, pages 7867–7876. PMLR.",
+      "citeRegEx" : "Qu et al\\.,? 2020",
+      "shortCiteRegEx" : "Qu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Learning social affordance for human-robot interaction",
+      "author" : [ "Tianmin Shu", "Michael S Ryoo", "Song-Chun Zhu." ],
+      "venue" : "arXiv preprint arXiv:1604.03692.",
+      "citeRegEx" : "Shu et al\\.,? 2016",
+      "shortCiteRegEx" : "Shu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Inferring interpersonal relations in narrative summaries",
+      "author" : [ "Shashank Srivastava", "Snigdha Chaturvedi", "Tom Mitchell." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, volume 30.",
+      "citeRegEx" : "Srivastava et al\\.,? 2016",
+      "shortCiteRegEx" : "Srivastava et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Socjologia",
+      "author" : [ "Piotr Sztompka." ],
+      "venue" : "Analiza społeczeństwa, Znak, Kraków, page 324.",
+      "citeRegEx" : "Sztompka.,? 2002",
+      "shortCiteRegEx" : "Sztompka.",
+      "year" : 2002
+    }, {
+      "title" : "Moviegraphs: Towards understanding human-centric situations from videos",
+      "author" : [ "Paul Vicol", "Makarand Tapaswi", "Lluis Castrejon", "Sanja Fidler." ],
+      "venue" : "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition, pages 8581–8590.",
+      "citeRegEx" : "Vicol et al\\.,? 2018",
+      "shortCiteRegEx" : "Vicol et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A numerical study of the bottom-up and top-down inference processes in and-or graphs",
+      "author" : [ "Tianfu Wu", "Song-Chun Zhu." ],
+      "venue" : "International journal of computer vision, 93(2):226–252.",
+      "citeRegEx" : "Wu and Zhu.,? 2011",
+      "shortCiteRegEx" : "Wu and Zhu.",
+      "year" : 2011
+    }, {
+      "title" : "An embarrassingly simple model for dialogue relation extraction",
+      "author" : [ "Fuzhao Xue", "Aixin Sun", "Hao Zhang", "Eng Siong Chng." ],
+      "venue" : "arXiv preprint arXiv:2012.13873.",
+      "citeRegEx" : "Xue et al\\.,? 2020a",
+      "shortCiteRegEx" : "Xue et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Gdpnet: Refining latent multiview graph for relation extraction",
+      "author" : [ "Fuzhao Xue", "Aixin Sun", "Hao Zhang", "Eng Siong Chng." ],
+      "venue" : "arXiv preprint arXiv:2012.06780.",
+      "citeRegEx" : "Xue et al\\.,? 2020b",
+      "shortCiteRegEx" : "Xue et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "The theory of thermodynamics for chemical reactions in dispersed heterogeneous systems",
+      "author" : [ "Xue Yongqiang", "Gao Baojiao", "Gao Jianfeng." ],
+      "venue" : "Journal of colloid and interface science, 191(1):81–85.",
+      "citeRegEx" : "Yongqiang et al\\.,? 1997",
+      "shortCiteRegEx" : "Yongqiang et al\\.",
+      "year" : 1997
+    }, {
+      "title" : "Dialogue-based relation extraction",
+      "author" : [ "Dian Yu", "Kai Sun", "Claire Cardie", "Dong Yu." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 4927–4940, Online. Association for Computational Linguistics.",
+      "citeRegEx" : "Yu et al\\.,? 2020",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Concept relation extraction using naı̈ve bayes classifier for ontologybased question answering systems",
+      "author" : [ "Godandapani Zayaraz" ],
+      "venue" : "Journal of King Saud University-Computer and Information Sciences, 27(1):13–24.",
+      "citeRegEx" : "Zayaraz,? 2015",
+      "shortCiteRegEx" : "Zayaraz",
+      "year" : 2015
+    }, {
+      "title" : "Kernel methods for relation extraction",
+      "author" : [ "Dmitry Zelenko", "Chinatsu Aone", "Anthony Richardella." ],
+      "venue" : "Journal of machine learning research, 3(Feb):1083–1106.",
+      "citeRegEx" : "Zelenko et al\\.,? 2003",
+      "shortCiteRegEx" : "Zelenko et al\\.",
+      "year" : 2003
+    }, {
+      "title" : "Positionaware attention and supervised data improve slot filling",
+      "author" : [ "Yuhao Zhang", "Victor Zhong", "Danqi Chen", "Gabor Angeli", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Zhang et al\\.,? 2017",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Extracting relations with integrated information using kernel methods",
+      "author" : [ "Shubin Zhao", "Ralph Grishman." ],
+      "venue" : "Proceedings of the 43rd Annual Meeting of the Association for Computational Linguistics (ACL’05), pages 419–426, Ann Arbor, Michi-",
+      "citeRegEx" : "Zhao and Grishman.,? 2005",
+      "shortCiteRegEx" : "Zhao and Grishman.",
+      "year" : 2005
+    }, {
+      "title" : "Vertical-horizontal structured attention for generating music with chords",
+      "author" : [ "Yizhou Zhao", "Liang Qiu", "Wensi Ai", "Feng Shi", "Song-Chun Zhu." ],
+      "venue" : "arXiv preprint arXiv:2011.09078.",
+      "citeRegEx" : "Zhao et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Attention-based bidirectional long short-term memory networks for relation classification",
+      "author" : [ "Peng Zhou", "Wei Shi", "Jun Tian", "Zhenyu Qi", "Bingchen Li", "Hongwei Hao", "Bo Xu." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computa-",
+      "citeRegEx" : "Zhou et al\\.,? 2016",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "A stochastic grammar of images",
+      "author" : [ "Song-Chun Zhu", "David Mumford." ],
+      "venue" : "Now Publishers Inc.",
+      "citeRegEx" : "Zhu and Mumford.,? 2007",
+      "shortCiteRegEx" : "Zhu and Mumford.",
+      "year" : 2007
+    }, {
+      "title" : "Filters, random fields and maximum entropy (frame): Towards a unified theory for texture modeling",
+      "author" : [ "Song Chun Zhu", "Yingnian Wu", "David Mumford." ],
+      "venue" : "International Journal of Computer Vision, 27(2):107–126.",
+      "citeRegEx" : "Zhu et al\\.,? 1998",
+      "shortCiteRegEx" : "Zhu et al\\.",
+      "year" : 1998
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 30,
+      "context" : "Social relations form the basic structure of our society, defining not only our self-images but also our relationships (Sztompka, 2002).",
+      "startOffset" : 119,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 36,
+      "context" : "Table 5 shows such an example from the dataset DialogRE (Yu et al., 2020).",
+      "startOffset" : 56,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 7,
+      "context" : "Existing researches using BERT-based models (Devlin et al., 2018; Yu et al., 2020; Xue et al., 2020a) or graph-based models (Xue et al.",
+      "startOffset" : 44,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 36,
+      "context" : "Existing researches using BERT-based models (Devlin et al., 2018; Yu et al., 2020; Xue et al., 2020a) or graph-based models (Xue et al.",
+      "startOffset" : 44,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 33,
+      "context" : "Existing researches using BERT-based models (Devlin et al., 2018; Yu et al., 2020; Xue et al., 2020a) or graph-based models (Xue et al.",
+      "startOffset" : 44,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 36,
+      "context" : "Table 1: A dialogue example from DialogRE (Yu et al., 2020).",
+      "startOffset" : 42,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 17,
+      "context" : ", strangers become friends over a good chat (Kukleva et al., 2020), unveiling intermediate reasoning results, or dealing with long dialogues.",
+      "startOffset" : 44,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 44,
+      "context" : "Motivated by these observations, we propose to model social relation as an attributed And-Or graph (AoG) (Zhu et al., 1998; Zhu and Mumford, 2007; Wu and Zhu, 2011; Shu et al., 2016; Qi et al., 2018), named SocAoG, and develop an incremental graph parsing algorithm to jointly infer human attributes and social relations from a dialogue.",
+      "startOffset" : 105,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 43,
+      "context" : "Motivated by these observations, we propose to model social relation as an attributed And-Or graph (AoG) (Zhu et al., 1998; Zhu and Mumford, 2007; Wu and Zhu, 2011; Shu et al., 2016; Qi et al., 2018), named SocAoG, and develop an incremental graph parsing algorithm to jointly infer human attributes and social relations from a dialogue.",
+      "startOffset" : 105,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 32,
+      "context" : "Motivated by these observations, we propose to model social relation as an attributed And-Or graph (AoG) (Zhu et al., 1998; Zhu and Mumford, 2007; Wu and Zhu, 2011; Shu et al., 2016; Qi et al., 2018), named SocAoG, and develop an incremental graph parsing algorithm to jointly infer human attributes and social relations from a dialogue.",
+      "startOffset" : 105,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 28,
+      "context" : "Motivated by these observations, we propose to model social relation as an attributed And-Or graph (AoG) (Zhu et al., 1998; Zhu and Mumford, 2007; Wu and Zhu, 2011; Shu et al., 2016; Qi et al., 2018), named SocAoG, and develop an incremental graph parsing algorithm to jointly infer human attributes and social relations from a dialogue.",
+      "startOffset" : 105,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 25,
+      "context" : "Motivated by these observations, we propose to model social relation as an attributed And-Or graph (AoG) (Zhu et al., 1998; Zhu and Mumford, 2007; Wu and Zhu, 2011; Shu et al., 2016; Qi et al., 2018), named SocAoG, and develop an incremental graph parsing algorithm to jointly infer human attributes and social relations from a dialogue.",
+      "startOffset" : 105,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 27,
+      "context" : "To incrementally parse SocAoG and track social relations, we apply Markov Chain Monte Carlo (MCMC) to sample from the posterior probability calculated by three complementary processes (α–β–γ) (Qu et al., 2020; Zayaraz et al., 2015).",
+      "startOffset" : 192,
+      "endOffset" : 231
+    }, {
+      "referenceID" : 36,
+      "context" : "We evaluate our method on two datasets of DialogRE (Yu et al., 2020) and MovieGraph (Vicol et al.",
+      "startOffset" : 51,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 31,
+      "context" : ", 2020) and MovieGraph (Vicol et al., 2018) for relation inference, and the results show that our method outperforms the state-of-theart (SoTA) ones.",
+      "startOffset" : 23,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 1,
+      "context" : "They typically output a set of “subjectpredicate-object” triples after reading the entire document (Bach and Badaskar, 2007; Mintz et al., 2009; Kumar, 2017).",
+      "startOffset" : 99,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 21,
+      "context" : "They typically output a set of “subjectpredicate-object” triples after reading the entire document (Bach and Badaskar, 2007; Mintz et al., 2009; Kumar, 2017).",
+      "startOffset" : 99,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 18,
+      "context" : "They typically output a set of “subjectpredicate-object” triples after reading the entire document (Bach and Badaskar, 2007; Mintz et al., 2009; Kumar, 2017).",
+      "startOffset" : 99,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 14,
+      "context" : "While early works mostly utilize feature-based methods (Kambhatla, 2004; Miwa and Sasaki, 2014; Gormley et al., 2015) and kernel-based methods (Zelenko et al.",
+      "startOffset" : 55,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 22,
+      "context" : "While early works mostly utilize feature-based methods (Kambhatla, 2004; Miwa and Sasaki, 2014; Gormley et al., 2015) and kernel-based methods (Zelenko et al.",
+      "startOffset" : 55,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 10,
+      "context" : "While early works mostly utilize feature-based methods (Kambhatla, 2004; Miwa and Sasaki, 2014; Gormley et al., 2015) and kernel-based methods (Zelenko et al.",
+      "startOffset" : 55,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 38,
+      "context" : ", 2015) and kernel-based methods (Zelenko et al., 2003; Zhao and Grishman, 2005; Mooney and Bunescu, 2006), more recent studies use deep learning methods such as recurrent neural networks or transformers (Kumar, 2017).",
+      "startOffset" : 33,
+      "endOffset" : 106
+    }, {
+      "referenceID" : 40,
+      "context" : ", 2015) and kernel-based methods (Zelenko et al., 2003; Zhao and Grishman, 2005; Mooney and Bunescu, 2006), more recent studies use deep learning methods such as recurrent neural networks or transformers (Kumar, 2017).",
+      "startOffset" : 33,
+      "endOffset" : 106
+    }, {
+      "referenceID" : 23,
+      "context" : ", 2015) and kernel-based methods (Zelenko et al., 2003; Zhao and Grishman, 2005; Mooney and Bunescu, 2006), more recent studies use deep learning methods such as recurrent neural networks or transformers (Kumar, 2017).",
+      "startOffset" : 33,
+      "endOffset" : 106
+    }, {
+      "referenceID" : 18,
+      "context" : ", 2003; Zhao and Grishman, 2005; Mooney and Bunescu, 2006), more recent studies use deep learning methods such as recurrent neural networks or transformers (Kumar, 2017).",
+      "startOffset" : 156,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 3,
+      "context" : "(2016) formulate the interpersonal relation inference as structured prediction (Belanger and McCallum, 2016; Qiu et al., 2020; Zhao et al., 2020), inferring the collective assignment of relations among all entities from a document (Li et al.",
+      "startOffset" : 79,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 26,
+      "context" : "(2016) formulate the interpersonal relation inference as structured prediction (Belanger and McCallum, 2016; Qiu et al., 2020; Zhao et al., 2020), inferring the collective assignment of relations among all entities from a document (Li et al.",
+      "startOffset" : 79,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 41,
+      "context" : "(2016) formulate the interpersonal relation inference as structured prediction (Belanger and McCallum, 2016; Qiu et al., 2020; Zhao et al., 2020), inferring the collective assignment of relations among all entities from a document (Li et al.",
+      "startOffset" : 79,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2020), inferring the collective assignment of relations among all entities from a document (Li et al., 2020; Jin et al., 2020).",
+      "startOffset" : 93,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2020), inferring the collective assignment of relations among all entities from a document (Li et al., 2020; Jin et al., 2020).",
+      "startOffset" : 93,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 4,
+      "context" : ", the development of relations, from narratives by Hidden Markov Models (Chaturvedi et al., 2017), Recurrent Neural Networks (Kim and Klinger, 2019), deep recurrent autoencoders (Iyyer et al.",
+      "startOffset" : 72,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 15,
+      "context" : ", 2017), Recurrent Neural Networks (Kim and Klinger, 2019), deep recurrent autoencoders (Iyyer et al.",
+      "startOffset" : 35,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2017), Recurrent Neural Networks (Kim and Klinger, 2019), deep recurrent autoencoders (Iyyer et al., 2016).",
+      "startOffset" : 88,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 8,
+      "context" : "Our method differs from the aforementioned works by modeling the structured social relations and their changes concurrently, which can be useful for the task of tracking social network evolution (Doreian and Stokman, 1997) and unveiling the reasoning process of relations.",
+      "startOffset" : 195,
+      "endOffset" : 222
+    }, {
+      "referenceID" : 7,
+      "context" : "(2020) evaluate a BERT-based baseline model (Devlin et al., 2018) and a modified version BERTs, which takes speaker arguments into consideration.",
+      "startOffset" : 44,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 35,
+      "context" : "The network is a heterogeneous physical system (Yongqiang et al., 1997) with particles representing entities and different types of edges representing social relations.",
+      "startOffset" : 47,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 2,
+      "context" : "Community detection is based on the social network analysis (Bedi and Sharma, 2016; Du et al., 2007), and can benefit the modeling of loosely connected social relations.",
+      "startOffset" : 60,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 9,
+      "context" : "Community detection is based on the social network analysis (Bedi and Sharma, 2016; Du et al., 2007), and can benefit the modeling of loosely connected social relations.",
+      "startOffset" : 60,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 6,
+      "context" : "Using the Metropolis-Hastings algorithm (Chib and Greenberg, 1995), the proposed new parse graph pg′ is accepted according to the following accep-",
+      "startOffset" : 40,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 36,
+      "context" : "We use DialogRE (V2)3 (Yu et al., 2020) and MovieGraph4 (Vicol et al.",
+      "startOffset" : 22,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 31,
+      "context" : ", 2020) and MovieGraph4 (Vicol et al., 2018) for evaluating our method.",
+      "startOffset" : 24,
+      "endOffset" : 44
+    }, {
+      "referenceID" : 31,
+      "context" : "For the joint parsing of relation and attribute, we further annotate the entity arguments with attributes from four subtypes (by following the practice of MovieGraph (Vicol et al., 2018)): gender, age, profession, and ethnicity, according to Friends Central in Fandom5.",
+      "startOffset" : 166,
+      "endOffset" : 186
+    }, {
+      "referenceID" : 36,
+      "context" : "Following previous works (Yu et al., 2020; Xue et al., 2020b), we report macro F1 scores in both the standard and conversational settings (F1c).",
+      "startOffset" : 25,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 34,
+      "context" : "Following previous works (Yu et al., 2020; Xue et al., 2020b), we report macro F1 scores in both the standard and conversational settings (F1c).",
+      "startOffset" : 25,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 11,
+      "context" : "We learn the SocAoG model with a contrastive loss (Hadsell et al., 2006) comparing the posterior of a positive parse graph against a negative one.",
+      "startOffset" : 50,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 16,
+      "context" : "All parameters are learned by gradient descent using the Adam optimizer (Kingma and Ba, 2014).",
+      "startOffset" : 72,
+      "endOffset" : 93
+    }, {
+      "referenceID" : 7,
+      "context" : "Given dialogue history D and target argument pair (vi, vj), BERT (Devlin et al., 2018) takes input sequences formatted as 〈[CLS]d[SEP]vi[SEP]vj[SEP]〉.",
+      "startOffset" : 65,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 36,
+      "context" : "BERTS (Yu et al., 2020) is a speaker-aware modification of BERT, which also takes speaker information into consideration by converting it into a special token.",
+      "startOffset" : 6,
+      "endOffset" : 23
+    }, {
+      "referenceID" : 33,
+      "context" : "SimpleRE (Xue et al., 2020a) models the relations between each pair of entities with a customized input format.",
+      "startOffset" : 9,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 34,
+      "context" : "GDPNet (Xue et al., 2020b) takes in token representations from BERT and constructs a multi-view graph with a Gaussian Graph Generator.",
+      "startOffset" : 7,
+      "endOffset" : 26
+    }, {
+      "referenceID" : 33,
+      "context" : "Figure 4: Performance boosts (F1) of SocAoG compared to SimpleRE (Xue et al., 2020a) by relation type.",
+      "startOffset" : 65,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 36,
+      "context" : "Table 3: Dialogue example from the testing set of DialogRE (Yu et al., 2020).",
+      "startOffset" : 59,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 31,
+      "context" : "Second, our model relies upon the attribute-category ascription provided by MovieGraph (Vicol et al., 2018) and Friends Central in Fandom.",
+      "startOffset" : 87,
+      "endOffset" : 107
+    } ],
+    "year" : 2021,
+    "abstractText" : "Inferring social relations from dialogues is vital for building emotionally intelligent robots to interpret human language better and act accordingly. We model the social network as an And-or Graph, named SocAoG, for the consistency of relations among a group and leveraging attributes as inference cues. Moreover, we formulate a sequential structure prediction task, and propose an α–β–γ strategy to incrementally parse SocAoG for the dynamic inference upon any incoming utterance: (i) an α process predicting attributes and relations conditioned on the semantics of dialogues, (ii) a β process updating the social relations based on related attributes, and (iii) a γ process updating individual’s attributes based on interpersonal social relations. Empirical results on DialogRE and MovieGraph show that our model infers social relations more accurately than the state-of-the-art methods. Moreover, the ablation study shows the three processes complement each other, and the case study demonstrates the dynamic relational inference.1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

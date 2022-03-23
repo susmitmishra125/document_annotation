@@ -1,0 +1,673 @@
+{
+  "name" : "2021.acl-long.259.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Taming Pre-trained Language Models with N-gram Representations for Low-Resource Domain Adaptation",
+    "authors" : [ "Shizhe Diao", "Ruijia Xu", "Hongjin Su", "Yilei Jiang", "Yan Song", "Tong Zhang" ],
+    "emails" : [ "tongzhang}@ust.hk", "songyan@cuhk.edu.cn" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 3336–3349\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n3336"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Pre-trained language models have achieved great success and shown promise in various application scenarios across natural language understanding (Devlin et al., 2019; Liu et al., 2019; Tian et al., 2020a) and generation (Lewis et al., 2020; Zhang\n1Our code is available at https://github.com/ shizhediao/T-DNA.\net al., 2020; Yang et al., 2020). Normally applying pre-trained language models to different applications follows a two-stage paradigm: pre-training on a large unlabeled corpus and then fine-tuning on a downstream task dataset. However, when there are domain gaps between pre-training and fine-tuning data, previous studies (Beltagy et al., 2019; Lee et al., 2020) have observed a performance drop caused by the incapability of generalization to new domains. Towards filling the gaps, the main research stream (Beltagy et al., 2019; Alsentzer et al., 2019; Huang et al., 2019; Lee et al., 2020) on adapting pre-trained language models starts from a generic model (e.g., BERT, RoBERTa) and then continues pre-training with similar objectives on a large-scale domain-specific corpus. However, without providing sufficient understanding of the reason for the performance drop during the domain shift, it is prone to failure of adaptation. Therefore, many aspects of continuous pre-training are expected to be enhanced. First, although generic pre-trained models offer better initialization for continuous pre-training models, it still costs considerable time (and money) that are beyond the reach of many institutions.2 Second, it is clumsy to pre-train domain-specific models repeatedly for each domain on large-scale corpora.3 Therefore, it is helpful to have an efficient and flexible method for being able to adapt pre-trained language models to different domains requiring limited resources.\nStarting from the observed vocabulary mismatch problem (Gururangan et al., 2020), we further show empirically that the domain gap is largely caused by domain-specific n-grams.4 Motivated by this find-\n2For example, BioBERT (Lee et al., 2020), initialized by generic BERT, was trained on biomedical corpora for 23 days on eight NVIDIA V100 GPUs.\n3For example, SciBERT (Beltagy et al., 2019) needs to be trained from scratch if one wants to use a domain-specific vocabulary (i.e., SciVocab in their paper).\n4We explain it in detail in the following section.\ning, we propose a light-weight Transformer-based Domain-aware N-gram Adaptor (T-DNA) by incorporating n-gram representations to bridge the domain gap between source and target vocabulary. Specifically, the proposed model is able to explicitly learn and incorporate better representations of domain-specific words and phrases (in the form of n-grams) by the adaptor networks with only requiring small pieces of data. With this adaptor, once entering a new domain, one can choose to train the adaptor alone or train it with a Transformer-based backbone (e.g., BERT) together, where the joint training paradigm could provide more improvement. In addition, although it is designed for a lowresource setting, the adaptor is still able to work with enough data, which ensures its generalization ability in different scenarios.\nExperimental results demonstrate that T-DNA significantly improves domain adaptation performance based on a generic pre-trained model and outperforms all baselines on eight classification tasks (on eight datasets). The results confirm that incorporating domain-specific n-grams with the proposed T-DNA is an effective and efficient solution to domain adaptation, showing that the information carried by larger text granularity is highly important for language processing across domains. Moreover, further analyses investigate the factors that may influence the performance of our model, such as the amount of available data, the training time cost and efficiency, and the granularity of domain-specific information, revealing the best way and setting for using the model."
+    }, {
+      "heading" : "2 The Motivation",
+      "text" : "As observed in Gururangan et al. (2020), the transfer gain of domain-specific pre-training becomes increasingly significant when the source and target domain are vastly dissimilar in terms of the vocabulary overlap. Motivated by this association between transfer gain and vocabulary distribution, we further investigate the shift of words and phrases across domains and attempt to alleviate the degradation of language models without large domainspecific corpora.\nIn particular, we start with a RoBERTa-base model from the generic domain and then fine-tune it on the IMDB (Maas et al., 2011) dataset. We investigate the outputs predicted by the [CLS] embedding on the IMDB development set and divide them into two categories: correct predictions (true\npositive/negative) and false predictions (false positive/false negative). To examine the vocabulary mismatch problem during the domain shift, we extract the top 1K most frequent n-grams5 from these two categories respectively. We identify the n-grams not in the top 10K most frequent n-grams of source data6 as domain-specific n-grams. As revealed in Figure 1, a larger proportion of domainspecific n-grams are captured when the model is misled to make wrong predictions, which suggests that the shifts in semantic meaning for both words and phrases might account for the domain shift. Furthermore, we conjecture that the representations of domain-specific n-grams are unreliable, which exacerbates the model degradation. While more details will be presented in §6.3, we briefly mention here that the tokens usually improperly attend to other tokens in the sentence but omit the most important words and phrases.\nIn light of this empirical evidence, we are motivated to design a framework to not only capture the domain-specific n-grams but also reliably embed them to extrapolate in the novel domain."
+    }, {
+      "heading" : "3 The T-DNA",
+      "text" : "Our approach follows the standard recipe of pretraining and fine-tuning a language model, which receives a sentence X = t1t2 · · · ti · · · tT with ti indicating the i-th token, and outputs the representation of each token. The overall architecture of our approach is shown in Figure 2. In the middle, a generic pre-trained encoder, such\n5Here we set n to 5. 6We sample a subset from English Wikipedia.\nas BERT or RoBERTa, provides a representation at the subword-level without any target domain knowledge. The right-hand side shows the proposed T-DNA to enhance the backbone pre-trained encoder, where word based n-grams in X are extracted from a pre-constructed lexicon L, and are represented through n-gram attention module. The left-hand side shows the n-gram matching matrix and the integrating process of domain-specific representation and generic encoding.\nIn this section, we start with a detailed description of lexicon construction, then introduce our n-gram encoding module and how to integrate ngram encoding with the backbone model to get domain-aware representation, and end with an illustration of two training strategies."
+    }, {
+      "heading" : "3.1 Lexicon Construction and N-gram Extraction",
+      "text" : "To better represent and incorporate unseen and domain-specific n-grams, we first need to find and extract them. Here we propose to use an unsupervised method, pointwise mutual information (PMI), to find domain-specific words and phrases by collocations and associations between words.\nGiven a sentence X = x1x2 · · ·xK with K words, for any two adjacent words (e.g., x̄, x̃)\nwithin the sentence, their PMI is calculated by\nPMI(x̄, x̃) = log p(x̄x̃)\np(x̄)p(x̃) , (1)\nwhere p(x) is the probability of an n-gram x. When a high PMI score is detected between the adjacent x̄ and x̃, it suggests they are good collocation pairs, because they have a high probability of cooccurrence and are more likely to form an n-gram. On the contrary, a delimiter is inserted between the two adjacent words if their PMI(x̄, x̃) is less than a threshold σ, i.e., X = x1x2 · · · x̄/x̃ · · ·xK . As a result, those consecutive words without a delimiter are identified as candidate domain-specific n-grams. After using PMI to segment each sentence in the training set of a target task, we could select among candidate n-grams to obtain the final n-gram lexicon L, where each n-gram appears with a frequency of at least f .\nIn light of this lexicon, for each training input sentence X = t1t2 · · · ti · · · tT with T tokens, where ti denotes the i-th token of X , we extract those sub-strings of X that exist in the lexicon to form domain-specific n-gram sequence S = s1s2, · · · , sj , · · · , sN , with sj indicating the j-th n-gram of X . At the same time, an n-gram matching matrix,M∈ RT×N , can be built to record the\npositions of the extracted domain-specific n-gram set and its associated tokens, where mij = 1 for ti ∈ sj and mij = 0 for ti /∈ sj . The matching matrix is shown in the left hand size of Figure 2."
+    }, {
+      "heading" : "3.2 Domain-aware Representation",
+      "text" : "The backbone pre-trained encoder is a Transformer architecture (Vaswani et al., 2017) with L layers, S self-attention heads and H hidden dimensions initialized from any pre-trained encoder (e.g., BERT or RoBERTa). The input sentence is passed through it, resulting in a generic hidden state hi for each input token xi. To get the domain-aware hidden representation, the n-gram adaptor network is implemented by a Transformer encoder with l layers, S self-attention heads and H hidden dimensions. First, the embeddings of domain-specific n-grams could be obtained by an n-gram embedding layer and then they are fed into the n-gram encoder to get a sequence of hidden states g via a multi-head attention mechanism. The n-gram encoder is able to model the interactions among all extracted ngrams and dynamically weighs n-grams to emphasize truly useful n-grams and ignores noisy information. The combination of the generic representation and domain-specific n-gram representation are computed by\nh′i = hi + ∑ k gi,k, (2)\nwhere h′i is the desired domain-aware representation, and gi,k is the resulting hidden state for the i-th token and the k-th n-gram associated with this token according to the matching matrixM. The ngram encoding process and hidden state integration is repeated layer-by-layer along with the generic encoder for l layers from the bottom."
+    }, {
+      "heading" : "3.3 Training Strategies",
+      "text" : "Several training strategies could be used and we adopt two in our experiments: fine-tuning (FT) and task-adaptive pre-training (TAPT). For finetuning, we operate on the hidden state of the special classification token [CLS]. Following the tradition citation, we simply add a fully-connected layer as a classifier on top of the model and obtain the probabilities via a softmax layer. The classifier and the whole model are fine-tuned on the labeled task data in the target domain with cross-entropy loss. To inject unsupervised target domain knowledge, we leverage the task-adaptive pre-training proposed\nin (Gururangan et al., 2020) which strips the labels in downstream task training data and trains the model on this unlabeled data. We use the masked language model (MLM) as our objective and do not include the next sentence prediction (NSP) task following Liu et al. (2019); Lan et al. (2020).\nNote that, our model also supports other training strategies such as domain-adaptive pre-training, which proves to be effective in Gururangan et al. (2020). One can pre-train our model on a far larger domain corpus (normally beyond 10GB) at the beginning, and then do the task-adaptive pre-training and fine-tuning. Because our main goal is to adapt our model in a low-resource setting in terms of data size and time cost, we leave it for future research.7"
+    }, {
+      "heading" : "4 Experiment Settings",
+      "text" : "In this section, we first introduce eight benchmarking datasets. Then the baseline models, evaluation metrics, and implementation details are presented in the following three subsections, respectively."
+    }, {
+      "heading" : "4.1 Datasets",
+      "text" : "Following Gururangan et al. (2020), we conduct our experiments on eight classification tasks from four domains including biomedical sciences, computer science, news and reviews. The datasets are described as follows. • CHEMPROT (Kringelum et al., 2016), a man-\nually annotated chemical–protein interaction dataset extracted from 5,031 abstracts for relation classification. • RCT (Dernoncourt and Lee, 2017), which con-\ntains approximately 200,000 abstracts from public medicine with the role of each sentence clearly identified. • CITATIONINTENT (Jurgens et al., 2018), which\ncontains around 2,000 citations annotated for their function. • SCIERC (Luan et al., 2018), which consists\nof 500 scientific abstracts annotated for relation classification. • HYPERPARTISAN (Kiesel et al., 2019), which\ncontains 645 articles from Hyperpartisan news with either extreme left-wing or right-wing standpoint used for partisanship classification. • AGNEWS (Zhang et al., 2015), consisting of\n127,600 categorized articles from more than 2000 news source for topic classification.\n7We show some analyses and discussion of data size in Section 6.2.\n• AMAZON (McAuley et al., 2015), consisting of 145,251 reviews on Women’s and Men’s Clothing & Accessories, each representing users’ implicit feedback on items with a binary label signifying whether the majority of customers found the review helpful. • IMDB (Maas et al., 2011), 50,000 balanced\npositive and negative reviews from the Internet Movie Database for sentiment classification. To create a low-resource setting, we constrain the size of all datasets into thousand-level. To do so, we randomly select a subset for RCT, AG, Amazon, IMDB with the ratio 1%, 1%, 1%, 10%, respectively. The details can be found in Table 1."
+    }, {
+      "heading" : "4.2 Baselines",
+      "text" : "In our experiments, the following two models serve as the main baselines. • ROBERTA+FT: fine-tuned off-the-shelf\nRoBERTa-base model for downstream tasks. • ROBERTA+TAPT: task-adaptive pre-trained\non unlabeled task data starting from RoBERTa and then fine-tuned on labeled data."
+    }, {
+      "heading" : "4.3 Evaluation Metrics",
+      "text" : "Following Beltagy et al. (2019), we adopt macroF1 for CitationIntent, SciERC, HyperPartisan, AGNews, Amazon, IMDB, and micro-F1 for ChemProt and RCT as evaluation metrics. MacroF1 will compute the F1 metric independently for each class and then take the average, whereas micro-F1 will aggregate the contributions of all classes to compute the average metric. In a\nmulti-class classification setup, micro-F1 is preferable if there is class imbalance, which is true for ChemProt and RCT."
+    }, {
+      "heading" : "4.4 Implementation",
+      "text" : "We implement the RoBERTa-base architecture and initialize it with pre-trained weights by Huggingface’s Transformers library8. In order to obtain a fast and warm start for n-gram representations, we utilize fastText (Bojanowski et al., 2017) to initialize n-gram embeddings. Considering the small amount of data and based on our experience, the number of N-gram encoding layers l is set to 1.\nFor unsupervised task-adaptive pre-training (TAPT), the batch size is set to 16 and training epochs range from 10 to 15. We adopt Adam (Kingma and Ba, 2015) as the optimizer , where the corresponding learning rates of different datasets can be found in our code. The dropout rate is set to 0.5. For the task-specific fine-tuning (FT), we use similar hyperparameter settings and the details are elaborated in the Appendix. All the experiments are implemented on Nvidia V100 GPUs."
+    }, {
+      "heading" : "5 Experimental Results",
+      "text" : "We compare the performance of the RoBERTa model with and without T-DNA on the aforementioned datasets. In both fine-tuning and task adaptive pre-training experiments, T-DNA shows significant improvements over the pre-trained generic RoBERTa.\n8https://github.com/huggingface/transformers"
+    }, {
+      "heading" : "5.1 Fine-Tuning",
+      "text" : "The results of fine-tuning on eight datasets are reported in Table 4. In general, the RoBERTa model with T-DNA outperforms that without T-DNA on all datasets, clearly indicating the effectiveness of T-DNA by emphasizing multi-granularity information. On average, T-DNA is able to bring an improvement of performance by around 2.66%.\nAcross all eight datasets, it is observed that TDNA achieves the greatest improvement (8.21%) on the CitationIntent dataset and the least improvement on the AGNews dataset. One reasonable explanation for different improvements is that the domain gap between the RoBERTa pre-training domain and the CS domain is the greatest so that far more gains could be obtained by an effective adaptation strategy. To confirm this, we follow Gururangan et al. (2020) to characterize the domain similarity by analyzing vocabulary overlap and we draw the same conclustion that RoBERTa’s pretraining domain has a similar vocabulary to News and Reviews, but far more dissimilar vocabulary to BioMed and CS. In light of this observation, we recognize that the proposed method is more applicable when the domain gap is large. In this scenario, the potential of incorporating multi-grained information by domain-specific n-grams is greatly exploited to boost the performance of adaptation.\nWhen comparing the improvements over four domains, T-DNA is able to offer 1.18%, 6.38%, 2.33%, 0.75% gains on BioMed, CS, News, Reviews, respectively. The improvement on the CS domain is the best while on the Reviews domain it is the poorest, which is consistent with previous analyses across datasets for similar reasons."
+    }, {
+      "heading" : "5.2 Task-Adaptive Pre-Training",
+      "text" : "In the previous section, we show that T-DNA is helpful in fine-tuning. Additionally, we would like to explore whether T-DNA is complementary to more training strategies, such as task-adaptive pretraining (TAPT). TAPT has been shown useful for\npre-trained models in previous studies (Howard and Ruder, 2018; Gururangan et al., 2020), by pretraining on the unlabeled task dataset drawn from the task distribution. The experimental results of two models with and without T-DNA are reported in the bottom two rows in Table 4. From the results, we can clearly see that the model with TDNA achieves better performance on all datasets compared to the generic RoBERTa model without T-DNA. The T-DNA helps to improve the performance by approximately 1.59% on average, which shows that the effectiveness of T-DNA does not vanish when combined with TAPT. Instead, it further leads to a large performance boost for pre-trained models, indicating that T-DNA is a complementary approach, where explicitly modeling domain-specific information helps the unsupervised learning of representations (i.e., the masked language model (MLM) pre-training objective).\nOverall, for both FT and TAPT experiments, the results show that T-DNA significantly improves domain adaptation performance based on a generic pre-trained model. We attribute this improvement to the essential domain-specific semantic information that is carried by n-grams and the valid representation of n-grams from the T-DNA network."
+    }, {
+      "heading" : "6 Analyses",
+      "text" : "We analyze several aspects of T-DNA, including the effects of different granularities and the effects\nof data size. In addition, we examine the attention mechanism to verify the effects of n-gram representations during the domain shift. The details are illustrated in this section."
+    }, {
+      "heading" : "6.1 Effects of Different Granularities",
+      "text" : "The lexical unit in RoBERTa is a subword obtained from byte pair encoding (BPE) (Sennrich et al., 2016) tokenization, resulting in a smaller token space and more training data for each token. Our approach provides coarse-grained information carried by the larger lexical units, n-gram.\nTo verify the contribution of larger granularity information, we compare the improvement brought by T-DNA with information of different granularities, for n from 0 to 3. Note that here n means that we extract and incorporate all n-grams with a length smaller or equal to n (within a certain granularity). For example, n = 3 means that we include all unigrams, bigrams and trigrams. Two consistent observations could be made. First, adding only 1-gram is able to bring improvements over 0-gram (i.e., without T-DNA) on all eight datasets, as shown in Figure 3. As we know, the tokens in the generic encoder are at the subword-level and our unigrams are at the word-level, which can be seen as a combination of subwords. Therefore, the results suggest that adding unseen words through our adaptor network is effective, which could enhance the interaction between subwords of the same word, especially for the new words in the target domain.\nMoreover, based on 1-gram, involving larger granularity offer further gains. Comparing 2-gram and 3-gram v.s. 1-gram, the consistent improvements of T-DNA demonstrate that the potential boundary information presented by n-grams plays an essential role in learning representations by providing explicit and better guidance."
+    }, {
+      "heading" : "6.2 Effects of Data Size",
+      "text" : "In the previous section, we explored the virtue of incorporating multi-grained information under resource-limited settings, where only a small subset of specific datasets can be accessed. In addition, we are curious whether T-DNA could work well on a larger scale. To this end, we sample different ratios (i.e., 10%, 20%, 50%, 100%) of four datasets (i.e., RCT, AGNews, Amazon and IMDB) and investigate how T-DNA performs at different data scales. As shown in Table 3, the model with T-DNA always outperforms that without T-DNA w.r.t. any subsets of four datasets. This demonstrates that models with T-DNA could easily adapt to any size of dataset with the help of domainspecific n-gram information. However, it is also noted that the performance gains of our method decayed with the increase of the amount of training data, dropping from 1.24% (proportion=10%) to 0.36% (proportion=100%). It is not surprising because with adequate data, a model is able to learn a good representation with supervised learning without the need of prior knowledge. However, since sufficient data normally could not be accessed in reality, especially labeled data, we argue that T-DNA is desirable and necessary for domain adaptation."
+    }, {
+      "heading" : "6.3 Visualization of N-gram Representations",
+      "text" : "To verify the effects of n-gram representations during the domain shift, we examine the attention mechanism of RoBERTa and T-DNA by plotting the attention maps and salience maps using the LIT tool (Tenney et al., 2020). In the attention map of RoBERTa without T-DNA, we found that the tokens usually improperly attend to other tokens in the sentence. For example, in Figure 4, “Barbie” attributes more attentions to “animated” and “scary” but omits “creepy” and fails to capture “scary as hell” as an integrated phase. In contrast, when the model is equipped with T-DNA, this variant will shift its attention to include “creepy” and\nforce the model to focus on the informative phrase “scary as hell”. Furthermore, the salience map of RoBERTa without T-DNA suggests that “animated” and “scary” dominate its prediction while “creepy” and “scary as hell” are captured by our TDNA, which is consistent with the decision process of human beings.\nDue to the space limitations, more visualized examples are not shown here. However, based on considerable empirical evidence, we conclude that the unreliable representations of domain-specific n-grams (words and phrases) might be one of the main causes for model degradation."
+    }, {
+      "heading" : "7 Related Work",
+      "text" : "A large performance drop of pre-trained models caused by domain shift has been observed and many domain-specific BERT models (Beltagy et al., 2019; Alsentzer et al., 2019; Huang et al., 2019; Lee et al., 2020) have been introduced to bridge the domain gap. For example, SciBERT (Beltagy et al., 2019) is trained on 1.14M scientific papers from Semantic Scholar corpus (Ammar et al., 2018) for 7 days on TPU v3-8 machine and BioBERT (Lee et al., 2020) is trained on PubMed abstracts and PMC full text articles for 23 days on eight NVIDIA V100 GPUs. ClinicalBERT (Alsentzer et al., 2019) is trained on about 2 million notes in the MIMIC-III\nv1.4 database (Johnson et al., 2016) for 17-18 days on a single GeForce GTX TITAN X 12 GB GPU. However, they all incur a huge computational cost, which is not affordable for many university labs or institutions. This is precisely why we believe that our efficient adaptor is useful to the community. Although Gururangan et al. (2020) introduced task-adaptive pre-training (TAPT) to save time by training on unlabeled downstream task data, we demonstrate that our plug-in adaptor is faster and more effective because of the explicit learning strategy and efficient model architecture.\nOut of vocabulary (OOV) words refer to those words that are not in the vocabulary list and have received a lot of attention in recent years. One way to handle OOV words is to simply utilize and learn an “unknown” embedding during training. Another way is to add in-domain words into the original vocabulary list and learn their representation by pretraining from scratch (Beltagy et al., 2019; Gu et al., 2020), which requires substantial resources and training data. Moreover, SciBERT (Beltagy et al., 2019) found that in-domain vocabulary is helpful but not significant while we attribute it to the inefficiency of implicit learning of in-domain vocabulary. To represent OOV words in multilingual settings, the mixture mapping method (Wang et al., 2019) utilized a mixture of English subwords embedding, but it has been shown useless for domain-specific\nwords by Tai et al. (2020). ExBERT (Tai et al., 2020) applied an extension module to adapt an augmenting embedding for the in-domain vocabulary but it still needs large continuous pre-training. Similar to our work, they highlight the importance of the domain-specific words but all of these work neither explore the understanding of performance drop during a domain shift nor examine the importance of multi-grained information. Large granularity contextual information carried by spans or n-grams has proven to be helpful to enhance text representation for Chinese (Song et al., 2009; Song and Xia, 2012; Ouyang et al., 2017; Kim et al., 2018; Peng et al., 2018; Higashiyama et al., 2019; Tian et al., 2020e,b; Li et al., 2020; Diao et al., 2020; Song et al., 2021) and English (Joshi et al., 2020; Xiao et al., 2020; Tian et al., 2020c,d). In addition to text encoders on pre-training, the kNN-LM (Khandelwal et al., 2019) proposes to augment the language model for effective domain adaptation, by varying the nearest neighbor datastore of similar contexts without further training. However, all of the previous studies focused on either general pre-training procedures or different tasks (e.g., language modeling), and did not explore the effectiveness of multigrained information for domain adaptation. We hence view them as orthogonal to our work."
+    }, {
+      "heading" : "8 Conclusion",
+      "text" : "In this work, we first reveal a novel discovery behind the performance drop during a domain shift, demonstrating that an unreliable representation of domain-specific n-grams causes the failure of adaptation. To this end, we propose an innovative adaptor network for generic pre-trained encoders, supporting many training strategies such as taskadaptive pre-training and fine-tuning, both leading to significant improvements to eight classification datasets from four domains (biomedical, computer science, news and reviews). Our method is easy to implement, simple but effective, implying that explicitly representing and incorporating domainspecific n-grams offer large gains. In addition, further analyses consistently demonstrate the importance and effectiveness of both unseen words and the information carried by coarse-grained n-grams."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "This work was supported by the General Research Fund (GRF) of Hong Kong (No. 16201320). The authors also want to thank the Sinovation Ventures\nfor their great support. Y. Song was supported by NSFC under the project “The Essential Algorithms and Technologies for Standardized Analytics of Clinical Texts” (12026610) and Shenzhen Institute of Artificial Intelligence and Robotics for Society under the project “Automatic Knowledge Enhanced Natural Language Understanding and Its Applications” (AC01202101001). R. Xu was supported by the Hong Kong PhD Fellowship Scheme (HKPFS)."
+    }, {
+      "heading" : "A Description of Computing Infrastructure",
+      "text" : "All the experiments are implemented on Nvidia V100 GPUs with 32GB memory."
+    }, {
+      "heading" : "B Run Time",
+      "text" : "C Validation Performance\nDOMAIN BIOMED CS NEWS REVIEWS DATASET CP RCT CI SE HP AG AM IMDB RoBERTa+FT 80.08 81.21 58.06 75.33 93.50 88.70 62.50 93.04 +T-DNA 81.17 82.00 62.98 79.62 91.81 88.64 63.40 92.83 RoBERTa+TAPT 81.27 80.98 60.11 77.08 93.50 88.90 64.30 92.38 +T-DNA 82.58 83.24 67.89 80.69 93.74 89.31 64.27 93.11\nTable 5: The validation performance."
+    }, {
+      "heading" : "D Evaluation Measures",
+      "text" : "We use manual tuning and adopt macro-F1 for CitationIntent, SciERC, HyperPartisan, AGNews, Amazon, IMDB, and micro-F1 for ChemProt and RCT as evaluation metrics. Macro-F1 will compute the F1 metric independently for each class and then take the average, whereas micro-F1 will aggregate the contributions of all classes to compute the average metric. In a multi-class classification setup, micro-F1 is preferable if there is class imbalance, which is true for ChemProt and RCT."
+    }, {
+      "heading" : "E Bounds of Hyperparameters",
+      "text" : ""
+    }, {
+      "heading" : "F Configuration of Best Model",
+      "text" : ""
+    } ],
+    "references" : [ {
+      "title" : "Publicly Available Clinical BERT Embeddings",
+      "author" : [ "Emily Alsentzer", "John Murphy", "William Boag", "WeiHung Weng", "Di Jindi", "Tristan Naumann", "Matthew McDermott." ],
+      "venue" : "Proceedings of the 2nd Clinical Natural Language Processing Work-",
+      "citeRegEx" : "Alsentzer et al\\.,? 2019",
+      "shortCiteRegEx" : "Alsentzer et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Construction of the Literature Graph in Semantic Scholar",
+      "author" : [ "Waleed Ammar", "Dirk Groeneveld", "Chandra Bhagavatula", "Iz Beltagy", "Miles Crawford", "Doug Downey", "Jason Dunkelberger", "Ahmed Elgohary", "Sergey Feldman", "Vu Ha" ],
+      "venue" : null,
+      "citeRegEx" : "Ammar et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Ammar et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "SciBERT: A Pretrained Language Model for Scientific Text",
+      "author" : [ "Iz Beltagy", "Kyle Lo", "Arman Cohan." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natu-",
+      "citeRegEx" : "Beltagy et al\\.,? 2019",
+      "shortCiteRegEx" : "Beltagy et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Enriching Word Vectors with Subword Information",
+      "author" : [ "Piotr Bojanowski", "Édouard Grave", "Armand Joulin", "Tomáš Mikolov." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 5:135–146.",
+      "citeRegEx" : "Bojanowski et al\\.,? 2017",
+      "shortCiteRegEx" : "Bojanowski et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "PubMed 200k RCT: a Dataset for Sequential Sentence Classification in Medical Abstracts",
+      "author" : [ "Franck Dernoncourt", "Ji Young Lee." ],
+      "venue" : "Proceedings of the Eighth International Joint Conference on Natural Language Processing (Volume 2: Short Papers),",
+      "citeRegEx" : "Dernoncourt and Lee.,? 2017",
+      "shortCiteRegEx" : "Dernoncourt and Lee.",
+      "year" : 2017
+    }, {
+      "title" : "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "ZEN: Pre-training Chinese Text Encoder Enhanced by N-gram Representations",
+      "author" : [ "Shizhe Diao", "Jiaxin Bai", "Yan Song", "Tong Zhang", "Yonggang Wang." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical",
+      "citeRegEx" : "Diao et al\\.,? 2020",
+      "shortCiteRegEx" : "Diao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "DomainSpecific Language Model Pretraining for Biomedical Natural Language Processing",
+      "author" : [ "Yu Gu", "Robert Tinn", "Hao Cheng", "Michael Lucas", "Naoto Usuyama", "Xiaodong Liu", "Tristan Naumann", "Jianfeng Gao", "Hoifung Poon." ],
+      "venue" : "arXiv e-prints,",
+      "citeRegEx" : "Gu et al\\.,? 2020",
+      "shortCiteRegEx" : "Gu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Don’t Stop Pretraining: Adapt Language Models to Domains and Tasks",
+      "author" : [ "Suchin Gururangan", "Ana Marasović", "Swabha Swayamdipta", "Kyle Lo", "Iz Beltagy", "Doug Downey", "Noah A Smith." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the",
+      "citeRegEx" : "Gururangan et al\\.,? 2020",
+      "shortCiteRegEx" : "Gururangan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Incorporating Word Attention into Character-Based Word Segmentation",
+      "author" : [ "Shohei Higashiyama", "Masao Utiyama", "Eiichiro Sumita", "Masao Ideuchi", "Yoshiaki Oida", "Yohei Sakamoto", "Isaac Okada." ],
+      "venue" : "Proceedings of the 2019 Conference of the North",
+      "citeRegEx" : "Higashiyama et al\\.,? 2019",
+      "shortCiteRegEx" : "Higashiyama et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Universal Language Model Fine-tuning for Text Classification",
+      "author" : [ "Jeremy Howard", "Sebastian Ruder." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 328–339, Melbourne, Aus-",
+      "citeRegEx" : "Howard and Ruder.,? 2018",
+      "shortCiteRegEx" : "Howard and Ruder.",
+      "year" : 2018
+    }, {
+      "title" : "ClinicalBERT: Modeling Clinical Notes and Predicting Hospital Readmission",
+      "author" : [ "Kexin Huang", "Jaan Altosaar", "Rajesh Ranganath." ],
+      "venue" : "arXiv preprint arXiv:1904.05342.",
+      "citeRegEx" : "Huang et al\\.,? 2019",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "MIMIC-III, a Freely Accessible Critical Care Database",
+      "author" : [ "AE Johnson", "TJ Pollard", "L Shen", "LW Lehman", "M Feng", "M Ghassemi", "B Moody", "P Szolovits", "LA Celi", "RG Mark." ],
+      "venue" : "Scientific data, 3:160035– 160035.",
+      "citeRegEx" : "Johnson et al\\.,? 2016",
+      "shortCiteRegEx" : "Johnson et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Spanbert: Improving Pre-training by Representing and Predicting Spans",
+      "author" : [ "Mandar Joshi", "Danqi Chen", "Yinhan Liu", "Daniel S Weld", "Luke Zettlemoyer", "Omer Levy." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 8:64–77.",
+      "citeRegEx" : "Joshi et al\\.,? 2020",
+      "shortCiteRegEx" : "Joshi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Measuring the Evolution of a Scientific Field through Citation Frames",
+      "author" : [ "David Jurgens", "Srijan Kumar", "Raine Hoover", "Dan McFarland", "Dan Jurafsky." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 6:391–406.",
+      "citeRegEx" : "Jurgens et al\\.,? 2018",
+      "shortCiteRegEx" : "Jurgens et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Generalization through Memorization: Nearest Neighbor Language Models",
+      "author" : [ "Urvashi Khandelwal", "Omer Levy", "Dan Jurafsky", "Luke Zettlemoyer", "Mike Lewis." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Khandelwal et al\\.,? 2019",
+      "shortCiteRegEx" : "Khandelwal et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Semeval2019 Task 4: Hyperpartisan News Detection",
+      "author" : [ "Johannes Kiesel", "Maria Mestre", "Rishabh Shukla", "Emmanuel Vincent", "Payam Adineh", "David Corney", "Benno Stein", "Martin Potthast." ],
+      "venue" : "Proceedings of the 13th International Workshop on",
+      "citeRegEx" : "Kiesel et al\\.,? 2019",
+      "shortCiteRegEx" : "Kiesel et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Word-like Character N-gram Embedding",
+      "author" : [ "Geewook Kim", "Kazuki Fukui", "Hidetoshi Shimodaira." ],
+      "venue" : "Proceedings of the 2018 EMNLP Workshop W-NUT: The 4th Workshop on Noisy Usergenerated Text, pages 148–152.",
+      "citeRegEx" : "Kim et al\\.,? 2018",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Adam: A Method for Stochastic Optimization",
+      "author" : [ "Diederik P. Kingma", "Jimmy Ba." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "ChemProt-3.0: a Global Chemical Biology Diseases Mapping",
+      "author" : [ "Jens Kringelum", "Sonny Kim Kjaerulff", "Søren Brunak", "Ole Lund", "Tudor I Oprea", "Olivier Taboureau" ],
+      "venue" : null,
+      "citeRegEx" : "Kringelum et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Kringelum et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "ALBERT: A Lite BERT for Self-supervised Learning of Language Representations",
+      "author" : [ "Zhenzhong Lan", "Mingda Chen", "Sebastian Goodman", "Kevin Gimpel", "Piyush Sharma", "Radu Soricut." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Lan et al\\.,? 2020",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BioBERT: A Pre-Trained Biomedical Language Representation Model for Biomedical Text Mining",
+      "author" : [ "Jinhyuk Lee", "Wonjin Yoon", "Sungdong Kim", "Donghyeon Kim", "Sunkyu Kim", "Chan Ho So", "Jaewoo Kang." ],
+      "venue" : "Bioinformatics,",
+      "citeRegEx" : "Lee et al\\.,? 2020",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BART: Denoising Sequence-to-Sequence Pretraining for Natural Language Generation, Transla",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "FLAT: Chinese NER using FlatLattice Transformer",
+      "author" : [ "Xiaonan Li", "Hang Yan", "Xipeng Qiu", "Xuanjing Huang." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 6836–6842, Online.",
+      "citeRegEx" : "Li et al\\.,? 2020",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "RoBERTa: A Robustly Optimized BERT Pretraining Approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "arXiv preprint arXiv:1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Multi-Task Identification of Entities, Relations, and Coreference for Scientific Knowledge Graph Construction",
+      "author" : [ "Yi Luan", "Luheng He", "Mari Ostendorf", "Hannaneh Hajishirzi." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natu-",
+      "citeRegEx" : "Luan et al\\.,? 2018",
+      "shortCiteRegEx" : "Luan et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Image-based Recommendations on Styles and Substitutes",
+      "author" : [ "Julian McAuley", "Christopher Targett", "Qinfeng Shi", "Anton Van Den Hengel." ],
+      "venue" : "Proceedings of the 38th international ACM SIGIR conference on research and development in information re-",
+      "citeRegEx" : "McAuley et al\\.,? 2015",
+      "shortCiteRegEx" : "McAuley et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Exploring N-gram Character Presentation in Bidirectional RNN-CRF for Chinese Clinical Named Entity Recognition",
+      "author" : [ "En Ouyang", "Yuxi Li", "Ling Jin", "Zuofeng Li", "Xiaoyan Zhang." ],
+      "venue" : "CEUR Workshop Proc, volume 1976, pages 37–42.",
+      "citeRegEx" : "Ouyang et al\\.,? 2017",
+      "shortCiteRegEx" : "Ouyang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Learning Multi-grained Aspect Target Sequence for Chinese Sentiment Analysis",
+      "author" : [ "Haiyun Peng", "Yukun Ma", "Yang Li", "Erik Cambria." ],
+      "venue" : "KnowledgeBased Systems, 148:167–176.",
+      "citeRegEx" : "Peng et al\\.,? 2018",
+      "shortCiteRegEx" : "Peng et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Neural Machine Translation of Rare Words with Subword Units",
+      "author" : [ "Rico Sennrich", "Barry Haddow", "Alexandra Birch." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1715–",
+      "citeRegEx" : "Sennrich et al\\.,? 2016",
+      "shortCiteRegEx" : "Sennrich et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Transliteration of Name Entity via Improved Statistical Translation on Character Sequences",
+      "author" : [ "Yan Song", "Chunyu Kit", "Xiao Chen." ],
+      "venue" : "Proceedings of the 2009 Named Entities Workshop: Shared Task on Transliteration (NEWS 2009), pages 57–60, Sun-",
+      "citeRegEx" : "Song et al\\.,? 2009",
+      "shortCiteRegEx" : "Song et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Using a Goodness Measurement for Domain Adaptation: A Case Study on Chinese Word Segmentation",
+      "author" : [ "Yan Song", "Fei Xia." ],
+      "venue" : "LREC, pages 3853– 3860.",
+      "citeRegEx" : "Song and Xia.,? 2012",
+      "shortCiteRegEx" : "Song and Xia.",
+      "year" : 2012
+    }, {
+      "title" : "ZEN 2.0: Continue Training and Adaption for N-gram Enhanced Text Encoders",
+      "author" : [ "Yan Song", "Tong Zhang", "Yonggang Wang", "Kai-Fu Lee" ],
+      "venue" : "arXiv preprint arXiv:2105.01279",
+      "citeRegEx" : "Song et al\\.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Song et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "exBERT: Extending Pretrained Models with Domain-specific Vocabulary Under Constrained Training Resources",
+      "author" : [ "Wen Tai", "HT Kung", "Xin Luna Dong", "Marcus Comiter", "Chang-Fu Kuo." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods",
+      "citeRegEx" : "Tai et al\\.,? 2020",
+      "shortCiteRegEx" : "Tai et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "The Language Interpretability Tool: Extensible",
+      "author" : [ "Ian Tenney", "James Wexler", "Jasmijn Bastings", "Tolga Bolukbasi", "Andy Coenen", "Sebastian Gehrmann", "Ellen Jiang", "Mahima Pushkarna", "Carey Radebaugh", "Emily Reif" ],
+      "venue" : null,
+      "citeRegEx" : "Tenney et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Tenney et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Joint Chinese Word Segmentation and Partof-Speech Tagging via Two-way Attentions of Autoanalyzed Knowledge",
+      "author" : [ "Yuanhe Tian", "Yan Song", "Xiang Ao", "Fei Xia", "Xiaojun Quan", "Tong Zhang", "Yonggang Wang." ],
+      "venue" : "Proceedings of the 58th An-",
+      "citeRegEx" : "Tian et al\\.,? 2020a",
+      "shortCiteRegEx" : "Tian et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Joint Chinese Word Segmentation and Partof-speech Tagging via Two-way Attentions of Autoanalyzed Knowledge",
+      "author" : [ "Yuanhe Tian", "Yan Song", "Xiang Ao", "Fei Xia", "Xiaojun Quan", "Tong Zhang", "Yonggang Wang." ],
+      "venue" : "Proceedings of the 58th An-",
+      "citeRegEx" : "Tian et al\\.,? 2020b",
+      "shortCiteRegEx" : "Tian et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Supertagging combinatory categorial grammar with attentive graph convolutional networks",
+      "author" : [ "Yuanhe Tian", "Yan Song", "Fei Xia." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 6037–6044.",
+      "citeRegEx" : "Tian et al\\.,? 2020c",
+      "shortCiteRegEx" : "Tian et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Improving Constituency Parsing with Span Attention",
+      "author" : [ "Yuanhe Tian", "Yan Song", "Fei Xia", "Tong Zhang." ],
+      "venue" : "Findings of the 2020 Conference on Empirical Methods in Natural Language Processing.",
+      "citeRegEx" : "Tian et al\\.,? 2020d",
+      "shortCiteRegEx" : "Tian et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Improving Chinese Word Segmentation with Wordhood Memory Networks",
+      "author" : [ "Yuanhe Tian", "Yan Song", "Fei Xia", "Tong Zhang", "Yonggang Wang." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages",
+      "citeRegEx" : "Tian et al\\.,? 2020e",
+      "shortCiteRegEx" : "Tian et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Attention Is All You Need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in neural information processing systems, pages 5998–6008.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Improving Pre-Trained Multilingual Model with Vocabulary Expansion",
+      "author" : [ "Hai Wang", "Dian Yu", "Kai Sun", "Jianshu Chen", "Dong Yu." ],
+      "venue" : "Proceedings of the 23rd Conference on Computational Natural Language Learning (CoNLL), pages 316–327.",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "ERNIE-Gram: Pre-Training with Explicitly N-Gram Masked Language Modeling for Natural Language Understanding",
+      "author" : [ "Dongling Xiao", "Yu-Kun Li", "Han Zhang", "Yu Sun", "Hao Tian", "Hua Wu", "Haifeng Wang." ],
+      "venue" : "arXiv preprint arXiv:2010.12148.",
+      "citeRegEx" : "Xiao et al\\.,? 2020",
+      "shortCiteRegEx" : "Xiao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "StyleDGPT: Stylized Response Generation with Pretrained Language Models",
+      "author" : [ "Ze Yang", "Wei Wu", "Can Xu", "Xinnian Liang", "Jiaqi Bai", "Liran Wang", "Wei Wang", "Zhoujun Li." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural",
+      "citeRegEx" : "Yang et al\\.,? 2020",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Character-level Convolutional Networks for Text Classification",
+      "author" : [ "Xiang Zhang", "Junbo Zhao", "Yann LeCun." ],
+      "venue" : "Advances in neural information processing systems, 28:649–657.",
+      "citeRegEx" : "Zhang et al\\.,? 2015",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "DIALOGPT: Large-Scale Generative Pre-training for Conversational Response Generation",
+      "author" : [ "Yizhe Zhang", "Siqi Sun", "Michel Galley", "Yen-Chun Chen", "Chris Brockett", "Xiang Gao", "Jianfeng Gao", "Jingjing Liu", "William B Dolan." ],
+      "venue" : "Proceedings of the",
+      "citeRegEx" : "Zhang et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 5,
+      "context" : "Pre-trained language models have achieved great success and shown promise in various application scenarios across natural language understanding (Devlin et al., 2019; Liu et al., 2019; Tian et al., 2020a) and generation (Lewis et al.",
+      "startOffset" : 145,
+      "endOffset" : 204
+    }, {
+      "referenceID" : 24,
+      "context" : "Pre-trained language models have achieved great success and shown promise in various application scenarios across natural language understanding (Devlin et al., 2019; Liu et al., 2019; Tian et al., 2020a) and generation (Lewis et al.",
+      "startOffset" : 145,
+      "endOffset" : 204
+    }, {
+      "referenceID" : 35,
+      "context" : "Pre-trained language models have achieved great success and shown promise in various application scenarios across natural language understanding (Devlin et al., 2019; Liu et al., 2019; Tian et al., 2020a) and generation (Lewis et al.",
+      "startOffset" : 145,
+      "endOffset" : 204
+    }, {
+      "referenceID" : 2,
+      "context" : "domain gaps between pre-training and fine-tuning data, previous studies (Beltagy et al., 2019; Lee et al., 2020) have observed a performance drop caused by the incapability of generalization to new domains.",
+      "startOffset" : 72,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 21,
+      "context" : "domain gaps between pre-training and fine-tuning data, previous studies (Beltagy et al., 2019; Lee et al., 2020) have observed a performance drop caused by the incapability of generalization to new domains.",
+      "startOffset" : 72,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 2,
+      "context" : "search stream (Beltagy et al., 2019; Alsentzer et al., 2019; Huang et al., 2019; Lee et al., 2020) on adapting pre-trained language models starts from a generic model (e.",
+      "startOffset" : 14,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 0,
+      "context" : "search stream (Beltagy et al., 2019; Alsentzer et al., 2019; Huang et al., 2019; Lee et al., 2020) on adapting pre-trained language models starts from a generic model (e.",
+      "startOffset" : 14,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 11,
+      "context" : "search stream (Beltagy et al., 2019; Alsentzer et al., 2019; Huang et al., 2019; Lee et al., 2020) on adapting pre-trained language models starts from a generic model (e.",
+      "startOffset" : 14,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 21,
+      "context" : "search stream (Beltagy et al., 2019; Alsentzer et al., 2019; Huang et al., 2019; Lee et al., 2020) on adapting pre-trained language models starts from a generic model (e.",
+      "startOffset" : 14,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 8,
+      "context" : "Starting from the observed vocabulary mismatch problem (Gururangan et al., 2020), we further show empirically that the domain gap is largely caused by domain-specific n-grams.",
+      "startOffset" : 55,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 21,
+      "context" : "For example, BioBERT (Lee et al., 2020), initialized by generic BERT, was trained on biomedical corpora for 23 days on eight NVIDIA V100 GPUs.",
+      "startOffset" : 21,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 2,
+      "context" : "(3)For example, SciBERT (Beltagy et al., 2019) needs to be trained from scratch if one wants to use a domain-specific vocabulary (i.",
+      "startOffset" : 24,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 40,
+      "context" : "The backbone pre-trained encoder is a Transformer architecture (Vaswani et al., 2017) with L layers, S self-attention heads and H hidden dimensions initialized from any pre-trained encoder (e.",
+      "startOffset" : 63,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 8,
+      "context" : "To inject unsupervised target domain knowledge, we leverage the task-adaptive pre-training proposed in (Gururangan et al., 2020) which strips the labels in downstream task training data and trains the model on this unlabeled data.",
+      "startOffset" : 103,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 19,
+      "context" : "• CHEMPROT (Kringelum et al., 2016), a manually annotated chemical–protein interaction dataset extracted from 5,031 abstracts for relation classification.",
+      "startOffset" : 11,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 4,
+      "context" : "• RCT (Dernoncourt and Lee, 2017), which contains approximately 200,000 abstracts from public medicine with the role of each sentence clearly identified.",
+      "startOffset" : 6,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 14,
+      "context" : "• CITATIONINTENT (Jurgens et al., 2018), which contains around 2,000 citations annotated for their function.",
+      "startOffset" : 17,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 25,
+      "context" : "• SCIERC (Luan et al., 2018), which consists of 500 scientific abstracts annotated for relation classification.",
+      "startOffset" : 9,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 16,
+      "context" : "• HYPERPARTISAN (Kiesel et al., 2019), which contains 645 articles from Hyperpartisan news with either extreme left-wing or right-wing standpoint used for partisanship classification.",
+      "startOffset" : 16,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 44,
+      "context" : "• AGNEWS (Zhang et al., 2015), consisting of 127,600 categorized articles from more than 2000 news source for topic classification.",
+      "startOffset" : 9,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 26,
+      "context" : "• AMAZON (McAuley et al., 2015), consisting of 145,251 reviews on Women’s and Men’s Clothing & Accessories, each representing users’ implicit feedback on items with a binary label signifying whether the majority of customers found",
+      "startOffset" : 9,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 3,
+      "context" : "we utilize fastText (Bojanowski et al., 2017) to initialize n-gram embeddings.",
+      "startOffset" : 20,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 18,
+      "context" : "We adopt Adam (Kingma and Ba, 2015) as the optimizer , where the corresponding learning rates of different datasets can be found in our code.",
+      "startOffset" : 14,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 10,
+      "context" : "pre-trained models in previous studies (Howard and Ruder, 2018; Gururangan et al., 2020), by pretraining on the unlabeled task dataset drawn from the task distribution.",
+      "startOffset" : 39,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 8,
+      "context" : "pre-trained models in previous studies (Howard and Ruder, 2018; Gururangan et al., 2020), by pretraining on the unlabeled task dataset drawn from the task distribution.",
+      "startOffset" : 39,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 29,
+      "context" : "The lexical unit in RoBERTa is a subword obtained from byte pair encoding (BPE) (Sennrich et al., 2016) tokenization, resulting in a smaller token space and more training data for each token.",
+      "startOffset" : 80,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 34,
+      "context" : "To verify the effects of n-gram representations during the domain shift, we examine the attention mechanism of RoBERTa and T-DNA by plotting the attention maps and salience maps using the LIT tool (Tenney et al., 2020).",
+      "startOffset" : 197,
+      "endOffset" : 218
+    }, {
+      "referenceID" : 2,
+      "context" : "A large performance drop of pre-trained models caused by domain shift has been observed and many domain-specific BERT models (Beltagy et al., 2019; Alsentzer et al., 2019; Huang et al., 2019; Lee et al., 2020) have been introduced to bridge the domain gap.",
+      "startOffset" : 125,
+      "endOffset" : 209
+    }, {
+      "referenceID" : 0,
+      "context" : "A large performance drop of pre-trained models caused by domain shift has been observed and many domain-specific BERT models (Beltagy et al., 2019; Alsentzer et al., 2019; Huang et al., 2019; Lee et al., 2020) have been introduced to bridge the domain gap.",
+      "startOffset" : 125,
+      "endOffset" : 209
+    }, {
+      "referenceID" : 11,
+      "context" : "A large performance drop of pre-trained models caused by domain shift has been observed and many domain-specific BERT models (Beltagy et al., 2019; Alsentzer et al., 2019; Huang et al., 2019; Lee et al., 2020) have been introduced to bridge the domain gap.",
+      "startOffset" : 125,
+      "endOffset" : 209
+    }, {
+      "referenceID" : 21,
+      "context" : "A large performance drop of pre-trained models caused by domain shift has been observed and many domain-specific BERT models (Beltagy et al., 2019; Alsentzer et al., 2019; Huang et al., 2019; Lee et al., 2020) have been introduced to bridge the domain gap.",
+      "startOffset" : 125,
+      "endOffset" : 209
+    }, {
+      "referenceID" : 2,
+      "context" : "For example, SciBERT (Beltagy et al., 2019) is trained on 1.",
+      "startOffset" : 21,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 1,
+      "context" : "14M scientific papers from Semantic Scholar corpus (Ammar et al., 2018) for 7 days on TPU v3-8 machine and BioBERT (Lee et al.",
+      "startOffset" : 51,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2018) for 7 days on TPU v3-8 machine and BioBERT (Lee et al., 2020) is trained on PubMed abstracts and PMC full text articles for 23 days on eight NVIDIA V100 GPUs.",
+      "startOffset" : 51,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 0,
+      "context" : "ClinicalBERT (Alsentzer et al., 2019) is trained on about 2 million notes in the MIMIC-III v1.",
+      "startOffset" : 13,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 12,
+      "context" : "4 database (Johnson et al., 2016) for 17-18 days on a single GeForce GTX TITAN X 12 GB GPU.",
+      "startOffset" : 11,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 2,
+      "context" : "Another way is to add in-domain words into the original vocabulary list and learn their representation by pretraining from scratch (Beltagy et al., 2019; Gu et al., 2020), which requires substantial resources and training data.",
+      "startOffset" : 131,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 7,
+      "context" : "Another way is to add in-domain words into the original vocabulary list and learn their representation by pretraining from scratch (Beltagy et al., 2019; Gu et al., 2020), which requires substantial resources and training data.",
+      "startOffset" : 131,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 2,
+      "context" : "Moreover, SciBERT (Beltagy et al., 2019) found that in-domain vocabulary is helpful but not significant while we attribute it to the inefficiency of implicit learning of in-domain vocabulary.",
+      "startOffset" : 18,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 41,
+      "context" : "To represent OOV words in multilingual settings, the mixture mapping method (Wang et al., 2019) utilized a mixture of English subwords embedding, but it has been shown useless for domain-specific",
+      "startOffset" : 76,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 33,
+      "context" : "ExBERT (Tai et al., 2020) applied an extension module to adapt an augmenting embedding for the in-domain vocabulary but it still needs large continuous pre-training.",
+      "startOffset" : 7,
+      "endOffset" : 25
+    }, {
+      "referenceID" : 30,
+      "context" : "Large granularity contextual information carried by spans or n-grams has proven to be helpful to enhance text representation for Chinese (Song et al., 2009; Song and Xia, 2012; Ouyang et al., 2017; Kim et al., 2018; Peng et al., 2018; Higashiyama et al., 2019; Tian et al., 2020e,b; Li et al., 2020; Diao et al., 2020; Song et al., 2021) and English (Joshi et al.",
+      "startOffset" : 137,
+      "endOffset" : 337
+    }, {
+      "referenceID" : 31,
+      "context" : "Large granularity contextual information carried by spans or n-grams has proven to be helpful to enhance text representation for Chinese (Song et al., 2009; Song and Xia, 2012; Ouyang et al., 2017; Kim et al., 2018; Peng et al., 2018; Higashiyama et al., 2019; Tian et al., 2020e,b; Li et al., 2020; Diao et al., 2020; Song et al., 2021) and English (Joshi et al.",
+      "startOffset" : 137,
+      "endOffset" : 337
+    }, {
+      "referenceID" : 27,
+      "context" : "Large granularity contextual information carried by spans or n-grams has proven to be helpful to enhance text representation for Chinese (Song et al., 2009; Song and Xia, 2012; Ouyang et al., 2017; Kim et al., 2018; Peng et al., 2018; Higashiyama et al., 2019; Tian et al., 2020e,b; Li et al., 2020; Diao et al., 2020; Song et al., 2021) and English (Joshi et al.",
+      "startOffset" : 137,
+      "endOffset" : 337
+    }, {
+      "referenceID" : 17,
+      "context" : "Large granularity contextual information carried by spans or n-grams has proven to be helpful to enhance text representation for Chinese (Song et al., 2009; Song and Xia, 2012; Ouyang et al., 2017; Kim et al., 2018; Peng et al., 2018; Higashiyama et al., 2019; Tian et al., 2020e,b; Li et al., 2020; Diao et al., 2020; Song et al., 2021) and English (Joshi et al.",
+      "startOffset" : 137,
+      "endOffset" : 337
+    }, {
+      "referenceID" : 28,
+      "context" : "Large granularity contextual information carried by spans or n-grams has proven to be helpful to enhance text representation for Chinese (Song et al., 2009; Song and Xia, 2012; Ouyang et al., 2017; Kim et al., 2018; Peng et al., 2018; Higashiyama et al., 2019; Tian et al., 2020e,b; Li et al., 2020; Diao et al., 2020; Song et al., 2021) and English (Joshi et al.",
+      "startOffset" : 137,
+      "endOffset" : 337
+    }, {
+      "referenceID" : 9,
+      "context" : "Large granularity contextual information carried by spans or n-grams has proven to be helpful to enhance text representation for Chinese (Song et al., 2009; Song and Xia, 2012; Ouyang et al., 2017; Kim et al., 2018; Peng et al., 2018; Higashiyama et al., 2019; Tian et al., 2020e,b; Li et al., 2020; Diao et al., 2020; Song et al., 2021) and English (Joshi et al.",
+      "startOffset" : 137,
+      "endOffset" : 337
+    }, {
+      "referenceID" : 23,
+      "context" : "Large granularity contextual information carried by spans or n-grams has proven to be helpful to enhance text representation for Chinese (Song et al., 2009; Song and Xia, 2012; Ouyang et al., 2017; Kim et al., 2018; Peng et al., 2018; Higashiyama et al., 2019; Tian et al., 2020e,b; Li et al., 2020; Diao et al., 2020; Song et al., 2021) and English (Joshi et al.",
+      "startOffset" : 137,
+      "endOffset" : 337
+    }, {
+      "referenceID" : 6,
+      "context" : "Large granularity contextual information carried by spans or n-grams has proven to be helpful to enhance text representation for Chinese (Song et al., 2009; Song and Xia, 2012; Ouyang et al., 2017; Kim et al., 2018; Peng et al., 2018; Higashiyama et al., 2019; Tian et al., 2020e,b; Li et al., 2020; Diao et al., 2020; Song et al., 2021) and English (Joshi et al.",
+      "startOffset" : 137,
+      "endOffset" : 337
+    }, {
+      "referenceID" : 32,
+      "context" : "Large granularity contextual information carried by spans or n-grams has proven to be helpful to enhance text representation for Chinese (Song et al., 2009; Song and Xia, 2012; Ouyang et al., 2017; Kim et al., 2018; Peng et al., 2018; Higashiyama et al., 2019; Tian et al., 2020e,b; Li et al., 2020; Diao et al., 2020; Song et al., 2021) and English (Joshi et al.",
+      "startOffset" : 137,
+      "endOffset" : 337
+    }, {
+      "referenceID" : 15,
+      "context" : "encoders on pre-training, the kNN-LM (Khandelwal et al., 2019) proposes to augment the language model for effective domain adaptation, by varying the nearest neighbor datastore of similar contexts without further training.",
+      "startOffset" : 37,
+      "endOffset" : 62
+    } ],
+    "year" : 2021,
+    "abstractText" : "Large pre-trained models such as BERT are known to improve different downstream NLP tasks, even when such a model is trained on a generic domain. Moreover, recent studies have shown that when large domain-specific corpora are available, continued pre-training on domain-specific data can further improve the performance of in-domain tasks. However, this practice requires significant domainspecific data and computational resources which may not always be available. In this paper, we aim to adapt a generic pretrained model with a relatively small amount of domain-specific data. We demonstrate that by explicitly incorporating the multi-granularity information of unseen and domain-specific words via the adaptation of (word based) ngrams, the performance of a generic pretrained model can be greatly improved. Specifically, we introduce a Transformer-based Domainaware N-gram Adaptor, T-DNA, to effectively learn and incorporate the semantic representation of different combinations of words in the new domain. Experimental results illustrate the effectiveness of T-DNA on eight lowresource downstream tasks from four domains. We show that T-DNA is able to achieve significant improvements compared to existing methods on most tasks using limited data with lower computational costs. Moreover, further analyses demonstrate the importance and effectiveness of both unseen words and the information of different granularities.1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

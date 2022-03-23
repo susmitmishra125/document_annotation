@@ -1,0 +1,970 @@
+{
+  "name" : "2021.acl-long.334.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "BinaryBERT: Pushing the Limit of BERT Quantization",
+    "authors" : [ "Haoli Bai", "Wei Zhang", "Lu Hou", "Lifeng Shang", "Jing Jin", "Xin Jiang", "Qun Liu", "Michael Lyu", "Irwin King" ],
+    "emails" : [ "king}@cse.cuhk.edu.hk", "qun.liu}@huawei.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 4334–4348\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n4334"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Recent pre-trained language models have achieved remarkable performance improvement in various natural language tasks (Vaswani et al., 2017; Devlin et al., 2019). However, the improvement generally comes at the cost of increasing model size and computation, which limits the deployment of these huge pre-trained language models to edge devices. Various methods have been recently proposed to compress these models, such as knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Jiao et al., 2020), pruning (Michel et al., 2019; Fan et al., 2019), low-rank approximation (Ma et al., 2019; Lan et al., 2020), weightsharing (Dehghani et al., 2019; Lan et al., 2020; Huang et al., 2021), dynamic networks with adaptive depth and/or width (Hou et al., 2020; Xin et al., 2020; Zhou et al., 2020), and quantization (Zafrir\net al., 2019; Shen et al., 2020; Fan et al., 2020; Zhang et al., 2020).\nAmong all these model compression approaches, quantization is a popular solution as it does not require designing a smaller model architecture. Instead, it compresses the model by replacing each 32-bit floating-point parameter with a low-bit fixedpoint representation. Existing attempts try to quantize pre-trained models (Zafrir et al., 2019; Shen et al., 2020; Fan et al., 2020) to even as low as ternary values (2-bit) with minor performance drop (Zhang et al., 2020). However, none of them achieves the binarization (1-bit). As the limit of quantization, weight binarization could bring at most 32× reduction in model size and replace most floating-point multiplications with additions. Moreover, quantizing activations to 8-bit or 4-bit further replaces the floating-point addition with int8 and int4 addition, decreasing the energy burden and the area usage on chips (Courbariaux et al., 2015).\nIn this paper, we explore to binarize BERT parameters with quantized activations, pushing BERT quantization to the limit. We find that directly training a binary network is rather challenging. According to Figure 1, there is a sharp performance drop when reducing weight bit-width from 2-bit\nto 1-bit, compared to other bit configurations. To explore the challenges of binarization, we analyze the loss landscapes of models under different precisions both qualitatively and quantitatively. It is found that while the full-precision and ternary (2- bit) models enjoy relatively flat and smooth loss surfaces, the binary model suffers from a rather steep and complex landscape, which poses great challenges to the optimization.\nMotivated by the above empirical observations, we propose ternary weight splitting, which takes the ternary model as a proxy to bridge the gap between the binary and full-precision models. Specifically, ternary weight splitting equivalently converts both the quantized and latent full-precision weights in a well-trained ternary model to initialize BinaryBERT. Therefore, BinaryBERT retains the good performance of the ternary model, and can be further refined on the new architecture. While neuron splitting is previously studied (Chen et al., 2016; Wu et al., 2019) for full-precision network, our ternary weight splitting is much more complex due to the additional equivalence requirement of quantized weights. Furthermore, the proposed BinaryBERT also supports adaptive splitting. It can adaptively perform splitting on the most important ternary modules while leaving the rest as binary, based on efficiency constraints such as model size or floating-point operations (FLOPs). Therefore, our approach allows flexible sizes of binary models for various edge devices’ demands.\nEmpirical results show that BinaryBERT split from a half-width ternary network is much better than a directly-trained binary model with the original width. On the GLUE and SQuAD benchmarks, our BinaryBERT has only a slight performance drop compared to the full-precision BERT-base model, while being 24× smaller. Moreover, BinaryBERT with the proposed importance-based adaptive splitting also outperforms other splitting criteria across a variety of model sizes."
+    }, {
+      "heading" : "2 Difficulty in Training Binary BERT",
+      "text" : "In this section, we show that it is challenging to train a binary BERT with conventional binarization approaches directly. Before diving into details, we first review the necessary backgrounds.\nWe follow the standard quantization-aware training procedure (Zhou et al., 2016). Specifically, given weight w ∈ Rn (a.k.a latent full-precision weights), each forward propagation quantizes it to\nŵ = Q(w) by some quantization function Q(·), and then computes the loss `(ŵ) at ŵ. During back propagation, we use ∇`(ŵ) to update latent fullprecision weights w due to the non-differentiability of Q(·), which is known as the straight-through estimator (Courbariaux et al., 2015).\nRecent TernaryBERT (Zhang et al., 2020) follows Ternary-Weight-Network (TWN) (Li et al., 2016) to quantize the elements in w to three values {±α, 0}. To avoid confusion, we use superscript t and b for the latent full-precision weights and quantized weights in ternary and binary models, respectively. Specifically, TWN ternarizes each element wti in the ternary weight w t as\nŵti =Q(wti)= { α · sign(wti) |wti | ≥ ∆\n0 |wti | < ∆ , (1)\nwhere sign(·) is the sign function, ∆ = 0.7n ‖w t‖1 and α= 1|I| ∑ i∈I |wti | with I = {i | ŵti 6= 0}.\nBinarization. Binarization is first proposed in (Courbariaux et al., 2015) and has been extensively studied in the academia (Rastegari et al., 2016; Hubara et al., 2016; Liu et al., 2018). As a representative work, Binary-Weight-Network (BWN) (Hubara et al., 2016) binarizes wb elementwisely with a scaling parameter α as follows:\nŵbi = Q(wbi ) = α · sign(wbi ), α = 1\nn ‖wb‖1. (2)\nDespite the appealing properties of network binarization, we show that it is non-trivial to obtain a binary BERT with these binarization approaches."
+    }, {
+      "heading" : "2.1 Sharp Performance Drop with Weight Binarization",
+      "text" : "To study the performance drop of BERT quantization, we train the BERT model with fullprecision, {8,4,3,2,1}-bit weight quantization and 8-bit activations on MRPC and MNLI-m from the GLUE benchmark (Wang et al., 2018) 1. We use loss-aware weight quantization (LAQ) (Hou and Kwok, 2018) for 8/4/3-bit weight quantization, TWN (Li et al., 2016) for weight ternarization and BWN (Hubara et al., 2016) for weight binarization. Meanwhile, we adopt 8-bit uniform quantization for activations. We follow the default experimental settings detailed in Section 4.1 and Appendix C.1.\n1We conduct more experiments on other GLUE datasets and with different settings in Appendix C.1, and find similar empirical results to MRPC and MNLI-m here.\nFrom Figure 1, the performance drops mildly from 32-bit to as low as 2-bit, i.e., around 0.6% ↓ on MRPC and 0.2% ↓ on MNLI-m. However, when reducing the bit-width to one, the performance drops sharply, i.e, ∼ 3.8% ↓ and ∼ 0.9% ↓ on the two tasks, respectively. Therefore, weight binarization may severely harm the performance, which may explain why most current approaches stop at 2-bit weight quantization (Shen et al., 2020; Zadeh and Moshovos, 2020; Zhang et al., 2020). To further push weight quantization to the limit, a first step is to study the potential reasons behind the sharp drop from ternarization to binarization."
+    }, {
+      "heading" : "2.2 Exploring the Quantized Loss Landscape",
+      "text" : "Visualization. To learn about the challenges behind the binarization, we first visually compare the loss landscapes of full-precision, ternary, and binary BERT models. Following (Nahshan et al., 2019), we extract parameters wx,wy from the value layers2 of multi-head attention in the first two Transformer layers, and assign the following perturbations on parameters:\nw̃x = wx + x · 1x, w̃y = wy + y · 1y, (3)\n2We also extract parameters from other parts of the Transformer in Appendix C.2, and the observations are similar.\nwhere x ∈ {±0.2w̄x,±0.4w̄x, ...,±1.0w̄x} are perturbation magnitudes based the absolute mean value w̄x of wx, and similar rules hold for y. 1x and 1y are vectors with all elements being 1. For each pair of (x, y), we evaluate the corresponding training loss and plot the surface in Figure 2.\nAs can be seen, the full-precision model (Figure 2(a)) has the lowest overall training loss, and its loss landscape is flat and robust to the perturbation. For the ternary model (Figure 2(b)), despite the surface tilts up with larger perturbations, it looks locally convex and is thus easy to optimize. This may also explain why the BERT model can be ternarized without severe accuracy drop (Zhang et al., 2020). However, the loss landscape of the binary model (Figure 2(c)) turns out to be both higher and more complex. By stacking the three landscapes together (Figure 2(d)), the loss surface of the binary BERT stands on the top with a clear margin with the other two. The steep curvature of loss surface reflects a higher sensitivity to binarization, which attributes to the training difficulty.\nSteepness Measurement. To quantitatively measure the steepness of loss landscape, we start from a local minima w and apply the second order approximation to the curvature. According to the Taylor’s expansion, the loss increase induced by quantizing\nw can be approximately upper bounded by\n`(ŵ)− `(w) ≈ >H ≤ λmax‖ ‖2, (4)\nwhere = w − ŵ is the quantization noise, and λmax is the largest eigenvalue of the Hessian H at w. Note that the first-order term is skipped due to ∇`(w) = 0. Thus we take λmax as a quantitative measurement for the steepness of the loss surface. Following (Shen et al., 2020) we adopt the power method to compute λmax. As it is computationally expensive to estimate H for all w in the network, we consider them separately as follows: (1) the query/key layers (MHA-QK), (2) the value layer (MHA-V), (3) the output projection layer (MHA-O) in the multi-head attention, (4) the intermediate layer (FFN-Mid), and (5) the output layer (FFN-Out) in the feed-forward network. Note that we group key and query layers as they are used together to calculate the attention scores.\nFrom Figure 3, the top-1 eigenvalues of the binary model are higher both on expectation and standard deviation compared to the full-precision baseline and the ternary model. For instance, the top-1 eigenvalues of MHA-O in the binary model are ∼ 15× larger than the full-precision counterpart. Therefore, the quantization loss increases of fullprecision and ternary model are tighter bounded than the binary model in Equation (4). The highly complex and irregular landscape by binarization thus poses more challenges to the optimization."
+    }, {
+      "heading" : "3 Proposed Method",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Ternary Weight Splitting",
+      "text" : "Given the challenging loss landscape of binary BERT, we propose ternary weight splitting (TWS) that exploits the flatness of ternary loss landscape as the optimization proxy of the binary model. As\nis shown in Figure 4, we first train the half-sized ternary BERT to convergence, and then split both the latent full-precision weight wt and quantized ŵt to their binary counterparts wb1,w b 2 and ŵ b 1, ŵ b 2 via the TWS operator. To inherit the performance of the ternary model after splitting, the TWS operator requires the splitting equivalency (i.e., the same output given the same input):\nwt = wb1 + w b 2, ŵ t = ŵb1 + ŵ b 2 . (5)\nWhile solution to Equation (5) is not unique, we constrain the latent full-precision weights after splitting wb1,w b 2 to satisfy w t = wb1 + w b 2 as\nwb1,i =  a · wti if ŵti 6= 0 b+ wti if ŵ t i = 0, w t i> 0\nb otherwise , (6)\nwb2,i =  (1−a)wti if ŵti 6= 0 −b if ŵti = 0, wti> 0 −b+ wti otherwise , (7)\nwhere a and b are the variables to solve. By Equations (6) and (7) with ŵt = ŵb1 + ŵ b 2, we get\na =\n∑ i∈I |wti |+ ∑ j∈J |wtj | − ∑ k∈K |wtk|\n2 ∑\ni∈I |wti | ,\nb =\nn |I| ∑ i∈I |wti | − ∑n\ni=1 |wti | 2(|J |+ |K|) , (8)\nwhere we denote I = {i | ŵti 6= 0}, J = {j | ŵtj = 0 andwtj > 0} andK = {k | ŵtk = 0 andwtk < 0}. | · | denotes the cardinality of the set. Detailed derivation of Equation (8) is in Appendix A.\nQuantization Details. Following (Zhang et al., 2020), for each weight matrix in the Transformer layers, we use layer-wise ternarization (i.e., one scaling parameter for all elements in the weight\nmatrix). For word embedding, we use row-wise ternarization (i.e., one scaling parameter for each row in the embedding). After splitting, each of the two split matrices has its own scaling factor.\nAside from weight binarization, we simultaneously quantize activations before all matrix multiplications, which could accelerate inference on specialized hardwares (Shen et al., 2020; Zafrir et al., 2019). Following (Zafrir et al., 2019; Zhang et al., 2020), we skip the quantization for all layernormalization (LN) layers, skip connections, and bias as their calculations are negligible compared to matrix multiplication. The last classification layer is also not quantized to avoid a large accuracy drop.\nTraining with Knowledge Distillation. Knowledge distillation is shown to benefit BERT quantization (Zhang et al., 2020). Following (Jiao et al., 2020; Zhang et al., 2020), we first perform intermediate-layer distillation from the fullprecision teacher network’s embedding E, layerwise MHA output Ml and FFN output Fl to the quantized student counterpart Ê, M̂l, F̂l (l = 1, 2, ...L). We aim to minimize their mean sqaured errors, i.e., `emb = MSE(Ê,E), `mha =∑\nl MSE(M̂l,Ml), and `ffn = ∑\nl MSE(F̂l,Fl). Thus the objective function is\n`int = `emb + `mha + `ffn. (9)\nWe then conduct prediction-layer distillation by minimizing the soft cross-entropy (SCE) between quantized student logits ŷ and teacher logits y, i.e.,\n`pred = SCE(ŷ,y). (10)\nFurther Fine-tuning. After splitting from the half-sized ternary model, the binary model inherits its performance on a new architecture with full width. However, the original minimum of the ternary model may not hold in this new loss landscape after splitting. Thus we further fine-tune with prediction-layer distillation to look for a better solution. We dub the resulting model as BinaryBERT."
+    }, {
+      "heading" : "3.2 Adaptive Splitting",
+      "text" : "Our proposed approach also supports adaptive splitting that can flexibly adjust the width of BinaryBERT, based on the parameter sensitivity to binarization and resource constraints of edge devices.\nSpecifically, given the resource constraints C (e.g., model size and computational FLOPs), we first train a mixed-precision model adaptively (with\nsensitive parts being ternary and the rest being binary), and then split ternary weights into binary ones. Therefore, adaptive splitting finally enjoys consistent arithmetic precision (1-bit) for all weight matrices, which is usually easier to deploy than the mixed-precision counterpart.\nFormulation. Intuitively, we assign ternary values to weight matrices that are more sensitive to quantization. The quantization sensitivity of the weight matrix is empirically measured by the performance gain of not quantizing it comparing to the fully-quantized counterpart (Details are in Appendix B.1.). We denote u ∈ RZ+ as the sensitivity vector, where Z is the total number of splittable weight matrices in all Transformer layers, the word embedding layer and the pooler layer. The cost vector c ∈ RZ+ stores the additional increase of parameter or FLOPs of each ternary weight matrix against a binary choice. The splitting assignment can be represented as a binary vector s ∈ {0, 1}Z , where sz = 1 means to ternarize the z-th weight matrix, and vice versa. The optimal assignment s∗ can thus be solved from the following combinatorial optimization problem:\nmaxs u >s (11)\ns.t. c>s ≤ C − C0, s ∈ {0, 1}Z ,\nwhere C0 is the baseline efficiency of the half-sized binary network. Dynamic programming can be applied to solve Equation (11) to avoid NP-hardness."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : "In this section, we empirically verify our proposed approach on the GLUE (Wang et al., 2018) and SQuAD (Rajpurkar et al., 2016, 2018) benchmarks. We first introduce the experimental setup in Section 4.1, and then present the main experimental results on both benchmarks in Section 4.2. We compare with other state-of-the-arts in Section 4.3, and finally provide more discussions on the proposed methods in Section 4.4. Code is available at https://github.com/huawei-noah/ Pretrained-Language-Model/tree/master/ BinaryBERT."
+    }, {
+      "heading" : "4.1 Experimental Setup",
+      "text" : "Dataset and Metrics. The GLUE benchmark contains multiple natural language understanding tasks. We follow Devlin et al. (2019) to evaluate the performance on these tasks: Matthews correlation\nfor CoLA, Spearman correlation for STS-B and accuracy for the rest tasks: RTE, MRPC, SST-2, QQP, MNLI-m (matched) and MNLI-mm (mismatched). For machine reading comprehension on SQuAD, we report the EM (exact match) and F1 score.\nAside from the task performance, we also report the model size (MB) and computational FLOPs at inference. For quantized operations, we follow (Zhou et al., 2016; Liu et al., 2018; Li et al., 2020a) to count the bit-wise operations, i.e., the multiplication between an m-bit number and an n-bit number approximately takes mn/64 FLOPs for a CPU with the instruction size of 64 bits.\nImplementation. We take DynaBERT (Hou et al., 2020) sub-networks as backbones as they offer both half-sized and full-sized models for easy comparison. We start from training a ternary model of width 0.5× with the two-stage knowledge distillation introduced in Section 3.1. Then we split it into a binary model with width 1.0×, and perform further fine-tuning with prediction-layer distillation. Each training stage takes the same number of training epochs. Following (Jiao et al., 2020; Hou et al., 2020; Zhang et al., 2020), we adopt data augmentation with one training epoch in each stage on all GLUE tasks except for MNLI and QQP. Aside from this default setting, we also remove data\naugmentation and perform vanilla training with 6 epochs on these tasks. On MNLI and QQP, we train 3 epochs for each stage.\nWe verify our ternary weight splitting (TWS) against vanilla binary training (BWN), the latter of which doubles training epochs to match the overall training time in TWS for fair comparison. More training details are provided in Appendix B.\nActivation Quantization. While BinaryBERT focuses on weight binarization, we also explore activation quantization in our implementation, which is beneficial for reducing the computation burden on specialized hardwares (Hubara et al., 2016; Zhou et al., 2016; Zhang et al., 2020). Aside from 8-bit uniform quantization (Zhang et al., 2020; Shen et al., 2020) in past efforts, we further pioneer to study 4-bit activation quantization. We find that uniform quantization can hardly deal with outliers in the activation. Thus we use Learned Step-size Quantization (LSQ) (Esser et al., 2019) to directly learn the quantized values, which empirically achieves better quantization performance."
+    }, {
+      "heading" : "4.2 Experimental Results",
+      "text" : ""
+    }, {
+      "heading" : "4.2.1 Results on the GLUE Benchmark",
+      "text" : "The main results on the development set are shown in Table 1. For results without data augmenta-\ntion (row #2-5), our ternary weight splitting method outperforms BWN with a clear margin 3. For instance, on CoLA, ternary weight splitting achieves 6.7% ↑ and 9.6% ↑ with 8-bit and 4-bit activation quantization, respectively. While data augmentation (row 6-9) mostly improves each entry, our approach still overtakes BWN consistently. Furthermore, 4-bit activation quantization empirically benefits more from ternary weight splitting (row 4-5 and 8-9) compared with 8-bit activations (row 2-3 and 6-7), demonstrating the potential of our approach in extremely low bit quantized models.\nIn Table 2, we also provide the results on the test set of GLUE benchmark. Similar to the observation in Table 1, our approach achieves consistent improvement on both 8-bit and 4-bit activation quantization compared with BWN."
+    }, {
+      "heading" : "4.2.2 Results on SQuAD Benchmark",
+      "text" : "The results on the development set of SQuAD v1.1 and v2.0 are shown in Table 3. Our proposed ternary weight splitting again outperforms BWN w.r.t both EM and F1 scores on both datasets. Similar to previous observations, 4-bit activation enjoys a larger gain in performance from the splitting approach. For instance, our approach improves the EM score of 4-bit activation by 1.8% and 0.6% on SQuAD v1.1 and v2.0, respectively, both of which are higher than those of 8-bit activation.\n3Note that DynaBERT only squeezes width in the Transformer layers but not the word embedding layer, thus the split binary model has a slightly larger size than BWN."
+    }, {
+      "heading" : "4.2.3 Adaptive Splitting",
+      "text" : "The adaptive splitting in Section 3.2 supports the conversion of mixed ternary and binary precisions for more-fine-grained configurations. To verify its advantages, we name our approach as Maximal Gain according to Equation (11), and compare it with two baseline strategies i) Random Gain that randomly selects weight matrices to split; and ii) Minimal Gain that splits the least important modules according to sensitivity. We report the average score over six tasks (QNLI, SST-2, CoLA, STSB, MRPC and RTE) in Figure 5. The end-points of 9.8MB and 16.5MB are the half-sized and fullsized BinaryBERT, respectively. As can be seen, adaptive splitting generally outperforms the other two baselines under varying model size, indicating the effectiveness of maximizing the gain in adaptive splitting. In Appendix C.4, we provide detailed performance on the six tasks, together with the architecture visualization of adaptive splitting."
+    }, {
+      "heading" : "4.3 Comparison with State-of-the-arts",
+      "text" : "Now we compare our proposed approach with a variety of state-of-the-art counterparts, including Q-BERT (Shen et al., 2020), GOBO (Zadeh and Moshovos, 2020), Quant-Noise (Fan et al., 2020) and TernaryBERT (Zhang et al., 2020). Aside from quantization, we also compare with other general compression approaches such as DistillBERT (Sanh et al., 2019), LayerDrop (Fan et al., 2019), TinyBERT (Jiao et al., 2020), and ALBERT (Lan et al., 2020). The results are taken from the original papers, respectively. From Table 4, our proposed BinaryBERT has the smallest model size with the best performance among all quantiza-\ntion approaches. Compared with the full-precision model, our BinaryBERT retains competitive performance with a significant reduction of model size and computation. For example, we achieve more than 24× compression ratio compared with BERTbase, with only 0.4% ↓ and 0.0%/0.2% ↓ drop on MNLI-m on SQuAD v1.1, respectively."
+    }, {
+      "heading" : "4.4 Discussion",
+      "text" : ""
+    }, {
+      "heading" : "4.4.1 Further Improvement after Splitting",
+      "text" : "We now demonstrate the performance gain by refining the binary model on the new architecture. We evaluate the performance gain after splitting from a half-width ternary model (TWN0.5×) to the full-sized model (TWN1.0×) on the development set of SQuAD v1.1, MNLI-m, QNLI and MRPC. The results are shown in Table 5. As can be seen, further fine-tuning brings consistent improvement on both 8-bit and 4-bit activation.\nTraining Curves. Furthermore, we plot the training loss curves of BWN, TWN and our TWS on MRPC with data augmentation in Figures 6(a) and 6(b). Since TWS cannot inherit the previous optimizer due to the architecture change, we reset the optimizer and learning rate scheduler of BWN, TWN and TWS for a fair comparison, despite the slight increase of loss after splitting. We find that our TWS attains much lower training loss than BWN, and also surpasses TWN, verifying the advantages of fine-tuning on the wider architecture.\nOptimization Trajectory. We also follow (Li et al., 2018; Hao et al., 2019) to visualize the optimization trajectory after splitting in Figures 6(c) and 6(d). We calculate the first two principal components of parameters in the final BinaryBERT, which are the basis for the 2-D plane. The loss contour is thus obtained by evaluating each grid point in the plane. It is found that the binary models are heading towards the optimal solution for both 8/4-bit activation quantization on the loss contour."
+    }, {
+      "heading" : "4.4.2 Exploring More Binarization Methods",
+      "text" : "We now study if there are any improved binarization variants that can directly bring better performance. Aside from BWN, we compare with LAB (Hou et al., 2017) and BiReal (Liu et al., 2018). Meanwhile, we compare with gradual quantization, i.e., BWN training based on a ternary model, denoted as BWN†. Furthermore, we also try the same scaling factor of BWN with TWN to make the precision change smooth, dubbed as BWN‡. From Table 6, we find that our TWS still outperforms various binarization approaches in most cases, suggesting the superiority of splitting in finding better minima than direct binary training."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "Network quantization has been a popular topic with vast literature in efficient deep learning. Below we give a brief overview for three research strands: network binarization, mixed-precision quantization and neuron splitting, all of which are related to our proposed approach."
+    }, {
+      "heading" : "5.1 Network Binarization",
+      "text" : "Network binarization achieves remarkable size reduction and is widely explored in computer vision. Existing binarization approaches can be categorized into quantization error minimization (Rastegari et al., 2016; Hou et al., 2017; Zhang et al., 2018), improving training objectives (Martinez et al., 2020; Bai et al., 2020) and reduction of gradient mismatch (Bai et al., 2018; Liu et al., 2018, 2020). Despite the empirical success of these approaches in computer vision, there is little exploration of binarization in natural language processing tasks. Previous works on BERT quantization (Zafrir et al., 2019; Shen et al., 2020; Zhang et al., 2020) push down the bit-width to as low as two, but none of them achieves binarization. On the other hand, our work serves as the first attempt to binarize the pre-trained language models."
+    }, {
+      "heading" : "5.2 Mixed-precision Quantization",
+      "text" : "Given the observation that neural network layers exhibit different sensitivity to quantization (Dong et al., 2019; Wang et al., 2019), mixed-precision quantization re-allocate layer-wise quantization bit-width for higher compression ratio. Inspired by neural architecture search (Liu et al., 2019; Wang et al., 2020), common approaches of mixedprecision quantization are primarily based on differentiable search (Wu et al., 2018a; Li et al., 2020b), reinforcement learning (Wu et al., 2018b; Wang et al., 2019), or simply loss curvatures (Dong et al., 2019; Shen et al., 2020). While mixedprecision quantized models usually demonstrate better performance than traditional methods under the same compression ratio, they are also harder to deploy (Habi et al., 2020). On the contrary, BinaryBERT with adaptive splitting enjoy both the good performance from the mixed precision of ternary and binary values, and the easy deployment given the consistent arithmetic precision.\nThere are also works on binary neural architecture search (Kim et al., 2020; Bulat et al., 2020) which have a similar purpose to mixed-precision\nquantization. Nonetheless, such methods are usually time-consuming to train and are prohibitive for large pre-trained language models."
+    }, {
+      "heading" : "5.3 Neuron Splitting",
+      "text" : "Neuron splitting is originally proposed to accelerate the network training, by progressively increasing the width of a network (Chen et al., 2016; Wu et al., 2019). The split network equivalently inherits the knowledge from the antecessors and is trained for further improvement. Recently, neuron splitting is also studied in quantization (Zhao et al., 2019; Kim et al., 2019). By splitting neurons with large magnitudes, the full-precision outliers are removed and thus the quantization error can be effectively reduced (Zhao et al., 2019). Kim et al. (2019) apply neuron splitting to decompose ternary activation into two binary activations based on bias shifting of the batch normalization layer. However, such a method cannot be applied in BERT as there is no batch normalization layer. Besides, weight splitting is much more complex due to the equivalence constraint on both the quantized and latent full-precision weights."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "In this paper, we propose BinaryBERT, pushing BERT quantization to the limit. As a result of the steep and complex loss landscape, we find directly training a BinaryBERT is hard with a large performance drop. We thus propose a ternary weight splitting that splits a trained ternary BERT to initialize BinaryBERT, followed by fine-tuning for further refinement. Our approach also supports adaptive splitting that can tailor the size of BinaryBERT based on the edge device constraints. Empirical results show that our approach significantly outperforms vanilla binary training, achieving stateof-the-art performance on BERT compression."
+    }, {
+      "heading" : "Acknowledgement",
+      "text" : "This work was partially supported by the National Key Research and Development Program of China (No. 2018AAA0100204), and Research Grants Council of the Hong Kong Special Administrative Region, China (No. CUHK 14210717 of the General Research Fund). We sincerely thank all anonymous reviewers for their insightful suggestions."
+    }, {
+      "heading" : "C More Empirical Results",
+      "text" : "C.1 Performance Drop by Binarization\nHere we provide more empirical results on the sharp drop in performance as a result of binarization. We run multi-bit quantization on the BERT model over representative tasks of the GLUE benchmark, and activations are quantized in both 8- bit and 4-bit. We run 10 independent experiments for each task except for MNLI with 3 runs. We follow the same procedure in Section 2.1, and the default experimental setup in Appendix B.2 without data augmentation and splitting. The results are shown in Figures 8 and 9 respectively. It can be found that while the performance drops slowly from full-precision to ternarization, there is a consistent sharp drop by binarization in each tasks and on both 8-bit and 4-bit activation quantization. This\nis similar to the findings in Figure 1.\nC.2 More Visualizations of Loss Landscape\nTo comprehensively compare the loss curvature among the full-precision, ternary and binary models, we provide more landscape visualizations aside from the value layer in Figure 2. We extract parameters from MHA-K, MHA-O, FFN-Mid and FFN-out in the first two Transformer layers, and the corresponding landscape are shown in Figure 10, Figure 11, Figure 12, Figure 13 respectively. We omit MHA-Q due to page limitation, and also it is symmetric to MHA-K with similar landscape observation. It can be found that binary model have steep and irregular loss landscape in general w.r.t different parameters of the model, and is thus hard to optimize directly.\nC.3 Ablation of Knowledge Distillation\nWhile knowledge distillation on BERT has been thoroughly investigated in (Jiao et al., 2020; Hou et al., 2020; Zhang et al., 2020), here we further conduct ablation study of knowledge distillation on the proposed ternary weight splitting. We compare with no distillation (“N/A”), prediction distillation (“Pred”) and our default setting (“Int.+Pred”). For “N/A” or “Pred”, fine-tuning after splitting follows the same setting to their ternary\ntraining. “Int.+Pred” follows our default setting in Table . We do not adopt data-augmentation, and results are shown in Table 10. It can be found that “Int.+Pred.” outperforms both “N/A” and “Pred.” with a clear margin, which is consistent to the findings in (Zhang et al., 2020) that knowledge distillation helps BERT quantization.\nC.4 Detailed Results of Adaptive Splitting\nThe detailed comparison of our adaptive splitting strategy against the random strategy (Rand.) and minimal gain strategy (Min.) under different model size are shown in Table 8 and Table 9. It can be found that for both 8-bit and 4-bit activation quantization, our strategy that splits the most sensitive modules mostly performs the best on average under various model sizes.\nC.5 Architecture Visualization We further visualize the architectures after adaptive splitting on MRPC in Figure 14. For clear presentation, we merge all splittable parameters in each Transformer layer. As the baseline, 9.8MB refers to no splitting, while 16.5MB refers to splitting all splittable parameters in the model. According to Figure 14, with the increasing model size, shallower layers are more preferred for splitting than deeper layers, which is consistent to the findings in Figure 7."
+    } ],
+    "references" : [ {
+      "title" : "Few shot network compression via cross distillation",
+      "author" : [ "H. Bai", "J. Wu", "I. King", "M. Lyu." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, pages 3203–3210.",
+      "citeRegEx" : "Bai et al\\.,? 2020",
+      "shortCiteRegEx" : "Bai et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Proxquant: Quantized neural networks via proximal operators",
+      "author" : [ "Y. Bai", "Y. Wang", "E. Liberty." ],
+      "venue" : "International Conference on Machine Learning.",
+      "citeRegEx" : "Bai et al\\.,? 2018",
+      "shortCiteRegEx" : "Bai et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Bats: Binary architecture search",
+      "author" : [ "A. Bulat", "B. Martinez", "G. Tzimiropoulos." ],
+      "venue" : "European Conference on Computer Vision, pages 309–325.",
+      "citeRegEx" : "Bulat et al\\.,? 2020",
+      "shortCiteRegEx" : "Bulat et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Net2net: Accelerating learning via knowledge transfer",
+      "author" : [ "T. Chen", "I. Goodfellow", "J. Shlens." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Chen et al\\.,? 2016",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Binaryconnect: Training deep neural networks with binary weights during propagations",
+      "author" : [ "M. Courbariaux", "Y. Bengio", "J. David." ],
+      "venue" : "Advances in neural information processing systems.",
+      "citeRegEx" : "Courbariaux et al\\.,? 2015",
+      "shortCiteRegEx" : "Courbariaux et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Universal transformers",
+      "author" : [ "M. Dehghani", "S. Gouws", "O. Vinyals", "J. Uszkoreit", "L. Kaiser." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Dehghani et al\\.,? 2019",
+      "shortCiteRegEx" : "Dehghani et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Bert: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "J. Devlin", "M. Chang", "K. Lee", "K. Toutanova." ],
+      "venue" : "North American Chapter of the Association for Computational Linguistics.",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Hawq: Hessian aware quantization of neural networks with mixed-precision",
+      "author" : [ "Z. Dong", "Z. Yao", "A. Gholami", "M. Mahoney", "K. Keutzer." ],
+      "venue" : "Proceedings of the IEEE/CVF International Conference on Computer Vision, pages 293–302.",
+      "citeRegEx" : "Dong et al\\.,? 2019",
+      "shortCiteRegEx" : "Dong et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Learned step size quantization",
+      "author" : [ "S.K. Esser", "J.L. McKinstry", "D. Bablani", "R. Appuswamy", "D.S. Modha." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Esser et al\\.,? 2019",
+      "shortCiteRegEx" : "Esser et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Reducing transformer depth on demand with structured dropout",
+      "author" : [ "A. Fan", "E. Grave", "A. Joulin." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Fan et al\\.,? 2019",
+      "shortCiteRegEx" : "Fan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Training with quantization noise for extreme model compression",
+      "author" : [ "A. Fan", "P. Stock", "B. Graham", "E. Grave", "R. Gribonval", "H. Jegou", "A. Joulin." ],
+      "venue" : "Preprint arXiv:2004.07320.",
+      "citeRegEx" : "Fan et al\\.,? 2020",
+      "shortCiteRegEx" : "Fan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Hmq: Hardware friendly mixed precision quantization block for cnns",
+      "author" : [ "H. Habi", "R. Jennings", "A. Netzer." ],
+      "venue" : "European Conference on Computer Vision, pages 448–463.",
+      "citeRegEx" : "Habi et al\\.,? 2020",
+      "shortCiteRegEx" : "Habi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Visualizing and understanding the effectiveness of BERT",
+      "author" : [ "Y. Hao", "L. Dong", "F. Wei", "K. Xu." ],
+      "venue" : "Conference on Empirical Methods in Natural Language Processing.",
+      "citeRegEx" : "Hao et al\\.,? 2019",
+      "shortCiteRegEx" : "Hao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Dynabert: Dynamic bert with adaptive width and depth",
+      "author" : [ "L. Hou", "Z. Huang", "L. Shang", "X. Jiang", "X. Chen", "Q. Liu." ],
+      "venue" : "Advances in Neural Information Processing Systems.",
+      "citeRegEx" : "Hou et al\\.,? 2020",
+      "shortCiteRegEx" : "Hou et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Loss-aware weight quantization of deep networks",
+      "author" : [ "L. Hou", "J.T. Kwok." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Hou and Kwok.,? 2018",
+      "shortCiteRegEx" : "Hou and Kwok.",
+      "year" : 2018
+    }, {
+      "title" : "Loss-aware binarization of deep networks",
+      "author" : [ "L. Hou", "Yao Q.", "J.T. Kwok." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Hou et al\\.,? 2017",
+      "shortCiteRegEx" : "Hou et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Ghostbert: Generate more features with cheap operations for bert",
+      "author" : [ "Z. Huang", "L Hou", "L. Shang", "X. Jiang", "X. Chen", "Q. Liu." ],
+      "venue" : "Annual Meeting of the Association for Computational Linguistics.",
+      "citeRegEx" : "Huang et al\\.,? 2021",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Binarized neural networks",
+      "author" : [ "I. Hubara", "M. Courbariaux", "D. Soudry", "R. El-Yaniv", "Y. Bengio." ],
+      "venue" : "Advances in neural information processing systems.",
+      "citeRegEx" : "Hubara et al\\.,? 2016",
+      "shortCiteRegEx" : "Hubara et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Tinybert: Distilling bert for natural language understanding",
+      "author" : [ "X. Jiao", "Y. Yin", "L. Shang", "X. Jiang", "X. Chen", "L. Li", "F. Wang", "Q. Liu." ],
+      "venue" : "Findings of Empirical Methods in Natural Language Processing.",
+      "citeRegEx" : "Jiao et al\\.,? 2020",
+      "shortCiteRegEx" : "Jiao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Learning architectures for binary networks",
+      "author" : [ "D. Kim", "K Singh", "J. Choi." ],
+      "venue" : "European Conference on Computer Vision, pages 575–591.",
+      "citeRegEx" : "Kim et al\\.,? 2020",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Binaryduo: Reducing gradient mismatch in binary activation network by coupling binary activations",
+      "author" : [ "H. Kim", "K. Kim", "J. Kim", "J. Kim." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Kim et al\\.,? 2019",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Albert: A lite bert for selfsupervised learning of language representations",
+      "author" : [ "Z. Lan", "M. Chen", "S. Goodman", "K. Gimpel", "P. Sharma", "R. Soricut." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Lan et al\\.,? 2020",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Ternary weight networks",
+      "author" : [ "F. Li", "B. Zhang", "B. Liu." ],
+      "venue" : "Preprint arXiv:1605.04711.",
+      "citeRegEx" : "Li et al\\.,? 2016",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Visualizing the loss landscape of neural nets",
+      "author" : [ "H. Li", "Z. Xu", "G. Taylor", "C. Studer", "T. Goldstein." ],
+      "venue" : "Advances in Neural Information Processing Systems.",
+      "citeRegEx" : "Li et al\\.,? 2018",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Additive powersof-two quantization: a non-uniform discretization for neural networks",
+      "author" : [ "Y. Li", "X. Dong", "W. Wang." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Li et al\\.,? 2020a",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Efficient bitwidth search for practical mixed precision neural network",
+      "author" : [ "Y. Li", "W. Wang", "H. Bai", "R. Gong", "X. Dong", "F. Yu." ],
+      "venue" : "Preprint arXiv:2003.07577.",
+      "citeRegEx" : "Li et al\\.,? 2020b",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Darts: Differentiable architecture search",
+      "author" : [ "H. Liu", "K. Simonyan", "Y. Yang." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Reactnet: Towards precise binary neural network with generalized activation functions",
+      "author" : [ "Z. Liu", "Z. Shen", "M. Savvides", "K. Cheng." ],
+      "venue" : "European Conference on Computer Vision, pages 143–159.",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bi-real net: Enhancing the performance of 1-bit cnns with improved representational capability and advanced training algorithm",
+      "author" : [ "Z. Liu", "B. Wu", "W. Luo", "X. Yang", "W. Liu", "K. Cheng." ],
+      "venue" : "European Conference on Computer Vision.",
+      "citeRegEx" : "Liu et al\\.,? 2018",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A tensorized transformer for language modeling",
+      "author" : [ "X. Ma", "P. Zhang", "S. Zhang", "N. Duan", "Y. Hou", "D. Song", "M. Zhou." ],
+      "venue" : "Advances in Neural Information Processing Systems.",
+      "citeRegEx" : "Ma et al\\.,? 2019",
+      "shortCiteRegEx" : "Ma et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Training binary neural networks with real-tobinary convolutions",
+      "author" : [ "B. Martinez", "J. Yang", "A. Bulat", "G. Tzimiropoulos." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Martinez et al\\.,? 2020",
+      "shortCiteRegEx" : "Martinez et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Are sixteen heads really better than one",
+      "author" : [ "P. Michel", "O. Levy", "G. Neubig" ],
+      "venue" : "In Advances in Neural Information Processing Systems",
+      "citeRegEx" : "Michel et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Michel et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Loss aware post-training quantization",
+      "author" : [ "Y. Nahshan", "B. Chmiel", "C. Baskin", "E. Zheltonozhskii", "R. Banner", "A.M. Bronstein", "A. Mendelson." ],
+      "venue" : "Preprint arXiv:1911.07190.",
+      "citeRegEx" : "Nahshan et al\\.,? 2019",
+      "shortCiteRegEx" : "Nahshan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Know what you don’t know: Unanswerable questions for squad",
+      "author" : [ "P. Rajpurkar", "R. Jia", "P. Liang." ],
+      "venue" : "Preprint arXiv:1806.03822.",
+      "citeRegEx" : "Rajpurkar et al\\.,? 2018",
+      "shortCiteRegEx" : "Rajpurkar et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Squad: 100,000+ questions for machine comprehension of text",
+      "author" : [ "P. Rajpurkar", "J. Zhang", "K. Lopyrev", "P. Liang." ],
+      "venue" : "Preprint arXiv:1606.05250.",
+      "citeRegEx" : "Rajpurkar et al\\.,? 2016",
+      "shortCiteRegEx" : "Rajpurkar et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Xnor-net: Imagenet classification using binary convolutional neural networks",
+      "author" : [ "M. Rastegari", "V. Ordonez", "J. Redmon", "A. Farhadi." ],
+      "venue" : "European Conference on Computer Vision.",
+      "citeRegEx" : "Rastegari et al\\.,? 2016",
+      "shortCiteRegEx" : "Rastegari et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter",
+      "author" : [ "V. Sanh", "L. Debut", "J. Chaumond", "T. Wolf." ],
+      "venue" : "Preprint arXiv:1910.01108.",
+      "citeRegEx" : "Sanh et al\\.,? 2019",
+      "shortCiteRegEx" : "Sanh et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Q-bert: Hessian based ultra low precision quantization of bert",
+      "author" : [ "S. Shen", "Z. Dong", "J. Ye", "L. Ma", "Z. Yao", "A. Gholami", "M.W. Mahoney", "K. Keutzer." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence.",
+      "citeRegEx" : "Shen et al\\.,? 2020",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Patient knowledge distillation for bert model compression",
+      "author" : [ "S. Sun", "Y. Cheng", "Z. Gan", "J. Liu." ],
+      "venue" : "Conference on Empirical Methods in Natural Language Processing.",
+      "citeRegEx" : "Sun et al\\.,? 2019",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "A. Vaswani", "N. Shazeer", "N. Parmar", "J. Uszkoreit", "L. Jones", "A.N. Gomez", "Ł. Kaiser", "I. Polosukhin." ],
+      "venue" : "Advances in neural information processing systems.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Glue: A multi-task benchmark and analysis platform for natural language understanding",
+      "author" : [ "A. Wang", "A. Singh", "J. Michael", "F. Hill", "O. Levy", "S.R. Bowman." ],
+      "venue" : "Preprint arXiv:1804.07461.",
+      "citeRegEx" : "Wang et al\\.,? 2018",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Revisiting parameter sharing for automatic neural channel number search",
+      "author" : [ "J. Wang", "H. Bai", "J. Wu", "X. Shi", "J. Huang", "I. King", "M. Lyu", "J. Cheng." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 33.",
+      "citeRegEx" : "Wang et al\\.,? 2020",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Haq: Hardware-aware automated quantization with mixed precision",
+      "author" : [ "K. Wang", "Z. Liu", "Y. Lin", "J. Lin", "S. Han." ],
+      "venue" : "Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 8612–8620.",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Mixed precision quantization of convnets via differentiable neural architecture search",
+      "author" : [ "B. Wu", "Y. Wang", "P. Zhang", "Y. Tian", "P. Vajda", "K. Keutzer." ],
+      "venue" : "Preprint arXiv:1812.00090.",
+      "citeRegEx" : "Wu et al\\.,? 2018a",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Pocketflow: An automated framework for compressing and accelerating deep neural networks",
+      "author" : [ "J. Wu", "Y. Zhang", "H. Bai", "H. Zhong", "J. Hou", "W. Liu", "J Huang." ],
+      "venue" : "Advances in Neural Information Processing Systems, Workshop on Compact Deep Neu-",
+      "citeRegEx" : "Wu et al\\.,? 2018b",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Splitting steepest descent for growing neural architectures",
+      "author" : [ "L. Wu", "D. Wang", "Q. Liu." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 32.",
+      "citeRegEx" : "Wu et al\\.,? 2019",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Deebert: Dynamic early exiting for accelerating bert inference",
+      "author" : [ "J. Xin", "R. Tang", "J. Lee", "Y. Yu", "J. Lin." ],
+      "venue" : "Annual Meeting of the Association for Computational Linguistics.",
+      "citeRegEx" : "Xin et al\\.,? 2020",
+      "shortCiteRegEx" : "Xin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Gobo: Quantizing attention-based nlp models for low latency and energy efficient inference",
+      "author" : [ "A.H. Zadeh", "A. Moshovos." ],
+      "venue" : "Preprint arXiv:2005.03842.",
+      "citeRegEx" : "Zadeh and Moshovos.,? 2020",
+      "shortCiteRegEx" : "Zadeh and Moshovos.",
+      "year" : 2020
+    }, {
+      "title" : "Q8bert: Quantized 8bit bert",
+      "author" : [ "O. Zafrir", "G. Boudoukh", "P. Izsak", "M. Wasserblat." ],
+      "venue" : "Preprint arXiv:1910.06188.",
+      "citeRegEx" : "Zafrir et al\\.,? 2019",
+      "shortCiteRegEx" : "Zafrir et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Lq-nets: Learned quantization for highly accurate and compact deep neural networks",
+      "author" : [ "D. Zhang", "J. Yang", "D. Ye", "G. Hua." ],
+      "venue" : "European conference on computer vision, pages 365–382.",
+      "citeRegEx" : "Zhang et al\\.,? 2018",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Ternarybert: Distillation-aware ultra-low bit bert",
+      "author" : [ "W. Zhang", "L. Hou", "Y. Yin", "L. Shang", "X. Chen", "X. Jiang", "Q. Liu." ],
+      "venue" : "Conference on Empirical Methods in Natural Language Processing.",
+      "citeRegEx" : "Zhang et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Improving neural network quantization without retraining using outlier channel splitting",
+      "author" : [ "R. Zhao", "Y. Hu", "J. Dotzel", "C. De Sa", "Z. Zhang." ],
+      "venue" : "International Conference on Machine Learning.",
+      "citeRegEx" : "Zhao et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Dorefa-net: Training low bitwidth convolutional neural networks with low bitwidth gradients",
+      "author" : [ "S. Zhou", "Y. Wu", "Z. Ni", "X. Zhou", "H. Wen", "Y. Zou." ],
+      "venue" : "Preprint arXiv:1606.06160.",
+      "citeRegEx" : "Zhou et al\\.,? 2016",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Bert loses patience: Fast and robust inference with early exit",
+      "author" : [ "W. Zhou", "C. Xu", "T. Ge", "J. McAuley", "K. Xu", "F. Wei." ],
+      "venue" : "Advances in Neural Information Processing Systems.",
+      "citeRegEx" : "Zhou et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "2020), here we further conduct ablation study of knowledge distillation on the proposed ternary weight splitting. We compare with no distillation (“N/A”), prediction distillation (“Pred”) and our default setting",
+      "author" : [ "Zhang" ],
+      "venue" : null,
+      "citeRegEx" : "Zhang,? \\Q2020\\E",
+      "shortCiteRegEx" : "Zhang",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 39,
+      "context" : "Recent pre-trained language models have achieved remarkable performance improvement in various natural language tasks (Vaswani et al., 2017; Devlin et al., 2019).",
+      "startOffset" : 118,
+      "endOffset" : 161
+    }, {
+      "referenceID" : 6,
+      "context" : "Recent pre-trained language models have achieved remarkable performance improvement in various natural language tasks (Vaswani et al., 2017; Devlin et al., 2019).",
+      "startOffset" : 118,
+      "endOffset" : 161
+    }, {
+      "referenceID" : 36,
+      "context" : "Various methods have been recently proposed to compress these models, such as knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Jiao et al., 2020), pruning (Michel et al.",
+      "startOffset" : 101,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 38,
+      "context" : "Various methods have been recently proposed to compress these models, such as knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Jiao et al., 2020), pruning (Michel et al.",
+      "startOffset" : 101,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 18,
+      "context" : "Various methods have been recently proposed to compress these models, such as knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Jiao et al., 2020), pruning (Michel et al.",
+      "startOffset" : 101,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 31,
+      "context" : ", 2020), pruning (Michel et al., 2019; Fan et al., 2019), low-rank approximation (Ma et al.",
+      "startOffset" : 17,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2020), pruning (Michel et al., 2019; Fan et al., 2019), low-rank approximation (Ma et al.",
+      "startOffset" : 17,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 29,
+      "context" : ", 2019), low-rank approximation (Ma et al., 2019; Lan et al., 2020), weightsharing (Dehghani et al.",
+      "startOffset" : 32,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2019), low-rank approximation (Ma et al., 2019; Lan et al., 2020), weightsharing (Dehghani et al.",
+      "startOffset" : 32,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 5,
+      "context" : ", 2020), weightsharing (Dehghani et al., 2019; Lan et al., 2020; Huang et al., 2021), dynamic networks with adaptive depth and/or width (Hou et al.",
+      "startOffset" : 23,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2020), weightsharing (Dehghani et al., 2019; Lan et al., 2020; Huang et al., 2021), dynamic networks with adaptive depth and/or width (Hou et al.",
+      "startOffset" : 23,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2020), weightsharing (Dehghani et al., 2019; Lan et al., 2020; Huang et al., 2021), dynamic networks with adaptive depth and/or width (Hou et al.",
+      "startOffset" : 23,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2021), dynamic networks with adaptive depth and/or width (Hou et al., 2020; Xin et al., 2020; Zhou et al., 2020), and quantization (Zafrir (a) MRPC.",
+      "startOffset" : 59,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 46,
+      "context" : ", 2021), dynamic networks with adaptive depth and/or width (Hou et al., 2020; Xin et al., 2020; Zhou et al., 2020), and quantization (Zafrir (a) MRPC.",
+      "startOffset" : 59,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 53,
+      "context" : ", 2021), dynamic networks with adaptive depth and/or width (Hou et al., 2020; Xin et al., 2020; Zhou et al., 2020), and quantization (Zafrir (a) MRPC.",
+      "startOffset" : 59,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 48,
+      "context" : "Existing attempts try to quantize pre-trained models (Zafrir et al., 2019; Shen et al., 2020; Fan et al., 2020) to even as low as ternary values (2-bit) with minor performance drop (Zhang et al.",
+      "startOffset" : 53,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 37,
+      "context" : "Existing attempts try to quantize pre-trained models (Zafrir et al., 2019; Shen et al., 2020; Fan et al., 2020) to even as low as ternary values (2-bit) with minor performance drop (Zhang et al.",
+      "startOffset" : 53,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 10,
+      "context" : "Existing attempts try to quantize pre-trained models (Zafrir et al., 2019; Shen et al., 2020; Fan et al., 2020) to even as low as ternary values (2-bit) with minor performance drop (Zhang et al.",
+      "startOffset" : 53,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 50,
+      "context" : ", 2020) to even as low as ternary values (2-bit) with minor performance drop (Zhang et al., 2020).",
+      "startOffset" : 77,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 4,
+      "context" : "Moreover, quantizing activations to 8-bit or 4-bit further replaces the floating-point addition with int8 and int4 addition, decreasing the energy burden and the area usage on chips (Courbariaux et al., 2015).",
+      "startOffset" : 182,
+      "endOffset" : 208
+    }, {
+      "referenceID" : 3,
+      "context" : "While neuron splitting is previously studied (Chen et al., 2016; Wu et al., 2019) for full-precision network, our ternary weight splitting is much more complex due to the additional equivalence requirement of quantized weights.",
+      "startOffset" : 45,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 45,
+      "context" : "While neuron splitting is previously studied (Chen et al., 2016; Wu et al., 2019) for full-precision network, our ternary weight splitting is much more complex due to the additional equivalence requirement of quantized weights.",
+      "startOffset" : 45,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 52,
+      "context" : "We follow the standard quantization-aware training procedure (Zhou et al., 2016).",
+      "startOffset" : 61,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 4,
+      "context" : "During back propagation, we use ∇`(ŵ) to update latent fullprecision weights w due to the non-differentiability of Q(·), which is known as the straight-through estimator (Courbariaux et al., 2015).",
+      "startOffset" : 170,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 50,
+      "context" : "Recent TernaryBERT (Zhang et al., 2020) follows Ternary-Weight-Network (TWN) (Li et al.",
+      "startOffset" : 19,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2020) follows Ternary-Weight-Network (TWN) (Li et al., 2016) to quantize the elements in w to three values {±α, 0}.",
+      "startOffset" : 45,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 4,
+      "context" : "Binarization is first proposed in (Courbariaux et al., 2015) and has been extensively studied in the academia (Rastegari et al.",
+      "startOffset" : 34,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 35,
+      "context" : ", 2015) and has been extensively studied in the academia (Rastegari et al., 2016; Hubara et al., 2016; Liu et al., 2018).",
+      "startOffset" : 57,
+      "endOffset" : 120
+    }, {
+      "referenceID" : 17,
+      "context" : ", 2015) and has been extensively studied in the academia (Rastegari et al., 2016; Hubara et al., 2016; Liu et al., 2018).",
+      "startOffset" : 57,
+      "endOffset" : 120
+    }, {
+      "referenceID" : 28,
+      "context" : ", 2015) and has been extensively studied in the academia (Rastegari et al., 2016; Hubara et al., 2016; Liu et al., 2018).",
+      "startOffset" : 57,
+      "endOffset" : 120
+    }, {
+      "referenceID" : 17,
+      "context" : "As a representative work, Binary-Weight-Network (BWN) (Hubara et al., 2016) binarizes wb elementwisely with a scaling parameter α as follows:",
+      "startOffset" : 54,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 40,
+      "context" : "To study the performance drop of BERT quantization, we train the BERT model with fullprecision, {8,4,3,2,1}-bit weight quantization and 8-bit activations on MRPC and MNLI-m from the GLUE benchmark (Wang et al., 2018) 1.",
+      "startOffset" : 197,
+      "endOffset" : 216
+    }, {
+      "referenceID" : 14,
+      "context" : "We use loss-aware weight quantization (LAQ) (Hou and Kwok, 2018) for 8/4/3-bit weight quantization, TWN (Li et al.",
+      "startOffset" : 44,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 22,
+      "context" : "We use loss-aware weight quantization (LAQ) (Hou and Kwok, 2018) for 8/4/3-bit weight quantization, TWN (Li et al., 2016) for weight ternarization and BWN (Hubara et al.",
+      "startOffset" : 104,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 17,
+      "context" : ", 2016) for weight ternarization and BWN (Hubara et al., 2016) for weight binarization.",
+      "startOffset" : 41,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 37,
+      "context" : "Therefore, weight binarization may severely harm the performance, which may explain why most current approaches stop at 2-bit weight quantization (Shen et al., 2020; Zadeh and Moshovos, 2020; Zhang et al., 2020).",
+      "startOffset" : 146,
+      "endOffset" : 211
+    }, {
+      "referenceID" : 47,
+      "context" : "Therefore, weight binarization may severely harm the performance, which may explain why most current approaches stop at 2-bit weight quantization (Shen et al., 2020; Zadeh and Moshovos, 2020; Zhang et al., 2020).",
+      "startOffset" : 146,
+      "endOffset" : 211
+    }, {
+      "referenceID" : 50,
+      "context" : "Therefore, weight binarization may severely harm the performance, which may explain why most current approaches stop at 2-bit weight quantization (Shen et al., 2020; Zadeh and Moshovos, 2020; Zhang et al., 2020).",
+      "startOffset" : 146,
+      "endOffset" : 211
+    }, {
+      "referenceID" : 32,
+      "context" : "Following (Nahshan et al., 2019), we extract parameters wx,wy from the value layers2 of multi-head attention in the first two Transformer layers, and assign the following perturbations on parameters:",
+      "startOffset" : 10,
+      "endOffset" : 32
+    }, {
+      "referenceID" : 50,
+      "context" : "This may also explain why the BERT model can be ternarized without severe accuracy drop (Zhang et al., 2020).",
+      "startOffset" : 88,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 37,
+      "context" : "Following (Shen et al., 2020) we adopt the power method to compute λmax.",
+      "startOffset" : 10,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 50,
+      "context" : "Following (Zhang et al., 2020), for each weight matrix in the Transformer layers, we use layer-wise ternarization (i.",
+      "startOffset" : 10,
+      "endOffset" : 30
+    }, {
+      "referenceID" : 37,
+      "context" : "Aside from weight binarization, we simultaneously quantize activations before all matrix multiplications, which could accelerate inference on specialized hardwares (Shen et al., 2020; Zafrir et al., 2019).",
+      "startOffset" : 164,
+      "endOffset" : 204
+    }, {
+      "referenceID" : 48,
+      "context" : "Aside from weight binarization, we simultaneously quantize activations before all matrix multiplications, which could accelerate inference on specialized hardwares (Shen et al., 2020; Zafrir et al., 2019).",
+      "startOffset" : 164,
+      "endOffset" : 204
+    }, {
+      "referenceID" : 48,
+      "context" : "Following (Zafrir et al., 2019; Zhang et al., 2020), we skip the quantization for all layernormalization (LN) layers, skip connections, and bias as their calculations are negligible compared to matrix multiplication.",
+      "startOffset" : 10,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 50,
+      "context" : "Following (Zafrir et al., 2019; Zhang et al., 2020), we skip the quantization for all layernormalization (LN) layers, skip connections, and bias as their calculations are negligible compared to matrix multiplication.",
+      "startOffset" : 10,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 50,
+      "context" : "Knowledge distillation is shown to benefit BERT quantization (Zhang et al., 2020).",
+      "startOffset" : 61,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 18,
+      "context" : "Following (Jiao et al., 2020; Zhang et al., 2020), we first perform intermediate-layer distillation from the fullprecision teacher network’s embedding E, layerwise MHA output Ml and FFN output Fl to the quantized student counterpart Ê, M̂l, F̂l (l = 1, 2, .",
+      "startOffset" : 10,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 50,
+      "context" : "Following (Jiao et al., 2020; Zhang et al., 2020), we first perform intermediate-layer distillation from the fullprecision teacher network’s embedding E, layerwise MHA output Ml and FFN output Fl to the quantized student counterpart Ê, M̂l, F̂l (l = 1, 2, .",
+      "startOffset" : 10,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 40,
+      "context" : "In this section, we empirically verify our proposed approach on the GLUE (Wang et al., 2018) and SQuAD (Rajpurkar et al.",
+      "startOffset" : 73,
+      "endOffset" : 92
+    }, {
+      "referenceID" : 52,
+      "context" : "For quantized operations, we follow (Zhou et al., 2016; Liu et al., 2018; Li et al., 2020a) to count the bit-wise operations, i.",
+      "startOffset" : 36,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 28,
+      "context" : "For quantized operations, we follow (Zhou et al., 2016; Liu et al., 2018; Li et al., 2020a) to count the bit-wise operations, i.",
+      "startOffset" : 36,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 24,
+      "context" : "For quantized operations, we follow (Zhou et al., 2016; Liu et al., 2018; Li et al., 2020a) to count the bit-wise operations, i.",
+      "startOffset" : 36,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 13,
+      "context" : "We take DynaBERT (Hou et al., 2020) sub-networks as backbones as they offer both half-sized and full-sized models for easy comparison.",
+      "startOffset" : 17,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 18,
+      "context" : "Following (Jiao et al., 2020; Hou et al., 2020; Zhang et al., 2020), we adopt data augmentation with one training epoch in each stage on all GLUE tasks except for MNLI and QQP.",
+      "startOffset" : 10,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 13,
+      "context" : "Following (Jiao et al., 2020; Hou et al., 2020; Zhang et al., 2020), we adopt data augmentation with one training epoch in each stage on all GLUE tasks except for MNLI and QQP.",
+      "startOffset" : 10,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 50,
+      "context" : "Following (Jiao et al., 2020; Hou et al., 2020; Zhang et al., 2020), we adopt data augmentation with one training epoch in each stage on all GLUE tasks except for MNLI and QQP.",
+      "startOffset" : 10,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 17,
+      "context" : "While BinaryBERT focuses on weight binarization, we also explore activation quantization in our implementation, which is beneficial for reducing the computation burden on specialized hardwares (Hubara et al., 2016; Zhou et al., 2016; Zhang et al., 2020).",
+      "startOffset" : 193,
+      "endOffset" : 253
+    }, {
+      "referenceID" : 52,
+      "context" : "While BinaryBERT focuses on weight binarization, we also explore activation quantization in our implementation, which is beneficial for reducing the computation burden on specialized hardwares (Hubara et al., 2016; Zhou et al., 2016; Zhang et al., 2020).",
+      "startOffset" : 193,
+      "endOffset" : 253
+    }, {
+      "referenceID" : 50,
+      "context" : "While BinaryBERT focuses on weight binarization, we also explore activation quantization in our implementation, which is beneficial for reducing the computation burden on specialized hardwares (Hubara et al., 2016; Zhou et al., 2016; Zhang et al., 2020).",
+      "startOffset" : 193,
+      "endOffset" : 253
+    }, {
+      "referenceID" : 50,
+      "context" : "Aside from 8-bit uniform quantization (Zhang et al., 2020; Shen et al., 2020) in past efforts, we further pioneer to study 4-bit activation quantization.",
+      "startOffset" : 38,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 37,
+      "context" : "Aside from 8-bit uniform quantization (Zhang et al., 2020; Shen et al., 2020) in past efforts, we further pioneer to study 4-bit activation quantization.",
+      "startOffset" : 38,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 8,
+      "context" : "Thus we use Learned Step-size Quantization (LSQ) (Esser et al., 2019) to directly learn the quantized values, which empirically achieves better quantization performance.",
+      "startOffset" : 49,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 37,
+      "context" : "Now we compare our proposed approach with a variety of state-of-the-art counterparts, including Q-BERT (Shen et al., 2020), GOBO (Zadeh and Moshovos, 2020), Quant-Noise (Fan et al.",
+      "startOffset" : 103,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 47,
+      "context" : ", 2020), GOBO (Zadeh and Moshovos, 2020), Quant-Noise (Fan et al.",
+      "startOffset" : 14,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2020), GOBO (Zadeh and Moshovos, 2020), Quant-Noise (Fan et al., 2020) and TernaryBERT (Zhang et al.",
+      "startOffset" : 54,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 36,
+      "context" : "Aside from quantization, we also compare with other general compression approaches such as DistillBERT (Sanh et al., 2019), LayerDrop (Fan et al.",
+      "startOffset" : 103,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2019), LayerDrop (Fan et al., 2019), TinyBERT (Jiao et al.",
+      "startOffset" : 19,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 18,
+      "context" : ", 2019), TinyBERT (Jiao et al., 2020), and ALBERT (Lan et al.",
+      "startOffset" : 18,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 23,
+      "context" : "We also follow (Li et al., 2018; Hao et al., 2019) to visualize the optimization trajectory after splitting in Figures 6(c) and 6(d).",
+      "startOffset" : 15,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 12,
+      "context" : "We also follow (Li et al., 2018; Hao et al., 2019) to visualize the optimization trajectory after splitting in Figures 6(c) and 6(d).",
+      "startOffset" : 15,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 15,
+      "context" : "Aside from BWN, we compare with LAB (Hou et al., 2017) and BiReal (Liu et al.",
+      "startOffset" : 36,
+      "endOffset" : 54
+    }, {
+      "referenceID" : 35,
+      "context" : "Existing binarization approaches can be categorized into quantization error minimization (Rastegari et al., 2016; Hou et al., 2017; Zhang et al., 2018), improving training objectives (Martinez et al.",
+      "startOffset" : 89,
+      "endOffset" : 151
+    }, {
+      "referenceID" : 15,
+      "context" : "Existing binarization approaches can be categorized into quantization error minimization (Rastegari et al., 2016; Hou et al., 2017; Zhang et al., 2018), improving training objectives (Martinez et al.",
+      "startOffset" : 89,
+      "endOffset" : 151
+    }, {
+      "referenceID" : 49,
+      "context" : "Existing binarization approaches can be categorized into quantization error minimization (Rastegari et al., 2016; Hou et al., 2017; Zhang et al., 2018), improving training objectives (Martinez et al.",
+      "startOffset" : 89,
+      "endOffset" : 151
+    }, {
+      "referenceID" : 30,
+      "context" : ", 2018), improving training objectives (Martinez et al., 2020; Bai et al., 2020) and reduction of gradient mismatch (Bai et al.",
+      "startOffset" : 39,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2018), improving training objectives (Martinez et al., 2020; Bai et al., 2020) and reduction of gradient mismatch (Bai et al.",
+      "startOffset" : 39,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2020) and reduction of gradient mismatch (Bai et al., 2018; Liu et al., 2018, 2020).",
+      "startOffset" : 43,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 48,
+      "context" : "Previous works on BERT quantization (Zafrir et al., 2019; Shen et al., 2020; Zhang et al., 2020) push down the bit-width to as low as two, but none of them achieves binarization.",
+      "startOffset" : 36,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 37,
+      "context" : "Previous works on BERT quantization (Zafrir et al., 2019; Shen et al., 2020; Zhang et al., 2020) push down the bit-width to as low as two, but none of them achieves binarization.",
+      "startOffset" : 36,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 50,
+      "context" : "Previous works on BERT quantization (Zafrir et al., 2019; Shen et al., 2020; Zhang et al., 2020) push down the bit-width to as low as two, but none of them achieves binarization.",
+      "startOffset" : 36,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 7,
+      "context" : "Given the observation that neural network layers exhibit different sensitivity to quantization (Dong et al., 2019; Wang et al., 2019), mixed-precision quantization re-allocate layer-wise quantization bit-width for higher compression ratio.",
+      "startOffset" : 95,
+      "endOffset" : 133
+    }, {
+      "referenceID" : 42,
+      "context" : "Given the observation that neural network layers exhibit different sensitivity to quantization (Dong et al., 2019; Wang et al., 2019), mixed-precision quantization re-allocate layer-wise quantization bit-width for higher compression ratio.",
+      "startOffset" : 95,
+      "endOffset" : 133
+    }, {
+      "referenceID" : 26,
+      "context" : "Inspired by neural architecture search (Liu et al., 2019; Wang et al., 2020), common approaches of mixedprecision quantization are primarily based on differentiable search (Wu et al.",
+      "startOffset" : 39,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 41,
+      "context" : "Inspired by neural architecture search (Liu et al., 2019; Wang et al., 2020), common approaches of mixedprecision quantization are primarily based on differentiable search (Wu et al.",
+      "startOffset" : 39,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 43,
+      "context" : ", 2020), common approaches of mixedprecision quantization are primarily based on differentiable search (Wu et al., 2018a; Li et al., 2020b), reinforcement learning (Wu et al.",
+      "startOffset" : 103,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2020), common approaches of mixedprecision quantization are primarily based on differentiable search (Wu et al., 2018a; Li et al., 2020b), reinforcement learning (Wu et al.",
+      "startOffset" : 103,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 44,
+      "context" : ", 2020b), reinforcement learning (Wu et al., 2018b; Wang et al., 2019), or simply loss curvatures (Dong et al.",
+      "startOffset" : 33,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 42,
+      "context" : ", 2020b), reinforcement learning (Wu et al., 2018b; Wang et al., 2019), or simply loss curvatures (Dong et al.",
+      "startOffset" : 33,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 7,
+      "context" : ", 2019), or simply loss curvatures (Dong et al., 2019; Shen et al., 2020).",
+      "startOffset" : 35,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 37,
+      "context" : ", 2019), or simply loss curvatures (Dong et al., 2019; Shen et al., 2020).",
+      "startOffset" : 35,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 11,
+      "context" : "While mixedprecision quantized models usually demonstrate better performance than traditional methods under the same compression ratio, they are also harder to deploy (Habi et al., 2020).",
+      "startOffset" : 167,
+      "endOffset" : 186
+    }, {
+      "referenceID" : 19,
+      "context" : "There are also works on binary neural architecture search (Kim et al., 2020; Bulat et al., 2020) which have a similar purpose to mixed-precision quantization.",
+      "startOffset" : 58,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 2,
+      "context" : "There are also works on binary neural architecture search (Kim et al., 2020; Bulat et al., 2020) which have a similar purpose to mixed-precision quantization.",
+      "startOffset" : 58,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 3,
+      "context" : "Neuron splitting is originally proposed to accelerate the network training, by progressively increasing the width of a network (Chen et al., 2016; Wu et al., 2019).",
+      "startOffset" : 127,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 45,
+      "context" : "Neuron splitting is originally proposed to accelerate the network training, by progressively increasing the width of a network (Chen et al., 2016; Wu et al., 2019).",
+      "startOffset" : 127,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 51,
+      "context" : "Recently, neuron splitting is also studied in quantization (Zhao et al., 2019; Kim et al., 2019).",
+      "startOffset" : 59,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 20,
+      "context" : "Recently, neuron splitting is also studied in quantization (Zhao et al., 2019; Kim et al., 2019).",
+      "startOffset" : 59,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 51,
+      "context" : "By splitting neurons with large magnitudes, the full-precision outliers are removed and thus the quantization error can be effectively reduced (Zhao et al., 2019).",
+      "startOffset" : 143,
+      "endOffset" : 162
+    } ],
+    "year" : 2021,
+    "abstractText" : "The rapid development of large pre-trained language models has greatly increased the demand for model compression techniques, among which quantization is a popular solution. In this paper, we propose BinaryBERT, which pushes BERT quantization to the limit by weight binarization. We find that a binary BERT is hard to be trained directly than a ternary counterpart due to its complex and irregular loss landscape. Therefore, we propose ternary weight splitting, which initializes BinaryBERT by equivalently splitting from a half-sized ternary network. The binary model thus inherits the good performance of the ternary one, and can be further enhanced by fine-tuning the new architecture after splitting. Empirical results show that our BinaryBERT has only a slight performance drop compared with the full-precision model while being 24× smaller, achieving the state-of-the-art compression results on the GLUE and SQuAD benchmarks.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

@@ -1,0 +1,336 @@
+{
+  "name" : "2021.acl-long.253.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Answering Ambiguous Questions through Generative Evidence Fusion and Round-Trip Prediction",
+    "authors" : [ "Yifan Gao", "Henghui Zhu", "Patrick Ng", "Cicero Nogueira dos Santos", "Zhiguo Wang", "Feng Nan", "Dejiao Zhang", "Ramesh Nallapati", "Andrew O. Arnold", "Bing Xiang" ],
+    "emails" : [ "yifangao95@gmail.com", "henghui@amazon.com", "patricng@amazon.com", "cicnog@amazon.com", "zhiguow@amazon.com", "nanfen@amazon.com", "dejiaoz@amazon.com", "rnallapa@amazon.com", "anarnld@amazon.com", "bxiang@amazon.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 3263–3276\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n3263\nIn open-domain question answering, questions are highly likely to be ambiguous because users may not know the scope of relevant topics when formulating them. Therefore, a system needs to find possible interpretations of the question, and predict one or multiple plausible answers. When multiple plausible answers are found, the system should rewrite the question for each answer to resolve the ambiguity. In this paper, we present a model that aggregates and combines evidence from multiple passages to adaptively predict a single answer or a set of question-answer pairs for ambiguous questions. In addition, we propose a novel round-trip prediction approach to iteratively generate additional interpretations that our model fails to find in the first pass, and then verify and filter out the incorrect questionanswer pairs to arrive at the final disambiguated output. Our model, named REFUEL, achieves a new state-of-the-art performance on the AMBIGQA dataset, and shows competitive performance on NQ-OPEN and TriviaQA. The proposed round-trip prediction is a model-agnostic general approach for answering ambiguous open-domain questions, which improves our REFUEL as well as several baseline models. We release source code for our models and experiments at https://github. com/amzn/refuel-open-domain-qa."
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Open-domain Question Answering (QA) is the task of answering questions using a collection of passages with diverse topics (Chen et al., 2017; Guu et al., 2020; Karpukhin et al., 2020). Open-domain questions are highly likely to be ambiguous because people may not have the knowledge of relevant topics when formulating them. For example, in Figure 1, the prompt question “What’s the most\n∗Work done during an internship at AWS AI.\npoints scored in an NBA game?” is ambiguous because the score in this question could be interpreted as the combined score in a game (Q1A1), score from a single team (Q2A2), or score from an individual player (Q3A3). Therefore, a system needs to adaptively predict a single answer, or a set of equally plausible answers when the question has multiple interpretations. When a set of multiple answers is predicted, an unambiguous rewriting of the question that leads to each answer should also be provided to clarify each interpretation.\nMin et al. (2020) decompose this problem into two subtasks. Given the prompt question and Wikipedia passages, the first subtask, Answer Prediction, consists in predicting one or several plausible answers, depending on whether this question is ambiguous or not. If multiple answers are predicted, the second subtask, Question Disambiguation, requires generating a disambiguated question for each of the plausible answers. They propose SPANSEQGEN, which first retrieves and reranks\npassages using the prompt question, and then adopts a BART pre-trained sequence-to-sequence model (Lewis et al., 2020a) to generate all plausible answers, conditioned on the concatenation of the prompt question and top 8 passages. For the question disambiguation subtask, based on BART, they first pre-train a question generation model on NQ-OPEN (Kwiatkowski et al., 2019), a large-scale open-domain QA dataset, to generate the question given the answer and top 8 passages. Then they fine-tune it as a question disambiguation model to generate the disambiguated question conditioned on the prompt question, answer, and passages.\nThere are three main drawbacks to SPANSEQGEN. Firstly, a complete coverage of all relevant passages is essential for predicting all plausible answers of the ambiguous question. However, SPANSEQGEN only takes 8 passages for answer prediction so some of the most informative passages might be excluded. Secondly, for the question disambiguation subtask, there is a mismatch between question generation pre-training on NQ-OPEN and question disambiguation finetuning on AMBIGQA – there is no question to disambiguate in question generation pre-training, which makes the pre-training task somewhat misaligned with fine-tuning. Thirdly, SPANSEQGEN predicts a much smaller average number of answers compared to the ground truth data (1.17 vs. 2.19).\nTo address these issues, we propose REFUEL, Round-trip Evidence FUsion via gEneration with retrievaL, a new framework for answering ambiguous open-domain questions. To ensure a broad coverage of relevant knowledge of the question, REFUEL reads 12 times more passages (100 in our experiments) than SPANSEQGEN by using Fusionin-Decoder (Izacard and Grave, 2020) that processes each passage individually in the encoder, and then fused their encodings together in the decoder. For the question disambiguation subtask, we propose a token-deletion pre-training task to transform NQ-OPEN into an “ambiguous” QA setting by randomly deleting an informative span for each question. Thus, pre-training and fine-tuning tasks are well aligned. Additionally, we add an insertionbased weighted loss to emphasize the newly inserted tokens in the disambiguated question, which helps the model on learning to resolve the ambiguity. Finally, we propose a round-trip prediction approach to find additional interpretations that REFUEL fails to predict in the first pass. We contin-\nuously feed the generated questions into REFUEL until there are no new answers predicted from our model. While this round-trip prediction can improve the recall of answers, we refine the quality of predicted QA pairs by filtering them with the conditional probability of the answers estimated by an answer-generation model.\nOur REFUEL achieves a new state-of-the-art on the AMBIGQA dataset, outperforming the previous best model SPANSEQGEN by 9.1% in answer prediction F1 and 4.4% in Edit-F1 score for question disambiguation. When directly doing inference on NQ-OPEN and TriviaQA, REFUEL not only predicts the single answer precisely but also finds multiple interpretations if the question is ambiguous. Moreover, human evaluation shows that REFUEL can correctly generate more QA pairs on all three datasets. Finally, the proposed round-trip prediction is a model-agnostic general approach for answering ambiguous questions, which improves our REFUEL as well as several baseline models up to 3.7% for the overall performance.\nThe main contributions of this work, which are fundamental to significantly push the state-of-theart in answering ambiguous questions, can be summarized as follows:\n1. We present an evidence aggregation approach that can effectively use a large number of passages to uncover more candidate interpretations of the ambiguous question. 2. We propose a token-deletion pre-training task to reduce the mismatch between pre-training and fine-tuning for question disambiguation. The insertion-based weighted loss further helps to capture answer-relevant constraints. 3. We propose a round-trip prediction approach to find more interpretations missed in the first prediction pass, which we further refine using a conditional-probability-based filtering approach."
+    }, {
+      "heading" : "2 REFUEL",
+      "text" : "REFUEL answers questions through a three-step process illustrated in Figure 2:\n1. The Passage Retrieval & Reranking module retrieves question-relevant passages from the whole Wikipedia corpus. Then the retrieved passages are further reranked (Sec. 2.1). 2. Taking the reranked passages and the prompt question as input, our single pass QA pair generation model makes the first prediction\nPrompt Question Q!\nPassage Retrieval & Reranking\nAnswer Prediction\nQ!, A\", Passages If #Predicted Answers > 1 …\nQuestion Disambiguation\nQuestion Disambiguation\nQ\"#\nQ$#\n……Top K Passages\nPrompt Q!\nA\", … , A$ Q!, A$, Passages\n1. Retrieval & Reranking 2. Single Pass QA Pair Generation\n3. Round-Trip Prediction\nAP QD Q%& A\"\nA$ … Q'# AP\nQD \uD835\uDC44! A\"\nA(\nQ\"#\nQD Q(# APQ\"&\nA\"\nA) QD Q)#\nterminate!\nExample of Round-Trip Prediction:\n…\nSingle Pass QA Pair Generation 1st Round-Trip Generation\nNewA!?\n2nd 3rd\n…Top K Passages New! \uD835\uDC44!\nFigure 2: Overall Pipeline of REFUEL. REFUEL firstly retrieves question-relevant passages (Section 2.1). Then it generates first-pass QA pairs through the Answer Prediction (AP) module and Question Disambiguation (QP) module (Section 3). Finally, generated disambiguated questions Qd are further taken as the input of our pipeline to find more interpretations (Round-Trip Prediction). If the generated question Qd still has multiple interpretations, the newly predicted answers will receive their own questions (Section 2.3).\npass to predict a single answer or a set of disambiguated QA pairs (Sec. 2.2). 3. Our proposed Round-Trip Prediction can find more interpretations missed in the first prediction pass, which we further refine using a conditional-probability-based filtering approach (Sec. 2.3)."
+    }, {
+      "heading" : "2.1 Passage Retrieval & Reranking",
+      "text" : "We use Dense Passage Retriever (DPR) (Karpukhin et al., 2020) for retrieval. First, we split all Wikipedia pages into 100-token passages, resulting in 24M passages in total. Then DPR maps all passages into d-dimensional vectors, computes the representation of the prompt question, and retrieves N passages whose vectors are closest to the question vector (we use N=1000).\nAfter retrieving N passages for the prompt question, we fine-tune BERT (Devlin et al., 2019) to rerank these passages. Taking the concatenation of the prompt question and each passage as input, the reranker allows a token-level cross-attention between the prompt question and passages. The relevance score is then derived by taking the [CLS] vector of the input sequence into a linear layer. After reranking, the QA pair generation model takes the top K passages as inputs (we use K=100)."
+    }, {
+      "heading" : "2.2 Single Pass QA Pair Generation",
+      "text" : "The single pass QA pair generation step includes an Answer Prediction module and a Question Disambiguation module. Firstly, taking the reranked passages and the prompt question Qp as input, the Answer Prediction module generates one or multiple\nplausible answers A1, ..., Am. If multiple plausible answers are found, the prompt question is treated as ambiguous so that the Question Disambiguation module generates a disambiguated question Qdi for each predicted answer Ai. Note that our general pipeline in Figure 2 does not limit the implementation of Answer Prediction module and Question Disambiguation module, and it can work for our REFUEL as well as several baselines (shown in Sec. 4.3). Our implementation is detailed in Sec. 3."
+    }, {
+      "heading" : "2.3 Round-Trip Prediction",
+      "text" : "During answering ambiguous questions, it might be difficult to find every possible interpretation in the first prediction pass, and existing work (Min et al., 2020) predicts 47% less answers compared with the ground truth. Therefore, we propose round-trip prediction, which includes a Round-Trip Generation step and a Language Model Verification Step.\nRound-Trip Generation. Keeping the same retrieved passages, we continuously feed the generated disambiguated questions into the Answer Prediction module to check if any new answers are generated, and generate their corresponding disambiguated questions until there are no newly predicted answers. As exemplified in Figure 2, (Qd1,A1), (Q d 2,A2) are two disambiguated QA pairs of the ambiguous prompt question Qp after the first prediction pass. When feeding Qd1 to the Answer Prediction module again (1st Round-Trip Prediction), we find that besides the previously predicted answer A1, a new answer candidate A3 is predicted. Then we generate its corresponding question Qd3 accordingly. This loop continues until\nPrompt Question Q! Passage Retrieval & Rerank\nAnswer Prediction\nQ!, A\", Passages If # Predicted Answers > 1 …\nQuestion Disambiguation\nQuestion Disambiguation\nQ\"#\nQ$#\n……Top K Passages\nPrompt Q!\nA\", … , A$ Q!, A$, Passages\nRetrieval & Rerank Answer Prediction Question Disambiguation\nPrompt Question Q! Passage Retrieval & Rerank\nAnswer Prediction\nQ!, A\", Passages If # Predicted Answers > 1 …\nQuestion Disambiguation\nQuestion Disambiguation\nQ\"#\nQ$#\n……Top K Passages\nPrompt Q!\nA\", … , A$ Q!, A$, Passages\nRetrieval & Rerank Answer Prediction Question Disambiguation\nthere are no newly predicted answers.\nLanguage Model Verification. Through the Round-Trip Generation, we generate a bunch of QA pairs from the ambiguous prompt question, but some of them are incorrect. Here we adopt a verification process to filter out these incorrect predictions. Recent works in synthetic QA pair generation (Alberti et al., 2019; Puri et al., 2020) use an “Exact Match (EM) Verification” approach to prune the QA pairs. They separately train a QA model as the verification model, and drop the predicted (q, a) when the verification model’s answer a′ 6= a. However, this EM Verification approach is only suitable for factoid reading comprehension tasks such as SQuAD (Rajpurkar et al., 2016), in which the QA model has near-human accuracy so that it will not falsely filter out too many correct QA pairs. In open-domain QA, the current best model can only have 51.4% EM accuracy on the NQ-OPEN dataset (Izacard and Grave, 2020).\nInstead of using hard filtering, we employ a “Language Model (LM) Verification” approach that is similar to the LM filtering method of Shakeri et al. (2020). LM Verification is a conditionalprobability-based approach to filter out QA pairs softly. In “LM Verification”, we first train a conditional language model using the gold disambiguated QA pairs from AMBIGQA. The conditional language model is trained to estimate the likelihood of an answer given the golden disambiguated question. Once training is done, it is used to score the generated QA pair (q, a) from REFUEL, which is the likelihood of the answer a given the question q and passages,\nLM score = ΣNai=1log p(a i|q, passages), (1)\nwhere Na is the length of the generated answer. Finally, we rerank all predicted QA pairs according to the LM score, and drop the QA pairs according to a threshold Th = 6.1. The threshold is tuned according using the development set."
+    }, {
+      "heading" : "3 Single Pass QA Pair Generation Details",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Answer Prediction",
+      "text" : "SPANSEQGEN (Min et al., 2020) concatenates the prompt question and top reranked passages into a single sequence for BART encoding, which is extremely limited by the maximum input sequence length of BART (1024 subwords, equivalent to 8 passages). Consequently, SPANSEQGEN finds fewer interpretations of the prompt question compared to the ground truth (1.17 vs 2.19). To ensure a broad coverage of retrieved & reranked passages, our Answer Prediction module uses the Fusionin-Decoder approach (Izacard and Grave, 2020), which allows us to scale the number of processed passages. As shown in Figure 3, our BART-based Answer Prediction module BARTAP encodes the concatenation of the prompt question and each passage independently. Then all encoded token-level representations are concatenated into a single sequence, and the BARTAP decoder performs attention over all passages to aggregate and combine evidence. Finally, the BARTAP decoder generates a sequence of plausible answers token-by-token, separated by [SEP]. Since there is no cross-passage attention in the encoder, BARTAP encoder reduces the computation from quadratic in the number of input passages to linear complexity. As a result, it can process 12 times larger number of input passages (up to 100 passages, 16000 subwords) than SPANSEQGEN. Given that AMBIGQA is a small dataset with only 10k training samples, we first pre-train BARTAP on NQ-OPEN to predict a single answer, then fine-tune it on AMBIGQA to predict one or multiple answers."
+    }, {
+      "heading" : "3.2 Question Disambiguation",
+      "text" : "If multiple answers are predicted, the Question Disambiguation module is activated to generate a disambiguated rewriting of the prompt question for each predicted answer. Because we do not know which input passage is the key evidence to derive the predicted answer, the Question Disambigua-\ntion module takes the same passages in the Answer Prediction stage as inputs. Similar to the Answer Prediction module BARTAP, our Question Disambiguation module BARTQD processes the inputs under the same fashion except that BARTQD encoder additionally takes the predicted answer Ai from BARTAP in the input (shown in Figure 3).\nToken-Deletion Pre-training. Similar to the training scheme of the Answer Prediction module, we also want to leverage the large-scale NQ-OPEN data for pre-training. One straightforward way is to train a question generation model on NQ-OPEN that generates questions given the passages and answer, and then fine-tune it for question disambiguation on AMBIGQA given the prompt question, answer, and passages. However, there is no input question to disambiguate in the question generation pre-training task, it leads to a mismatch between pre-training and fine-tuning. Ablation study shows this way of pre-training has almost no help for question disambiguation (Section 4.5).\nTo reduce the mismatch issue between pretraining and fine-tuning, we propose a TokenDeletion Pre-training task. The idea is to construct synthetic ambiguous questions in pre-training to reduce the mismatch. Given a question Q from NQOPEN, we randomly delete an informative span from it, resulting in a partial question Qs. This partial question is designed to simulate the ambiguous question Qp in the fine-tuning stage. Then the token-deletion pre-training target is to recover the complete question Q from the partial question Qs, answer, and passages. In this way, the tokendeletion pre-training aligns the fine-tuning phase.\nPrompt questions are usually rewritten by adding new constraints including event/entity references, properties, answer types, etc. For example, the disambiguated question Q1 in Figure 1 inserts “by a combined team” after the ambiguous prompt question. Therefore, we define the informative span as the span containing at least one of the following Part-of-Speech tags: ’ADJ’, ’NOUN’, ’NUM’, ’PROPN’, ’SYM’, ’VERB’. The length of the span is uniformly sampled in [1, 5].\nInsertion-based Weighted Loss. Since the disambiguated question is a small modification from the ambiguous prompt question, most tokens can be directly copied from the input. Here we introduce an insertion-based weighted loss to put more emphasis on the newly added tokens of the disam-\nbiguated question, which could be the key to disambiguate the prompt question. Given the prompt question Qp, we find the newly inserted tokens from the disambiguated question Qd: {qin}. The final loss for fine-tuning BARTQD is a combination of the original negative log-likelihood loss on all question tokens augmented with a term that adds weight on the likelihood of inserted tokens:\nL = Lnll − λ ∑\nqj∈{qin}\nlog(qj |A,Qp,Psg), (2)\nwhere Lnll = ∑n\ni=1 log(qi|A,Qp,Psg), n is the number of tokens in the disambiguated question, λ = 3.5 is a hyperparameter tuned on the dev. set."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Experimental Setup",
+      "text" : "Dataset. We conduct main experiments on the AMBIGQA dataset (Min et al., 2020). AMBIGQA is constructed to address the ambiguity of questions in open-domain QA. It samples 14,042 questions from NQ-OPEN, a large-scale open-domain QA dataset in which each question has a single answer (Kwiatkowski et al., 2019), and asks annotators to search for, navigate and read multiple Wikipedia pages to find as many interpretations as possible. As a result, each question is annotated with either a single answer or multiple disambiguated QA pairs, depending on how many interpretations can be found. The train, development, and test (not public) dataset sizes are 10036, 2002, 2004, respectively 1. On average, there are 2.1 distinct answers per question in AMBIGQA. To test the generalization ability of REFUEL on any possibly ambiguous questions, we additionally evaluate it on two open-domain QA datasets: NQ-OPEN and TriviaQA (Joshi et al., 2017).\nImplementation Details are in Appendix A. We release source code for our models and experiments at https: //github.com/amzn/refuel-open-domain-qa.\nEvaluation Metrics. Let (q1, a1), ..., (qm, am) be m QA pair predictions, (q̂1, â1), ..., (q̂n, ân) be n gold QA pairs, each predicted QA pair (qi, ai) is evaluated in order by a correctness score towards all gold QA pairs: ci = 1(ai=âj)f(qi, q̂j), where f(qi, q̂j) is a similarity function for questions. (q̂j , âj) will not be further used to evaluate\n1Leaderboard: https://nlp.cs.washington. edu/ambigqa/leaderboard.html\nother predicted QA pairs as it is used for (qi, ai). The overall correctness is calculated by F1 between predictions and references,\nPf = ∑m\ni=1 ci m\n,Rf = ∑m\ni=1 ci n ,F1f = 2PfRf Pf + Rf .\nAll examples are evaluated for the answer prediction subtask, in which f function always yields 1. This metric is denoted as F1ans (all). For the subset of examples with multiple gold QA pairs, both answer prediction subtask and question disambiguation subtask are evaluated. The answer prediction metric only computed on this subset is denoted as F1ans (multi). To evaluate question disambiguation performance, BLEU (Papineni et al., 2002) and EDIT-F1 is used for the function f , denoted as F1BLEU and F1EDIT-F1, respectively. EDIT-F1 compute the F1 score of added and deleted unigrams from the prompt question to the predicted disambiguated question towards references."
+    }, {
+      "heading" : "4.2 Experimental Results",
+      "text" : "Main Results. Performance on the dev. and hidden test set of AMBIGQA is shown in Table 1. Even without having round-trip prediction, REFUEL (w/o RTP) outperforms SPANSEQGEN on both the answer prediction subtask and question disambiguation subtask by a large margin. Moreover, the round-trip prediction indeed further improves the performance by finding more and better QA pairs, going from 1.55 to 1.72 pairs per prompt question on the dev. set. A comprehensive analysis on the round-trip prediction is discussed in Sec 4.3.\nControlled Comparison with SPANSEQGEN. Besides round-trip prediction, REFUEL has two advantages over SPANSEQGEN in terms of input passages: (1) We retrieve top N=1000 passages (instead of 100 in SPANSEQGEN) to get a higher answer recall at top 100 passages (improved from\n86.2 to 89.7). (2) REFUEL takes K=100 input passages whereas SPANSEQGEN takes at most 1024 subwords (K≈8). To establish a controlled and fair comparison, we remove the round-trip prediction part of REFUEL, and feed REFUEL (w/o RTP) with the same input passages used in SPANSEQGEN (N=100, K=8). Results are shown in Table 2. We find (1) Under the same number of passages, REFUEL (w/o RTP) (N=100, K=8) still outperforms SPANSEQGEN and generates more and better QA pairs; (2) REFUEL (w/o RTP) benefits from increasing the answer recall of retrieval stage (N = 100→ 1000), as well as allowing more input passages (K = 8→ 100).\nGeneralization to Other Datasets. To test how well does REFUEL answer any open-domain questions, we evaluate REFUEL on NQ-OPEN and Triv-\niaQA without finetuning on these datasets. When REFUEL predicts multiple answers, we take the first predicted answer for EM evaluation; we also introduce a new Oracle EM metric which treat the prediction is correct if the gold answer matches any predicted answers for the current question. Table 3 shows that REFUEL has competitive performance even without dataset-specific finetuning. When REFUEL finds multiple interpretations for questions in NQ-OPEN & TriviaQA, we manually check the quality of disambiguated QA pairs in Section 4.4."
+    }, {
+      "heading" : "4.3 Effect of Round-Trip Prediction",
+      "text" : "We compare our proposed Round-Trip Prediction (Round-Trip Prediction = Round-Trip Generation + LM Verification) with several alternative approaches, as well as investigate its generalization ability to other models like SPANSEQGEN and DPR Reader. Results are shown in Table 4.\nRound-Trip Generation Only. We investigate the necessity of the verification process by conducting only round-trip generation to REFUEL. Results show that Round-Trip Generation can generate 33.5% more QA pairs, but the lower F1ans (all) suggests that this strategy may over-generate QA pairs when the prompt question is not ambiguous. Hence, the verification process is necessary to prune some incorrect QAs.\nLM Verification vs. EM Verification. As described in section 2.3, we compare the existing EM Verification approach (Alberti et al., 2019; Puri et al., 2020) with our LM Verification. Results demonstrate that EM Verification prunes too many QA pairs – the number of remaining QA pairs (1.43) is even smaller than not doing round-trip prediction (1.55). This validates our intuition in section 2.3 that EM Verification is not suitable for open-domain QA tasks because of the low perfor-\nmance of current open-domain QA models.\nGeneralization to Other Models. We show that round-trip prediction is a model-agnostic general approach for answering possibly ambiguous opendomain questions by using it on our replicated baseline models: DPR Reader and SPANSEQGEN. With the help of round-trip prediction, DPR Reader and SPANSEQGEN generates 11.7% and 12.3% more QA pairs, which result in a boost of 3.7% and 2.1% for the overall performance (Comb.)."
+    }, {
+      "heading" : "4.4 Human Evaluation",
+      "text" : "Since the answers collected in AMBIGQA are not necessarily exhaustive, there is a possibility that a model generates correct interpretations but they are missed in AMBIGQA. Therefore, we hire 3 workers from MTurk.com to evaluate the correctness of the answer given the generated disambiguated question and retrieved passages (instructions in Appendix C). Let (q1, a1), ..., (qn, an) be n generated QA pairs from the same prompt question, we define two levels of correctness as follows: #C-QAs: (qi, ai) is considered Correct if ai is a correct answer of qi; #CD-QAs: (qi, ai) is considered correct iff. (1) ai is a correct answer of qi and (2) any aj(j 6= i) is a wrong answer of qi. #CD-QAs is designed to examine the Correctness of ques-\ntion Disambiguation because ambiguous questions can have multiple valid answers. We take the majority judgement from 3 annotators for each QA pair. For each dataset, we randomly sample 50 prompt questions which have multiple predicted answers, and apply the QA swapping strategy in #CD-QAs, resulting 960 question-answer-passages triples in total. Results in Table 5 show that REFUEL (w/o RTP) can correctly generate 113% more QA pairs than SPANSEQGEN on #CD-QAs. In addition, round-trip prediction (RTP) can find more correct interpretations across all datasets."
+    }, {
+      "heading" : "4.5 Ablations on Question Disambiguation",
+      "text" : "Table 6 compares our question disambiguation model with the prompt baseline and several ablations. The prompt baseline directly takes the prompt question as the disambiguated prediction, so its F1EDIT-F1 is zero. However, F1BLEU score of the prompt baseline is higher than REFUEL. This suggests that F1EDIT-F1 captures the effectiveness of question disambiguation better than F1BLEU.\nFor our ablations, we start from only using AMBIGQA dataset (None+QDF), and investigate whether it is helpful to only use answer-containing passages as inputs (None+QDF w/ filtered passages). The worse result of the latter approach suggests that we should keep all passages for question disambiguation. Second, we examine the effectiveness of pre-training. We try the question generation pre-training (QGP+QDF) and compare it with the ablation without any pre-training (None+QDF). Results show that the question generation pre-training has little help for fine-tuning. By replacing the question generation pre-training QGP with our proposed token-deletion pre-training TDP, we see the results (TDP+QDF) are better than the no pretraining ablation (None+QDF), which implies the mismatch between pre-training and fine-tuning are somewhat reduced. Finally, the insertion-based\nloss enables REFUEL to capture the key disambiguation phrase with less copying the prompt question, resulting in a lower BLEU but higher Edit-F1."
+    }, {
+      "heading" : "4.6 Case Study",
+      "text" : "Figure 4 provides example question-answer pairs generated by crowd-workers, REFUEL (w/o RTP), and REFUEL. The annotator find three interpretations from the prompt question, while our single pass model REFUEL (w/o RTP) finds in total four interpretations (QA1-4). Although QA2 predicted from our model is not included in the references, it is indeed a correct interpretation of the prompt question. In addition, the Round-Trip Prediction approach finds two correct interpretations (QA5, QA6) which the model fails to predict on the first generation pass. More cases are shown in Appendix F."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "Open-Domain Question Answering is answering factoid questions using a huge collection of documents such as Wikipedia pages (Voorhees, 1999;\nChen et al., 2017; Yang et al., 2019; Lee et al., 2019; Wang et al., 2019). We are motivated by the recent proposed question ambiguity problem in open-domain QA (Min et al., 2020). Different from the existing formulation of open-domain QA that each question only has a single answer, the proposed AMBIGQA task requires to predict a single answer or a set of disambiguated QA pairs depending on the ambiguity of the input question. They also propose the first model SPANSEQGEN to this task, which firstly uses the dense passage retriever (Karpukhin et al., 2020) to retrieve question-relevant passages, and then adopts a retrieval-augmented generation method (Lewis et al., 2020b) to disambiguated QA pairs.\nOur REFUEL follow Min et al. (2020)’s task formulation and overall pipeline, but there are three differences between our REFUEL and SPANSEQGEN: (1) REFUEL takes the architecture of Fusionin-Decoder (Izacard and Grave, 2020) that can effectively use a large number of passages to uncover more candidate interpretations of the ambiguous question. (2) We propose a token-deletion pretraining task to reduce the mismatch between pretraining and fine-tuning for question disambiguation. The insertion-based weighted loss further helps to capture answer-relevant constraints. (3) We propose a model-agnostic round-trip prediction approach to find more interpretations missed in the first prediction pass, which we further refine using a conditional-probability-based filtering approach."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "In this paper, we present REFUEL to answer ambiguous open-domain questions. REFUEL is a generative approach to aggregate and combine evidence from multiple passages for multiple rounds which can find more and better interpretations. REFUEL achieves a new state-of-the-art on AMBIGQA, and shows competitive performance on NQ-OPEN and TriviaQA. The proposed round-trip prediction is a general approach for answering ambiguous open-domain questions, which improves our REFUEL as well as several baseline models."
+    }, {
+      "heading" : "B Error Analysis",
+      "text" : "Answer Prediction Error. In the development set of AMBIGQA, 22.9% of examples actually have multiple interpretations but REFUEL only predicts one answer. In 12.0% examples, REFUEL wrongly predicts multiple answers on the unambiguous prompt questions. In the rest 65.1% examples, REFUEL aligns with annotators in terms of the ambiguity. Since REFUEL tends to wrongly think the prompt question is unambiguous, it predicts fewer answers than ground truth (1.55 vs. 2.02 on average). In effect, the predicted answers have a relatively high precision 55.6% but low recall 48.0%. By localizing where the errors come from, we find that in 2.3% of examples, REFUEL fails to retrieve any relevant passage which contains gold answers. In 27.0% of examples, retrieved passages only contain part of gold answers. In 38.6% of examples, retrieved passages can cover all gold answers but REFUEL fails to make correct predictions.\nQuestion Disambiguation Error. We analyze the quality of disambiguated questions when the predicted answers are correct. We select 100 samples from the development data and summarize errors into five categories in Figure 5. We see that 42% of generated questions are totally wrong and 15% of them are identical to the prompt ones. Besides, there are in total 31% of generated questions (Correct but Different Constraints, Correct but Paraphrase) are actually correct but do not get credits under the current matching based evalua-\ntion metric F1EDIT-F1. This suggests that a better evaluation metric should be incorporated in future to mitigate the variability of language generation, such as using a trained QA model for evaluation."
+    }, {
+      "heading" : "C Details of Human Evaluation",
+      "text" : "Instruction Details. Figure 6 shows the instruction and interface for human evaluation. We have three choices for each QA pair: “Answer is correct”, “Answer is incorrect” and “Insufficient evidence”. Since each QA pair has 100 retrieved passages, we show 5 retrieved passages (with answer highlighted) at a time. If the worker select “Insufficient evidence”, we will show the next 5 retrieved passages until this QA pair receives a “correct/incorrect” decision. If “Insufficient evidence” is still select after showing all 100 passages, then we mark this QA pair as “incorrect”.\nEvaluation Metrics & Quality Control. Let (q1, a1), ..., (qn, an) be n generated QA pairs from the same prompt question, we define two levels of correctness as follows: #C-QAs: (qi, ai) is considered Correct if ai is a correct answer of qi; #CDQAs: (qi, ai) is considered correct iff. (1) ai is a correct answer of qi and (2) any aj(j 6= i) is a wrong answer of qi. #CD-QAs is designed to examine the Correctness of question Disambiguation because ambiguous questions can have multiple valid answers. Moreover, it reduce the priming effect so that workers won’t have a tendency to mark\nall samples as correct. During annotation, workers do not know each question qi is paired with its answer ai or other answers aj(j 6= i) under the same prompt question.\nWe only recruit workers based in the United States and pay 0.2 USD per QA pair on Mturk. For quality control, we have manually annotate 15 correct QA pairs and 15 wrong QA pairs (pair qi with aj(j 6= i), and randomly select 5 of them to examine the quality of annotation. The task will be approved only when 3 out of 5 hidden test QA pairs receive correct annotations."
+    }, {
+      "heading" : "D Discussion on Problem Formulation",
+      "text" : "REFUEL follows the problem formulation of SPANSEQGEN to firstly predict one or multiple answers, and then generate the disambiguated question for each answer. We also tried/considered different formulations of this problem as follows:\nQGen-AGen. We swap the order of answer prediction and question disambiguation in the problem formulation – firstly a QD model generates several disambiguated questions in a sequence, or predicts EOS if the question is not ambiguous; Then a QA model predicts a single answer for each predicted disambiguated question. This approach does not work in our experiments with poor performance. We think the major reason is generating multiple disambiguated question from the prompt question as the first step is much harder than the original\nformulation which only requires to generating multiple plausible answers from the prompt question.\nQAGen. Another possible approach is using a single model to predict disambiguated questionanswer pairs where each answer right precedes its disambiguated question. This is certainly a possible way but it is even more challenging than QGenAGen. We did not try this way after receiving poor performance from QGen-AGen."
+    }, {
+      "heading" : "E Baselines for Round-Trip Prediction",
+      "text" : "Since the current round-trip prediction requires several iteration between the answer prediction module and the question disambiguation module, it would be better to over-generate many answers in one pass. One straightforward way to generate more QA pairs is setting a minimum length of generation for the answer prediction model, and then go through the LM Verification process to drop the low-quality predictions. We set two minimum lengths of generation (L=8/16) for our answer prediction model. As shown in Table 7, although setting a minimum length effectively increases the number of predicted QA pairs (2.10/2.88 for L=8/16), the over-generated answers are extremely\nnoisy which in turn hurts the effectiveness of the LM Verification model, resulting in far worse performance across all metrics. Presumably, one major disadvantage of the Min-Length Generation approach is that REFUEL loses the flexibility to decide the number of possible interpretations based on the passages. Instead, it always generates multiple answers according to the minimum length.\nF More Cases from REFUEL: Figure 7"
+    } ],
+    "references" : [ {
+      "title" : "Reading Wikipedia to answer opendomain questions",
+      "author" : [ "Danqi Chen", "Adam Fisch", "Jason Weston", "Antoine Bordes." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1870–",
+      "citeRegEx" : "Chen et al\\.,? 2017",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Realm: Retrievalaugmented language model pre-training",
+      "author" : [ "Kelvin Guu", "Kenton Lee", "Zora Tung", "Panupong Pasupat", "Ming-Wei Chang." ],
+      "venue" : "International Conference on Machine Learning.",
+      "citeRegEx" : "Guu et al\\.,? 2020",
+      "shortCiteRegEx" : "Guu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Leveraging passage retrieval with generative models for open domain question answering",
+      "author" : [ "Gautier Izacard", "E. Grave." ],
+      "venue" : "ArXiv, abs/2007.01282.",
+      "citeRegEx" : "Izacard and Grave.,? 2020",
+      "shortCiteRegEx" : "Izacard and Grave.",
+      "year" : 2020
+    }, {
+      "title" : "TriviaQA: A large scale distantly supervised challenge dataset for reading comprehension",
+      "author" : [ "Mandar Joshi", "Eunsol Choi", "Daniel Weld", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Joshi et al\\.,? 2017",
+      "shortCiteRegEx" : "Joshi et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Dense passage retrieval for open-domain question answering",
+      "author" : [ "Vladimir Karpukhin", "Barlas Oguz", "Sewon Min", "Patrick Lewis", "Ledell Wu", "Sergey Edunov", "Danqi Chen", "Wen-tau Yih." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Nat-",
+      "citeRegEx" : "Karpukhin et al\\.,? 2020",
+      "shortCiteRegEx" : "Karpukhin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Natural questions: a benchmark for question answering research",
+      "author" : [ "Tom Kwiatkowski", "Jennimaria Palomaki", "Olivia Redfield", "Michael Collins", "Ankur Parikh", "Chris Alberti", "Danielle Epstein", "Illia Polosukhin", "Jacob Devlin", "Kenton Lee" ],
+      "venue" : null,
+      "citeRegEx" : "Kwiatkowski et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Kwiatkowski et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Latent retrieval for weakly supervised open domain question answering",
+      "author" : [ "Kenton Lee", "Ming-Wei Chang", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 6086–6096, Florence,",
+      "citeRegEx" : "Lee et al\\.,? 2019",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Retrieval-augmented generation for knowledge",
+      "author" : [ "Patrick Lewis", "Ethan Perez", "Aleksandara Piktus", "F. Petroni", "V. Karpukhin", "Naman Goyal", "Heinrich Kuttler", "M. Lewis", "Wen tau Yih", "Tim Rocktäschel", "Sebastian Riedel", "Douwe Kiela" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A discrete hard EM approach for weakly supervised question answering",
+      "author" : [ "Sewon Min", "Danqi Chen", "Hannaneh Hajishirzi", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Min et al\\.,? 2019",
+      "shortCiteRegEx" : "Min et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "AmbigQA: Answering ambiguous open-domain questions",
+      "author" : [ "Sewon Min", "Julian Michael", "Hannaneh Hajishirzi", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 5783–",
+      "citeRegEx" : "Min et al\\.,? 2020",
+      "shortCiteRegEx" : "Min et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bleu: a method for automatic evaluation of machine translation",
+      "author" : [ "Kishore Papineni", "Salim Roukos", "Todd Ward", "WeiJing Zhu." ],
+      "venue" : "Proceedings of the 40th Annual Meeting of the Association for Computational Linguistics, pages 311–318, Philadelphia,",
+      "citeRegEx" : "Papineni et al\\.,? 2002",
+      "shortCiteRegEx" : "Papineni et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Training question answering models from synthetic data",
+      "author" : [ "R. Puri", "Ryan Spring", "M. Patwary", "M. Shoeybi", "Bryan Catanzaro." ],
+      "venue" : "ArXiv, abs/2002.09599.",
+      "citeRegEx" : "Puri et al\\.,? 2020",
+      "shortCiteRegEx" : "Puri et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "SQuAD: 100,000+ questions for machine comprehension of text",
+      "author" : [ "Pranav Rajpurkar", "Jian Zhang", "Konstantin Lopyrev", "Percy Liang." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 2383–2392, Austin,",
+      "citeRegEx" : "Rajpurkar et al\\.,? 2016",
+      "shortCiteRegEx" : "Rajpurkar et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "End-to-end synthetic data generation for domain adaptation of question answering systems",
+      "author" : [ "Siamak Shakeri", "Cicero Nogueira dos Santos", "Henghui Zhu", "Patrick Ng", "Feng Nan", "Zhiguo Wang", "Ramesh Nallapati", "Bing Xiang." ],
+      "venue" : "Proceedings of the 2020",
+      "citeRegEx" : "Shakeri et al\\.,? 2020",
+      "shortCiteRegEx" : "Shakeri et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "The trec-8 question answering track report",
+      "author" : [ "E. Voorhees." ],
+      "venue" : "TREC.",
+      "citeRegEx" : "Voorhees.,? 1999",
+      "shortCiteRegEx" : "Voorhees.",
+      "year" : 1999
+    }, {
+      "title" : "Multi-granular text encoding for self-explaining categorization",
+      "author" : [ "Zhiguo Wang", "Yue Zhang", "Mo Yu", "Wei Zhang", "Lin Pan", "Linfeng Song", "Kun Xu", "Yousef El-Kurdi." ],
+      "venue" : "Proceedings of the 2019 ACL Workshop BlackboxNLP: Analyzing and Interpreting Neu-",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "End-to-end open-domain question answering with BERTserini",
+      "author" : [ "Wei Yang", "Yuqing Xie", "Aileen Lin", "Xingyu Li", "Luchen Tan", "Kun Xiong", "Ming Li", "Jimmy Lin." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Asso-",
+      "citeRegEx" : "Yang et al\\.,? 2019",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Who have the Kane County Cougars been affiliated with since 2015? Disamb. Q (p): Who are the Kane County Cougars affiliated with from 2015-present? Annotation",
+      "author" : [ "Q Disamb" ],
+      "venue" : null,
+      "citeRegEx" : "Disamb.,? \\Q2015\\E",
+      "shortCiteRegEx" : "Disamb.",
+      "year" : 2015
+    }, {
+      "title" : "Who played tony driscoll in only fools and horses? Disamb",
+      "author" : [ "Q Disamb" ],
+      "venue" : "Q (p): Who played Tony in Only Fools and Horses",
+      "citeRegEx" : "Disamb.,? \\Q1983\\E",
+      "shortCiteRegEx" : "Disamb.",
+      "year" : 1983
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 0,
+      "context" : "Open-domain Question Answering (QA) is the task of answering questions using a collection of passages with diverse topics (Chen et al., 2017; Guu et al., 2020; Karpukhin et al., 2020).",
+      "startOffset" : 122,
+      "endOffset" : 183
+    }, {
+      "referenceID" : 2,
+      "context" : "Open-domain Question Answering (QA) is the task of answering questions using a collection of passages with diverse topics (Chen et al., 2017; Guu et al., 2020; Karpukhin et al., 2020).",
+      "startOffset" : 122,
+      "endOffset" : 183
+    }, {
+      "referenceID" : 5,
+      "context" : "Open-domain Question Answering (QA) is the task of answering questions using a collection of passages with diverse topics (Chen et al., 2017; Guu et al., 2020; Karpukhin et al., 2020).",
+      "startOffset" : 122,
+      "endOffset" : 183
+    }, {
+      "referenceID" : 10,
+      "context" : "Figure 1: An example from the AMBIGQA (Min et al., 2020) dataset.",
+      "startOffset" : 38,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 6,
+      "context" : "they first pre-train a question generation model on NQ-OPEN (Kwiatkowski et al., 2019), a large-scale open-domain QA dataset, to generate the question given the answer and top 8 passages.",
+      "startOffset" : 60,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 3,
+      "context" : "To ensure a broad coverage of relevant knowledge of the question, REFUEL reads 12 times more passages (100 in our experiments) than SPANSEQGEN by using Fusionin-Decoder (Izacard and Grave, 2020) that processes each passage individually in the encoder, and then fused their encodings together in the de-",
+      "startOffset" : 169,
+      "endOffset" : 194
+    }, {
+      "referenceID" : 5,
+      "context" : "We use Dense Passage Retriever (DPR) (Karpukhin et al., 2020) for retrieval.",
+      "startOffset" : 37,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 1,
+      "context" : "After retrieving N passages for the prompt question, we fine-tune BERT (Devlin et al., 2019) to rerank these passages.",
+      "startOffset" : 71,
+      "endOffset" : 92
+    }, {
+      "referenceID" : 10,
+      "context" : "first prediction pass, and existing work (Min et al., 2020) predicts 47% less answers compared with the ground truth.",
+      "startOffset" : 41,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 12,
+      "context" : "generation (Alberti et al., 2019; Puri et al., 2020) use an “Exact Match (EM) Verification” approach to prune the QA pairs.",
+      "startOffset" : 11,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 13,
+      "context" : "However, this EM Verification approach is only suitable for factoid reading comprehension tasks such as SQuAD (Rajpurkar et al., 2016), in which the QA model has near-human accuracy so that it will not falsely filter out too many correct",
+      "startOffset" : 110,
+      "endOffset" : 134
+    }, {
+      "referenceID" : 3,
+      "context" : "4% EM accuracy on the NQ-OPEN dataset (Izacard and Grave, 2020).",
+      "startOffset" : 38,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 10,
+      "context" : "SPANSEQGEN (Min et al., 2020) concatenates the prompt question and top reranked passages into a single sequence for BART encoding, which is extremely limited by the maximum input sequence",
+      "startOffset" : 11,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 3,
+      "context" : "our Answer Prediction module uses the Fusionin-Decoder approach (Izacard and Grave, 2020), which allows us to scale the number of processed passages.",
+      "startOffset" : 64,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 10,
+      "context" : "We conduct main experiments on the AMBIGQA dataset (Min et al., 2020).",
+      "startOffset" : 51,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 6,
+      "context" : "It samples 14,042 questions from NQ-OPEN, a large-scale open-domain QA dataset in which each question has a single answer (Kwiatkowski et al., 2019), and asks annotators to search for, navigate and read multiple Wikipedia",
+      "startOffset" : 122,
+      "endOffset" : 148
+    }, {
+      "referenceID" : 4,
+      "context" : "To test the generalization ability of REFUEL on any possibly ambiguous questions, we additionally evaluate it on two open-domain QA datasets: NQ-OPEN and TriviaQA (Joshi et al., 2017).",
+      "startOffset" : 163,
+      "endOffset" : 183
+    }, {
+      "referenceID" : 11,
+      "context" : "To evaluate question disambiguation performance, BLEU (Papineni et al., 2002) and EDIT-F1 is used for the function f , denoted as F1BLEU and F1EDIT-F1, respectively.",
+      "startOffset" : 54,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2019), HardEM (Min et al., 2019), RAG (Lewis et al.",
+      "startOffset" : 16,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 12,
+      "context" : "3, we compare the existing EM Verification approach (Alberti et al., 2019; Puri et al., 2020) with our LM Verification.",
+      "startOffset" : 52,
+      "endOffset" : 93
+    }, {
+      "referenceID" : 10,
+      "context" : "We are motivated by the recent proposed question ambiguity problem in open-domain QA (Min et al., 2020).",
+      "startOffset" : 85,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 5,
+      "context" : "They also propose the first model SPANSEQGEN to this task, which firstly uses the dense passage retriever (Karpukhin et al., 2020) to re-",
+      "startOffset" : 106,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 3,
+      "context" : "(2020)’s task formulation and overall pipeline, but there are three differences between our REFUEL and SPANSEQGEN: (1) REFUEL takes the architecture of Fusionin-Decoder (Izacard and Grave, 2020) that can ef-",
+      "startOffset" : 169,
+      "endOffset" : 194
+    } ],
+    "year" : 2021,
+    "abstractText" : "In open-domain question answering, questions are highly likely to be ambiguous because users may not know the scope of relevant topics when formulating them. Therefore, a system needs to find possible interpretations of the question, and predict one or multiple plausible answers. When multiple plausible answers are found, the system should rewrite the question for each answer to resolve the ambiguity. In this paper, we present a model that aggregates and combines evidence from multiple passages to adaptively predict a single answer or a set of question-answer pairs for ambiguous questions. In addition, we propose a novel round-trip prediction approach to iteratively generate additional interpretations that our model fails to find in the first pass, and then verify and filter out the incorrect questionanswer pairs to arrive at the final disambiguated output. Our model, named REFUEL, achieves a new state-of-the-art performance on the AMBIGQA dataset, and shows competitive performance on NQ-OPEN and TriviaQA. The proposed round-trip prediction is a model-agnostic general approach for answering ambiguous open-domain questions, which improves our REFUEL as well as several baseline models. We release source code for our models and experiments at https://github. com/amzn/refuel-open-domain-qa.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

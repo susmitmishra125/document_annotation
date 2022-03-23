@@ -1,0 +1,1276 @@
+{
+  "name" : "2021.acl-long.331.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Reservoir Transformers",
+    "authors" : [ "Sheng Shen", "Alexei Baevski", "Ari S. Morcos", "Kurt Keutzer", "Michael Auli", "Douwe Kiela" ],
+    "emails" : [ "sheng.s@berkeley.edu,", "dkiela@fb.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 4294–4309\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n4294"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Transformers (Vaswani et al., 2017) have dominated natural language processing (NLP) in recent years, from large scale machine translation (Ott et al., 2018) to pre-trained (masked) language modeling (Devlin et al., 2018; Radford et al., 2018), and are becoming more popular in other fields as well, from reinforcement learning (Vinyals et al., 2019) to speech recognition (Baevski et al., 2019) and computer vision (Carion et al., 2020). Their success is enabled in part by ever increasing computational demands, which has naturally led to an increased interest in improving their efficiency. Scalability gains in transformers could facilitate bigger, deeper networks with longer contexts (Kitaev et al., 2020; Wang et al., 2020; Beltagy et al., 2020; Kaplan et al., 2020; Tay et al., 2020b). Conversely, improved efficiency could reduce environmental costs (Strubell et al., 2019) and hopefully help democratize the technology.\nIn this work, we explore a simple question: if some layers of the transformer are kept frozen— i.e., never updated after random initialization— can we match the performance of fully learned transformers, while being more efficient? Surprisingly, the answer is resoundingly yes; and what\nis more, we find that freezing layers may actually improve performance.\nBeyond desirable efficiency gains, random layers are interesting for several additional reasons. Fixed randomly initialized networks (Gallicchio and Scardapane, 2020) converge to Gaussian processes in the limit of infinite width (Daniely et al., 2016), have intriguing interpretations in metric learning (Rosenfeld and Tsotsos, 2019; Giryes et al., 2016), and have been shown to provide excellent “priors” either for subsequent learning (Ulyanov et al., 2018) or pruning (Frankle and Carbin, 2018). Fixed layers allow for efficient low-cost hardware implementations (Schrauwen et al., 2007) and can be characterized using only a random number generator and its seed. This could facilitate distributed training and enables highly efficient deployment to edge devices, since it only requires transmission of a single number. The strong performance of networks with fixed layers also sheds new light on the inner workings of BERT (Devlin et al., 2018), and layer-wise interpretations of such models (Rogers et al., 2020; Tenney et al., 2019). It appears that “not all layers are created equal” (Zhang et al., 2019) is true to such an extent that some layers can simply remain random and fixed.\nRandom projections have a long history in machine learning. By Cover’s theorem (Cover, 1965), any high-dimensional non-linear transformation is more likely to be linearly separable than its lower-or-equal-dimensional input space. By Johnson-Lindenstrauss (Johnson and Lindenstrauss, 1984), random projections distort Euclidean distances very little under mild assumptions, which is useful e.g. for dimensionality reduction and random indexing (Sahlgren, 2005). Fixed random layers in neural networks pre-date deep learning by far (Gamba et al., 1961; Baum, 1988). Indeed, random kernel methods have long\nbeen influential in machine learning (Rahimi and Recht, 2008, 2009).\nOne way to think of such layers is as “reservoirs” (Lukoševičius and Jaeger, 2009), where a highly non-linear high-dimensional black box representation is provided to a lightweight “readout” network, as in echo state networks (Jaeger, 2003) and liquid state machines (Maass et al., 2002). The benefit of such an approach is that the reservoir has fixed parameters and is computationally efficient, as it can be pre-computed and does not (necessarily) require backpropagation.\nIn NLP, Wieting and Kiela (2019) showed that random sentence encoders present a strong baseline for text classification, with subsequent work showing applications in a variety of tasks from summarization to machine translation (Enguehard et al., 2019; Garg et al., 2020; Pilault et al., 2020). To our knowledge, this work is the first to examine this phenomenon in transformers, and the first to recursively alternate reservoirs with subsequent transformer layers acting as readout functions. We introduce “reservoir transformers”, wherein fixed random reservoir layers are interspersed with regular updateable transformer layers. The goal of this work is to put our understanding of transformer models on a more solid footing by providing empirical evidence of their capabilities even when some of their parameters are fixed. Our contributions are as follows:\n• We introduce a area under the convergence curve metric for measuring performanceefficiency trade-offs, and show that replacing regular transformer layers with reservoir layers leads to improvements.\n• We show that the addition of reservoir layers leads to improved test set generalization on a variety of tasks in a variety of settings.\n• We show that pre-trained masked language modelling architectures like BERT and RoBERTa (Liu et al., 2019) can benefit from having some of their layers frozen, both during pre-training as well as when fine-tuning on downstream tasks.\n• We experiment with different types of reservoir layers, including convolutional and recurrent neural network-based ones.\n• We show empirical evidence that the backward pass can be skipped in its entirety by\napproximating upstream gradients using an approach we call backskipping, which can reduce the training compute further without sacrificing performance."
+    }, {
+      "heading" : "2 Approach",
+      "text" : "This paper is based on a very simple idea. Neural networks are trained via backpropagation, which involves consecutive steps of matrix addition and multiplication, i.e.,\nθt+1 ← θt − η ∂J ∂θt ; ∂J ∂θt = ∂J ∂Ln ∂Ln ∂Ln−1 · · · ∂L0 ∂x\nfor some objective J , parameterization θ and learning rate η, with the gradient computed via the chain rule, where Li is the i-th layer of the neural network and x is the input. Let L = Transformer(X) be a single layer in a Transformer network (Vaswani et al., 2017), i.e.,\nH = MultiHeadSelfAttn(LayerNorm(X)) +X\nL = FFN(LayerNorm(H)) +H\nNow, during every “backward pass”, we compute the Jacobian for parameters θL at layer L, which are used to update the parameters of L, θLt , as well as to compute the next layer’s Jacobian, thus back-propagating the gradients. In this work however, for some of the layers, we still backpropagate through them to compute gradients for earlier layers, but we never apply the parameter update. As a result, these layers stay fixed at their initialization, saving computational resources."
+    }, {
+      "heading" : "2.1 Background",
+      "text" : "Naturally, never updating some of the parameters is computationally more efficient, as some matrix addition operations can be skipped in the backward pass, but why is this not detrimental to the performance of the network?\nIn the early days of neural networks, the bottom layers were often kept fixed as “associators” (Block, 1962), or what (Minsky and Papert, 2017) called the Gamba perceptron (Gamba et al., 1961; Borsellino and Gamba, 1961). Fixed random networks (Baum, 1988; Schmidt et al., 1992; Pao et al., 1994) have been explored from many angles, including as “random kitchen sink” kernel machines (Rahimi and Recht, 2008, 2009), “extreme learning machines” (Huang et al., 2006) and\nreservoir computing (Jaeger, 2003; Maass et al., 2002; Lukoševičius and Jaeger, 2009). In reservoir computing, input data are represented through fixed random high-dimensional non-linear representations, called “reservoirs”, which are followed by a regular (often but not necessarily linear) “readout” network to make the final classification decision.\nThe theoretical justification for these approaches lies in two well-known results in machine learning: Cover’s theorem (Cover, 1965) on the separability of patterns states that highdimensional non-linear transformations are more likely to be linearly separable; and the JohnsonLindenstrauss lemma (Johnson and Lindenstrauss, 1984) shows that (most) random projections distort Euclidean distances very little.\nPractically, random layers can be seen as a cheap way to increase network depth. There are interesting advantages to this approach. Fixed layers are known to have particularly low-cost hardware requirements and can be easily implemented on high-bandwidth FPGAs with low power consumption (Hadaeghi et al., 2017; Tanaka et al., 2019), or on optical devices (Hicke et al., 2013). This might yield interesting possibilities for training in a distributed fashion across multiple devices, as well as for neuromorphic hardware (Neftci et al., 2017). This approach also facilitates lower-latency deployment of neural networks to edge devices, since weights can be shared simply by sending the seed number, assuming the random number generator is known on both ends."
+    }, {
+      "heading" : "2.2 Reservoir Transformers",
+      "text" : "This work explores inserting random non-linear transformations, or what we call reservoir layers, into transformer networks. Specifically, we experiment with a variety of reservoir layers:\n• Transformer Reservoir: The standard transformer layer as described above, but with all parameters fixed after initialization, including the self-attention module.\n• FFN Reservoir: A transformer-style fixed feed-forward layer without any self-attention, i.e., FFN(LayerNorm(Previous layer)) + Previous layer.\n• BiGRU Reservoir: A fixed bidirectional Gated Recurrent Unit (Cho et al., 2014) layer, which is closer in spirit to previous work on\nreservoir computing, most of which builds on recurrent neural network architectures.\n• CNN Reservoir: A fixed Convolutional Neural Network (LeCun et al., 1998) layer, specifically light dynamical convolution layers (Wu et al., 2019), which are known to be competitive with transformers in sequenceto-sequence tasks.\nWe find that all these approaches work well, to a certain extent. For clarity, we focus primarily on the first two reservoir layers, but include a broader comparison in Appendix A.\nIn each case, contrary to traditional reservoir computing, our reservoir layers are interspersed throughout a regular transformer network, or what we call a reservoir transformer. Since random projections are not learned and might introduce noise, subsequent normal transformer “readout” layers might be able to benefit from additional depth while allowing us to recover from any adverse effects of randomness. For example, previous work has shown that ResNets, with all of their parameters fixed except for the scale and shift parameters of batch normalization, can still achieve high performance, simply by scaling and shifting random features (Frankle et al., 2020). Adding some form of noise to the parameters is also known to help convergence and generalization (Jim et al., 1995, 1996; Gulcehre et al., 2016; Noh et al., 2017)."
+    }, {
+      "heading" : "3 Evaluation",
+      "text" : "We evaluate the proposed approach on a variety of well-known tasks in natural language processing, namely: machine translation, language modelling and masked language model pre-training.\nWe set out to do this work with the main objective of examining any potential efficiency gains, i.e. the relationship between compute time and task performance. This is closely related to efforts in Green AI, which are concerned with the trade-offs between compute, data, and performance (Schwartz et al., 2019). We propose to measure this trade-off via the area under the convergence curve (AUCC): similarly to how the area under the receiver operating characteristic (Bradley, 1997, AUC-ROC) measures a classifier’s performance independent of the classification threshold, AUCC measures a model’s performance independent of the specific compute bud-\nget. Specifically, AUCC is computed as follows:\n∫ T̂ t=0 ∑ x,y∈D gt(f(x), y) (1)\nwhere f is the network and g is the evaluation metric, measured until convergence time T̂ , which is the maximum convergence time of all models included in the comparison. Note that time here is wall-clock time, not iterations. By convergence, we mean that validation performance has stopped improving, and hence the convergence curve whose area we measure plots the desired metric over time. Runs are averaged over multiple seeds and reported with standard deviation. We normalize raw AUCC scores by their maximum to ensure a more interpretable [0− 1] range.\nOne potential downside of this approach is that the AUCC metric could lead to higher scores for a model that converges quickly but to ultimately worse performance, if measured in a small window. This can be solved by making sure that T̂ is set sufficiently high. We include the raw validation curves in the appendix to demonstrate that the chosen window sizes are sufficient and the results are not a influenced by this limitation. In addition, we report the number of trainable parameters and the wall-clock training time until maximum performance (plus 95% and 99% convergence results in the appendix). Finally, we show test set generalization in each experiment. Overall, this gives us a wide set of axes along which to examine models."
+    }, {
+      "heading" : "3.1 Experimental Settings",
+      "text" : "We evaluate on IWSLT de-en (Cettolo et al., 2015) and WMT en-de (Bojar et al., 2014) for machine translation; enwiki8 (LLC, 2009) for language modelling; and experiment with RoBERTa (Liu et al., 2019) in our pretraining experiments. For IWSLT, we follow the pre-processing steps in Edunov et al. (2018). The train/val/test split is 129k/10k/6.8k sentences. For WMT, we follow pre-process as in Ott et al. (2018), with 4.5M/16.5k/3k sentences in train/val/test. For enwiki8, we follow the pre-processing steps in Dai et al. (2019). The train/val/test split is 1M/54k/56k sentences. For RoBERTa pretraining, we follow the pre-processing steps in Liu et al. (2019).\nWe use 8 Volta V100 GPUs for WMT and enwik8, 32 V100 GPUs for RoBERTa and a single V100 for IWSLT. The hyperparameters for\nIWSLT14 and WMT16 were set to the bestperforming values from Ott et al. (2018) and Kasai et al. (2020) respectively. The enwik8 experiment settings followed Bachlechner et al. (2020) and the RoBERTa experiments followed Liu et al. (2019).\nAll the experiments in this paper were run with 3 random seeds and the mean and standard deviation are reported. For the relatively small IWSLT, the T̂ value in the AUCC metric was set to 4 hours. For the larger WMT, we set it to 20 hours. For enwiki8, it was 30 hours; and for the RoBERTa pre-training experiments, it was set to 60 hours.\nThe projection weights in random layers were initialized using orthogonal initialization (Saxe et al., 2013), since random orthogonal projections should ideally be maximally informationpreserving, and which was found to work well empirically for initializing fixed random representations in previous work (Wieting and Kiela, 2019). Biases and layer norm parameters were initialized using their respective PyTorch defaults (based on Xavier init; Glorot and Bengio, 2010).\nWe intersperse reservoir layers in alternating fashion starting from the middle. Specifically, we alternate one reservoir layer with one transformer layer, and place the alternating block in the middle. For example: a 7-layer encoder LLLLLLL in which we replace three layers with reservoirs becomes LRLRLRL, and with two becomes LLRLRLL. See Appendix C for a study comparing this strategy to alternative approaches (e.g., freezing in the bottom, middle or top)."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : "In what follows, we first show our main result, on a variety of tasks: reservoir transformers mostly have better AUCC metrics; less training time per epoch; less convergence time until the best validation performance is achieved; and even improved test set generalization metrics. As a strong baseline method, we compare to LayerDrop (Fan et al., 2019). LayerDrop can also be seen as a method that dynamically bypasses parts of the computation during Transformer training in an attempt to improve efficiency, and making it a strong comparison to examine our methods. Then, we examine whether we can minimize the expectation over the gradients of upstream layers in the network such that we do not at all have to pass gradients through the reservoir layers, skipping their backward pass."
+    }, {
+      "heading" : "4.1 Machine Translation",
+      "text" : "Machine translation (MT) is one of the core tasks of NLP. We demonstrate on two well-known MT datasets, IWSLT’14 German-English and WMT’16 English-German, that reservoir transformers obtain a better AUCC. For the raw validation plots over time that were used to calculate the AUCC, please refer to Appendix F.\nFollowing Kasai et al. (2020), the architecture of the network is an N-layer reservoir transformer encoder, followed by a regular shallow one- or two-layer decoder. This design choice has been shown to lead to very good speed and efficiency trade-offs, and serves as a good baseline for our experiments. Moreover, shallow decoders make it easier to decide where to place reservoir layers (in the encoder) and makes it more straightforward to identify where performance gains come from.\nFigure 1 shows the results for IWSLT (left) and WMT (middle). On the y-axis we show validation AUCC for the BLEU metric; on the x-axis we show the number of updatable layers in the encoder. The performance of a regular transformer encoder with 6 layers and a reservoir transformer encoder with 6 layers plus N additional reservoir layers are plotted for the same x-axis value to show the total number of updated layers. Plots for the total number of layers (updatable plus notupdatable, so essentially shifted versions of the plots) are shown in Appendix E.\nWMT is much larger and requires a much deeper encoder, as illustrated by the fact that a certain minimum depth is required for reservoir transformers to achieve a comparable validation AUCC. At test time, reservoir transformers outperform regular transformers for almost all encoder depths. The FFN Reservoir seems to work best in both cases, which is surprising because it does not have any self-attention component at all. This finding shows that self-attention, or the mechanism to summarize context information, should be learned if present. Once the context features have been gathered, a random projection via a fixed FFN module appears to be beneficial.\nTable 1 and 2 show the time it took to achieve the maximum validation BLEU score and how that relates to the regular transformer, demonstrating that reservoir transformers consistently converge faster in terms of wall-clock time. We save up to 22% convergence wall-clock time using reservoir transformers as much with the same number of updateable layers. We save as much as 27% time until convergence a 24 layer model on WMT, as shown in Table 2. One other noticeable point is that we can see that the T Reservoir achieves similar performance to LayerDrop on IWSLT and WMT in terms of wall-clock per epoch and wallclock time to the best performance. However, on both tasks, FFN Reservoir performs much better than LayerDrop in terms of efficiency per epoch\nand achieves better/similar performance in less time in each case. As a point of reference, a half hour gain on IWSLT would translate to a gain of several days in the training of bigger transformer models like GPT-3 (Brown et al., 2020).\nWe observe that reservoir transformers consistently perform better than, or are competitive to, regular transformers, both in terms of validation BLEU AUCC as well as test time BLEU, for all examined encoder depths."
+    }, {
+      "heading" : "4.2 Language Modelling",
+      "text" : "To examine whether the same findings hold for other tasks, we evaluate on the enwiki8 (LLC,\n2009) language modelling task. We examine the BPC (bits per character) rate for a variety of network depths (since the task is language modelling, these layers are in the decoder). The results show that except for the 64-layer regular transformer, which appears to be particularly optimal for this task, we obtain consistently better BPC for all depths. We observe similar trends during test time."
+    }, {
+      "heading" : "4.3 Masked Language Model Pretraining",
+      "text" : "We train RoBERTa (Liu et al., 2019) models from scratch at a variety of depths, both in the normal and reservoir setting. We find that these networks show minor differences in their best perplexity\nand similar AUCC perplexity (see Appendix D). We then examine the performance of these models when fine-tuned on downstream tasks, specifically the well known SST-2 (Socher et al., 2013) and MultiNLI-matched (Williams et al., 2017) tasks. When fine-tuning the reservoir models, we keep the reservoir layers fixed (also fine-tuning them did not work very well, see Appendix D).\nFigure 2 shows the results of fine-tuning. We observe that the reservoir transformer outperforms normal RoBERTa at all depths in both tasks. At lower depth, the improvements are substantial. As a sanity check, we also experiment with freezing some of the layers in a regular pre-trained RoBERTa model during fine-tuning only (Transformer “frozen finetuned” in the Figure) and show that this helps a little but is still outperformed by the reservoir transformer.\nThese findings suggest that we can train a RoBERTa model without updating all of the layers, achieving similar perplexity at a similar computational cost, but with better downstream performance. This strategy could prove to be beneficial in a wide variety of pre-training scenarios.\nWe follow Jawahar et al. (2019) and investigate what the frozen layers in the Reservoir Transformer have actually “learned” (while being frozen) as measured by probing tasks, reported in Table 4. The set of tasks comprises one surface\ntask, three syntactic tasks, and five semantic tasks. From the table, we can see that generally probing performance is quite similar between Transformer and the T Reservoir model. We also noticed that the representations collected after the reservoir layer (3, 5, 7, 9) in the T Reservoir actually have significantly better performance over the regular Transformer representations across all the probing tasks. Related to our findings, Voita and Titov (2020) show that the wholly-randomlyinitialized model representations can still have reasonable probing accuracy if they are contextualized, though the accuracy is strictly worse than a trained one. These findings raise interesting repercussions for the study of “BERTology”, as it clearly shows that even completely random and frozen layers can represent linguistic phenomena."
+    }, {
+      "heading" : "4.4 Backskipping",
+      "text" : "With the reservoir transformers as described above, we obtain better efficiency by skipping the “gradient application” matrix addition step in some of the layers (i.e., updating the weights). One step further would be to investigate skipping the entire backward pass for reservoirs altogether, which would save us from having to do the much more expensive matrix multiplication for these layers that is required for the propagation of gradients through a regular layer.\nWe report on preliminary experiments where in the backward pass we replace the gradients for the layer Li going into the reservoir Li+1 with a noisy estimate (Jaderberg et al., 2017; Czarnecki et al., 2017). Promisingly, Oktay et al. (2020) recently asked “why spend resources on exact gradients when we’re going to use stochastic optimization?” and show that we can do randomized autodifferentiation quite successfully.\nHere, rather than minimizing the actual gradients ∂Li\n∂θLi , we minimize their expectation and train\nvia continuous-action REINFORCE (Williams, 1992). That is, Li becomes a policy πa: s → µ where we sample actions a ∼ N (µ, 1). We train to minimize the gradient prediction loss via MSE, i.e., 1n ∑n i=0(R\ni − V i(a))2, and the REINFORCE loss Ea [log(a) (R− V (a))], where the value network V acts as the baseline. R is defined as the mean of the gradients of the top layer Li+2, with the sign flipped. Thus, simply put, we train to minimize the expectation of the true gradients at the layer directly following the reservoir. We employ an annealing scheme where we first train the value network and propagate the true gradients during warmup. Afterwards, we anneal the probability of backskipping instead of doing a true backward pass (multiplying the probability by 0.99 every iteration until we only backskip). We experimented with setting R to the negation of the total loss but found the mean upstream gradient reward to work better. We call this approach backskipping.\nAs shown in Table 3, the backskip reservoir approach leads to a higher maximum BLEU score than the regular transformer, with a much higher AUCC and much lower training time. The encoder depth is 8 with 2 frozen. Appendix G shows the raw validation BLEU curves over time. We observe that this approach helps especially during the earlier stages of training. This finding opens up intriguing possibilities for having parts of neural networks be completely frozen both in the forward as well as in the backward pass, while still\ncontributing to the overall model computation. The computational cost is heavily reduced given that we completely bypass the expensive backpropagation computation in the reservoir layers. Backskipping is shown to be a promising approach to further reduce computational costs, and would be even more efficient from a hardware perspective since the circuitry for such layers (which do not need to propagate gradients) can be hardwired."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "Recent work has shown that modern NLP models are able to function with different numbers of layers for different examples (Elbayad et al., 2019; Fan et al., 2019; He et al., 2021); that different layers specialize for different purposes (Zhang et al., 2019); that layers can be compressed (Li et al., 2020; Zhu et al., 2019; Shen et al., 2020; Sun et al., 2020); and, that layers can be reordered (Press et al., 2019). There is a growing body of work in efficient self-attention networks (Tay et al., 2020b), such as linear attention (Wang et al., 2020), on how to process long context information (Beltagy et al., 2020; Ainslie et al., 2020) and on approximations to make transformers more scalable (Kitaev et al., 2020; Katharopoulos et al., 2020). BigBIRD (Zaheer et al., 2020) provides random keys as additional inputs to its attention mechanism. Locality sensitive hashing (LSH) as employed e.g. in Reformer (Kitaev et al., 2020) utilizes a fixed random projection. Random Feature Attention (Peng et al., 2021) uses random fea-\nture methods to approximate the softmax function. Performer (Choromanski et al., 2020) computes the transformer’s multi-head attention weights as a fixed orthogonal random projection. Closely related to this work, Tay et al. (2020a) showed that randomized alignment matrices in their “Synthesizer” architecture are sufficient for many NLP tasks. While these works focus on random attention, we show that entire layers can be random and fixed. We also show that entire layers can be replaced by fixed random projections that do not have any attention whatsoever.\nBeyond transformers, random features have been extensively explored. Examples of this include FreezeOut (Brock et al., 2017), deep reservoir computing networks (Scardapane and Wang, 2017; Gallicchio and Micheli, 2017), as well as applications in domains as varied as text classification (Conneau et al., 2017; Zhang and Bowman, 2018; Wieting and Kiela, 2019) or music classification (Pons and Serra, 2019). It is well known that randomly initialized networks can display impressive performance on their own (Ulyanov et al., 2018; Rosenfeld and Tsotsos, 2019; Ramanujan et al., 2020; Voita and Titov, 2020), which underlies, for example, the recently popularized lottery ticket hypothesis (Frankle and Carbin, 2018; Zhou et al., 2019). We know that learning deep overparameterized networks appears to help in general (Li and Liang, 2018; Du et al., 2019). Our method constitutes a way to add both depth and parameters to transformer networks without much computational cost."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "This work demonstrated that state-of-the-art transformer architectures can be trained without updating all of the layers. This complements a long history in machine learning of harnessing the power of random features. We use the “area under the convergence curve” (AUCC) metric to demonstrate that on a variety of tasks, and in a variety of settings, “reservoir transformers” achieve better performance-efficiency trade-offs. We show that such reservoir transformers show better convergence rates and test-set generalization. We demonstrated that the backward pass can be skipped altogether, opening up exciting vanues for future research. Future work includes further investigating hybrid networks and backskipping strategies, as well as utilizing pruning."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "We thank Eric Wallace, Zhewei Yao, Kevin Lin, Zhiqing Sun, Zhuohan Li, Angela Fan, Shaojie Bai, and anonymous reviewers for their comments and suggestions. SS and KK were supported by grants from Samsung, Facebook, and the Berkeley Deep Drive Consortium."
+    }, {
+      "heading" : "A Hybrid Networks and Non-Transformer Reservoirs",
+      "text" : "We investigate whether reservoir layers need to be transformer-based (or transformers-withoutattention, i.e., FFN). We examine two different alternatives: bidirectional Gated Recurrent Units (Cho et al., 2014) and Convolutional Neural Networks (LeCun et al., 1998; Kim, 2014), specifically light dynamical convolutions (Wu et al., 2019). Figure 3 shows the results for these hybrids: depending on the setting, they may obtain a better AUCC than the regular transformer, but this is less consistent than with the other reservoir layers, most likely because these layers have different computational properties. It’s possible that these hybrids simply require further tuning, as we found e.g. up-projecting to help for BiGRUs, but studying this is outside of the scope of the current work."
+    }, {
+      "heading" : "B Deep Decoders",
+      "text" : "We show that the same results hold for a 6-layer decoder on IWSLT (although less pronounced for AUCC, probably because the decoder is computationally heavier). See Figure 4 and Table 5."
+    }, {
+      "heading" : "C Freezing Strategy",
+      "text" : "We explored different strategies for the placement of reservoir layers and found the “alternating” strategy reported in the main body of the paper to work best. Generally, we found repetitive applica-\ntion of reservoirs to yield diminishing returns, as might be expected. See Figure 5."
+    }, {
+      "heading" : "D RoBERTa Results",
+      "text" : "Here we present the additional results for RoBERTa , i.e., convergence plots and AUCCs for various depth settings, in Figure 7. As stated in the main paper, the differences in terms of AUCC and convergence between RoBERTa models with and without reservoir layers are limited. Moreover, we plot downstream task performance for SST-2 and MNLI compared to the pretraining wall-clock time in Figure 6. It can be seen that the FFN Reservoir can achieve up to 25% and 10% pretraining time savings while matching the best performance\nof vanilla transformers for MNLI-m and SST2, respectively."
+    }, {
+      "heading" : "E Reservoir Results for Total Layers",
+      "text" : "Here we present the shifted Reservoir Results for IWSLT14, WMT16, Enwik8 and RoBERTa finetuning in Figure 8, 9, 10, 11, respectively. We show the same results also hold when it comes to replace normal transformer blocks with Reservoir blocks at least for MT.\nF Validation Plots\nHere we present the validation plots for training a 8-layer encoder, 2-layer decoder model for IWSLT14, a 24-layer encoder, 1-layer decoder model for WMT16, a 48-layer decoder model for enwik8 and a 12-layer decoder model for RoBERTa for detailed steps to calculate the AUCC. It can be clearly observed that given the configurations from Section 3.1, all the models have converged. So when we compute the area under the convergence curve, this depicts the training efficiency of the model (basically time x performance) until convergence. Specifically, we set T\nsufficiently high for computing the AUCC, which is 4h for IWSLT, 20h for WMT, 30h for enwik8 and 60h for RoBERTa pretraning. From the training plot in the appendix, we can see that each model has converged at that point. The Reservoir model in Figure 12 has 2 layers frozen for IWSLT14, 8 layers frozen for enwik8, and 4 layers frozen for WMT16 and RoBERTa."
+    }, {
+      "heading" : "G Backskipping",
+      "text" : "Figure 13 shows the BLUE curves for IWSLT comparing regular vs reservoir vs backskipped transformers, with the latter performing surprisingly well."
+    } ],
+    "references" : [ {
+      "title" : "ETC: Encoding long and structured inputs in transformers",
+      "author" : [ "Joshua Ainslie", "Santiago Ontanon", "Chris Alberti", "Vaclav Cvicek", "Zachary Fisher", "Philip Pham", "Anirudh Ravula", "Sumit Sanghai", "Qifan Wang", "Li Yang." ],
+      "venue" : "Proceedings of the 2020 Con-",
+      "citeRegEx" : "Ainslie et al\\.,? 2020",
+      "shortCiteRegEx" : "Ainslie et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Rezero is all you need: Fast convergence at large depth",
+      "author" : [ "Thomas Bachlechner", "Bodhisattwa Prasad Majumder", "Huanru Henry Mao", "Garrison W Cottrell", "Julian McAuley." ],
+      "venue" : "arXiv preprint arXiv:2003.04887.",
+      "citeRegEx" : "Bachlechner et al\\.,? 2020",
+      "shortCiteRegEx" : "Bachlechner et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "vq-wav2vec: Self-supervised learning of discrete speech representations",
+      "author" : [ "Alexei Baevski", "Steffen Schneider", "Michael Auli." ],
+      "venue" : "arXiv preprint arXiv:1910.05453.",
+      "citeRegEx" : "Baevski et al\\.,? 2019",
+      "shortCiteRegEx" : "Baevski et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "On the capabilities of multilayer perceptrons",
+      "author" : [ "Eric B Baum." ],
+      "venue" : "Journal of complexity, 4(3):193–215.",
+      "citeRegEx" : "Baum.,? 1988",
+      "shortCiteRegEx" : "Baum.",
+      "year" : 1988
+    }, {
+      "title" : "Longformer: The long-document transformer",
+      "author" : [ "Iz Beltagy", "Matthew E Peters", "Arman Cohan." ],
+      "venue" : "arXiv preprint arXiv:2004.05150.",
+      "citeRegEx" : "Beltagy et al\\.,? 2020",
+      "shortCiteRegEx" : "Beltagy et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "The perceptron: A model for brain functioning",
+      "author" : [ "Hans-Dieter Block." ],
+      "venue" : "i. Reviews of Modern Physics, 34(1):123.",
+      "citeRegEx" : "Block.,? 1962",
+      "shortCiteRegEx" : "Block.",
+      "year" : 1962
+    }, {
+      "title" : "Findings of the 2014 workshop",
+      "author" : [ "Ondřej Bojar", "Christian Buck", "Christian Federmann", "Barry Haddow", "Philipp Koehn", "Johannes Leveling", "Christof Monz", "Pavel Pecina", "Matt Post", "Herve Saint-Amand", "Radu Soricut", "Lucia Specia", "Aleš Tamchyna" ],
+      "venue" : null,
+      "citeRegEx" : "Bojar et al\\.,? \\Q2014\\E",
+      "shortCiteRegEx" : "Bojar et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "An outline of a mathematical theory of papa",
+      "author" : [ "A Borsellino", "A Gamba." ],
+      "venue" : "Il Nuovo Cimento (1955-1965), 20(2):221–231.",
+      "citeRegEx" : "Borsellino and Gamba.,? 1961",
+      "shortCiteRegEx" : "Borsellino and Gamba.",
+      "year" : 1961
+    }, {
+      "title" : "The use of the area under the roc curve in the evaluation of machine learning algorithms",
+      "author" : [ "Andrew P Bradley." ],
+      "venue" : "Pattern recognition, 30(7):1145–1159.",
+      "citeRegEx" : "Bradley.,? 1997",
+      "shortCiteRegEx" : "Bradley.",
+      "year" : 1997
+    }, {
+      "title" : "Freezeout: Accelerate training by progressively freezing layers",
+      "author" : [ "Andrew Brock", "Theodore Lim", "James M Ritchie", "Nick Weston." ],
+      "venue" : "arXiv preprint arXiv:1706.04983.",
+      "citeRegEx" : "Brock et al\\.,? 2017",
+      "shortCiteRegEx" : "Brock et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Language models are few-shot learners. arXiv preprint arXiv:2005.14165",
+      "author" : [ "Tom B Brown", "Benjamin Mann", "Nick Ryder", "Melanie Subbiah", "Jared Kaplan", "Prafulla Dhariwal", "Arvind Neelakantan", "Pranav Shyam", "Girish Sastry", "Amanda Askell" ],
+      "venue" : null,
+      "citeRegEx" : "Brown et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Brown et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "End-to-end object detection with transformers",
+      "author" : [ "Nicolas Carion", "Francisco Massa", "Gabriel Synnaeve", "Nicolas Usunier", "Alexander Kirillov", "Sergey Zagoruyko." ],
+      "venue" : "arXiv preprint arXiv:2005.12872.",
+      "citeRegEx" : "Carion et al\\.,? 2020",
+      "shortCiteRegEx" : "Carion et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Report on the 11 th iwslt evaluation campaign , iwslt 2014",
+      "author" : [ "M. Cettolo", "J. Niehues", "S. Stüker", "L. Bentivogli", "Marcello Federico." ],
+      "venue" : "Proceedings of IWSLT.",
+      "citeRegEx" : "Cettolo et al\\.,? 2015",
+      "shortCiteRegEx" : "Cettolo et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Learning phrase representations using rnn encoder-decoder for statistical machine translation",
+      "author" : [ "Kyunghyun Cho", "Bart Van Merriënboer", "Caglar Gulcehre", "Dzmitry Bahdanau", "Fethi Bougares", "Holger Schwenk", "Yoshua Bengio." ],
+      "venue" : "arXiv preprint",
+      "citeRegEx" : "Cho et al\\.,? 2014",
+      "shortCiteRegEx" : "Cho et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Masked language modeling for proteins via linearly scalable long-context transformers",
+      "author" : [ "Krzysztof Choromanski", "Valerii Likhosherstov", "David Dohan", "Xingyou Song", "Jared Davis", "Tamas Sarlos", "David Belanger", "Lucy Colwell", "Adrian Weller." ],
+      "venue" : "arXiv",
+      "citeRegEx" : "Choromanski et al\\.,? 2020",
+      "shortCiteRegEx" : "Choromanski et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Supervised learning of universal sentence representations from natural language inference data",
+      "author" : [ "Alexis Conneau", "Douwe Kiela", "Holger Schwenk", "Loic Barrault", "Antoine Bordes." ],
+      "venue" : "arXiv preprint arXiv:1705.02364.",
+      "citeRegEx" : "Conneau et al\\.,? 2017",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Geometrical and statistical properties of systems of linear inequalities with applications in pattern recognition",
+      "author" : [ "Thomas M Cover." ],
+      "venue" : "IEEE transactions on electronic computers, (3):326–334.",
+      "citeRegEx" : "Cover.,? 1965",
+      "shortCiteRegEx" : "Cover.",
+      "year" : 1965
+    }, {
+      "title" : "Understanding synthetic gradients and decoupled neural interfaces",
+      "author" : [ "Wojciech Marian Czarnecki", "Grzegorz Świrszcz", "Max Jaderberg", "Simon Osindero", "Oriol Vinyals", "Koray Kavukcuoglu." ],
+      "venue" : "arXiv preprint arXiv:1703.00522.",
+      "citeRegEx" : "Czarnecki et al\\.,? 2017",
+      "shortCiteRegEx" : "Czarnecki et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Transformer-XL: Attentive language models beyond a fixed-length context",
+      "author" : [ "Zihang Dai", "Zhilin Yang", "Yiming Yang", "Jaime Carbonell", "Quoc Le", "Ruslan Salakhutdinov." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computa-",
+      "citeRegEx" : "Dai et al\\.,? 2019",
+      "shortCiteRegEx" : "Dai et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Toward deeper understanding of neural networks: The power of initialization and a dual view on expressivity",
+      "author" : [ "Amit Daniely", "Roy Frostig", "Yoram Singer." ],
+      "venue" : "Advances In Neural Information Processing Systems, pages 2253–2261.",
+      "citeRegEx" : "Daniely et al\\.,? 2016",
+      "shortCiteRegEx" : "Daniely et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Bert: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "arXiv preprint arXiv:1810.04805.",
+      "citeRegEx" : "Devlin et al\\.,? 2018",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Gradient descent finds global minima of deep neural networks",
+      "author" : [ "Simon Du", "Jason Lee", "Haochuan Li", "Liwei Wang", "Xiyu Zhai." ],
+      "venue" : "International Conference on Machine Learning, pages 1675–1685.",
+      "citeRegEx" : "Du et al\\.,? 2019",
+      "shortCiteRegEx" : "Du et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Classical structured prediction losses for sequence to sequence learning",
+      "author" : [ "Sergey Edunov", "Myle Ott", "Michael Auli", "David Grangier", "Marc’Aurelio Ranzato" ],
+      "venue" : "In Proceedings of the 2018 Conference of the North American Chapter of the Asso-",
+      "citeRegEx" : "Edunov et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Edunov et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Depth-adaptive transformer",
+      "author" : [ "Maha Elbayad", "Jiatao Gu", "Edouard Grave", "Michael Auli." ],
+      "venue" : "arXiv preprint arXiv:1910.10073.",
+      "citeRegEx" : "Elbayad et al\\.,? 2019",
+      "shortCiteRegEx" : "Elbayad et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Neural language priors",
+      "author" : [ "Joseph Enguehard", "Dan Busbridge", "Vitalii Zhelezniak", "Nils Hammerla." ],
+      "venue" : "arXiv preprint arXiv:1910.03492.",
+      "citeRegEx" : "Enguehard et al\\.,? 2019",
+      "shortCiteRegEx" : "Enguehard et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Reducing transformer depth on demand with structured dropout",
+      "author" : [ "Angela Fan", "Edouard Grave", "Armand Joulin." ],
+      "venue" : "arXiv preprint arXiv:1909.11556.",
+      "citeRegEx" : "Fan et al\\.,? 2019",
+      "shortCiteRegEx" : "Fan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The lottery ticket hypothesis: Finding sparse, trainable neural networks",
+      "author" : [ "Jonathan Frankle", "Michael Carbin." ],
+      "venue" : "arXiv preprint arXiv:1803.03635.",
+      "citeRegEx" : "Frankle and Carbin.,? 2018",
+      "shortCiteRegEx" : "Frankle and Carbin.",
+      "year" : 2018
+    }, {
+      "title" : "Training batchnorm and only batchnorm: On the expressive power of random features in cnns",
+      "author" : [ "Jonathan Frankle", "David J Schwab", "Ari S Morcos." ],
+      "venue" : "arXiv preprint arXiv:2003.00152.",
+      "citeRegEx" : "Frankle et al\\.,? 2020",
+      "shortCiteRegEx" : "Frankle et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Echo state property of deep reservoir computing networks",
+      "author" : [ "Claudio Gallicchio", "Alessio Micheli." ],
+      "venue" : "Cognitive Computation, 9(3):337–350.",
+      "citeRegEx" : "Gallicchio and Micheli.,? 2017",
+      "shortCiteRegEx" : "Gallicchio and Micheli.",
+      "year" : 2017
+    }, {
+      "title" : "Deep randomized neural networks",
+      "author" : [ "Claudio Gallicchio", "Simone Scardapane." ],
+      "venue" : "Recent Trends in Learning From Data, pages 43–68. Springer.",
+      "citeRegEx" : "Gallicchio and Scardapane.,? 2020",
+      "shortCiteRegEx" : "Gallicchio and Scardapane.",
+      "year" : 2020
+    }, {
+      "title" : "Further experiments with papa",
+      "author" : [ "A. Gamba", "L. Gamberini", "G. Palmieri", "R. Sanna." ],
+      "venue" : "Il Nuovo Cimento (1955-1965), 20(2):112–115.",
+      "citeRegEx" : "Gamba et al\\.,? 1961",
+      "shortCiteRegEx" : "Gamba et al\\.",
+      "year" : 1961
+    }, {
+      "title" : "Echo state neural machine translation",
+      "author" : [ "Ankush Garg", "Yuan Cao", "Qi Ge." ],
+      "venue" : "arXiv preprint arXiv:2002.11847.",
+      "citeRegEx" : "Garg et al\\.,? 2020",
+      "shortCiteRegEx" : "Garg et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deep neural networks with random gaussian weights: A universal classification strategy",
+      "author" : [ "Raja Giryes", "Guillermo Sapiro", "Alex M Bronstein" ],
+      "venue" : "IEEE Transactions on Signal Processing,",
+      "citeRegEx" : "Giryes et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Giryes et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Understanding the difficulty of training deep feedforward neural networks",
+      "author" : [ "Xavier Glorot", "Yoshua Bengio." ],
+      "venue" : "Proceedings of the thirteenth international conference on artificial intelligence and statistics, pages 249–256.",
+      "citeRegEx" : "Glorot and Bengio.,? 2010",
+      "shortCiteRegEx" : "Glorot and Bengio.",
+      "year" : 2010
+    }, {
+      "title" : "Noisy activation functions",
+      "author" : [ "Caglar Gulcehre", "Marcin Moczulski", "Misha Denil", "Yoshua Bengio." ],
+      "venue" : "International conference on machine learning, pages 3059–3068.",
+      "citeRegEx" : "Gulcehre et al\\.,? 2016",
+      "shortCiteRegEx" : "Gulcehre et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Unconventional Information Processing Systems, Novel Hardware: A Tour D’Horizon",
+      "author" : [ "Fatemeh Hadaeghi", "Xu He", "Herbert Jaeger" ],
+      "venue" : null,
+      "citeRegEx" : "Hadaeghi et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Hadaeghi et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Pipetransformer: Automated elastic pipelining for distributed training of transformers",
+      "author" : [ "Chaoyang He", "Shen Li", "Mahdi Soltanolkotabi", "Salman Avestimehr." ],
+      "venue" : "ICML.",
+      "citeRegEx" : "He et al\\.,? 2021",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Information processing using transient dynamics of semiconductor lasers subject to delayed feedback",
+      "author" : [ "Konstantin Hicke", "Miguel Escalona-Moran", "Daniel Brunner", "Miguel Soriano", "Ingo Fischer", "Claudio Mirasso." ],
+      "venue" : "Selected Topics in Quantum Elec-",
+      "citeRegEx" : "Hicke et al\\.,? 2013",
+      "shortCiteRegEx" : "Hicke et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Extreme learning machine: theory and applications",
+      "author" : [ "Guang-Bin Huang", "Qin-Yu Zhu", "Chee-Kheong Siew." ],
+      "venue" : "Neurocomputing, 70(1-3):489–501.",
+      "citeRegEx" : "Huang et al\\.,? 2006",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "Decoupled neural interfaces using synthetic gradients",
+      "author" : [ "Max Jaderberg", "Wojciech Marian Czarnecki", "Simon Osindero", "Oriol Vinyals", "Alex Graves", "David Silver", "Koray Kavukcuoglu." ],
+      "venue" : "International Conference on Machine Learning, pages",
+      "citeRegEx" : "Jaderberg et al\\.,? 2017",
+      "shortCiteRegEx" : "Jaderberg et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Adaptive nonlinear system identification with echo state networks",
+      "author" : [ "Herbert Jaeger." ],
+      "venue" : "Advances in neural information processing systems.",
+      "citeRegEx" : "Jaeger.,? 2003",
+      "shortCiteRegEx" : "Jaeger.",
+      "year" : 2003
+    }, {
+      "title" : "What does BERT learn about the structure of language",
+      "author" : [ "Ganesh Jawahar", "Benoı̂t Sagot", "Djamé Seddah" ],
+      "venue" : "In Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Jawahar et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Jawahar et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Effects of noise on convergence and generalization in recurrent networks",
+      "author" : [ "Kam Jim", "Bill G Horne", "C Lee Giles." ],
+      "venue" : "Advances in neural information processing systems, pages 649–656.",
+      "citeRegEx" : "Jim et al\\.,? 1995",
+      "shortCiteRegEx" : "Jim et al\\.",
+      "year" : 1995
+    }, {
+      "title" : "An analysis of noise in recurrent neural networks: convergence and generalization",
+      "author" : [ "Kam-Chuen Jim", "C Lee Giles", "Bill G Horne." ],
+      "venue" : "IEEE Transactions on neural networks, 7(6):1424–1438.",
+      "citeRegEx" : "Jim et al\\.,? 1996",
+      "shortCiteRegEx" : "Jim et al\\.",
+      "year" : 1996
+    }, {
+      "title" : "Extensions of lipschitz mappings into a hilbert space",
+      "author" : [ "William B Johnson", "Joram Lindenstrauss." ],
+      "venue" : "Contemporary mathematics, 26(189-206):1.",
+      "citeRegEx" : "Johnson and Lindenstrauss.,? 1984",
+      "shortCiteRegEx" : "Johnson and Lindenstrauss.",
+      "year" : 1984
+    }, {
+      "title" : "Scaling laws for neural language models",
+      "author" : [ "Jared Kaplan", "Sam McCandlish", "Tom Henighan", "Tom B Brown", "Benjamin Chess", "Rewon Child", "Scott Gray", "Alec Radford", "Jeffrey Wu", "Dario Amodei." ],
+      "venue" : "arXiv preprint arXiv:2001.08361.",
+      "citeRegEx" : "Kaplan et al\\.,? 2020",
+      "shortCiteRegEx" : "Kaplan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deep encoder, shallow decoder: Reevaluating the speed-quality tradeoff in machine translation",
+      "author" : [ "Jungo Kasai", "Nikolaos Pappas", "Hao Peng", "James Cross", "Noah A Smith." ],
+      "venue" : "arXiv preprint arXiv:2006.10369.",
+      "citeRegEx" : "Kasai et al\\.,? 2020",
+      "shortCiteRegEx" : "Kasai et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Transformers are rnns: Fast autoregressive transformers with linear attention",
+      "author" : [ "Angelos Katharopoulos", "Apoorv Vyas", "Nikolaos Pappas", "François Fleuret." ],
+      "venue" : "arXiv preprint arXiv:2006.16236.",
+      "citeRegEx" : "Katharopoulos et al\\.,? 2020",
+      "shortCiteRegEx" : "Katharopoulos et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Convolutional neural networks for sentence classification",
+      "author" : [ "Yoon Kim." ],
+      "venue" : "arXiv preprint arXiv:1408.5882.",
+      "citeRegEx" : "Kim.,? 2014",
+      "shortCiteRegEx" : "Kim.",
+      "year" : 2014
+    }, {
+      "title" : "Reformer: The efficient transformer",
+      "author" : [ "Nikita Kitaev", "Łukasz Kaiser", "Anselm Levskaya." ],
+      "venue" : "arXiv preprint arXiv:2001.04451.",
+      "citeRegEx" : "Kitaev et al\\.,? 2020",
+      "shortCiteRegEx" : "Kitaev et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Gradient-based learning applied to document recognition",
+      "author" : [ "Yann LeCun", "Léon Bottou", "Yoshua Bengio", "Patrick Haffner." ],
+      "venue" : "Proceedings of the IEEE, 86(11):2278–2324.",
+      "citeRegEx" : "LeCun et al\\.,? 1998",
+      "shortCiteRegEx" : "LeCun et al\\.",
+      "year" : 1998
+    }, {
+      "title" : "Learning overparameterized neural networks via stochastic gradient descent on structured data",
+      "author" : [ "Yuanzhi Li", "Yingyu Liang." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 8157–8166.",
+      "citeRegEx" : "Li and Liang.,? 2018",
+      "shortCiteRegEx" : "Li and Liang.",
+      "year" : 2018
+    }, {
+      "title" : "Train large, then compress: Rethinking model size for efficient training and inference of transformers",
+      "author" : [ "Zhuohan Li", "Eric Wallace", "Sheng Shen", "Kevin Lin", "Kurt Keutzer", "Dan Klein", "Joseph E Gonzalez." ],
+      "venue" : "arXiv preprint arXiv:2002.11794.",
+      "citeRegEx" : "Li et al\\.,? 2020",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Roberta: A robustly optimized bert pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "arXiv preprint arXiv:1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Reservoir computing approaches to recurrent neural network training",
+      "author" : [ "Mantas Lukoševičius", "Herbert Jaeger." ],
+      "venue" : "Computer Science Review, 3(3).",
+      "citeRegEx" : "Lukoševičius and Jaeger.,? 2009",
+      "shortCiteRegEx" : "Lukoševičius and Jaeger.",
+      "year" : 2009
+    }, {
+      "title" : "Real-time computing without stable states: A new framework for neural computation based on perturbations",
+      "author" : [ "Wolfgang Maass", "Thomas Natschläger", "Henry Markram." ],
+      "venue" : "Neural computation, 14(11):2531–2560.",
+      "citeRegEx" : "Maass et al\\.,? 2002",
+      "shortCiteRegEx" : "Maass et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Perceptrons: An introduction to computational geometry",
+      "author" : [ "Marvin Minsky", "Seymour A Papert." ],
+      "venue" : "MIT press.",
+      "citeRegEx" : "Minsky and Papert.,? 2017",
+      "shortCiteRegEx" : "Minsky and Papert.",
+      "year" : 2017
+    }, {
+      "title" : "Event-driven random back-propagation: Enabling neuromorphic deep learning machines",
+      "author" : [ "Emre O Neftci", "Charles Augustine", "Somnath Paul", "Georgios Detorakis." ],
+      "venue" : "Frontiers in neuroscience, 11:324.",
+      "citeRegEx" : "Neftci et al\\.,? 2017",
+      "shortCiteRegEx" : "Neftci et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Regularizing deep neural networks by noise: Its interpretation and optimization",
+      "author" : [ "Hyeonwoo Noh", "Tackgeun You", "Jonghwan Mun", "Bohyung Han." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 5109–5118.",
+      "citeRegEx" : "Noh et al\\.,? 2017",
+      "shortCiteRegEx" : "Noh et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Randomized automatic differentiation",
+      "author" : [ "Deniz Oktay", "Nick McGreivy", "Joshua Aduol", "Alex Beatson", "Ryan P Adams." ],
+      "venue" : "arXiv preprint arXiv:2007.10412.",
+      "citeRegEx" : "Oktay et al\\.,? 2020",
+      "shortCiteRegEx" : "Oktay et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Scaling neural machine translation",
+      "author" : [ "Myle Ott", "Sergey Edunov", "David Grangier", "Michael Auli." ],
+      "venue" : "arXiv preprint arXiv:1806.00187.",
+      "citeRegEx" : "Ott et al\\.,? 2018",
+      "shortCiteRegEx" : "Ott et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Learning and generalization characteristics of the random vector functional-link net",
+      "author" : [ "Yoh-Han Pao", "Gwang-Hoon Park", "Dejan J Sobajic." ],
+      "venue" : "Neurocomputing, 6(2):163–180.",
+      "citeRegEx" : "Pao et al\\.,? 1994",
+      "shortCiteRegEx" : "Pao et al\\.",
+      "year" : 1994
+    }, {
+      "title" : "Random feature attention",
+      "author" : [ "Hao Peng", "Nikolaos Pappas", "Dani Yogatama", "Roy Schwartz", "Noah Smith", "Lingpeng Kong." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Peng et al\\.,? 2021",
+      "shortCiteRegEx" : "Peng et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "On the impressive performance of randomly weighted encoders in summarization tasks",
+      "author" : [ "Jonathan Pilault", "Jaehong Park", "Christopher Pal." ],
+      "venue" : "arXiv preprint arXiv:2002.09084.",
+      "citeRegEx" : "Pilault et al\\.,? 2020",
+      "shortCiteRegEx" : "Pilault et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Randomly weighted cnns for (music) audio classification",
+      "author" : [ "Jordi Pons", "Xavier Serra." ],
+      "venue" : "ICASSP 2019-2019 IEEE international conference on acoustics, speech and signal processing (ICASSP), pages 336–340. IEEE.",
+      "citeRegEx" : "Pons and Serra.,? 2019",
+      "shortCiteRegEx" : "Pons and Serra.",
+      "year" : 2019
+    }, {
+      "title" : "Improving transformer models by reordering their sublayers",
+      "author" : [ "Ofir Press", "Noah A Smith", "Omer Levy." ],
+      "venue" : "arXiv preprint arXiv:1911.03864.",
+      "citeRegEx" : "Press et al\\.,? 2019",
+      "shortCiteRegEx" : "Press et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "Alec Radford", "Jeffrey Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever" ],
+      "venue" : null,
+      "citeRegEx" : "Radford et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Random features for large-scale kernel machines",
+      "author" : [ "Ali Rahimi", "Benjamin Recht." ],
+      "venue" : "Advances in neural information processing systems, pages 1177–1184.",
+      "citeRegEx" : "Rahimi and Recht.,? 2008",
+      "shortCiteRegEx" : "Rahimi and Recht.",
+      "year" : 2008
+    }, {
+      "title" : "Weighted sums of random kitchen sinks: Replacing minimization with randomization in learning",
+      "author" : [ "Ali Rahimi", "Benjamin Recht." ],
+      "venue" : "Advances in neural information processing systems, pages 1313– 1320.",
+      "citeRegEx" : "Rahimi and Recht.,? 2009",
+      "shortCiteRegEx" : "Rahimi and Recht.",
+      "year" : 2009
+    }, {
+      "title" : "What’s hidden in a randomly weighted neural network",
+      "author" : [ "Vivek Ramanujan", "Mitchell Wortsman", "Aniruddha Kembhavi", "Ali Farhadi", "Mohammad Rastegari" ],
+      "venue" : "In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition,",
+      "citeRegEx" : "Ramanujan et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Ramanujan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A primer in bertology: What we know about how bert works",
+      "author" : [ "Anna Rogers", "Olga Kovaleva", "Anna Rumshisky." ],
+      "venue" : "arXiv preprint arXiv:2002.12327.",
+      "citeRegEx" : "Rogers et al\\.,? 2020",
+      "shortCiteRegEx" : "Rogers et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Intriguing properties of randomly weighted networks: Generalizing while learning next to nothing",
+      "author" : [ "Amir Rosenfeld", "John K Tsotsos." ],
+      "venue" : "2019 16th Conference on Computer and Robot Vision (CRV), pages 9–16. IEEE.",
+      "citeRegEx" : "Rosenfeld and Tsotsos.,? 2019",
+      "shortCiteRegEx" : "Rosenfeld and Tsotsos.",
+      "year" : 2019
+    }, {
+      "title" : "An introduction to random indexing",
+      "author" : [ "Magnus Sahlgren." ],
+      "venue" : "Methods and applications of semantic indexing workshop at the 7th international conference on terminology and knowledge engineering.",
+      "citeRegEx" : "Sahlgren.,? 2005",
+      "shortCiteRegEx" : "Sahlgren.",
+      "year" : 2005
+    }, {
+      "title" : "Exact solutions to the nonlinear dynamics of learning in deep linear neural networks",
+      "author" : [ "Andrew M Saxe", "James L McClelland", "Surya Ganguli." ],
+      "venue" : "arXiv preprint arXiv:1312.6120.",
+      "citeRegEx" : "Saxe et al\\.,? 2013",
+      "shortCiteRegEx" : "Saxe et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Randomness in neural networks: an overview",
+      "author" : [ "Simone Scardapane", "Dianhui Wang." ],
+      "venue" : "Wiley Interdisciplinary Reviews: Data Mining and Knowledge Discovery, 7(2):e1200.",
+      "citeRegEx" : "Scardapane and Wang.,? 2017",
+      "shortCiteRegEx" : "Scardapane and Wang.",
+      "year" : 2017
+    }, {
+      "title" : "Feedforward neural networks with random weights",
+      "author" : [ "Wouter F Schmidt", "Martin A Kraaijveld", "Robert PW Duin." ],
+      "venue" : "Proceedings of the 11th International Conference on Pattern Recognition, 1992. Vol. II. Conference B: Pattern Recogni-",
+      "citeRegEx" : "Schmidt et al\\.,? 1992",
+      "shortCiteRegEx" : "Schmidt et al\\.",
+      "year" : 1992
+    }, {
+      "title" : "Compact hardware for real-time speech recognition using a liquid state machine",
+      "author" : [ "Benjamin Schrauwen", "Michiel D’Haene", "David Verstraeten", "Jan Campenhout" ],
+      "venue" : null,
+      "citeRegEx" : "Schrauwen et al\\.,? \\Q2007\\E",
+      "shortCiteRegEx" : "Schrauwen et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "Green ai",
+      "author" : [ "Roy Schwartz", "Jesse Dodge", "Noah A Smith", "Oren Etzioni." ],
+      "venue" : "arXiv preprint arXiv:1907.10597.",
+      "citeRegEx" : "Schwartz et al\\.,? 2019",
+      "shortCiteRegEx" : "Schwartz et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Q-bert: Hessian based ultra low precision quantization of bert",
+      "author" : [ "Sheng Shen", "Zhen Dong", "Jiayu Ye", "Linjian Ma", "Zhewei Yao", "Amir Gholami", "Michael W Mahoney", "Kurt Keutzer." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, vol-",
+      "citeRegEx" : "Shen et al\\.,? 2020",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Recursive deep models for semantic compositionality over a sentiment treebank",
+      "author" : [ "Richard Socher", "Alex Perelygin", "Jean Wu", "Jason Chuang", "Christopher D Manning", "Andrew Y Ng", "Christopher Potts." ],
+      "venue" : "Proceedings of the 2013 conference on",
+      "citeRegEx" : "Socher et al\\.,? 2013",
+      "shortCiteRegEx" : "Socher et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Energy and policy considerations for deep learning in nlp",
+      "author" : [ "Emma Strubell", "Ananya Ganesh", "Andrew McCallum." ],
+      "venue" : "arXiv preprint arXiv:1906.02243.",
+      "citeRegEx" : "Strubell et al\\.,? 2019",
+      "shortCiteRegEx" : "Strubell et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Mobilebert: a compact task-agnostic bert for resource-limited devices",
+      "author" : [ "Zhiqing Sun", "Hongkun Yu", "Xiaodan Song", "Renjie Liu", "Yiming Yang", "Denny Zhou." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Sun et al\\.,? 2020",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Recent advances in physical reservoir computing: A review",
+      "author" : [ "Gouhei Tanaka", "Toshiyuki Yamane", "Jean Benoit Héroux", "Ryosho Nakane", "Naoki Kanazawa", "Seiji Takeda", "Hidetoshi Numata", "Daiju Nakano", "Akira Hirose." ],
+      "venue" : "Neural Networks,",
+      "citeRegEx" : "Tanaka et al\\.,? 2019",
+      "shortCiteRegEx" : "Tanaka et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Synthesizer: Rethinking self-attention in transformer models",
+      "author" : [ "Yi Tay", "Dara Bahri", "Donald Metzler", "Da-Cheng Juan", "Zhe Zhao", "Che Zheng." ],
+      "venue" : "arXiv preprint arXiv:2005.00743.",
+      "citeRegEx" : "Tay et al\\.,? 2020a",
+      "shortCiteRegEx" : "Tay et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Efficient transformers: A survey",
+      "author" : [ "Yi Tay", "Mostafa Dehghani", "Dara Bahri", "Donald Metzler." ],
+      "venue" : "arXiv preprint arXiv:2009.06732.",
+      "citeRegEx" : "Tay et al\\.,? 2020b",
+      "shortCiteRegEx" : "Tay et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bert rediscovers the classical nlp pipeline",
+      "author" : [ "Ian Tenney", "Dipanjan Das", "Ellie Pavlick." ],
+      "venue" : "arXiv preprint arXiv:1905.05950.",
+      "citeRegEx" : "Tenney et al\\.,? 2019",
+      "shortCiteRegEx" : "Tenney et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Deep image prior",
+      "author" : [ "Dmitry Ulyanov", "Andrea Vedaldi", "Victor Lempitsky." ],
+      "venue" : "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition, pages 9446–9454.",
+      "citeRegEx" : "Ulyanov et al\\.,? 2018",
+      "shortCiteRegEx" : "Ulyanov et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in neural information processing systems, pages 5998–6008.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Grandmaster level in StarCraft II using multi-agent reinforcement",
+      "author" : [ "man Ring", "Dani Yogatama", "Dario Wünsch", "Katrina McKinney", "Oliver Smith", "Tom Schaul", "Timothy Lillicrap", "Koray Kavukcuoglu", "Demis Hassabis", "Chris Apps", "David Silver" ],
+      "venue" : null,
+      "citeRegEx" : "Ring et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Ring et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Informationtheoretic probing with minimum description length",
+      "author" : [ "Elena Voita", "Ivan Titov." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 183–196.",
+      "citeRegEx" : "Voita and Titov.,? 2020",
+      "shortCiteRegEx" : "Voita and Titov.",
+      "year" : 2020
+    }, {
+      "title" : "Linformer: Selfattention with linear complexity",
+      "author" : [ "Sinong Wang", "Belinda Li", "Madian Khabsa", "Han Fang", "Hao Ma." ],
+      "venue" : "arXiv preprint arXiv:2006.04768.",
+      "citeRegEx" : "Wang et al\\.,? 2020",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "No training required: Exploring random encoders for sentence classification",
+      "author" : [ "John Wieting", "Douwe Kiela." ],
+      "venue" : "arXiv preprint arXiv:1901.10444.",
+      "citeRegEx" : "Wieting and Kiela.,? 2019",
+      "shortCiteRegEx" : "Wieting and Kiela.",
+      "year" : 2019
+    }, {
+      "title" : "A broad-coverage challenge corpus for sentence understanding through inference",
+      "author" : [ "Adina Williams", "Nikita Nangia", "Samuel R Bowman." ],
+      "venue" : "arXiv preprint arXiv:1704.05426.",
+      "citeRegEx" : "Williams et al\\.,? 2017",
+      "shortCiteRegEx" : "Williams et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Simple statistical gradientfollowing algorithms for connectionist reinforcement learning",
+      "author" : [ "Ronald J Williams." ],
+      "venue" : "Machine learning, 8(3-4):229–256.",
+      "citeRegEx" : "Williams.,? 1992",
+      "shortCiteRegEx" : "Williams.",
+      "year" : 1992
+    }, {
+      "title" : "Pay less attention with lightweight and dynamic convolutions",
+      "author" : [ "Felix Wu", "Angela Fan", "Alexei Baevski", "Yann N Dauphin", "Michael Auli." ],
+      "venue" : "arXiv preprint arXiv:1901.10430.",
+      "citeRegEx" : "Wu et al\\.,? 2019",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Are all layers created equal? arXiv preprint arXiv:1902.01996",
+      "author" : [ "Chiyuan Zhang", "Samy Bengio", "Yoram Singer" ],
+      "venue" : null,
+      "citeRegEx" : "Zhang et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Language modeling teaches you more than translation does: Lessons learned through auxiliary syntactic task analysis",
+      "author" : [ "Kelly Zhang", "Samuel Bowman." ],
+      "venue" : "Proceedings of the 2018 EMNLP Workshop BlackboxNLP: Analyzing and Interpret-",
+      "citeRegEx" : "Zhang and Bowman.,? 2018",
+      "shortCiteRegEx" : "Zhang and Bowman.",
+      "year" : 2018
+    }, {
+      "title" : "Deconstructing lottery tickets: Zeros, signs, and the supermask",
+      "author" : [ "Hattie Zhou", "Janice Lan", "Rosanne Liu", "Jason Yosinski." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 3597– 3607.",
+      "citeRegEx" : "Zhou et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "PANLP at MEDIQA 2019: Pre-trained language models, transfer learning and knowledge distillation",
+      "author" : [ "Wei Zhu", "Xiaofeng Zhou", "Keqiang Wang", "Xun Luo", "Xiepeng Li", "Yuan Ni", "Guotong Xie." ],
+      "venue" : "Proceedings of the 18th BioNLP Workshop and",
+      "citeRegEx" : "Zhu et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhu et al\\.",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 87,
+      "context" : "Transformers (Vaswani et al., 2017) have dominated natural language processing (NLP) in recent years, from large scale machine translation (Ott et al.",
+      "startOffset" : 13,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 60,
+      "context" : ", 2017) have dominated natural language processing (NLP) in recent years, from large scale machine translation (Ott et al., 2018) to pre-trained (masked) language modeling (Devlin et al.",
+      "startOffset" : 111,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2018) to pre-trained (masked) language modeling (Devlin et al., 2018; Radford et al., 2018), and are becoming more popular in other fields as well, from reinforcement learning (Vinyals et al.",
+      "startOffset" : 50,
+      "endOffset" : 93
+    }, {
+      "referenceID" : 66,
+      "context" : ", 2018) to pre-trained (masked) language modeling (Devlin et al., 2018; Radford et al., 2018), and are becoming more popular in other fields as well, from reinforcement learning (Vinyals et al.",
+      "startOffset" : 50,
+      "endOffset" : 93
+    }, {
+      "referenceID" : 2,
+      "context" : ", 2019) to speech recognition (Baevski et al., 2019) and computer vision (Carion et al.",
+      "startOffset" : 30,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 49,
+      "context" : "Scalability gains in transformers could facilitate bigger, deeper networks with longer contexts (Kitaev et al., 2020; Wang et al., 2020; Beltagy et al., 2020; Kaplan et al., 2020; Tay et al., 2020b).",
+      "startOffset" : 96,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 90,
+      "context" : "Scalability gains in transformers could facilitate bigger, deeper networks with longer contexts (Kitaev et al., 2020; Wang et al., 2020; Beltagy et al., 2020; Kaplan et al., 2020; Tay et al., 2020b).",
+      "startOffset" : 96,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 4,
+      "context" : "Scalability gains in transformers could facilitate bigger, deeper networks with longer contexts (Kitaev et al., 2020; Wang et al., 2020; Beltagy et al., 2020; Kaplan et al., 2020; Tay et al., 2020b).",
+      "startOffset" : 96,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 45,
+      "context" : "Scalability gains in transformers could facilitate bigger, deeper networks with longer contexts (Kitaev et al., 2020; Wang et al., 2020; Beltagy et al., 2020; Kaplan et al., 2020; Tay et al., 2020b).",
+      "startOffset" : 96,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 84,
+      "context" : "Scalability gains in transformers could facilitate bigger, deeper networks with longer contexts (Kitaev et al., 2020; Wang et al., 2020; Beltagy et al., 2020; Kaplan et al., 2020; Tay et al., 2020b).",
+      "startOffset" : 96,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 80,
+      "context" : "Conversely, improved efficiency could reduce environmental costs (Strubell et al., 2019) and hopefully help democratize the technology.",
+      "startOffset" : 65,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 29,
+      "context" : "Fixed randomly initialized networks (Gallicchio and Scardapane, 2020) converge to Gaussian processes in the limit of infinite width (Daniely et al.",
+      "startOffset" : 36,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 19,
+      "context" : "Fixed randomly initialized networks (Gallicchio and Scardapane, 2020) converge to Gaussian processes in the limit of infinite width (Daniely et al., 2016), have intriguing interpretations in metric learning (Rosenfeld and Tsotsos, 2019; Giryes et al.",
+      "startOffset" : 132,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 71,
+      "context" : ", 2016), have intriguing interpretations in metric learning (Rosenfeld and Tsotsos, 2019; Giryes et al., 2016), and have been shown to provide excellent “priors” either for subsequent learning (Ulyanov et al.",
+      "startOffset" : 60,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 32,
+      "context" : ", 2016), have intriguing interpretations in metric learning (Rosenfeld and Tsotsos, 2019; Giryes et al., 2016), and have been shown to provide excellent “priors” either for subsequent learning (Ulyanov et al.",
+      "startOffset" : 60,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 86,
+      "context" : ", 2016), and have been shown to provide excellent “priors” either for subsequent learning (Ulyanov et al., 2018) or pruning (Frankle and Carbin, 2018).",
+      "startOffset" : 90,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 76,
+      "context" : "Fixed layers allow for efficient low-cost hardware implementations (Schrauwen et al., 2007) and can be characterized using only a random number generator and its seed.",
+      "startOffset" : 67,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 20,
+      "context" : "The strong performance of networks with fixed layers also sheds new light on the inner workings of BERT (Devlin et al., 2018), and layer-wise interpretations of such models (Rogers et al.",
+      "startOffset" : 104,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 70,
+      "context" : ", 2018), and layer-wise interpretations of such models (Rogers et al., 2020; Tenney et al., 2019).",
+      "startOffset" : 55,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 85,
+      "context" : ", 2018), and layer-wise interpretations of such models (Rogers et al., 2020; Tenney et al., 2019).",
+      "startOffset" : 55,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 95,
+      "context" : "It appears that “not all layers are created equal” (Zhang et al., 2019) is true to such an extent that some layers can simply remain random and fixed.",
+      "startOffset" : 51,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 16,
+      "context" : "By Cover’s theorem (Cover, 1965), any high-dimensional non-linear transformation is more likely to be linearly separable than its lower-or-equal-dimensional input space.",
+      "startOffset" : 19,
+      "endOffset" : 32
+    }, {
+      "referenceID" : 44,
+      "context" : "By Johnson-Lindenstrauss (Johnson and Lindenstrauss, 1984), random projections distort Euclidean distances very little under mild assumptions, which is useful e.",
+      "startOffset" : 25,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 72,
+      "context" : "for dimensionality reduction and random indexing (Sahlgren, 2005).",
+      "startOffset" : 49,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 30,
+      "context" : "Fixed random layers in neural networks pre-date deep learning by far (Gamba et al., 1961; Baum, 1988).",
+      "startOffset" : 69,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 3,
+      "context" : "Fixed random layers in neural networks pre-date deep learning by far (Gamba et al., 1961; Baum, 1988).",
+      "startOffset" : 69,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 54,
+      "context" : "One way to think of such layers is as “reservoirs” (Lukoševičius and Jaeger, 2009), where a highly non-linear high-dimensional black box representation is provided to a lightweight “readout” network, as in echo state networks (Jaeger, 2003) and liquid state machines (Maass et al.",
+      "startOffset" : 51,
+      "endOffset" : 82
+    }, {
+      "referenceID" : 40,
+      "context" : "One way to think of such layers is as “reservoirs” (Lukoševičius and Jaeger, 2009), where a highly non-linear high-dimensional black box representation is provided to a lightweight “readout” network, as in echo state networks (Jaeger, 2003) and liquid state machines (Maass et al.",
+      "startOffset" : 226,
+      "endOffset" : 240
+    }, {
+      "referenceID" : 55,
+      "context" : "One way to think of such layers is as “reservoirs” (Lukoševičius and Jaeger, 2009), where a highly non-linear high-dimensional black box representation is provided to a lightweight “readout” network, as in echo state networks (Jaeger, 2003) and liquid state machines (Maass et al., 2002).",
+      "startOffset" : 267,
+      "endOffset" : 287
+    }, {
+      "referenceID" : 24,
+      "context" : "In NLP, Wieting and Kiela (2019) showed that random sentence encoders present a strong baseline for text classification, with subsequent work showing applications in a variety of tasks from summarization to machine translation (Enguehard et al., 2019; Garg et al., 2020; Pilault et al., 2020).",
+      "startOffset" : 227,
+      "endOffset" : 292
+    }, {
+      "referenceID" : 31,
+      "context" : "In NLP, Wieting and Kiela (2019) showed that random sentence encoders present a strong baseline for text classification, with subsequent work showing applications in a variety of tasks from summarization to machine translation (Enguehard et al., 2019; Garg et al., 2020; Pilault et al., 2020).",
+      "startOffset" : 227,
+      "endOffset" : 292
+    }, {
+      "referenceID" : 63,
+      "context" : "In NLP, Wieting and Kiela (2019) showed that random sentence encoders present a strong baseline for text classification, with subsequent work showing applications in a variety of tasks from summarization to machine translation (Enguehard et al., 2019; Garg et al., 2020; Pilault et al., 2020).",
+      "startOffset" : 227,
+      "endOffset" : 292
+    }, {
+      "referenceID" : 53,
+      "context" : "• We show that pre-trained masked language modelling architectures like BERT and RoBERTa (Liu et al., 2019) can benefit from having some of their layers frozen, both during pre-training as well as when fine-tuning on downstream tasks.",
+      "startOffset" : 89,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 87,
+      "context" : "Let L = Transformer(X) be a single layer in a Transformer network (Vaswani et al., 2017), i.",
+      "startOffset" : 66,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 5,
+      "context" : "Naturally, never updating some of the parameters is computationally more efficient, as some matrix addition operations can be skipped in the backward pass, but why is this not detrimental to the performance of the network? In the early days of neural networks, the bottom layers were often kept fixed as “associators” (Block, 1962), or what (Minsky and Papert, 2017) called the Gamba perceptron (Gamba et al.",
+      "startOffset" : 318,
+      "endOffset" : 331
+    }, {
+      "referenceID" : 56,
+      "context" : "Naturally, never updating some of the parameters is computationally more efficient, as some matrix addition operations can be skipped in the backward pass, but why is this not detrimental to the performance of the network? In the early days of neural networks, the bottom layers were often kept fixed as “associators” (Block, 1962), or what (Minsky and Papert, 2017) called the Gamba perceptron (Gamba et al.",
+      "startOffset" : 341,
+      "endOffset" : 366
+    }, {
+      "referenceID" : 30,
+      "context" : "Naturally, never updating some of the parameters is computationally more efficient, as some matrix addition operations can be skipped in the backward pass, but why is this not detrimental to the performance of the network? In the early days of neural networks, the bottom layers were often kept fixed as “associators” (Block, 1962), or what (Minsky and Papert, 2017) called the Gamba perceptron (Gamba et al., 1961; Borsellino and Gamba, 1961).",
+      "startOffset" : 395,
+      "endOffset" : 443
+    }, {
+      "referenceID" : 7,
+      "context" : "Naturally, never updating some of the parameters is computationally more efficient, as some matrix addition operations can be skipped in the backward pass, but why is this not detrimental to the performance of the network? In the early days of neural networks, the bottom layers were often kept fixed as “associators” (Block, 1962), or what (Minsky and Papert, 2017) called the Gamba perceptron (Gamba et al., 1961; Borsellino and Gamba, 1961).",
+      "startOffset" : 395,
+      "endOffset" : 443
+    }, {
+      "referenceID" : 3,
+      "context" : "Fixed random networks (Baum, 1988; Schmidt et al., 1992; Pao et al., 1994) have been explored from many angles, including as “random kitchen sink” kernel machines (Rahimi and Recht, 2008, 2009), “extreme learning machines” (Huang et al.",
+      "startOffset" : 22,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 75,
+      "context" : "Fixed random networks (Baum, 1988; Schmidt et al., 1992; Pao et al., 1994) have been explored from many angles, including as “random kitchen sink” kernel machines (Rahimi and Recht, 2008, 2009), “extreme learning machines” (Huang et al.",
+      "startOffset" : 22,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 61,
+      "context" : "Fixed random networks (Baum, 1988; Schmidt et al., 1992; Pao et al., 1994) have been explored from many angles, including as “random kitchen sink” kernel machines (Rahimi and Recht, 2008, 2009), “extreme learning machines” (Huang et al.",
+      "startOffset" : 22,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 38,
+      "context" : ", 1994) have been explored from many angles, including as “random kitchen sink” kernel machines (Rahimi and Recht, 2008, 2009), “extreme learning machines” (Huang et al., 2006) and",
+      "startOffset" : 156,
+      "endOffset" : 176
+    }, {
+      "referenceID" : 16,
+      "context" : "The theoretical justification for these approaches lies in two well-known results in machine learning: Cover’s theorem (Cover, 1965) on the separability of patterns states that highdimensional non-linear transformations are more likely to be linearly separable; and the JohnsonLindenstrauss lemma (Johnson and Lindenstrauss, 1984) shows that (most) random projections distort Euclidean distances very little.",
+      "startOffset" : 119,
+      "endOffset" : 132
+    }, {
+      "referenceID" : 44,
+      "context" : "The theoretical justification for these approaches lies in two well-known results in machine learning: Cover’s theorem (Cover, 1965) on the separability of patterns states that highdimensional non-linear transformations are more likely to be linearly separable; and the JohnsonLindenstrauss lemma (Johnson and Lindenstrauss, 1984) shows that (most) random projections distort Euclidean distances very little.",
+      "startOffset" : 297,
+      "endOffset" : 330
+    }, {
+      "referenceID" : 35,
+      "context" : "Fixed layers are known to have particularly low-cost hardware requirements and can be easily implemented on high-bandwidth FPGAs with low power consumption (Hadaeghi et al., 2017; Tanaka et al., 2019), or on optical devices (Hicke et al.",
+      "startOffset" : 156,
+      "endOffset" : 200
+    }, {
+      "referenceID" : 82,
+      "context" : "Fixed layers are known to have particularly low-cost hardware requirements and can be easily implemented on high-bandwidth FPGAs with low power consumption (Hadaeghi et al., 2017; Tanaka et al., 2019), or on optical devices (Hicke et al.",
+      "startOffset" : 156,
+      "endOffset" : 200
+    }, {
+      "referenceID" : 57,
+      "context" : "This might yield interesting possibilities for training in a distributed fashion across multiple devices, as well as for neuromorphic hardware (Neftci et al., 2017).",
+      "startOffset" : 143,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 13,
+      "context" : "• BiGRU Reservoir: A fixed bidirectional Gated Recurrent Unit (Cho et al., 2014) layer, which is closer in spirit to previous work on reservoir computing, most of which builds on recurrent neural network architectures.",
+      "startOffset" : 62,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 50,
+      "context" : "• CNN Reservoir: A fixed Convolutional Neural Network (LeCun et al., 1998) layer, specifically light dynamical convolution layers (Wu et al.",
+      "startOffset" : 54,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 94,
+      "context" : ", 1998) layer, specifically light dynamical convolution layers (Wu et al., 2019), which are known to be competitive with transformers in sequenceto-sequence tasks.",
+      "startOffset" : 63,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 27,
+      "context" : "For example, previous work has shown that ResNets, with all of their parameters fixed except for the scale and shift parameters of batch normalization, can still achieve high performance, simply by scaling and shifting random features (Frankle et al., 2020).",
+      "startOffset" : 235,
+      "endOffset" : 257
+    }, {
+      "referenceID" : 34,
+      "context" : "Adding some form of noise to the parameters is also known to help convergence and generalization (Jim et al., 1995, 1996; Gulcehre et al., 2016; Noh et al., 2017).",
+      "startOffset" : 97,
+      "endOffset" : 162
+    }, {
+      "referenceID" : 58,
+      "context" : "Adding some form of noise to the parameters is also known to help convergence and generalization (Jim et al., 1995, 1996; Gulcehre et al., 2016; Noh et al., 2017).",
+      "startOffset" : 97,
+      "endOffset" : 162
+    }, {
+      "referenceID" : 77,
+      "context" : "This is closely related to efforts in Green AI, which are concerned with the trade-offs between compute, data, and performance (Schwartz et al., 2019).",
+      "startOffset" : 127,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 12,
+      "context" : "We evaluate on IWSLT de-en (Cettolo et al., 2015) and WMT en-de (Bojar et al.",
+      "startOffset" : 27,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 6,
+      "context" : ", 2015) and WMT en-de (Bojar et al., 2014) for machine translation; enwiki8 (LLC, 2009) for language modelling; and experiment with RoBERTa (Liu et al.",
+      "startOffset" : 22,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 53,
+      "context" : ", 2014) for machine translation; enwiki8 (LLC, 2009) for language modelling; and experiment with RoBERTa (Liu et al., 2019) in our pretraining experiments.",
+      "startOffset" : 105,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 73,
+      "context" : "The projection weights in random layers were initialized using orthogonal initialization (Saxe et al., 2013), since random orthogonal projections should ideally be maximally informationpreserving, and which was found to work well empirically for initializing fixed random representations in previous work (Wieting and Kiela, 2019).",
+      "startOffset" : 89,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 91,
+      "context" : ", 2013), since random orthogonal projections should ideally be maximally informationpreserving, and which was found to work well empirically for initializing fixed random representations in previous work (Wieting and Kiela, 2019).",
+      "startOffset" : 204,
+      "endOffset" : 229
+    }, {
+      "referenceID" : 33,
+      "context" : "Biases and layer norm parameters were initialized using their respective PyTorch defaults (based on Xavier init; Glorot and Bengio, 2010).",
+      "startOffset" : 90,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 25,
+      "context" : "As a strong baseline method, we compare to LayerDrop (Fan et al., 2019).",
+      "startOffset" : 53,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 10,
+      "context" : "As a point of reference, a half hour gain on IWSLT would translate to a gain of several days in the training of bigger transformer models like GPT-3 (Brown et al., 2020).",
+      "startOffset" : 149,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 53,
+      "context" : "We train RoBERTa (Liu et al., 2019) models from scratch at a variety of depths, both in the normal and reservoir setting.",
+      "startOffset" : 17,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 79,
+      "context" : "We then examine the performance of these models when fine-tuned on downstream tasks, specifically the well known SST-2 (Socher et al., 2013) and MultiNLI-matched (Williams et al.",
+      "startOffset" : 119,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 92,
+      "context" : ", 2013) and MultiNLI-matched (Williams et al., 2017) tasks.",
+      "startOffset" : 29,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 39,
+      "context" : "We report on preliminary experiments where in the backward pass we replace the gradients for the layer Li going into the reservoir Li+1 with a noisy estimate (Jaderberg et al., 2017; Czarnecki et al., 2017).",
+      "startOffset" : 158,
+      "endOffset" : 206
+    }, {
+      "referenceID" : 17,
+      "context" : "We report on preliminary experiments where in the backward pass we replace the gradients for the layer Li going into the reservoir Li+1 with a noisy estimate (Jaderberg et al., 2017; Czarnecki et al., 2017).",
+      "startOffset" : 158,
+      "endOffset" : 206
+    }, {
+      "referenceID" : 93,
+      "context" : "Here, rather than minimizing the actual gradients ∂Li ∂θLi , we minimize their expectation and train via continuous-action REINFORCE (Williams, 1992).",
+      "startOffset" : 133,
+      "endOffset" : 149
+    }, {
+      "referenceID" : 23,
+      "context" : "Recent work has shown that modern NLP models are able to function with different numbers of layers for different examples (Elbayad et al., 2019; Fan et al., 2019; He et al., 2021); that different layers specialize for different purposes (Zhang et al.",
+      "startOffset" : 122,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 25,
+      "context" : "Recent work has shown that modern NLP models are able to function with different numbers of layers for different examples (Elbayad et al., 2019; Fan et al., 2019; He et al., 2021); that different layers specialize for different purposes (Zhang et al.",
+      "startOffset" : 122,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 36,
+      "context" : "Recent work has shown that modern NLP models are able to function with different numbers of layers for different examples (Elbayad et al., 2019; Fan et al., 2019; He et al., 2021); that different layers specialize for different purposes (Zhang et al.",
+      "startOffset" : 122,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 95,
+      "context" : ", 2021); that different layers specialize for different purposes (Zhang et al., 2019); that layers can be compressed (Li et al.",
+      "startOffset" : 65,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 52,
+      "context" : ", 2019); that layers can be compressed (Li et al., 2020; Zhu et al., 2019; Shen et al., 2020; Sun et al., 2020); and, that layers can be reordered (Press et al.",
+      "startOffset" : 39,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 98,
+      "context" : ", 2019); that layers can be compressed (Li et al., 2020; Zhu et al., 2019; Shen et al., 2020; Sun et al., 2020); and, that layers can be reordered (Press et al.",
+      "startOffset" : 39,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 78,
+      "context" : ", 2019); that layers can be compressed (Li et al., 2020; Zhu et al., 2019; Shen et al., 2020; Sun et al., 2020); and, that layers can be reordered (Press et al.",
+      "startOffset" : 39,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 81,
+      "context" : ", 2019); that layers can be compressed (Li et al., 2020; Zhu et al., 2019; Shen et al., 2020; Sun et al., 2020); and, that layers can be reordered (Press et al.",
+      "startOffset" : 39,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 65,
+      "context" : ", 2020); and, that layers can be reordered (Press et al., 2019).",
+      "startOffset" : 43,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 84,
+      "context" : "There is a growing body of work in efficient self-attention networks (Tay et al., 2020b), such as linear attention (Wang et al.",
+      "startOffset" : 69,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 90,
+      "context" : ", 2020b), such as linear attention (Wang et al., 2020), on how to process long context information (Beltagy et al.",
+      "startOffset" : 35,
+      "endOffset" : 54
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2020), on how to process long context information (Beltagy et al., 2020; Ainslie et al., 2020) and on approximations to make transformers more scalable (Kitaev et al.",
+      "startOffset" : 52,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2020), on how to process long context information (Beltagy et al., 2020; Ainslie et al., 2020) and on approximations to make transformers more scalable (Kitaev et al.",
+      "startOffset" : 52,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 49,
+      "context" : ", 2020) and on approximations to make transformers more scalable (Kitaev et al., 2020; Katharopoulos et al., 2020).",
+      "startOffset" : 65,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 47,
+      "context" : ", 2020) and on approximations to make transformers more scalable (Kitaev et al., 2020; Katharopoulos et al., 2020).",
+      "startOffset" : 65,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 49,
+      "context" : "in Reformer (Kitaev et al., 2020) utilizes a fixed random projection.",
+      "startOffset" : 12,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 62,
+      "context" : "Random Feature Attention (Peng et al., 2021) uses random fea-",
+      "startOffset" : 25,
+      "endOffset" : 44
+    }, {
+      "referenceID" : 14,
+      "context" : "Performer (Choromanski et al., 2020) computes the transformer’s multi-head attention weights as a fixed orthogonal random projection.",
+      "startOffset" : 10,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 9,
+      "context" : "Examples of this include FreezeOut (Brock et al., 2017), deep reservoir computing networks (Scardapane and Wang, 2017; Gallicchio and Micheli, 2017), as well as applications in domains as varied as text classification (Conneau et al.",
+      "startOffset" : 35,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 74,
+      "context" : ", 2017), deep reservoir computing networks (Scardapane and Wang, 2017; Gallicchio and Micheli, 2017), as well as applications in domains as varied as text classification (Conneau et al.",
+      "startOffset" : 43,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 28,
+      "context" : ", 2017), deep reservoir computing networks (Scardapane and Wang, 2017; Gallicchio and Micheli, 2017), as well as applications in domains as varied as text classification (Conneau et al.",
+      "startOffset" : 43,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 15,
+      "context" : ", 2017), deep reservoir computing networks (Scardapane and Wang, 2017; Gallicchio and Micheli, 2017), as well as applications in domains as varied as text classification (Conneau et al., 2017; Zhang and Bowman, 2018; Wieting and Kiela, 2019) or music classification (Pons and Serra, 2019).",
+      "startOffset" : 170,
+      "endOffset" : 241
+    }, {
+      "referenceID" : 96,
+      "context" : ", 2017), deep reservoir computing networks (Scardapane and Wang, 2017; Gallicchio and Micheli, 2017), as well as applications in domains as varied as text classification (Conneau et al., 2017; Zhang and Bowman, 2018; Wieting and Kiela, 2019) or music classification (Pons and Serra, 2019).",
+      "startOffset" : 170,
+      "endOffset" : 241
+    }, {
+      "referenceID" : 91,
+      "context" : ", 2017), deep reservoir computing networks (Scardapane and Wang, 2017; Gallicchio and Micheli, 2017), as well as applications in domains as varied as text classification (Conneau et al., 2017; Zhang and Bowman, 2018; Wieting and Kiela, 2019) or music classification (Pons and Serra, 2019).",
+      "startOffset" : 170,
+      "endOffset" : 241
+    }, {
+      "referenceID" : 64,
+      "context" : ", 2017; Zhang and Bowman, 2018; Wieting and Kiela, 2019) or music classification (Pons and Serra, 2019).",
+      "startOffset" : 81,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 86,
+      "context" : "It is well known that randomly initialized networks can display impressive performance on their own (Ulyanov et al., 2018; Rosenfeld and Tsotsos, 2019; Ramanujan et al., 2020; Voita and Titov, 2020), which underlies, for example, the recently popularized lottery ticket hypothesis (Frankle and Carbin, 2018; Zhou et al.",
+      "startOffset" : 100,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 71,
+      "context" : "It is well known that randomly initialized networks can display impressive performance on their own (Ulyanov et al., 2018; Rosenfeld and Tsotsos, 2019; Ramanujan et al., 2020; Voita and Titov, 2020), which underlies, for example, the recently popularized lottery ticket hypothesis (Frankle and Carbin, 2018; Zhou et al.",
+      "startOffset" : 100,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 69,
+      "context" : "It is well known that randomly initialized networks can display impressive performance on their own (Ulyanov et al., 2018; Rosenfeld and Tsotsos, 2019; Ramanujan et al., 2020; Voita and Titov, 2020), which underlies, for example, the recently popularized lottery ticket hypothesis (Frankle and Carbin, 2018; Zhou et al.",
+      "startOffset" : 100,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 89,
+      "context" : "It is well known that randomly initialized networks can display impressive performance on their own (Ulyanov et al., 2018; Rosenfeld and Tsotsos, 2019; Ramanujan et al., 2020; Voita and Titov, 2020), which underlies, for example, the recently popularized lottery ticket hypothesis (Frankle and Carbin, 2018; Zhou et al.",
+      "startOffset" : 100,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 26,
+      "context" : ", 2020; Voita and Titov, 2020), which underlies, for example, the recently popularized lottery ticket hypothesis (Frankle and Carbin, 2018; Zhou et al., 2019).",
+      "startOffset" : 113,
+      "endOffset" : 158
+    }, {
+      "referenceID" : 97,
+      "context" : ", 2020; Voita and Titov, 2020), which underlies, for example, the recently popularized lottery ticket hypothesis (Frankle and Carbin, 2018; Zhou et al., 2019).",
+      "startOffset" : 113,
+      "endOffset" : 158
+    }, {
+      "referenceID" : 51,
+      "context" : "We know that learning deep overparameterized networks appears to help in general (Li and Liang, 2018; Du et al., 2019).",
+      "startOffset" : 81,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 21,
+      "context" : "We know that learning deep overparameterized networks appears to help in general (Li and Liang, 2018; Du et al., 2019).",
+      "startOffset" : 81,
+      "endOffset" : 118
+    } ],
+    "year" : 2021,
+    "abstractText" : "We demonstrate that transformers obtain impressive performance even when some of the layers are randomly initialized and never updated. Inspired by old and well-established ideas in machine learning, we explore a variety of non-linear “reservoir” layers interspersed with regular transformer layers, and show improvements in wall-clock compute time until convergence, as well as overall performance, on various machine translation and (masked) language modelling tasks.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

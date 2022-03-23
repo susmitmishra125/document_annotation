@@ -1,0 +1,732 @@
+{
+  "name" : "2021.acl-long.113.pdf",
+  "metadata" : {
+    "source" : "CRF",
+    "title" : "AGGGEN: Ordering and Aggregating while Generating",
+    "authors" : [ "Xinnuo Xu", "Ondřej Dušek", "Verena Rieser", "Ioannis Konstas" ],
+    "emails" : [ "i.konstas@hw.ac.uk", "odusek@ufal.mff.cuni.cz" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 1419–1434\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n1419"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Recent neural data-to-text systems generate text “end-to-end” (E2E) by learning an implicit mapping between input representations (e.g. RDF triples) and target texts. While this can lead to increased fluency, E2E methods often produce repetitions, hallucination and/or omission of important content for data-to-text (Dušek et al., 2020) as well as other natural language generation (NLG) tasks (Cao et al., 2018; Rohrbach et al., 2018). Traditional NLG systems, on the other hand, tightly control which content gets generated, as well as its ordering and aggregation. This process is called sentence planning (Reiter and Dale, 2000; Duboue and McKeown, 2001, 2002; Konstas and Lapata, 2013; Gatt and Krahmer, 2018). Figure 1 shows two different ways to arrange and combine the representations in the input, resulting in widely different generated target texts.\nIn this work, we combine advances of both paradigms into a single system by reintroducing\nsentence planning into neural architectures. We call our system AGGGEN (pronounced ‘again’). AGGGEN jointly learns to generate and plan at the same time. Crucially, our sentence plans are interpretable latent states using semantic facts1 (obtained via Semantic Role Labelling (SRL)) that align the target text with parts of the input representation. In contrast, the plan used in other neural plan-based approaches is usually limited in terms of its interpretability, control, and expressivity. For example, in (Moryossef et al., 2019b; Zhao et al., 2020) the sentence plan is created independently, incurring error propagation; Wiseman et al. (2018) use latent segmentation that limits interpretability; Shao et al. (2019) sample from a latent variable, not allowing for explicit control; and Shen et al. (2020) aggregate multiple input representations which limits expressiveness.\nAGGGEN explicitly models the two planning processes (ordering and aggregation), but can directly influence the resulting plan and generated\n1Each fact roughly captures “who did what to whom”.\ntarget text, using a separate inference algorithm based on dynamic programming. Crucially, this enables us to directly evaluate and inspect the model’s planning and alignment performance by comparing to manually aligned reference texts.\nWe demonstrate this for two data-to-text generation tasks: the E2E NLG (Novikova et al., 2017) and the WebNLG Challenge (Gardent et al., 2017a). We work with a triple-based semantic representation where a triple consists of a subject, a predicate and an object.2 For instance, in the last triple in Figure 1, Apollo 8, operator and NASA are the subject, predicate and object respectively. Our contributions are as follows: •We present a novel interpretable architecture for jointly learning to plan and generate based on modelling ordering and aggregation by aligning facts in the target text to input representations with an HMM and Transformer encoder-decoder. • We show that our method generates output with higher factual correctness than vanilla encoderdecoder models without semantic information. • We also introduce an intrinsic evaluation framework for inspecting sentence planning with a rigorous human evaluation procedure to assess factual correctness in terms of alignment, aggregation and ordering performance."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "Factual correctness is one of the main issues for data-to-text generation: How to generate text according to the facts specified in the input triples without adding, deleting or replacing information?\nThe prevailing sequence-to-sequence (seq2seq) architectures typically address this issue via reranking (Wen et al., 2015a; Dušek and Jurčı́ček, 2016; Juraska et al., 2018) or some sophisticated training techniques (Nie et al., 2019; Kedzie and McKeown, 2019; Qader et al., 2019). For applications where structured inputs are present, neural graph encoders (Marcheggiani and Perez-Beltrachini, 2018; Rao et al., 2019; Gao et al., 2020) or decoding of explicit graph references (Logan et al., 2019) are applied for higher accuracy. Recently, large-scale pretraining has achieved SoTA results on WebNLG by fine-tuning T5 (Kale and Rastogi, 2020).\nSeveral works aim to improve accuracy and controllability by dividing the end-to-end architecture into sentence planning and surface realisation.\n2Note that E2E NLG data and other input semantic representations can be converted into triples, see Section 4.1.\nCastro Ferreira et al. (2019) feature a pipeline with multiple planning stages and Elder et al. (2019) introduce a symbolic intermediate representation in multi-stage neural generation. Moryossef et al. (2019b,a) use pattern matching to approximate the required planning annotation (entity mentions, their order and sentence splits). Zhao et al. (2020) use a planning stage in a graph-based model – the graph is first reordered into a plan; the decoder conditions on both the input graph encoder and the linearized plan. Similarly, Fan et al. (2019) use a pipeline approach for story generation via SRL-based sketches. However, all of these pipeline-based approaches either require additional manual annotation or depend on a parser for the intermediate steps.\nOther works, in contrast, learn planning and realisation jointly. For example, Su et al. (2018) introduce a hierarchical decoding model generating different parts of speech at different levels, while filling in slots between previously generated tokens. Puduppully et al. (2019) include a jointly trained content selection and ordering module that is applied before the main text generation step.The model is trained by maximizing the log-likelihood of the gold content plan and the gold output text. Li and Rush (2020) utilize posterior regularization in a structured variational framework to induce which input items are being described by each token of the generated text. Wiseman et al. (2018) aim for better semantic control by using a Hidden Semi-Markov Model (HSMM) for splitting target sentences into short phrases corresponding to “templates”, which are then concatenated to produce the outputs. However it trades the controllability for fluency. Similarly, Shen et al. (2020) explicitly segment target text into fragment units, while aligning them with their corresponding input. Shao et al. (2019) use a Hierarchical Variational Model to aggregate input items into a sequence of local latent variables and realize sentences conditioned on the aggregations. The aggregation strategy is controlled by sampling from a global latent variable.\nIn contrast to these previous works, we achieve input ordering and aggregation, input-output alignment and text generation control via interpretable states, while preserving fluency."
+    }, {
+      "heading" : "3 Joint Planning and Generation",
+      "text" : "We jointly learn to generate and plan by aligning facts in the target text with parts of the input representation. We model this alignment using a Hidden\nMarkov Model (HMM) that follows a hierarchical structure comprising two sets of latent states, corresponding to ordering and aggregation. The model is trained end-to-end and all intermediate steps are learned in a unified framework."
+    }, {
+      "heading" : "3.1 Model Overview",
+      "text" : "Let x = {x1, x2, . . . , xJ} be a collection of J input triples and y their natural language description (human written target text). We first segment y into a sequence of T facts y1:T = y1,y2, . . . ,yT , where each fact roughly captures “who did what to whom” in one event. We follow the approach of Xu et al. (2020), where facts correspond to predicates and their arguments as identified by SRL (See Appendix B for more details). For example:\nWilliam Anders, who retired in 1969, was a crew member on Apollo 8.\nFact-1 Fact-2\nEach fact yt consists of a sequence of tokens y1t , y 2 t , . . . , y Nt t . Unlike the text itself, the planning information, i.e. input aggregation and ordering, is not directly observable due to the absence of labelled datasets. AGGGEN therefore utilises an HMM probabilistic model which assumes that there is an underlying hidden process that can be modeled by a first-order Markov chain. At each time step, a latent variable (in our case input triples) is responsible for emitting an observed variable (in our case a fact text segment). The HMM specifies a joint distribution on the observations and the latent variables. Here, a latent state zt emits a fact yt, representing the group of input triples that is verbalized in yt. We write the joint likelihood as:\np (z1:T ,y1:T | x) = p (z1:T | x) p (y1:T | z1:T , x)\n= [ p (z1 | x)\nT∏ t=2 p (zt | zt−1, x)\n][ T∏\nt=1\np (yt | zt, x) ] .\ni.e., it is a product of the probabilities of each latent state transition (transition distribution) and the probability of the observations given their respective latent state (emission distribution)."
+    }, {
+      "heading" : "3.2 Parameterization",
+      "text" : "Latent State. A latent state zt represents the input triples that are verbalized in the observed fact yt. It is not guaranteed that one fact always verbalizes only one triple (see bottom example in Figure 1). Thus, we represent state zt as a sequence of latent variables o1t , . . . , o Lt t , whereLt is the number of triples verbalized in yt. Figure 2 shows the structure of the model.\nLet olt ∈ Q = {1, . . . ,K} be a set of possible latent variables, then KLt is the size of the search space for zt. If olt maps to unique triples, the search space becomes intractable for a large value of K. To make the problem tractable, we decrease K by representing triples by their predicate. Q thus stands for the collection of all predicates appearing in the corpus. To reduce the search space for zt further, we limit Lt < L, where L = 3. 3\nTransition Distribution. The transition distribution between latent variables (T1 in Figure 2) is a K ×K matrix of probabilities, where each row sums to 1. We define this matrix as\np ( olt | o (l−1) t , x ) = softmax (AB M (q)) (1)\nwhere denotes the Hadamard product. A ∈ RK×m and B ∈ Rm×K are matrices of predicate embeddings with dimension m. q = {q1, q2, . . . , qJ} is the set of predicates of the input triples x, and each qj ∈ Q is the predicate of the triple xj . M (q) is a K ×K masking matrix, where Mij = 1 if i ∈ q and j ∈ q, otherwise\n3By aligning the triples to facts using a rule-based aligner (see Section 5), we found that the chance of aggregating more than three triples to a fact is under 0.01% in the training set of both WebNLG and E2E datasets.\nMij = 0. We apply row-wise softmax over the resulting matrix to obtain probabilities.\nThe probability of generating the latent state zt (T2 in Figure 2) can be written as the joint distribution of the latent variables o1t , . . . , o Lt t . Assuming a first-order Markov chain, we get:\np (zt | x) = p ( o0t , o 1 t , o 2 t , . . . , o Lt t | x ) = p ( o0t | x\n) [ Lt∏ l=1 p ( olt | o (l−1) t , x )] ,\nwhere o0t is a marked start-state. On top of the generation probability of the latent states p (zt | x) and p (zt−1 | x), we define the transition distribution between two latent states (T3 in Figure 2) as:\np (zt | zt−1, x) =p ( o0(t−1), . . . , o Lt−1 (t−1) | x ) · p ( o1t | o Lt−1 (t−1), x\n) · p ( o0t , . . . , o Lt t | x ) ,\nwhere oLt−1(t−1) denotes the last latent variable in latent state zt−1, while ot1 denotes the first latent variable (other than the start-state) in latent state zt. We use two sets of parameters {Ain, Bin} and {Aout, Bout} to describe the transition distribution between latent variables within and across latent states, respectively.\nEmission Distribution. The emission distribution p (yt | zt, x) (T4 in Figure 2) describes the generation of fact yt conditioned on latent state zt and input triples x. We define the probability of generating a fact as the product over token-level probabilities,\np (yt | zt, x) = p(y1t | zt, x) Nt∏ i=2 p(yit | y 1:(i−1) t , zt, x).\nThe first and last token of a fact are marked factstart and fact-end tokens. We adopt Transformer (Vaswani et al., 2017) as the model’s encoder and decoder.\nEach triple is linearized into a list of tokens following the order: subject, predicate, and object. In order to represent individual triples, we insert special [SEP] tokens at the end of each triple. A special [CLS] token is inserted before all input triples, representing the beginning of the entire input. An example where the encoder produces a contextual embedding for the tokens of two input triples is shown in Figure 6 in Appendix E.\nAt time step t, the decoder generates fact yt token-by-token autoregressively, conditioned on\nboth the contextually-encoded input and the latent state zt. To guarantee that the generation of yt conditions only on the input triples whose predicate is in zt, we mask out the contextual embeddings of tokens from other unrelated triples for the encoderdecoder attention in all Transformer layers.\nAutoregressive Decoding. Autoregressive Hidden Markov Model (AR-HMM) introduces extra links into HMM to capture long-term correlations between observed variables, i.e., output tokens. Following Wiseman et al. (2018), we use AR-HMM for decoding, therefore allowing the interdependence between tokens to generate more fluent and natural text descriptions. Each token distribution depends on all the previously generated tokens, i.e., we define the token-level probabilities as p(yit | y 1:Nt 1:(t−1), y 1:(i−1) t , zt, x) instead of p(yit | y 1:(i−1) t , zt, x). During training, at each time step t, we teacher-force the generation of the fact yt by feeding the ground-truth history, y1:(t−1), to the word-level Transformer decoder. However, since only yt depends on the current hidden state zt, we only calculate the loss over yt."
+    }, {
+      "heading" : "3.3 Learning",
+      "text" : "We apply the backward algorithm (Rabiner, 1989) to learn the parameters introduced in Section 3.2, where we maximize p(y | x), i.e., the marginal likelihood of the observed facts y given input triples x, over all the latent states z and o on the entire dataset using dynamic programming. Following Murphy (2012), and given that the latent state at time t is C, we define a conditional likelihood of future evidence as:\nβt (C) , p (yt+1:T | zt = C, x) , (2)\nwhere C denotes a group of predicates that are associated with the emission of y. The size of C ranges from 1 to L and each component is from the collection of predicates Q (see Section 3.2). Then, the backward recurrences are:\nβt−1 ( C′ ) = p ( yt:T | zt−1 = C′, x ) = ∑ C βt (C) p (yt | zt = C, x) p ( zt = C | zt−1 = C′, x\n) with the base case βT (C) = 1. The marginal probability of y over latent z is then obtained as p (y | x) = ∑ C β0 (C) p (z1 = C|x).\nIn Equation 2, the size of the search space for C is ∑L α=1K\nα, where K = |Q|, i.e., the number of unique predicates appearing in the dataset. The\nproblem can still be intractable due to high K, despite the simplifications explained in Section 3.2 (cf. predicates). To tackle this issue and reduce the search space of C, we: (1) only explore permutations of C that include predicates appearing on the input; (2) introduce a heuristic based on the overlap of tokens between a triple and a fact—if a certain fact mentions most tokens appearing in the predicate and object of a triple we hard-align it to this triple.4 As a result, we discard the permutations that do not include the aligned predicates."
+    }, {
+      "heading" : "3.4 Inference",
+      "text" : "After the joint learning process, the model is able to plan, i.e., order and aggregate the input triples in the most likely way, and then generate a text description following the planning results. Therefore, the joint prediction of (ŷ, ẑ) is defined as:\n(ŷ, ẑ) = arg max (y′,z′),z′∈{z̃(i)}\np ( y′, z′ | x ) = arg max\n(y′,z′),z′∈{z̃(i)} p(y′ | z′, x)p(z′ | x),\n(3)\nwhere {z̃(i)} denotes a set of planning results, ŷ is the text description, and ẑ is the planning result that ŷ is generated from.\nThe entire inference process (see Figure 3) includes three steps: input ordering, input aggregation, and text generation. The first two steps are responsible for the generation of {z̃(i)} together with their probabilities {p(z̃(i) | x)}, while the last step is for the text generation p(y′ | z̃(i), x).\nPlanning: Input Ordering. The aim is to find the top-k most likely orderings of predicates appearing in the input triples. In order to make the search process more efficient, we apply left-to-right beam-\n4This heuristic is using the rule-based aligner introduced in Section 5 with a threshold to rule out alignments in which the triples are not covered over 50%, since our model emphasises more on precision. Thus, not all triples are aligned to a fact.\nsearch5 based on the transition distribution introduced in Equation 1. Specifically, we use a transition distribution between latent variables within latent states, calculated with predicate embeddings Ain andBin (see Section 3.2). To guarantee that the generated sequence does not suffer from omission and duplication of predicates, we constantly update the masking matrix M(q) by removing generated predicates from the set q. The planning process stops when q is empty. Planning: Input Aggregation. The goal is to find the top-n most likely aggregations for each result of the Input Ordering step. To implement this process efficiently, we introduce a binary state for each predicate in the sequence: 0 indicates “wait” and 1 indicates “emit” (green squares in Figure 3). Then we list all possible combinations6 of the binary states for the Input Ordering result. For each combination, the aggregation algorithm proceeds left-to-right over the predicates and groups those labelled as “emit” with all immediately preceding predicates labelled as “wait”. In turn, we rank all the combinations with the transition distribution introduced in Equation 1. In contrast to the Input Ordering step, we use the transition distribution between latent variables across latent states, calculated with predicate embeddings Aout and Bout. That is, we do not take into account transitions between two consecutive predicates if they belong to the same group. Instead, we only consider consecutive predicates across two connected groups, i.e., the last predicate of the previous group with the first predicate of the following group. Text Generation. The final step generates a text description conditioned on the input triples and the planning result (obtained from the Input Aggregation step). We use beam search and the planningconditioned generation process described in Section 3.2 (“Emission Distribution”)."
+    }, {
+      "heading" : "3.5 Controllability over sentence plans",
+      "text" : "While the jointly learnt model is capable of fully automatic generation including the planning step (see Section 3.4), the discrete latent space allows direct access to manually control the planning component, which is useful in settings which require\n5We use beam search since Viterbi decoding aims at getting z∗ = argmaxz(z1:T |y1:T ), but y1:T is not available at this stage.\n6We assume that each fact is comprised of L triples at most. To match this assumption, we discard combinations containing a group that aggregates more than L predicates.\nincreased human supervision and is a unique feature of our architecture. The plans (latent variables) can be controlled in two ways: (1) hyperparameter. Our code offers a hyperparameter that can be tuned to control the level of aggregation: no aggregation, aggregate one, two triples, etc. The model can predict the most likely plan based on the input triples and the hyperparameter and generate a corresponding text description; (2) the model can directly adopt human-written plans, e.g. using the notation [eatType][near customer-rating], which translates to: first generate ‘eatType’ as an independent fact and then aggregate the predicates\n‘near’ and ‘customer-rating’ in the following fact and generate their joint description."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Datasets",
+      "text" : "We tested our approach on two widely used datato-text tasks: the E2E NLG (Novikova et al., 2017) and WebNLG7 (Gardent et al., 2017a). Compared to E2E, WebNLG is smaller, but contains more predicates and has a larger vocabulary. Statistics with examples can be found in Appendix C. We followed the original training-development-test data split for both datasets."
+    }, {
+      "heading" : "4.2 Evaluation Metrics",
+      "text" : "Generation Evaluation focuses on evaluating the generated text with respect to its similarity to human-authored reference sentences. To compare to previous work, we adopt their associated metrics to evaluate each task. The E2E task is evaluated using BLEU (Papineni et al., 2002), NIST (Doddington, 2002), ROUGE-L (Lin, 2004), METEOR (Lavie and Agarwal, 2007), and CIDEr (Vedantam et al., 2015). WebNLG is evaluated in terms of BLEU, METEOR, and TER (Snover et al., 2006). Factual Correctness Evaluation tests if the generated text corresponds to the input triples (Wen et al., 2015b; Reed et al., 2018; Dušek et al., 2020). We evaluated on the E2E test set using automatic slot error rate (SER),8 i.e., an estimation of the occurrence of the input attributes (predicates) and their values in the outputs, implemented by Dušek et al.\n7Since we propose exploring sentence planning and increasing the controllability of the generation model and do not aim for a zero-shot setup, we only focus on the seen category in WebNLG.\n8SER is based on regular expression matching. Since only the format of E2E data allows such patterns for evaluation, we only evaluate factual correctness on the E2E task.\n(2020). SER counts predicates that were added, missed or replaced with a wrong object. Intrinsic Planning Evaluation examines planning performance in Section 6."
+    }, {
+      "heading" : "4.3 Baseline model and Training Details",
+      "text" : "To evaluate the contributions of the planning component, we choose the vanilla Transformer model (Vaswani et al., 2017) as our baseline, trained on pairs of linearized input triples and target texts. In addition, we choose two types of previous works for comparison: (1) best-performing models reported on the WebNLG 2017 (seen) and E2E dataset, i.e. T5 (Kale and Rastogi, 2020), PlanEnc (Zhao et al., 2020), ADAPT (Gardent et al., 2017b), and TGen (Dušek and Jurčı́ček, 2016); (2) models with explicit planning, i.e. TILB-PIPE (Gardent et al., 2017b), NTemp+AR (Wiseman et al., 2018) and Shen et al. (2020).\nTo make our HMM-based approach converge faster, we initialized its encoder and decoder with the baseline model parameters and fine-tuned them during training of the transition distributions. Encoder and decoder parameters were chosen based on validation results of the baseline model for each task (see Appendix D for details)."
+    }, {
+      "heading" : "5 Experiment Results",
+      "text" : ""
+    }, {
+      "heading" : "5.1 Generation Evaluation Results",
+      "text" : "Table 1 shows the generation results on the WebNLG seen category (Gardent et al., 2017b). Our model outperforms TILB-PIPE and Transformer, but performs worse than T5, PlanEnc and ADAPT. However, unlike these three models, our approach does not rely on large-scale pretraining, extra annotation, or heavy pre-processing using external resources. Table 2 shows the results when training and testing on the original E2E set. AGGGEN outperforms NTemp+AR and is comparable with Shen et al. (2020), but performs slightly\nworse than both seq2seq models in terms of wordoverlap metrics.\nHowever, the results in Table 3 demonstrate that our model does outperform the baselines on most surface metrics if trained on the noisy original E2E training set and tested on clean E2E data (Dušek et al., 2019). This suggests that the previous performance drop was due to text references in the original dataset that did not verbalize all triples or added information not present in the triples that may have down-voted the fact-correct generations.9 This also shows that AGGGEN produces correct outputs even when trained on a noisy dataset. Since constructing high-quality data-to-text training sets is expensive and labor-intensive, this robustness towards noise is important."
+    }, {
+      "heading" : "5.2 Factual Correctness Results",
+      "text" : "The results for factual correctness evaluated using SER on the original E2E test set are shown in Table 2. The SER of AGGGEN is the best among all models. Especially, the high “Miss” scores for TGen and Transformer demonstrate the high chance of information omission in vanilla seq2seqbased generators. In contrast, AGGGEN shows much better coverage over the input triples while keeping a low level of hallucination (low “Add”\n9We also trained and tested models on the cleaned E2E data. The full results (including the factual correctness evaluation) are shown in Table 8 in Appendix F: there is a similar trend as in results in Table 3, compared to Transformer.\nand “Wrong” scores)."
+    }, {
+      "heading" : "5.3 Ablation variants",
+      "text" : "To explore the effect of input planning on text generation, we introduced two model variants: AGGGEN−OD, where we replaced the Input Ordering with randomly shuffling the input triples before input aggregation, and AGGGEN−AG, where the Input Ordering result was passed directly to the text generation and the text decoder generated a fact for each input triple individually.\nThe generation evaluation results on both datasets (Table 1 and Table 2) show that AGGGEN outperforms AGGGEN−OD and AGGGEN−AG substantially, which means both Input Ordering and Input Aggregation are critical. Table 2 shows that the factual correctness results for the ablative variants are much worse than full AGGGEN, indicating that planning is essential for factual correctness. An exception is the lower number of missed slots in AGGGEN−AG. This is expected since AGGGEN−AG generates a textual fact for each triple individually, which decreases the possibility of omissions at the cost of much lower fluency. This strategy also leads to a steep increase in added information.\nAdditionally, AGGGEN−AG performs even worse on the E2E dataset than on the WebNLG set. This result is also expected, since input aggregation is more pronounced in the E2E dataset with a higher number of facts and input triples per sentence (cf. Appendix C)."
+    }, {
+      "heading" : "5.4 Qualitative Error Analysis",
+      "text" : "We manually examined a sample of 100 outputs (50 from each dataset) with respect to their factual correctness and fluency. For factual correctness, we follow the definition of SER and check whether there are hallucinations, substitutions or omissions in generated texts. For fluency, we check whether the generated texts suffer from grammar mistakes, redundancy, or contain unfinished sentences. Fig-\nure 4 shows two examples of generated texts from Transformer and AGGGEN (more examples, including target texts generated by AGGGEN−OD and AGGGEN−AG, are shown in Table 6 and Table 7 in Appendix A). We observe that, in general, the seq2seq Transformer model tends to compress more triples into one fluent fact, whereas AGGGEN aggregates triples in more but smaller groups, and generates a shorter/simpler fact for each group. Therefore, the texts generated by Transformer are more compressed, while AGGGEN’s generations are longer with more sentences. However, the planning ensures that all input triples will still be mentioned. Thus, AGGGEN generates texts with higher factual correctness without trading off fluency.10"
+    }, {
+      "heading" : "6 Intrinsic Evaluation of Planning",
+      "text" : "We now directly inspect the performance of the planning component by taking advantage of the readability of SRL-aligned facts. In particular, we investigate: (1) Sentence planning performance. We study the agreement between model’s planning and reference planning for the same set of input triples; (2) Alignment performance – we use AGGGEN as an aligner and examine its ability to align segmented facts to the corresponding input triples. Since both studies require ground-truth triple-to-fact alignments, which are not part of the WebNLG and E2E data, we first introduce a human annotation process in Section 6.1.\n10The number of fluent generations for Transformer and AGGGEN among the examined 100 examples are 96 and 95 respectively. The numbers for AGGGEN−OD and AGGGEN−AG are 86 and 74, which indicates that both Input Ordering and Input Aggregation are critical for generating fluent texts."
+    }, {
+      "heading" : "6.1 Human-annotated Alignments",
+      "text" : "We asked crowd workers on Amazon Mechanical Turk to align input triples to their fact-based text snippets to derive a “reference plan” for each target text.11 Each worker was given a set of input triples and a corresponding reference text description, segmented into a sequence of facts. The workers were then asked to select the triples that are verbalised in each fact.12 We sampled 100 inputs from the WebNLG13 test set for annotation. Each input was paired with three reference target texts from WebNLG. To guarantee the correctness of the annotation, three different workers annotated each input-reference pair. We only consider the alignments where all three annotators agree. Using Fleiss Kappa (Fleiss, 1971) over the facts aligned by each judge to each triple, we obtained an average agreement of 0.767 for the 300 input-reference pairs, which is considered high agreement."
+    }, {
+      "heading" : "6.2 Study of Sentence Planning",
+      "text" : "We now check the agreement between the modelgenerated and reference plans based on the top-1 Input Aggregation result (see Section 3.4). We introduce two metrics: • Normalized Mutual Information (NMI) (Strehl and Ghosh, 2002) to evaluate aggregation. We represent each plan as a set of clusters of triples, where a cluster contains the triples sharing the same fact verbalization. Using NMI we measure mutual information between two clusters, normalized into the 0-1 range, where 0 and 1 denote no mutual information and perfect correlation, respectively. • Kendall’s tau (τ ) (Kendall, 1945) is a ranking based measure which we use to evaluate both ordering and aggregation. We represent each plan as a ranking of the input triples, where the rank of each triple is the position of its associated fact verbalization in the target text. τ measures rank correlation, ranging from -1 (strong disagreement) to 1 (strong agreement).\nIn the crowdsourced annotation (Section 6.1), each set of input triples contains three reference texts with annotated plans. We fist evaluate the correspondence among these three reference plans by\n11The evaluation requires human annotations, since anchorbased automatic alignments are not accurate enough (86%) for the referred plan annotation. See Table 5 (“RB”) for details.\n12The annotation guidelines and an example annotation task are shown in Figure 7 in Appendix G.\n13We chose WebNLG over E2E for its domain and predicate diversity.\ncalculating NMI and τ between one plan and the remaining two. In the top row of Table 4, the high average and maximum NMI indicate that the reference texts’ authors tend to aggregate input triples in similar ways. On the other hand, the low average τ shows that they are likely to order the aggregated groups differently. Then, for each set of input triples, we measure NMI and τ of the top-1 Input Aggregation result (model’s plan) against each of the corresponding reference plans and compute average and maximum values (bottom row in Table 4). Compared to the strong agreement among reference plans on the input aggregation, the agreement between model’s and reference plans is slightly weaker. Our model has slightly lower agreement on aggregation (NMI), but if we consider aggregation and ordering jointly (τ ), the agreement between our model’s plans and reference plans is comparable to the agreement among reference plans."
+    }, {
+      "heading" : "6.3 Study of Alignment",
+      "text" : "In this study, we use the HMM model as an aligner and assess its ability to align input triples with their fact verbalizations on the human-annotated set. Given the sequence of observed variables, a trained HMM-based model is able to find the most likely sequence of hidden states z∗ = argmax\nz (z1:T |y1:T )\nusing Viterbi decoding. Similarly, given a set of input triples and a factoid segmented text, we use Viterbi with our model to align each fact with the corresponding input triple(s). We then evaluate the accuracy of the model-produced alignments against the crowdsourced alignments.\nThe alignment evaluation results are shown in Table 5. We compare the Viterbi (Vtb) alignments with the ones calculated by a rule-based aligner (RB) that aligns each triple to the fact with the greatest word overlap. The precision of the Viterbi aligner is higher than the rule-based aligner. How-\never, the Viterbi aligner tends to miss triples, which leads to a lower recall. Since HMMs are locally optimal, the model cannot guarantee to annotate input triples once and only once."
+    }, {
+      "heading" : "7 Conclusion and Future Work",
+      "text" : "We show that explicit sentence planning, i.e., input ordering and aggregation, helps substantially to produce output which is both semantically correct as well as naturally sounding. Crucially, this also enables us to directly evaluate and inspect both the model’s planning and alignment performance by comparing to manually aligned reference texts. Our system outperforms vanilla seq2seq models when considering semantic accuracy and word-overlap based metrics. Experiment results also show that AGGGEN is robust to noisy training data. We plan to extend this work in three directions: Other Generation Models. We plan to plug other text generators, e.g. pre-training based approaches (Lewis et al., 2020; Kale and Rastogi, 2020), into AGGGEN to enhance their interpretability and controllability via sentence planning and generation. Zero/Few-shot scenarios. Kale and Rastogi (2020)’s work on low-resource NLG uses a pretrained language model with a schema-guided representation and hand-written templates to guide the representation in unseen domains and slots. These techniques can be plugged into AGGGEN, which allows us to examine the effectiveness of the explicit sentence planning in zero/few-shot scenarios. Including Content Selection. In this work, we concentrate on the problem of faithful surface realization based on E2E and WebNLG data, which both operate under the assumption that all input predicates have to be realized in the output. In contrast, more challenging tasks such as RotoWire (Wiseman et al., 2017), include content selection before sentence planning. In the future, we plan to include a content selection step to further extend AGGGEN’s usability."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "This research received funding from the EPSRC project AISec (EP/T026952/1), Charles University project PRIMUS/19/SCI/10, a Royal Society research grant (RGS/R1/201482), a Carnegie Trust incentive grant (RIG009861). This research also received funding from Apple to support research at Heriot-Watt University and Charles University. We thank Alessandro Suglia, Jindřich Helcl, and Henrique Ferrolho for their suggestions. We thank the anonymous reviewers for their helpful comments."
+    }, {
+      "heading" : "A Examples of input and system-generated target text",
+      "text" : ""
+    }, {
+      "heading" : "B Factoid Sentence Segmentation",
+      "text" : "In order to align meaningful parts of the human-written target text to semantic triples, we first segment the target sentences into sequences of facts using SRL, following Xu et al. (2020). The aim is to break down sentences into sub-sentences (facts) that verbalize as few input triples as possible; the original sentence can still be fully recovered by concatenating all its sub-sentences. Each fact is represented by a segment of the original text that roughly captures “who did what to whom” in one event. We first parse the sentences into SRL propositions using the implementation of He et al. (2018).14 We consider each predicate-argument structure as a separate fact, where the predicate stands for the event and its arguments are mapped to actors, recipients, time, place, etc. (see Figure 5). The sentence segmentation consists of two consecutive steps:\n(1) Tree Construction, where we construct a hierarchical tree structure for all the facts of one sentence, by choosing the fact with the largest coverage as the root and recursively building sub-trees by replacing arguments with their corresponding sub-facts (ARG1 in FACT1 is replaced by FACT2).\n(2) Argument Grouping, where each predicate (FACT in tree) with its leaf-arguments corresponds to a sub-sentence. For example, in Figure 5, leaf-argument “was” and “a crew member on Apollo 8” of FACT1 are grouped as one sub-sentence."
+    }, {
+      "heading" : "C Datasets",
+      "text" : "WebNLG. The corpus contains 21K instances (input-text pairs) from 9 different domains (e.g., astronauts, sports teams). The number of input triples ranges from 1 to 7, with an average of 2.9. The average number of facts that each text contains is 2.4 (see Appendix B). The corpus contains 272 distinct predicates. The vocabulary size for input and output side is 2.6K and 5K respectively.\nE2E NLG. The corpus contains 50K instances from the restaurant domain. We automatically convert the original attribute-value pairs to triples: For each instance, we take the restaurant name as the subject and use it along with the remaining attribute-value pairs as corresponding predicates and objects. The number of triples in each input ranges from 1 to 7 with an average of 4.4. The average number of facts that each text contains is 2.6. The corpus contains 9 distinct predicates. The vocabulary size for inputs and outputs is 120 and 2.4K respectively. We also tested our approach on an updated cleaned release (Dušek et al., 2019)."
+    }, {
+      "heading" : "D Hyperparameters",
+      "text" : "WebNLG. Both encoder and decoder are a 2-layer 4-head Transformer, with hidden dimension of 256. The size of token embeddings and predicate embeddings is 256 and 128, respectively. The Adam optimizer (Kingma and Ba, 2015) is used to update parameters. For both the baseline model and the pre-train of the HMM-based model, the learning rate is 0.1. During the training of the HMM-based model,\n14The code can be found in https://allennlp.org with 86.49 test F1 on the Ontonotes 5.0 dataset.\nthe learning rate for the encoder-decoder fine-tuning and the training of the transition distributions is set as 0.002 and 0.01, respectively.\nE2E. Both encoder and decoder are a Transformer with hidden dimension of 128. The size of token embeddings and predicate embeddings is 128 and 32, respectively. The rest hyper-parameters are same with WebNLG."
+    }, {
+      "heading" : "G Annotation interface",
+      "text" : ""
+    }, {
+      "heading" : "F Full Experiment Results on E2E",
+      "text" : ""
+    }, {
+      "heading" : "E Parameterization: Emission Distribution",
+      "text" : ""
+    } ],
+    "references" : [ {
+      "title" : "Faithful to the Original: Fact Aware Neural Abstractive Summarization",
+      "author" : [ "Ziqiang Cao", "Furu Wei", "Wenjie Li", "Sujian Li." ],
+      "venue" : "AAAI, New Orleans, LA, USA. ArXiv: 1711.04434.",
+      "citeRegEx" : "Cao et al\\.,? 2018",
+      "shortCiteRegEx" : "Cao et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Neural datato-text generation: A comparison between pipeline and end-to-end architectures",
+      "author" : [ "Thiago Castro Ferreira", "Chris van der Lee", "Emiel van Miltenburg", "Emiel Krahmer." ],
+      "venue" : "2019 Conference on Empirical Methods in Natural Language Pro-",
+      "citeRegEx" : "Ferreira et al\\.,? 2019",
+      "shortCiteRegEx" : "Ferreira et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Automatic evaluation of machine translation quality using n-gram cooccurrence statistics",
+      "author" : [ "George Doddington." ],
+      "venue" : "Proceedings of the second international conference on Human Language Technology Research, pages 138–145.",
+      "citeRegEx" : "Doddington.,? 2002",
+      "shortCiteRegEx" : "Doddington.",
+      "year" : 2002
+    }, {
+      "title" : "Content planner construction via evolutionary algorithms and a corpus-based fitness function",
+      "author" : [ "Pablo Duboue", "Kathleen McKeown." ],
+      "venue" : "Proceedings of the International Natural Language Generation Conference, pages 89–96, Harriman, New York,",
+      "citeRegEx" : "Duboue and McKeown.,? 2002",
+      "shortCiteRegEx" : "Duboue and McKeown.",
+      "year" : 2002
+    }, {
+      "title" : "Empirically estimating order constraints for content planning in generation",
+      "author" : [ "Pablo A. Duboue", "Kathleen R. McKeown." ],
+      "venue" : "Proceedings of the 39th Annual Meeting of the Association for Computational Linguistics, pages 172–179, Toulouse, France.",
+      "citeRegEx" : "Duboue and McKeown.,? 2001",
+      "shortCiteRegEx" : "Duboue and McKeown.",
+      "year" : 2001
+    }, {
+      "title" : "Semantic noise matters for neural natural language generation",
+      "author" : [ "Ondřej Dušek", "David M. Howcroft", "Verena Rieser." ],
+      "venue" : "Proc. of the 12th International Conference on Natural Language Generation, pages 421–426, Tokyo, Japan. Association for Computa-",
+      "citeRegEx" : "Dušek et al\\.,? 2019",
+      "shortCiteRegEx" : "Dušek et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Sequence-tosequence generation for spoken dialogue via deep syntax trees and strings",
+      "author" : [ "Ondřej Dušek", "Filip Jurčı́ček" ],
+      "venue" : "In Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Dušek and Jurčı́ček.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Dušek and Jurčı́ček.",
+      "year" : 2016
+    }, {
+      "title" : "Evaluating the State-of-the-Art of End-to-End Natural Language Generation: The E2E NLG Challenge",
+      "author" : [ "Ondřej Dušek", "Jekaterina Novikova", "Verena Rieser." ],
+      "venue" : "Computer Speech & Language, 59:123–156.",
+      "citeRegEx" : "Dušek et al\\.,? 2020",
+      "shortCiteRegEx" : "Dušek et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Sequence-toSequence Generation for Spoken Dialogue via Deep Syntax Trees and Strings",
+      "author" : [ "Ondřej Dušek", "Filip Jurčı́ček" ],
+      "venue" : "In Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Dušek and Jurčı́ček.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Dušek and Jurčı́ček.",
+      "year" : 2016
+    }, {
+      "title" : "Evaluating the state-of-the-art of end-to-end",
+      "author" : [ "Ondřej Dušek", "Jekaterina Novikova", "Verena Rieser" ],
+      "venue" : null,
+      "citeRegEx" : "Dušek et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Dušek et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Designing a symbolic intermediate representation for neural surface realization",
+      "author" : [ "Henry Elder", "Jennifer Foster", "James Barry", "Alexander O’Connor" ],
+      "venue" : "In Proceedings of the Workshop on Methods for Optimizing and Evaluating Neural Language Genera-",
+      "citeRegEx" : "Elder et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Elder et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Strategies for Structuring Story Generation",
+      "author" : [ "Angela Fan", "Mike Lewis", "Yann Dauphin." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 2650– 2660, Florence, Italy. Association for Computa-",
+      "citeRegEx" : "Fan et al\\.,? 2019",
+      "shortCiteRegEx" : "Fan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Measuring nominal scale agreement among many raters",
+      "author" : [ "Joseph L Fleiss." ],
+      "venue" : "Psychological bulletin, 76(5):378.",
+      "citeRegEx" : "Fleiss.,? 1971",
+      "shortCiteRegEx" : "Fleiss.",
+      "year" : 1971
+    }, {
+      "title" : "RDF-to-Text Generation with Graphaugmented Structural Neural Encoders",
+      "author" : [ "Hanning Gao", "Lingfei Wu", "Po Hu", "Fangli Xu." ],
+      "venue" : "Proceedings of the Twenty-Ninth International Joint Conference on Artificial Intelligence, pages 3030–3036,",
+      "citeRegEx" : "Gao et al\\.,? 2020",
+      "shortCiteRegEx" : "Gao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Creating training corpora for NLG micro-planners",
+      "author" : [ "Claire Gardent", "Anastasia Shimorina", "Shashi Narayan", "Laura Perez-Beltrachini." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Pa-",
+      "citeRegEx" : "Gardent et al\\.,? 2017a",
+      "shortCiteRegEx" : "Gardent et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "The WebNLG Challenge: Generating Text from RDF Data",
+      "author" : [ "Claire Gardent", "Anastasia Shimorina", "Shashi Narayan", "Laura Perez-Beltrachini." ],
+      "venue" : "Proceedings of the 10th International Conference on Natural Language Generation, pages 124–133, San-",
+      "citeRegEx" : "Gardent et al\\.,? 2017b",
+      "shortCiteRegEx" : "Gardent et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Survey of the state of the art in natural language generation: Core tasks, applications and evaluation",
+      "author" : [ "Albert Gatt", "Emiel Krahmer." ],
+      "venue" : "Journal of Artificial Intelligence Research, 61:65–170.",
+      "citeRegEx" : "Gatt and Krahmer.,? 2018",
+      "shortCiteRegEx" : "Gatt and Krahmer.",
+      "year" : 2018
+    }, {
+      "title" : "Jointly predicting predicates and arguments in neural semantic role labeling",
+      "author" : [ "Luheng He", "Kenton Lee", "Omer Levy", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Pa-",
+      "citeRegEx" : "He et al\\.,? 2018",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A Deep Ensemble Model with Slot Alignment for Sequenceto-Sequence Natural Language Generation",
+      "author" : [ "Juraj Juraska", "Panagiotis Karagiannis", "Kevin K. Bowden", "Marilyn A. Walker." ],
+      "venue" : "Proceedings of the 2018 Conference of the North Amer-",
+      "citeRegEx" : "Juraska et al\\.,? 2018",
+      "shortCiteRegEx" : "Juraska et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Text-to-text pre-training for data-to-text tasks",
+      "author" : [ "Mihir Kale", "Abhinav Rastogi." ],
+      "venue" : "Proceedings of the 13th International Conference on Natural Language Generation, pages 97–102, Dublin, Ireland. Association for Computational Linguistics.",
+      "citeRegEx" : "Kale and Rastogi.,? 2020",
+      "shortCiteRegEx" : "Kale and Rastogi.",
+      "year" : 2020
+    }, {
+      "title" : "A Good Sample is Hard to Find: Noise Injection Sampling and Self-Training for Neural Language Generation Models",
+      "author" : [ "Chris Kedzie", "Kathleen McKeown." ],
+      "venue" : "INLG, Tokyo, Japan.",
+      "citeRegEx" : "Kedzie and McKeown.,? 2019",
+      "shortCiteRegEx" : "Kedzie and McKeown.",
+      "year" : 2019
+    }, {
+      "title" : "The treatment of ties in ranking problems",
+      "author" : [ "Maurice G Kendall." ],
+      "venue" : "Biometrika, pages 239–251.",
+      "citeRegEx" : "Kendall.,? 1945",
+      "shortCiteRegEx" : "Kendall.",
+      "year" : 1945
+    }, {
+      "title" : "Adam: A Method for Stochastic Optimization",
+      "author" : [ "Diederik Kingma", "Jimmy Ba." ],
+      "venue" : "Proceedings of the 3rd International Conference on Learning Representations, San Diego, CA, USA. ArXiv: 1412.6980.",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "Inducing document plans for concept-to-text generation",
+      "author" : [ "Ioannis Konstas", "Mirella Lapata." ],
+      "venue" : "Proceedings of the 2013 Conference on Empirical Methods in Natural Language Processing, pages 1503–1514, Seattle, Washington, USA. Association",
+      "citeRegEx" : "Konstas and Lapata.,? 2013",
+      "shortCiteRegEx" : "Konstas and Lapata.",
+      "year" : 2013
+    }, {
+      "title" : "Meteor: An automatic metric for mt evaluation with high levels of correlation with human judgments",
+      "author" : [ "Alon Lavie", "Abhaya Agarwal." ],
+      "venue" : "Proceedings of the second workshop on statistical machine translation, pages 228–231.",
+      "citeRegEx" : "Lavie and Agarwal.,? 2007",
+      "shortCiteRegEx" : "Lavie and Agarwal.",
+      "year" : 2007
+    }, {
+      "title" : "BART: Denoising sequence-to-sequence pretraining for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Posterior control of blackbox generation",
+      "author" : [ "Xiang Lisa Li", "Alexander Rush." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 2731–2743, Online. Association for Computational Linguistics.",
+      "citeRegEx" : "Li and Rush.,? 2020",
+      "shortCiteRegEx" : "Li and Rush.",
+      "year" : 2020
+    }, {
+      "title" : "Rouge: A package for automatic evaluation of summaries",
+      "author" : [ "Chin-Yew Lin." ],
+      "venue" : "Text summarization branches out, pages 74–81.",
+      "citeRegEx" : "Lin.,? 2004",
+      "shortCiteRegEx" : "Lin.",
+      "year" : 2004
+    }, {
+      "title" : "Barack’s Wife Hillary: Using Knowledge Graphs for Fact-Aware Language Modeling",
+      "author" : [ "Robert Logan", "Nelson F. Liu", "Matthew E. Peters", "Matt Gardner", "Sameer Singh." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational",
+      "citeRegEx" : "Logan et al\\.,? 2019",
+      "shortCiteRegEx" : "Logan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Deep Graph Convolutional Encoders",
+      "author" : [ "Diego Marcheggiani", "Laura Perez-Beltrachini" ],
+      "venue" : null,
+      "citeRegEx" : "Marcheggiani and Perez.Beltrachini.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Marcheggiani and Perez.Beltrachini.",
+      "year" : 2018
+    }, {
+      "title" : "Improving Quality and Efficiency in Planbased Neural Data-to-Text Generation",
+      "author" : [ "Amit Moryossef", "Ido Dagan", "Yoav Goldberg." ],
+      "venue" : "INLG, Tokyo, Japan.",
+      "citeRegEx" : "Moryossef et al\\.,? 2019a",
+      "shortCiteRegEx" : "Moryossef et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Step-by-Step: Separating Planning from Realization in Neural Data-to-Text Generation",
+      "author" : [ "Amit Moryossef", "Yoav Goldberg", "Ido Dagan." ],
+      "venue" : "NAACL, Minneapolis, MN, USA.",
+      "citeRegEx" : "Moryossef et al\\.,? 2019b",
+      "shortCiteRegEx" : "Moryossef et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Machine learning: a probabilistic perspective",
+      "author" : [ "Kevin P Murphy." ],
+      "venue" : "MIT press.",
+      "citeRegEx" : "Murphy.,? 2012",
+      "shortCiteRegEx" : "Murphy.",
+      "year" : 2012
+    }, {
+      "title" : "A Simple Recipe towards Reducing Hallucination in Neural Surface Realisation",
+      "author" : [ "Feng Nie", "Jin-Ge Yao", "Jinpeng Wang", "Rong Pan", "Chin-Yew Lin." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Nie et al\\.,? 2019",
+      "shortCiteRegEx" : "Nie et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The E2E dataset: New challenges for endto-end generation",
+      "author" : [ "Jekaterina Novikova", "Ondřej Dušek", "Verena Rieser." ],
+      "venue" : "Proceedings of the 18th Annual SIGdial Meeting on Discourse and Dialogue, pages 201–206, Saarbrücken, Germany. Association",
+      "citeRegEx" : "Novikova et al\\.,? 2017",
+      "shortCiteRegEx" : "Novikova et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Bleu: a method for automatic evaluation of machine translation",
+      "author" : [ "Kishore Papineni", "Salim Roukos", "Todd Ward", "WeiJing Zhu." ],
+      "venue" : "Proceedings of the 40th Annual Meeting of the Association for Computational Linguistics, pages 311–318, Philadelphia,",
+      "citeRegEx" : "Papineni et al\\.,? 2002",
+      "shortCiteRegEx" : "Papineni et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Data-to-text generation with content selection and planning",
+      "author" : [ "Ratish Puduppully", "Li Dong", "Mirella Lapata." ],
+      "venue" : "Proceedings of the 33rd AAAI Conference on Artificial Intelligence, Honolulu, Hawaii.",
+      "citeRegEx" : "Puduppully et al\\.,? 2019",
+      "shortCiteRegEx" : "Puduppully et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Semi-Supervised Neural Text Generation by Joint Learning of Natural Language Generation and Natural Language Understanding Models",
+      "author" : [ "Raheel Qader", "Francois Portet", "Cyril Labbe." ],
+      "venue" : "INLG, Tokyo, Japan.",
+      "citeRegEx" : "Qader et al\\.,? 2019",
+      "shortCiteRegEx" : "Qader et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A tutorial on hidden Markov models and selected applications in speech recognition",
+      "author" : [ "Lawrence R Rabiner." ],
+      "venue" : "Proceedings of the IEEE, 77(2):257– 286.",
+      "citeRegEx" : "Rabiner.,? 1989",
+      "shortCiteRegEx" : "Rabiner.",
+      "year" : 1989
+    }, {
+      "title" : "A Tree-to-Sequence Model for Neural NLG in Task-Oriented Dialog",
+      "author" : [ "Jinfeng Rao", "Kartikeya Upasani", "Anusha Balakrishnan", "Michael White", "Anuj Kumar", "Rajen Subba." ],
+      "venue" : "INLG, Tokyo, Japan.",
+      "citeRegEx" : "Rao et al\\.,? 2019",
+      "shortCiteRegEx" : "Rao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Can neural generators for dialogue learn sentence",
+      "author" : [ "Lena Reed", "Shereen Oraby", "Marilyn Walker" ],
+      "venue" : null,
+      "citeRegEx" : "Reed et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Reed et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Building natural language generation systems",
+      "author" : [ "Ehud Reiter", "Robert Dale." ],
+      "venue" : "Cambridge university press.",
+      "citeRegEx" : "Reiter and Dale.,? 2000",
+      "shortCiteRegEx" : "Reiter and Dale.",
+      "year" : 2000
+    }, {
+      "title" : "Object Hallucination in Image Captioning",
+      "author" : [ "Anna Rohrbach", "Lisa Anne Hendricks", "Kaylee Burns", "Trevor Darrell", "Kate Saenko." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 4035–4045, Brus-",
+      "citeRegEx" : "Rohrbach et al\\.,? 2018",
+      "shortCiteRegEx" : "Rohrbach et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Long and diverse text generation with planning-based hierarchical variational model",
+      "author" : [ "Zhihong Shao", "Minlie Huang", "Jiangtao Wen", "Wenfei Xu", "Xiaoyan Zhu." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language",
+      "citeRegEx" : "Shao et al\\.,? 2019",
+      "shortCiteRegEx" : "Shao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Neural data-to-text generation via jointly learning the segmentation and correspondence",
+      "author" : [ "Xiaoyu Shen", "Ernie Chang", "Hui Su", "Jie Zhou", "Dietrich Klakow." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics.",
+      "citeRegEx" : "Shen et al\\.,? 2020",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A study of translation edit rate with targeted human annotation",
+      "author" : [ "Matthew Snover", "Bonnie Dorr", "Richard Schwartz", "Linnea Micciulla", "John Makhoul." ],
+      "venue" : "Proceedings of the 7th Conference of the Association for Machine Translation in the Americas, pages",
+      "citeRegEx" : "Snover et al\\.,? 2006",
+      "shortCiteRegEx" : "Snover et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "Cluster ensembles—a knowledge reuse framework for combining multiple partitions",
+      "author" : [ "Alexander Strehl", "Joydeep Ghosh." ],
+      "venue" : "Journal of machine learning research, 3(Dec):583–617.",
+      "citeRegEx" : "Strehl and Ghosh.,? 2002",
+      "shortCiteRegEx" : "Strehl and Ghosh.",
+      "year" : 2002
+    }, {
+      "title" : "Natural language generation by hierarchical decoding with linguistic patterns",
+      "author" : [ "Shang-Yu Su", "Kai-Ling Lo", "Yi-Ting Yeh", "YunNung Chen." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computa-",
+      "citeRegEx" : "Su et al\\.,? 2018",
+      "shortCiteRegEx" : "Su et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in neural information processing systems, pages 5998–6008.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "CIDEr: Consensus-based image description evaluation",
+      "author" : [ "Ramakrishna Vedantam", "C Lawrence Zitnick", "Devi Parikh." ],
+      "venue" : "Proceedings of the IEEE conference on computer vision and pattern recognition, pages 4566–4575.",
+      "citeRegEx" : "Vedantam et al\\.,? 2015",
+      "shortCiteRegEx" : "Vedantam et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Stochastic Language Generation in Dialogue using Recurrent Neural Networks with Convolutional Sentence Reranking",
+      "author" : [ "Tsung-Hsien Wen", "Milica Gasic", "Dongho Kim", "Nikola Mrksic", "Pei-Hao Su", "David Vandyke", "Steve Young." ],
+      "venue" : "Proceedings",
+      "citeRegEx" : "Wen et al\\.,? 2015a",
+      "shortCiteRegEx" : "Wen et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Semantically conditioned LSTM-based natural language generation for spoken dialogue systems",
+      "author" : [ "Tsung-Hsien Wen", "Milica Gašić", "Nikola Mrkšić", "PeiHao Su", "David Vandyke", "Steve Young." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical",
+      "citeRegEx" : "Wen et al\\.,? 2015b",
+      "shortCiteRegEx" : "Wen et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Challenges in data-to-document generation",
+      "author" : [ "Sam Wiseman", "Stuart Shieber", "Alexander Rush." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 2253–2263, Copenhagen, Denmark. Association for",
+      "citeRegEx" : "Wiseman et al\\.,? 2017",
+      "shortCiteRegEx" : "Wiseman et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Learning neural templates for text generation",
+      "author" : [ "Sam Wiseman", "Stuart Shieber", "Alexander Rush." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 3174–3187, Brussels, Belgium. Association",
+      "citeRegEx" : "Wiseman et al\\.,? 2018",
+      "shortCiteRegEx" : "Wiseman et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Fact-based content weighting for evaluating abstractive summarisation",
+      "author" : [ "Xinnuo Xu", "Ondřej Dušek", "Jingyi Li", "Verena Rieser", "Ioannis Konstas." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages",
+      "citeRegEx" : "Xu et al\\.,? 2020",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bridging the Structural Gap Between Encoding and Decoding for Data-To-Text Generation",
+      "author" : [ "Chao Zhao", "Marilyn Walker", "Snigdha Chaturvedi." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 2481–",
+      "citeRegEx" : "Zhao et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Both encoder and decoder are a 2-layer 4-head Transformer, with hidden dimension of 256. The size of token embeddings and predicate embeddings is 256 and 128, respectively. The Adam optimizer (Kingma and Ba, 2015) is used to update parameters. For both the baseline model and the pre-train of the HMM-based model, the learning rate is 0.1",
+      "author" : [ "D Hyperparameters WebNLG" ],
+      "venue" : "During the training of the HMM-based model,",
+      "citeRegEx" : "WebNLG.,? \\Q2015\\E",
+      "shortCiteRegEx" : "WebNLG.",
+      "year" : 2015
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 7,
+      "context" : "While this can lead to increased fluency, E2E methods often produce repetitions, hallucination and/or omission of important content for data-to-text (Dušek et al., 2020) as well as other natural language generation (NLG) tasks (Cao et al.",
+      "startOffset" : 149,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2020) as well as other natural language generation (NLG) tasks (Cao et al., 2018; Rohrbach et al., 2018).",
+      "startOffset" : 65,
+      "endOffset" : 106
+    }, {
+      "referenceID" : 42,
+      "context" : ", 2020) as well as other natural language generation (NLG) tasks (Cao et al., 2018; Rohrbach et al., 2018).",
+      "startOffset" : 65,
+      "endOffset" : 106
+    }, {
+      "referenceID" : 41,
+      "context" : "This process is called sentence planning (Reiter and Dale, 2000; Duboue and McKeown, 2001, 2002; Konstas and Lapata, 2013; Gatt and Krahmer, 2018).",
+      "startOffset" : 41,
+      "endOffset" : 146
+    }, {
+      "referenceID" : 23,
+      "context" : "This process is called sentence planning (Reiter and Dale, 2000; Duboue and McKeown, 2001, 2002; Konstas and Lapata, 2013; Gatt and Krahmer, 2018).",
+      "startOffset" : 41,
+      "endOffset" : 146
+    }, {
+      "referenceID" : 16,
+      "context" : "This process is called sentence planning (Reiter and Dale, 2000; Duboue and McKeown, 2001, 2002; Konstas and Lapata, 2013; Gatt and Krahmer, 2018).",
+      "startOffset" : 41,
+      "endOffset" : 146
+    }, {
+      "referenceID" : 31,
+      "context" : "For example, in (Moryossef et al., 2019b; Zhao et al., 2020) the sentence plan is created independently, incurring error propagation; Wiseman et al.",
+      "startOffset" : 16,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 55,
+      "context" : "For example, in (Moryossef et al., 2019b; Zhao et al., 2020) the sentence plan is created independently, incurring error propagation; Wiseman et al.",
+      "startOffset" : 16,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 34,
+      "context" : "We demonstrate this for two data-to-text generation tasks: the E2E NLG (Novikova et al., 2017) and the WebNLG Challenge (Gardent et al.",
+      "startOffset" : 71,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 50,
+      "context" : "The prevailing sequence-to-sequence (seq2seq) architectures typically address this issue via reranking (Wen et al., 2015a; Dušek and Jurčı́ček, 2016; Juraska et al., 2018) or some sophisticated training techniques (Nie et al.",
+      "startOffset" : 103,
+      "endOffset" : 171
+    }, {
+      "referenceID" : 6,
+      "context" : "The prevailing sequence-to-sequence (seq2seq) architectures typically address this issue via reranking (Wen et al., 2015a; Dušek and Jurčı́ček, 2016; Juraska et al., 2018) or some sophisticated training techniques (Nie et al.",
+      "startOffset" : 103,
+      "endOffset" : 171
+    }, {
+      "referenceID" : 18,
+      "context" : "The prevailing sequence-to-sequence (seq2seq) architectures typically address this issue via reranking (Wen et al., 2015a; Dušek and Jurčı́ček, 2016; Juraska et al., 2018) or some sophisticated training techniques (Nie et al.",
+      "startOffset" : 103,
+      "endOffset" : 171
+    }, {
+      "referenceID" : 33,
+      "context" : ", 2018) or some sophisticated training techniques (Nie et al., 2019; Kedzie and McKeown, 2019; Qader et al., 2019).",
+      "startOffset" : 50,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2018) or some sophisticated training techniques (Nie et al., 2019; Kedzie and McKeown, 2019; Qader et al., 2019).",
+      "startOffset" : 50,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 37,
+      "context" : ", 2018) or some sophisticated training techniques (Nie et al., 2019; Kedzie and McKeown, 2019; Qader et al., 2019).",
+      "startOffset" : 50,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 29,
+      "context" : "For applications where structured inputs are present, neural graph encoders (Marcheggiani and Perez-Beltrachini, 2018; Rao et al., 2019; Gao et al., 2020) or decoding of explicit graph references (Logan et al.",
+      "startOffset" : 76,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 39,
+      "context" : "For applications where structured inputs are present, neural graph encoders (Marcheggiani and Perez-Beltrachini, 2018; Rao et al., 2019; Gao et al., 2020) or decoding of explicit graph references (Logan et al.",
+      "startOffset" : 76,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 13,
+      "context" : "For applications where structured inputs are present, neural graph encoders (Marcheggiani and Perez-Beltrachini, 2018; Rao et al., 2019; Gao et al., 2020) or decoding of explicit graph references (Logan et al.",
+      "startOffset" : 76,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 28,
+      "context" : ", 2020) or decoding of explicit graph references (Logan et al., 2019) are applied for higher accuracy.",
+      "startOffset" : 49,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 19,
+      "context" : "Recently, large-scale pretraining has achieved SoTA results on WebNLG by fine-tuning T5 (Kale and Rastogi, 2020).",
+      "startOffset" : 88,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 48,
+      "context" : "We adopt Transformer (Vaswani et al., 2017) as the model’s encoder and decoder.",
+      "startOffset" : 21,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 38,
+      "context" : "We apply the backward algorithm (Rabiner, 1989) to learn the parameters introduced in Section 3.",
+      "startOffset" : 32,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 34,
+      "context" : "We tested our approach on two widely used datato-text tasks: the E2E NLG (Novikova et al., 2017) and WebNLG7 (Gardent et al.",
+      "startOffset" : 73,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 35,
+      "context" : "The E2E task is evaluated using BLEU (Papineni et al., 2002), NIST (Doddington, 2002), ROUGE-L (Lin, 2004), METEOR (Lavie and Agarwal, 2007), and CIDEr (Vedantam et al.",
+      "startOffset" : 37,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 2,
+      "context" : ", 2002), NIST (Doddington, 2002), ROUGE-L (Lin, 2004), METEOR (Lavie and Agarwal, 2007), and CIDEr (Vedantam et al.",
+      "startOffset" : 14,
+      "endOffset" : 32
+    }, {
+      "referenceID" : 27,
+      "context" : ", 2002), NIST (Doddington, 2002), ROUGE-L (Lin, 2004), METEOR (Lavie and Agarwal, 2007), and CIDEr (Vedantam et al.",
+      "startOffset" : 42,
+      "endOffset" : 53
+    }, {
+      "referenceID" : 24,
+      "context" : ", 2002), NIST (Doddington, 2002), ROUGE-L (Lin, 2004), METEOR (Lavie and Agarwal, 2007), and CIDEr (Vedantam et al.",
+      "startOffset" : 62,
+      "endOffset" : 87
+    }, {
+      "referenceID" : 49,
+      "context" : ", 2002), NIST (Doddington, 2002), ROUGE-L (Lin, 2004), METEOR (Lavie and Agarwal, 2007), and CIDEr (Vedantam et al., 2015).",
+      "startOffset" : 99,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 45,
+      "context" : "WebNLG is evaluated in terms of BLEU, METEOR, and TER (Snover et al., 2006).",
+      "startOffset" : 54,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 51,
+      "context" : "Factual Correctness Evaluation tests if the generated text corresponds to the input triples (Wen et al., 2015b; Reed et al., 2018; Dušek et al., 2020).",
+      "startOffset" : 92,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 40,
+      "context" : "Factual Correctness Evaluation tests if the generated text corresponds to the input triples (Wen et al., 2015b; Reed et al., 2018; Dušek et al., 2020).",
+      "startOffset" : 92,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 7,
+      "context" : "Factual Correctness Evaluation tests if the generated text corresponds to the input triples (Wen et al., 2015b; Reed et al., 2018; Dušek et al., 2020).",
+      "startOffset" : 92,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 48,
+      "context" : "To evaluate the contributions of the planning component, we choose the vanilla Transformer model (Vaswani et al., 2017) as our baseline, trained on pairs of linearized input triples and target texts.",
+      "startOffset" : 97,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 55,
+      "context" : "T5 (Kale and Rastogi, 2020), PlanEnc (Zhao et al., 2020), ADAPT (Gardent et al.",
+      "startOffset" : 37,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 6,
+      "context" : "and TGen (Dušek and Jurčı́ček, 2016); (2) models with explicit planning, i.",
+      "startOffset" : 9,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 15,
+      "context" : "TILB-PIPE (Gardent et al., 2017b), NTemp+AR (Wiseman et al.",
+      "startOffset" : 10,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 53,
+      "context" : ", 2017b), NTemp+AR (Wiseman et al., 2018) and Shen et al.",
+      "startOffset" : 19,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 15,
+      "context" : "Table 1 shows the generation results on the WebNLG seen category (Gardent et al., 2017b).",
+      "startOffset" : 65,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 5,
+      "context" : "training set and tested on clean E2E data (Dušek et al., 2019).",
+      "startOffset" : 42,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 12,
+      "context" : "Using Fleiss Kappa (Fleiss, 1971) over the facts aligned",
+      "startOffset" : 19,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 46,
+      "context" : "We introduce two metrics: • Normalized Mutual Information (NMI) (Strehl and Ghosh, 2002) to evaluate aggregation.",
+      "startOffset" : 64,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 21,
+      "context" : "• Kendall’s tau (τ ) (Kendall, 1945) is a ranking based measure which we use to evaluate both ordering and aggregation.",
+      "startOffset" : 21,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 25,
+      "context" : "(Lewis et al., 2020; Kale and Rastogi, 2020), into AGGGEN to enhance their interpretability and controllability via sentence planning and generation.",
+      "startOffset" : 0,
+      "endOffset" : 44
+    }, {
+      "referenceID" : 19,
+      "context" : "(Lewis et al., 2020; Kale and Rastogi, 2020), into AGGGEN to enhance their interpretability and controllability via sentence planning and generation.",
+      "startOffset" : 0,
+      "endOffset" : 44
+    }, {
+      "referenceID" : 52,
+      "context" : "In contrast, more challenging tasks such as RotoWire (Wiseman et al., 2017), include content selection before sentence planning.",
+      "startOffset" : 53,
+      "endOffset" : 75
+    } ],
+    "year" : 2021,
+    "abstractText" : "We present AGGGEN (pronounced ‘again’), a data-to-text model which re-introduces two explicit sentence planning stages into neural datato-text systems: input ordering and input aggregation. In contrast to previous work using sentence planning, our model is still endto-end: AGGGEN performs sentence planning at the same time as generating text by learning latent alignments (via semantic facts) between input representation and target text. Experiments on the WebNLG and E2E challenge data show that by using fact-based alignments our approach is more interpretable, expressive, robust to noise, and easier to control, while retaining the advantages of end-to-end systems in terms of fluency. Our code is available at https://github.com/XinnuoXu/ AggGen.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

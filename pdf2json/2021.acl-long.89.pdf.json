@@ -1,0 +1,518 @@
+{
+  "name" : "2021.acl-long.89.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Multi-Task Retrieval for Knowledge-Intensive Tasks",
+    "authors" : [ "Jean Maillard", "Vladimir Karpukhin", "Fabio Petroni", "Wen-tau Yih Barlas", "Oğuz Veselin Stoyanov", "Gargi Ghosh" ],
+    "emails" : [ "jeanm@fb.com", "vladk@fb.com", "fabiopetroni@fb.com", "scottyih@fb.com", "barlaso@fb.com", "ves@fb.com", "gghosh@fb.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 1098–1111\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n1098"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Knowledge-intensive tasks is the common designation for a class of real-world NLP problems which, because of their nature, require large amounts of knowledge about the world (Petroni et al., 2020). For example, open-domain question answering requires producing answers to general factoid questions; fact checking involves determining the veracity of claims based on a database of trusted evidence. Practical solutions to these tasks usually involve an efficient retrieval component that, given an input query, selects a limited subset of relevant information from a large knowledge source. Sophisticated downstream models then consider the input only in the context of the retrieved information, and perform the final task.1\n∗Equal Contribution. 1While large pre-trained neural models have been shown to incorporate real-world knowledge in their parameters and thus may skip retrieval (Petroni et al., 2019), they still have limited capacity and suffer from a lack of explainability.\nThe standard retrieval component in many systems (e.g., Thorne et al., 2018; Wang et al., 2018; Chen et al., 2017) has long relied on term-matching methods, such as tf-idf or BM25 (Robertson and Zaragoza, 2009). These methods rely on efficient algorithms and usually perform reasonably well regardless of the problem. In contrast, recent neural retrieval models, such as ICT (Lee et al., 2019), DPR (Karpukhin et al., 2020) and RAG (Lewis et al., 2020b) achieve better results by learning directly from task-specific training data and going beyond simple keyword matching. While task specialisation results in improved task performance, researchers have observed that a retriever trained for one specific domain will typically achieve low out-of-domain performance, and even lower performance on entirely different tasks (Petroni et al., 2020). This has two implications. First, unlike tfidf or BM25, neural retrieval models are unsuitable for low data regimes such as few- and zero-shot settings. Second, task-specific retrievers complicate practical applications where multiple knowledgeintensive tasks may need to be performed using the same supporting database or over the same input text. It may not be practical to deploy multiple separate specialised models due to computational performance or memory concerns.\nIn this work, we ask the following question: can we develop a universal neural retriever? Namely, we target a retriever which can perform well on a wide variety of problems without domain-specific training, but which – if additional in-domain labelled data is available – can be further fine-tuned to improve its performance. We perform a large experimental study to attempt to build such a universal retrieval model. We find that, by jointly training on an extensive selection of retrieval tasks, we obtain a model which is not only more robust than previous approaches, but also can lead to better performance on the downstream knowledge-\nintensive tasks when plugged into an existing system. Our approach combines the benefits from IR-based models with those of task-specific neural retrievers – namely, good performance when no (or not enough) training data is available and high task performance due to its ability to learn highly specialised representations.\nOur contributions can be summarised as follows. • We propose a single general-purpose “univer-\nsal” retrieval model, able to perform comparably or better than specialised retriever approaches in both zero-shot (leave-one-out) and few-shot retrieval. We investigate several model variants, shedding light on what are the aspects of the architecture that affect its performance. • We show that, with in-domain training, our model’s gains in terms of retrieval directly translate into performance gains for a variety of downstream knowledge-intensive tasks. • We will share the implementation as well as our best model. This is in the form of a readily available BERT checkpoint which, as we will show, can be used by NLP practitioners as a strong out-of-the-box retrieval system, and can also undergo further in-domain training for even higher performance."
+    }, {
+      "heading" : "2 Background",
+      "text" : "In this section, we first give an overview of retrieval methods based on sparse and dense representations. We then discuss a wide range of knowledgeintensive NLP tasks, where retrieval plays a crucial role in solving the problems."
+    }, {
+      "heading" : "2.1 Retrieval methods",
+      "text" : "Given a large collection of unstructured text passages, information retrieval (IR) can be broadly defined as finding a small set of passages that satisfies an information need, often presented in the form of a short text query (Manning et al., 2008). Traditional IR methods, such as tf-idf and BM25 (Robertson and Zaragoza, 2009), match keywords efficiently with an inverted index. Such methods can be seen as representing queries and passages in high-dimensional, sparse vectors, where each dimension corresponds to a term in the vocabulary and the weight indicates its importance.\nIn contrast to tf-idf and BM25, dense retrieval methods encode text as a latent semantic vector of a fixed, much smaller dimensionality. Whether a\npassage is relevant to a given query is determined by the distance of their vectors (Deerwester et al., 1990). Although dense representations do not encode tokens explicitly and can potentially map paraphrases of completely different tokens to close vectors, performance of early dense retrieval methods was often inferior to term-matching approaches, except when large labelled data is available (Yih et al., 2011; Gao et al., 2011; Huang et al., 2013). Thanks to success of large pre-trained models (Devlin et al., 2019; Liu et al., 2019b), however, recent dense retrieval methods have shown to outperform the sparse counterparts, when fine-tuned on a small set of in-domain labelled data (Karpukhin et al., 2020; Lewis et al., 2020b; Xiong et al., 2020). Efficient index and search of dense vectors are made possible by maximum inner product search (MIPS) algorithms (e.g., Shrivastava and Li, 2014; Guo et al., 2016), as well as tools like FAISS (Johnson et al., 2019).\nOur work is built upon the Dense Passage Retriever (DPR) architecture of Karpukhin et al. (2020), which was initially proposed for the task of open-domain question answering. DPR is a neural bi-encoder model which embeds queries with an encoder f (·) and passages with a separate encoder g (·). Given an input query x and a target passage y, we have\np (x | y) ∝ sim(x, y),\nwhere the similarity score sim (x, y) is defined as the inner product of the embeddings of its arguments, f(x) · g(y). Given a query at inference time, calculating its similarity with every possible passage would be prohibitive for large knowledge sources. Therefore, DPR makes use of the FAISS library (Johnson et al., 2019) to perform fast approximate nearest neighbour search in sub-linear time.\nTraining of DPR is based on a contrastive loss. Given a query x, a relevant passage y, and a set of n irrelevant passages y−i , we train the model by optimising the following negative log likelihood:\nL = − log exp(sim(x, y)) exp(sim(x, y)) + ∑n i=1 exp(sim ( x, y−i ) ) .\nAs the set of irrelevant passages, we use the relevant passages for other queries within the same batch, as well as a specially selected “hard” confounder. This is a passage which has high lexical\noverlap with the query (high BM25 score), but is not among the set of relevant passages for the given data point. Karpukhin et al. (2020) have shown that the inclusion of such “hard” confounders leads to substantially improved training results. This training process is illustrated in Figure 1."
+    }, {
+      "heading" : "2.2 Knowledge-intensive Tasks",
+      "text" : "For the training and evaluation of all models in the paper we make use of KILT, a benchmark and library of datasets (Petroni et al., 2020). KILT consists of a selection of datasets spanning five varied classes of knowledge-intensive tasks (i.e., question answering, slot filling, fact checking, dialogue, entity linking), with the aim to cover many different ways of seeking knowledge. Input queries can vary wildly from one task to the other, and include classic examples of open-domain retrieval tasks such as natural language questions and claims to be verified, as well as more unusual examples like conversation fragments and long chunks of annotated text. Crucially, all datasets distributed in KILT have been re-aligned such that they are all grounded in the same snapshot of Wikipedia, which the authors distribute. The knowledge required to answer any of the queries in the library of tasks can thus be found within the same unified knowledge source.\nTo illustrate the variety of ways in which the input queries for different tasks can be formulated, we provide a few simple examples in Table 1. In spite of the differences between query formulations, all these tasks share one crucial aspect: they all require a retriever to fetch the relevant passages from the knowledge source, in order to support the final downstream task."
+    }, {
+      "heading" : "3 Methods",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Universal retrieval",
+      "text" : "Using task-specific models to tackle our collection of retrieval tasks would involve completely separate models, one per dataset. Following the definitions of §2.1, for a family of tasks i = 1, . . . , n this would require n query encoders f1, . . . ,fn, and n corresponding passage encoders g1, . . . , gn. As illustrated in Figure 2, this would lead to a proliferation of models and data, down to separate indexed copies of the knowledge source itself. This fully specialised setup will form one of our baselines.\nMulti-task training has been successfully used to allow models to leverage cross-task data, as well as to provide a regularisation effect leading to better generalisation ability (Liu et al., 2019a). We apply this concept to neural retrievers, with the aim of improving performance by jointly leveraging multiple different retrieval datasets.\nOur base setup is illustrated in Figure 3b and involves using, across all tasks, a shared passage encoder g — so that a single index of encoded passages can be used — as well as a shared query encoder f . In essence, in this setup a single DPR model is used to perform all retrieval tasks."
+    }, {
+      "heading" : "3.2 Model variants",
+      "text" : "Due to the complexity of training and evaluating retrievers (which involves training the model, embedding all of Wikipedia, and indexing it), our main experiments are all based on the configuration of Figure 3b, which was found to work well.\nWe did, however, also investigate other more complex model variants in a set of preliminary experiments. As these were not found to be beneficial, we leave them in the appendix, but mention the variants’ architecture for completeness:\n• Task-specific query encoder. A different query encoder f i is used for each family of tasks. For example, all question answering tasks use the same query encoder. This is meant to allow for potentially different needs in processing queries, given the fundamentally diverse nature of the tasks at hand. This setup configuration is illustrated in Figure 3a. • Task markers. This is a variant of the base model in which specialised tokens are inserted at the beginning of each query. Their aim is to help the model distinguish between the different tasks, by marking them. We use one task marker for each of the five task classes of KILT, such that all question answering tasks share the same marker.\nExperimental results comparing these variants to the base model can be found in Appendix B."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Experimental settings",
+      "text" : "Dataset selection For our experiments we select the eight KILT datasets listed in Table 2, which cover all five task classes and include a training split, a validation split and a held-out test split each.\nPreprocessing Starting from the KILT data, we split each Wikipedia article into disjoint 100-token chunks which form our basic retrieval units, following Wang et al. (2019) and Karpukhin et al. (2020). To maintain the same language introduced in §3, we will simply call these chunks passages.\nThis preprocessing results in a knowledge source of 36 million passages. In order to harmonise all datasets to the same knowledge source, KILT used a mapping strategy based on the BLEU metric to\nmap relevant passages in the original versions of its datasets to passages in its own shared knowledge source (Petroni et al., 2020). Entries included in the KILT training sets which have a mapping BLEU score below 0.5 are likely to be noise, and we exclude them from training and validation (resulting in a 18% reduction on average for the validation sets).\nMulti-tasking Training is performed on the union of all data. Since two training sets are vastly larger, we downsample them to the same order of magnitude as the others. Preliminary experiments with more complex sampling methods, like resampling all datasets so that each epoch would see an equal number of samples from each, found that they had no measurable effect compared to this simpler approach.\nEncoders Our query and passage encoders are initialised as distinct BERT-base uncased encoders (Devlin et al., 2019), trained separately. As pooling mechanism we find it effective to simply take the [CLS] token representation at the topmost layer.\nTraining We train our models for up to 80 epochs. To select the best checkpoint, we evaluate the retrieval performance on the validation set at regular intervals. We optimise with Adam (Kingma and Ba, 2015) with a learning rate of 2 · 10−5, warmup, a linear decay schedule, and a dropout rate of 0.1. The batch size is set to 128 samples, and in preliminary experiments we found no benefit in increasing this further. We use an additional “hard” confounder per batch, selected based on BM25 score as in Karpukhin et al. (2020).\nDownstream evaluation When evaluating our retriever within a larger architecture to perform a knowledge-intensive task, we replicate a setup analogous to DPR + BART of Petroni et al. (2020). This uses our multi-task model to retrieve and prepend the top 3 passages to the query, which is then processed by a task-specific fine-tuned BART model to generate the final answer for the end task.\nBaselines For our retrieval experiments, we include as baselines a BM25 model as well as a taskspecific DPR model for each of the training datasets. For the downstream evaluations, we compare against three strong representative models trained by Petroni et al. (2020): a task-specific DPR model combined with BART (Lewis et al., 2020a), RAG (Lewis et al., 2020b), and T5 (Raffel et al., 2020)."
+    }, {
+      "heading" : "4.2 Universal retrieval",
+      "text" : "The results of the evaluations reported in (Petroni et al., 2020) show that retrievers trained for question answering have poor performance outside of their domain. We would like to understand if it is possible to design a single model which can accurately satisfy the information needs of a wide variety of knowledge-intensive tasks. In short: Can a neural retriever be universal?\nWe perform a comprehensive evaluation of several models on the 8 tasks of Table 2. We evaluate 8 task-specific models (one trained on each of the 8 datasets), for which we measure both in-domain and out-of-domain performance, and a BM25 baseline. Additionally, we include a multitask trained model – as described in §3.1 – with the hope that it can learn to perform all tasks satisfyingly. This amounts to 10 models evaluated on 8 tasks each, for a total of 80 evaluations. To measure retrieval performance, we adopt the main metric used for the KILT benchmark, R-precision. This is calculated as r/R, where R is the total number of relevant passages for a given query, and r is the number of relevant passages returned among the top-R retrieval results. For the case of R = 1 this is therefore equivalent to precision@1.\nThis experiment is of a very large scale, amounting to 10 models evaluated on 8 tasks, each repeated at the page and passage level – for a total of 160 figures to report. Due to this complexity, we report the results in Table 3 via a heatmap showing, for each evaluation task, the difference in R-precision between a given model and the taskspecific model that was trained on the relevant task only. This is to highlight how each approach stacks up against a specialised model.\nWhile the KILT evaluation focuses on retrieval at the level of Wikipedia pages (thereby marking as “hits” any results that lie within the correct page), we are also interested in performing an evaluation at a more fine-grained level. We therefore also evaluate our models at the passage level, using a modified version of the official KILT evaluation scripts. These are shown at the right side of Table 3. For full context, we also provide the full absolute results in Appendix A.\nWe straight away notice that task-specific models tend to achieve high performance on their respective tasks, often taking one of the top two spots. Interestingly, we also note that these neural retrievers consistently outperform the BM25 baseline, show-\ning that the result achieved by Karpukhin et al. (2020) for open-domain question answering also holds for other knowledge-intensive tasks.\nThe results reveal a strong performance for the multi-task model, confirming the hypothesis that a single model can be trained to perform well on a wide variety of retrieval tasks. With the exception of one dataset, the multi-task model achieves the best retrieval performance or is within a few points of the top score. We note that the one exception, the Zero-shot RE task (Levy et al., 2017), is a trivial task in which the query will always contain the title of the page to be retrieved. Indeed, the model specific to this task achieves a near-perfect score (see full results in Appendix A).\nAnother task which stands out for being markedly different in formulation is AIDAYAGO 2 (Hoffart et al., 2011). As shown in Table 3, models that were not trained on AIDA-YAGO 2 do very poorly on it. Entity linking is normally better performed by models which are explicitly designed for it (De Cao et al., 2020). We nevertheless include it to showcase the ability of neural retrievers to adapt to a variety of tasks, and note how well the multi-task retriever performs on it in spite of its unusual nature."
+    }, {
+      "heading" : "4.3 Downstream performance",
+      "text" : "We saw that our proposed approach achieves strong performance across a variety of retrieval tasks. However, our interest in neural retrievers stems from their use as components within larger sys-\ntems, to perform tasks such as question answering. Our next experimental question is therefore: Can a universal retriever lead to better downstream performance in knowledge-intensive tasks?\nWe perform a downstream evaluation of our approach used in conjunction with BART (Lewis et al., 2020a) as the generative component, adopting a setup identical to that of Petroni et al. (2020). The results are reported in Table 4, with bold and underline marking the best and second best scores respectively.\nThe DPR + BART line refers to a setup similar to ours, but with the simpler retriever of Karpukhin et al. (2020) as trained in Petroni et al. (2020), which lacked the multi-task aspect. Therefore, comparing to its performance gives us a clear indication of the contribution of multi-task training on the overall performance on knowledge-intensive tasks.\nOur proposed model achieves significantly better performance than this baseline in AY2, zsRE and HoPo; while for the other tasks, the discrepancy is always below two points.\nThis fact is reflected in the last column, showing that on average multi-task training leads to better downstream performance. The model also compares favourably to RAG (Lewis et al., 2020b), a more advanced system in which the query encoder is fine-tuned on the end task.\n2Performing this evaluation required retrieving relevant documents for all training sets. Due to the very large size of T-REx, this particular dataset could not be included in this section."
+    }, {
+      "heading" : "4.4 Zero- and few-shot performance",
+      "text" : "Task-specific neural retrievers can achieve higher performance than IR-based methods, but they are not suitable for cases where no training data (or not enough) is available. In those cases, tf-idf and BM25 are the better choice. To evaluate the performance of a multi-task retriever as a suitable replacement for them in this scenario, we run a series of experiments in the low data regimes (few-shot and zero-shot).\nWe start by training a set of multi-task retrievers (with the base setup) in the leave-one-out setting for each dataset, in order to see how a neural retriever will perform when trained on all domains except for the one it is to be evaluated on.\nThe results of these zero-shot experiments are reported in the second line of Table 5 (again, bold and underline indicate best and second best overall performance, respectively). They show that, even in the zero-shot setting, the multi-task neural retriever achieves performance that is competitive to BM25, with retrieval being 10 points higher at the page level and 5 points lower at the passage level on average.\nThe advantage of neural retrievers over BM25 lies in their ability to improve with training. We therefore look at few-shot training for each task, and create two smaller copies for each of the original training sets with a random sample of 128 and 1,024 examples respectively. In order to evaluate the suitability of a multi-task trained retriever as a starting checkpoint for few-shot training, we take the various leave-one-out models and finetune them on our few-shot training sets. To check whether multi-task pre-training is effective, we also compare these to DPR models, which are just initialised with BERT weights and then fine-tuned on the same data.\nThe bottom two sections of Table 5 report the\nresults. The most dramatic gains from fine-tuning are seen for AY2, an “outlier” task whose formulation differs from that of the other tasks, and which seems to benefit the most from being trained on in-domain data. The zsRE performance does not seem to improve from fine-tuning on the smaller dataset, but sees a very big jump when switching to the larger dataset. As a reminder, in this trivial task the title of the page to be retrieved always appears at the start of the query. It is therefore not surprising that models specifically fine-tuned on it can achieve near-perfect scores, as long as enough training data is provided.\nIn spite of the fine-tuning, we note that both DPR and the multi-task model fail to improve on their performance for T-REx, suggesting that large amounts of training data are required to learn this task. Nevertheless, the multi-task model proves itself more robust, and achieves the top performance on it.\nFinally, we note for 2 out of 8 tasks, namely zsRE and WoW, DPR achieves lower page-level retrieval scores than the multi-task model, but performs better at the passage level. This shows that fine-grained and coarse-grained retrieval performance are not always perfectly correlated.\nOverall, the experiments show strong results for the multi-task model, with the average zero-shot performance being competitive to BM25, and the average few-shot performance being markedly better than the alternatives. The discrepancy in performance between a vanilla DPR model and the leave-one-out multi-task model is especially noticeable when using the smaller of the two datasets, in which case average performance for the latter is more than double that of vanilla DPR."
+    }, {
+      "heading" : "5 Related work",
+      "text" : "The approach most closely related to ours is DPR (Karpukhin et al., 2020), upon which we built all our retrievers. It is covered in detail, along with historical context, in § 2.1. Another closely related approach is the Retrieval-Augmented Generation (RAG) model of Lewis et al. (2020b). In its base configuration it augments DPR with a generative reader, and trains the query encoder end-to-end (differing from traditional retriever-reader architectures, which treat the two steps as disjoint). A natural extension of our work would be to combine RAG with the multi-task learning approach, to study whether it can lead to further gains in performance or robustness.\nA number of promising techniques to boost retrieval performance have been proposed recently. These are orthogonal to our work, and as such they could be combined with it. Amongst these, pretraining methods form one class. Inverse Cloze Task (Lee et al., 2019) and its extensions (Chang et al., 2020) are self-supervised pre-training methods designed for retrieval in open-domain question answering. Whether such specific pre-training is beneficial to tasks other than question answering remains an open question. CERT (Fang et al., 2020) is an alternative pre-training approach, inspired by some recent advances in computer vision. While to our knowledge this has not been applied to retrieval problems, we believe it might be promising due to its focus on sentence-level semantics (as opposed to the more standard masked language modelling pre-training, which focuses on the token level).\nAnother class of orthogonal improvements to dense retrieval involves models which embed passages into multiple fixed-size vectors. Of these, ColBERT (Khattab and Zaharia, 2020) and MEBERT (Luan et al., 2020) are two representative examples. One further approach is ColBERT-QA\n(Khattab et al., 2020), which additionally uses a data augmentation strategy closely related to our own approach described in Appendix D.\nRetrieval does not strictly have to be performed with a model which contains an explicit memory. Large-scale pre-trained models have been shown to store knowledge directly into their parameters. A model which demonstrates this ability is T5 (Raffel et al., 2020) – which we used as a baseline in § 4.\nRegarding the multi-task aspect of our approach, a related strategy has been demonstrated by Aghajanyan et al. (2021). In this recent work, the authors multi-task train a pre-trained model on around 50 datasets, before performing the final fine-tuning. While they do not focus on retrieval, their results are consistent with ours and show that multi-task training leads to improved performance and increased sample efficiency.\nOn the topic of question answering, Lewis et al. (2021) show in a recent notable paper that, for several popular QA datasets, a portion of questions in the test set has near-duplicates in the training sets, and the same holds true for an even larger set of answers. To our knowledge, similar analyses have yet to be performed on the other KILT tasks.\nFinally two entity linkers, GENRE (De Cao et al., 2020) and BLINK (Wu et al., 2020), are worth mentioning. Being trained specifically for entity linking, these models will generally outperform retrieval-based approaches on that task. While they are not comparable to retrieval models and will not generally be applicable to information retrieval tasks, we cite them here to provide readers with a fuller context of the existing literature on related tasks."
+    }, {
+      "heading" : "6 Conclusions",
+      "text" : "We have conducted a large-scale experimental study on knowledge-intensive tasks, and how re-\ntrieval models that tackle them seek the required information from knowledge bases like Wikipedia.\nThe study started with the question of whether the way in which information is embedded for retrieval purposes is universal. §4.2 provided evidence that to a large extent it is, with a single “universal” retriever, trained jointly on 8 datasets, often performing comparably to task-specific models.\nArmed with this knowledge, in §4.3 we plugged our single model in a larger pipeline, in order to see its contribution to the downstream performance on a wide range of knowledge-intensive tasks. This led to an overall improvement in downstream performance, setting new top results for a number of tasks in the KILT benchmark.\nNext, in §4.4, we evaluated the model’s performance in the zero-shot and few-shot settings. By evaluating on a wide range of tasks, we were able to show that our proposed approach performs comparably to BM25 in the zero shot setting, and quickly overtakes it even with minimal in-domain training.\nIn the appendices, readers interested in getting a fuller picture will find further experiments. Namely, in Appendix B we test two more complex variants of the model involving task specialisation, but fail to see clear performance improvements. In Appendix D we show how a simple iterative approach to data augmentation, easily applied to our base approach, can lead to better performance throughout.\nWe provide a pre-trained snapshot of our bestperforming model, in the form of a BERT checkpoint.3 As shown, this model will be useful in zero-shot and few-shot settings as a better performing alternative to both IR-based approaches such as BM25, as well as task-specific models. The multitask training approach demonstrated here can also be useful in industry settings where several retrieval operations may need to be performed on the same piece of content,4 and the deployment of multiple task-specific models might not be possible due to space or computational performance concerns."
+    }, {
+      "heading" : "A Full retrieval results",
+      "text" : "The heatmap in Table 3 showed a full comparison of task-specific models to our multi-task model and the BM25 for the experiments of § 4.2. In order to aid in the interpretation of a very large set of results, the heatmap showed, for each task, the difference in R-precision to the respective task-specific model. Here, for full context, we also provide in Table 6 the full set of absolute R-precisions for the experiments of § 4.2."
+    }, {
+      "heading" : "B Model variants",
+      "text" : "We compare our base multi-task model with the two variants described in § 3.2. Due to the high memory consumption of the “task-specific encoders” variant (requiring one full query encoder per task family, in addition to the passage encoder), it was only possible to perform these evaluations in a restricted setting of three datasets. The results in Table 7 do not reveal a clear winner, suggesting that the base architecture might be the better choice due to its simplicity and generally good performance. Not included in this table and in any other experiments, due to very poor performance in preliminary evaluations, are two further variants: a base model with a single encoder for both queries and passages, and a base model trained from scratch without BERT pre-training."
+    }, {
+      "heading" : "C Task learning curve",
+      "text" : "One of the initial studies we conducted involved computing the learning curve of the multi-task model for each task, using the full validation metrics. This is particularly expensive, as it involves embedding the whole of Wikipedia for each evaluation, indexing it, and performing a full retrieval. Figure 4 shows this for one of our preliminary models, trained on six tasks (excluding the abnormally large T-REx and the outlier AY2). We note the unstable behaviour of zsRE, whose unusual nature was already remarked upon in §4.2."
+    }, {
+      "heading" : "D Adversarial confounder selection",
+      "text" : "We saw in § 2.1 how “hard” confounder passages are collected using a BM25 baseline, following the standard approach in DPR. However, any other retriever can be used to select such confounders, including the very retriever being trained, leading to an iterative, self-adversarial training. Concretely, this amounts to following steps: (1) a first version\nof the retriever is trained with BM25 confounders; (2) new confounders are selected with the trained model, by retrieving high-ranking passages which are not among the set of relevant ones; (3) a second version of the model is trained using the additional new confounders.\nIntuitively, it is expected that this approach should lead to higher quality confounders compared to those selected by BM25 based on simple keyword matching. Based on our own experience as well as relevant literature (Khattab et al., 2020), this adversarial approach has been shown to work well for question answering.\nAs a way of further pushing the performance of the model, we experiment with this adversarial confounder selection on two datasets, Natural Questions (Kwiatkowski et al., 2019) and TriviaQA (Joshi et al., 2017). We selected these two datasets since, out of all of the tasks we are considering, they have an easy way of checking whether a certain passage is relevant or not for a given query – namely, by checking whether the answer is present in the passage. This enabled us to automatically build sets of confounders, ensuring relevant passages would be excluded.5\nThe performance of this approach is reported in Table 8, showing an overall improvement across multiple tasks. While this approach is demonstrated here on our multi-task model, it is in fact orthogonal to it, and could be applied to any other neural retrievers trained with a contrastive loss.\n5Strictly speaking, assuming a passage to be irrelevant because of the absence of the answer span is not formally correct. However, experiments show a good correlation between this simple check and the overall model quality."
+    } ],
+    "references" : [ {
+      "title" : "Muppet: Massive multi-task representations with pre-finetuning",
+      "author" : [ "Armen Aghajanyan", "Anchit Gupta", "Akshat Shrivastava", "Xilun Chen", "Luke Zettlemoyer", "Sonal Gupta." ],
+      "venue" : "ArXiv, abs/2101.11038. 3https://github.com/facebookresearch/",
+      "citeRegEx" : "Aghajanyan et al\\.,? 2021",
+      "shortCiteRegEx" : "Aghajanyan et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Pre-training tasks for embedding-based large-scale retrieval",
+      "author" : [ "Wei-Cheng Chang", "Felix X. Yu", "Yin-Wen Chang", "Yiming Yang", "Sanjiv Kumar." ],
+      "venue" : "8th International Conference on Learning Representations, ICLR 2020, Addis Ababa, Ethiopia, April",
+      "citeRegEx" : "Chang et al\\.,? 2020",
+      "shortCiteRegEx" : "Chang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Reading Wikipedia to answer opendomain questions",
+      "author" : [ "Danqi Chen", "Adam Fisch", "Jason Weston", "Antoine Bordes." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1870–",
+      "citeRegEx" : "Chen et al\\.,? 2017",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Autoregressive entity retrieval",
+      "author" : [ "Nicola De Cao", "Gautier Izacard", "Sebastian Riedel", "Fabio Petroni." ],
+      "venue" : "ArXiv, abs/2010.00904.",
+      "citeRegEx" : "Cao et al\\.,? 2020",
+      "shortCiteRegEx" : "Cao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Indexing by latent semantic analysis",
+      "author" : [ "Scott Deerwester", "Susan T Dumais", "George W Furnas", "Thomas K Landauer", "Richard Harshman." ],
+      "venue" : "Journal of the American society for information science, 41(6):391–407.",
+      "citeRegEx" : "Deerwester et al\\.,? 1990",
+      "shortCiteRegEx" : "Deerwester et al\\.",
+      "year" : 1990
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "CERT: Contrastive self-supervised learning for language understanding",
+      "author" : [ "Hongchao Fang", "Sicheng Wang", "Meng Zhou", "Jiayuan Ding", "Pengtao Xie." ],
+      "venue" : "ArXiv, abs/2005.12766.",
+      "citeRegEx" : "Fang et al\\.,? 2020",
+      "shortCiteRegEx" : "Fang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Clickthrough-based latent semantic models for web search",
+      "author" : [ "Jianfeng Gao", "Kristina Toutanova", "Wen-tau Yih." ],
+      "venue" : "Proceeding of the 34th International ACM SIGIR Conference on Research and Development in Information Retrieval, SIGIR 2011,",
+      "citeRegEx" : "Gao et al\\.,? 2011",
+      "shortCiteRegEx" : "Gao et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "Quantization based fast inner product search",
+      "author" : [ "Ruiqi Guo", "Sanjiv Kumar", "Krzysztof Choromanski", "David Simcha." ],
+      "venue" : "Proceedings of the 19th International Conference on Artificial Intelligence and Statistics, AISTATS 2016, Cadiz, Spain, May 9-11, 2016,",
+      "citeRegEx" : "Guo et al\\.,? 2016",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Robust disambiguation of named entities in text",
+      "author" : [ "Johannes Hoffart", "Mohamed Amir Yosef", "Ilaria Bordino", "Hagen Fürstenau", "Manfred Pinkal", "Marc Spaniol", "Bilyana Taneva", "Stefan Thater", "Gerhard Weikum." ],
+      "venue" : "Proceedings of the 2011 Conference",
+      "citeRegEx" : "Hoffart et al\\.,? 2011",
+      "shortCiteRegEx" : "Hoffart et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "Learning deep structured semantic models for web search using clickthrough data",
+      "author" : [ "Po-Sen Huang", "Xiaodong He", "Jianfeng Gao", "Li Deng", "Alex Acero", "Larry P. Heck." ],
+      "venue" : "22nd ACM International Conference on Information and Knowledge Manage-",
+      "citeRegEx" : "Huang et al\\.,? 2013",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Billionscale similarity search with GPUs",
+      "author" : [ "J. Johnson", "M. Douze", "H. Jégou." ],
+      "venue" : "IEEE Transactions on Big Data.",
+      "citeRegEx" : "Johnson et al\\.,? 2019",
+      "shortCiteRegEx" : "Johnson et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "TriviaQA: A large scale distantly supervised challenge dataset for reading comprehension",
+      "author" : [ "Mandar Joshi", "Eunsol Choi", "Daniel Weld", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Joshi et al\\.,? 2017",
+      "shortCiteRegEx" : "Joshi et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Dense passage retrieval for open-domain question answering",
+      "author" : [ "Vladimir Karpukhin", "Barlas Oguz", "Sewon Min", "Patrick Lewis", "Ledell Wu", "Sergey Edunov", "Danqi Chen", "Wen-tau Yih." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Nat-",
+      "citeRegEx" : "Karpukhin et al\\.,? 2020",
+      "shortCiteRegEx" : "Karpukhin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Relevance-guided supervision for OpenQA with ColBERT",
+      "author" : [ "Omar Khattab", "Christopher Potts", "Matei Zaharia." ],
+      "venue" : "ArXiv, abs/2007.00814.",
+      "citeRegEx" : "Khattab et al\\.,? 2020",
+      "shortCiteRegEx" : "Khattab et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Colbert: Efficient and effective passage search via contextualized late interaction over BERT",
+      "author" : [ "Omar Khattab", "Matei Zaharia." ],
+      "venue" : "Proceedings of the 43rd International ACM SIGIR conference on research and development in Information Retrieval,",
+      "citeRegEx" : "Khattab and Zaharia.,? 2020",
+      "shortCiteRegEx" : "Khattab and Zaharia.",
+      "year" : 2020
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P. Kingma", "Jimmy Ba." ],
+      "venue" : "3rd International Conference on Learning Representations, ICLR 2015, San Diego, CA, USA, May 7-9, 2015, Conference Track Proceedings.",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "Natural questions: A benchmark for question answering research",
+      "author" : [ "Jakob Uszkoreit", "Quoc Le", "Slav Petrov." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 7:452–466.",
+      "citeRegEx" : "Uszkoreit et al\\.,? 2019",
+      "shortCiteRegEx" : "Uszkoreit et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Latent retrieval for weakly supervised open domain question answering",
+      "author" : [ "Kenton Lee", "Ming-Wei Chang", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 6086–6096, Florence,",
+      "citeRegEx" : "Lee et al\\.,? 2019",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Zero-shot relation extraction via reading comprehension",
+      "author" : [ "Omer Levy", "Minjoon Seo", "Eunsol Choi", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 21st Conference on Computational Natural Language Learning (CoNLL 2017), pages 333–342,",
+      "citeRegEx" : "Levy et al\\.,? 2017",
+      "shortCiteRegEx" : "Levy et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "2020a. BART: Denoising sequence-to-sequence pretraining for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Question and answer test-train overlap in open-domain question answering datasets",
+      "author" : [ "Patrick Lewis", "Pontus Stenetorp", "Sebastian Riedel." ],
+      "venue" : "Proceedings of the 16th Conference of the European Chapter of the Association for Computational Lin-",
+      "citeRegEx" : "Lewis et al\\.,? 2021",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "2020b. Retrieval-augmented generation",
+      "author" : [ "Patrick S.H. Lewis", "Ethan Perez", "Aleksandra Piktus", "Fabio Petroni", "Vladimir Karpukhin", "Naman Goyal", "Heinrich Küttler", "Mike Lewis", "Wen-tau Yih", "Tim Rocktäschel", "Sebastian Riedel", "Douwe Kiela" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Multi-task deep neural networks for natural language understanding",
+      "author" : [ "Xiaodong Liu", "Pengcheng He", "Weizhu Chen", "Jianfeng Gao." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 4487–",
+      "citeRegEx" : "Liu et al\\.,? 2019a",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Roberta: A robustly optimized bert pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "ArXiv, abs/1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019b",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Sparse, dense, and attentional representations for text retrieval",
+      "author" : [ "Yi Luan", "Jacob Eisenstein", "Kristina Toutanova", "Michael Collins." ],
+      "venue" : "ArXiv, abs/2005.00181.",
+      "citeRegEx" : "Luan et al\\.,? 2020",
+      "shortCiteRegEx" : "Luan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Introduction to information retrieval",
+      "author" : [ "Christopher D Manning", "Hinrich Schütze", "Prabhakar Raghavan." ],
+      "venue" : "Cambridge university press.",
+      "citeRegEx" : "Manning et al\\.,? 2008",
+      "shortCiteRegEx" : "Manning et al\\.",
+      "year" : 2008
+    }, {
+      "title" : "KILT: a benchmark for knowledge intensive language tasks",
+      "author" : [ "Fabio Petroni", "Aleksandra Piktus", "Angela Fan", "Patrick Lewis", "Majid Yazdani", "Nicola De Cao", "James Thorne", "Yacine Jernite", "Vassilis Plachouras", "Tim Rocktäschel", "Sebastian Riedel" ],
+      "venue" : null,
+      "citeRegEx" : "Petroni et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Petroni et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Language models as knowledge bases",
+      "author" : [ "Fabio Petroni", "Tim Rocktäschel", "Sebastian Riedel", "Patrick Lewis", "Anton Bakhtin", "Yuxiang Wu", "Alexander Miller" ],
+      "venue" : "In Proceedings of the 2019 Conference on Empirical Methods in Natural Language",
+      "citeRegEx" : "Petroni et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Petroni et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Exploring the limits of transfer learning with a unified text-totext transformer",
+      "author" : [ "Colin Raffel", "Noam Shazeer", "Adam Roberts", "Katherine Lee", "Sharan Narang", "Michael Matena", "Yanqi Zhou", "Wei Li", "Peter J. Liu." ],
+      "venue" : "Journal of Machine Learning Re-",
+      "citeRegEx" : "Raffel et al\\.,? 2020",
+      "shortCiteRegEx" : "Raffel et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "The probabilistic relevance framework: BM25 and beyond",
+      "author" : [ "Stephen Robertson", "Hugo Zaragoza." ],
+      "venue" : "Foundations and Trends in Information Retrieval, 3(4):333–389.",
+      "citeRegEx" : "Robertson and Zaragoza.,? 2009",
+      "shortCiteRegEx" : "Robertson and Zaragoza.",
+      "year" : 2009
+    }, {
+      "title" : "Asymmetric LSH (ALSH) for sublinear time maximum inner product search (MIPS)",
+      "author" : [ "Anshumali Shrivastava", "Ping Li." ],
+      "venue" : "Advances in Neural Information Processing Systems 27: Annual Conference on Neural Information Processing Sys-",
+      "citeRegEx" : "Shrivastava and Li.,? 2014",
+      "shortCiteRegEx" : "Shrivastava and Li.",
+      "year" : 2014
+    }, {
+      "title" : "FEVER: a large-scale dataset for fact extraction and VERification",
+      "author" : [ "James Thorne", "Andreas Vlachos", "Christos Christodoulopoulos", "Arpit Mittal." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Com-",
+      "citeRegEx" : "Thorne et al\\.,? 2018",
+      "shortCiteRegEx" : "Thorne et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "R3: Reinforced rankerreader for open-domain question answering",
+      "author" : [ "Shuohang Wang", "Mo Yu", "Xiaoxiao Guo", "Z. Wang", "Tim Klinger", "Wei Zhang", "S. Chang", "G. Tesauro", "Bowen Zhou", "Jing Jiang." ],
+      "venue" : "AAAI.",
+      "citeRegEx" : "Wang et al\\.,? 2018",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Multi-passage BERT: A globally normalized BERT model for open-domain question answering",
+      "author" : [ "Zhiguo Wang", "Patrick Ng", "Xiaofei Ma", "Ramesh Nallapati", "Bing Xiang." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Nat-",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Scalable zeroshot entity linking with dense entity retrieval",
+      "author" : [ "Ledell Wu", "Fabio Petroni", "Martin Josifoski", "Sebastian Riedel", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP),",
+      "citeRegEx" : "Wu et al\\.,? 2020",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Approximate nearest neighbor negative contrastive learning for dense text retrieval",
+      "author" : [ "Overwijk." ],
+      "venue" : "ArXiv, abs/2007.00808.",
+      "citeRegEx" : "Overwijk.,? 2020",
+      "shortCiteRegEx" : "Overwijk.",
+      "year" : 2020
+    }, {
+      "title" : "Learning discriminative projections for text similarity measures",
+      "author" : [ "Wen-tau Yih", "Kristina Toutanova", "John C. Platt", "Christopher Meek." ],
+      "venue" : "Proceedings of the Fifteenth Conference on Computational Natural Language Learning, pages 247–256, Port-",
+      "citeRegEx" : "Yih et al\\.,? 2011",
+      "shortCiteRegEx" : "Yih et al\\.",
+      "year" : 2011
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 27,
+      "context" : "because of their nature, require large amounts of knowledge about the world (Petroni et al., 2020).",
+      "startOffset" : 76,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 28,
+      "context" : "(1)While large pre-trained neural models have been shown to incorporate real-world knowledge in their parameters and thus may skip retrieval (Petroni et al., 2019), they still have limited capacity and suffer from a lack of explainability.",
+      "startOffset" : 141,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 33,
+      "context" : "The standard retrieval component in many systems (e.g., Thorne et al., 2018; Wang et al., 2018; Chen et al., 2017) has long relied on term-matching methods, such as tf-idf or BM25 (Robertson and Zaragoza, 2009).",
+      "startOffset" : 49,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 2,
+      "context" : "The standard retrieval component in many systems (e.g., Thorne et al., 2018; Wang et al., 2018; Chen et al., 2017) has long relied on term-matching methods, such as tf-idf or BM25 (Robertson and Zaragoza, 2009).",
+      "startOffset" : 49,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 30,
+      "context" : ", 2017) has long relied on term-matching methods, such as tf-idf or BM25 (Robertson and Zaragoza, 2009).",
+      "startOffset" : 73,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 18,
+      "context" : "In contrast, recent neural retrieval models, such as ICT (Lee et al., 2019), DPR (Karpukhin et al.",
+      "startOffset" : 57,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2019), DPR (Karpukhin et al., 2020) and RAG (Lewis et al.",
+      "startOffset" : 13,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 27,
+      "context" : "out-of-domain performance, and even lower performance on entirely different tasks (Petroni et al., 2020).",
+      "startOffset" : 82,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 30,
+      "context" : "Traditional IR methods, such as tf-idf and BM25 (Robertson and Zaragoza, 2009), match keywords efficiently with an inverted index.",
+      "startOffset" : 48,
+      "endOffset" : 78
+    }, {
+      "referenceID" : 37,
+      "context" : "Although dense representations do not encode tokens explicitly and can potentially map paraphrases of completely different tokens to close vectors, performance of early dense retrieval methods was often inferior to term-matching approaches, except when large labelled data is available (Yih et al., 2011; Gao et al., 2011; Huang et al., 2013).",
+      "startOffset" : 286,
+      "endOffset" : 342
+    }, {
+      "referenceID" : 7,
+      "context" : "Although dense representations do not encode tokens explicitly and can potentially map paraphrases of completely different tokens to close vectors, performance of early dense retrieval methods was often inferior to term-matching approaches, except when large labelled data is available (Yih et al., 2011; Gao et al., 2011; Huang et al., 2013).",
+      "startOffset" : 286,
+      "endOffset" : 342
+    }, {
+      "referenceID" : 10,
+      "context" : "Although dense representations do not encode tokens explicitly and can potentially map paraphrases of completely different tokens to close vectors, performance of early dense retrieval methods was often inferior to term-matching approaches, except when large labelled data is available (Yih et al., 2011; Gao et al., 2011; Huang et al., 2013).",
+      "startOffset" : 286,
+      "endOffset" : 342
+    }, {
+      "referenceID" : 5,
+      "context" : "Thanks to success of large pre-trained models (Devlin et al., 2019; Liu et al., 2019b), however, recent dense retrieval methods have shown to outperform the sparse counterparts, when fine-tuned on a small set of in-domain labelled data (Karpukhin et al.",
+      "startOffset" : 46,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 24,
+      "context" : "Thanks to success of large pre-trained models (Devlin et al., 2019; Liu et al., 2019b), however, recent dense retrieval methods have shown to outperform the sparse counterparts, when fine-tuned on a small set of in-domain labelled data (Karpukhin et al.",
+      "startOffset" : 46,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2019b), however, recent dense retrieval methods have shown to outperform the sparse counterparts, when fine-tuned on a small set of in-domain labelled data (Karpukhin et al., 2020; Lewis et al., 2020b; Xiong et al., 2020).",
+      "startOffset" : 158,
+      "endOffset" : 223
+    }, {
+      "referenceID" : 8,
+      "context" : "algorithms (e.g., Shrivastava and Li, 2014; Guo et al., 2016), as well as tools like FAISS (Johnson et al.",
+      "startOffset" : 11,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 11,
+      "context" : ", 2016), as well as tools like FAISS (Johnson et al., 2019).",
+      "startOffset" : 37,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 11,
+      "context" : "Therefore, DPR makes use of the FAISS library (Johnson et al., 2019) to perform fast approximate nearest neighbour search in sub-linear time.",
+      "startOffset" : 46,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 13,
+      "context" : "Figure 1: Training of DPR (Karpukhin et al., 2020), a bi-encoder model for open-domain question answering.",
+      "startOffset" : 26,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 27,
+      "context" : "For the training and evaluation of all models in the paper we make use of KILT, a benchmark and library of datasets (Petroni et al., 2020).",
+      "startOffset" : 116,
+      "endOffset" : 138
+    }, {
+      "referenceID" : 23,
+      "context" : "Multi-task training has been successfully used to allow models to leverage cross-task data, as well as to provide a regularisation effect leading to better generalisation ability (Liu et al., 2019a).",
+      "startOffset" : 179,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 27,
+      "context" : "datasets to passages in its own shared knowledge source (Petroni et al., 2020).",
+      "startOffset" : 56,
+      "endOffset" : 78
+    }, {
+      "referenceID" : 5,
+      "context" : "Encoders Our query and passage encoders are initialised as distinct BERT-base uncased encoders (Devlin et al., 2019), trained separately.",
+      "startOffset" : 95,
+      "endOffset" : 116
+    }, {
+      "referenceID" : 16,
+      "context" : "We optimise with Adam (Kingma and Ba, 2015) with a learning rate of 2 · 10−5, warmup, a linear decay schedule, and a dropout rate of 0.",
+      "startOffset" : 22,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 27,
+      "context" : "The results of the evaluations reported in (Petroni et al., 2020) show that retrievers trained for question answering have poor performance outside of",
+      "startOffset" : 43,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 19,
+      "context" : "We note that the one exception, the Zero-shot RE task (Levy et al., 2017), is a trivial task in which the query will always contain the title of the page to be retrieved.",
+      "startOffset" : 54,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 9,
+      "context" : "Another task which stands out for being markedly different in formulation is AIDAYAGO 2 (Hoffart et al., 2011).",
+      "startOffset" : 88,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 13,
+      "context" : "The approach most closely related to ours is DPR (Karpukhin et al., 2020), upon which we built all our retrievers.",
+      "startOffset" : 49,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 18,
+      "context" : "Inverse Cloze Task (Lee et al., 2019) and its extensions (Chang et al.",
+      "startOffset" : 19,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2019) and its extensions (Chang et al., 2020) are self-supervised pre-training methods designed for retrieval in open-domain question",
+      "startOffset" : 27,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 6,
+      "context" : "CERT (Fang et al., 2020) is an alternative pre-training approach, inspired by some recent advances in computer vision.",
+      "startOffset" : 5,
+      "endOffset" : 24
+    }, {
+      "referenceID" : 15,
+      "context" : "Of these, ColBERT (Khattab and Zaharia, 2020) and MEBERT (Luan et al.",
+      "startOffset" : 18,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 25,
+      "context" : "Of these, ColBERT (Khattab and Zaharia, 2020) and MEBERT (Luan et al., 2020) are two representative examples.",
+      "startOffset" : 57,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 14,
+      "context" : "One further approach is ColBERT-QA (Khattab et al., 2020), which additionally uses a data augmentation strategy closely related to our own approach described in Appendix D.",
+      "startOffset" : 35,
+      "endOffset" : 57
+    }, {
+      "referenceID" : 29,
+      "context" : "A model which demonstrates this ability is T5 (Raffel et al., 2020) – which we used as a baseline in § 4.",
+      "startOffset" : 46,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 35,
+      "context" : ", 2020) and BLINK (Wu et al., 2020), are worth mentioning.",
+      "startOffset" : 18,
+      "endOffset" : 35
+    } ],
+    "year" : 2021,
+    "abstractText" : "Retrieving relevant contexts from a large corpus is a crucial step for tasks such as opendomain question answering and fact checking. Although neural retrieval outperforms traditional methods like tf-idf and BM25, its performance degrades considerably when applied to out-of-domain data. Driven by the question of whether a neural retrieval model can be universal and perform robustly on a wide variety of problems, we propose a multi-task trained model. Our approach not only surpasses previous methods in the few-shot setting, but also rivals specialised neural retrievers, even when in-domain training data is abundant. With the help of our retriever, we improve existing models for downstream tasks and closely match or improve the state of the art on multiple benchmarks.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

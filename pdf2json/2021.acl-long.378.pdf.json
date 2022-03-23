@@ -1,0 +1,796 @@
+{
+  "name" : "2021.acl-long.378.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Parameter-Efficient Transfer Learning with Diff Pruning",
+    "authors" : [ "Demi Guo", "Alexander M. Rush", "Yoon Kim" ],
+    "emails" : [ "dguo@college.harvard.edu", "arush@cornell.edu", "yoonkim@mit.edu" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 4884–4896\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n4884"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Task-specific finetuning of pretrained deep networks is the dominant paradigm in contemporary NLP, achieving state-of-the-art results across a suite of natural language understanding tasks (Devlin et al., 2019; Liu et al., 2019c; Yang et al., 2019; Lan et al., 2020). While straightforward and empirically effective, this approach is difficult to scale to multi-task, memory-constrained settings (e.g. for on-device applications), as it requires shipping and storing a full set of model parameters for each task. Inasmuch as these models are learning generalizable, task-agnostic language representations through self-supervised pretraining, finetuning the entire model for each task seems especially profligate.\nCode: https://github.com/dguo98/DiffPruning\nA popular approach to parameter-efficiency is to learn smaller compressed models for each task (Gordon et al., 2020; Sajjad et al., 2020; Zhao et al., 2020; Sanh et al., 2020). Such approaches face a steep sparsity/performance tradeoff and keep a substantial amount of nonzero parameters per task (e.g. 10%-30%). Multi-task learning and featurebased transfer allow for more parameter-efficient transfer learning per task (Liu et al., 2019b; Clark et al., 2019; Stickland & Murray, 2019; Reimers & Gurevych, 2019). These methods train a small number of additional parameters (e.g. a linear layer) on top of a shared model. However, multi-task learning generally requires access to all tasks during training to prevent catastrophic forgetting (French, 1999), while feature-based transfer learning (e.g. based on task-agnostic sentence representations) is typically outperformed by finetuning (Howard & Ruder, 2018).\nAn appealing middle ground is to finetune an extension of the base model for specific tasks. This approach captures the training benefits of finetuning while maintaining the task modularity of feature-based transfer. For example, Adapters (Rebuffi et al., 2018) use smaller, task-specific modules that are inserted between layers of a model This approach does not require access to all tasks during training, targeting realistic settings where as new tasks arrive in stream (Houlsby et al., 2019; Pfeiffer et al., 2020a,b,c). Houlsby et al. (2019) find that adapter layers can match the performance of fully finetuned BERT on the GLUE benchmark while requiring 3.6% additional parameters (on average) per task.\nDiff pruning is a new extension to pretrained models with the goal of even more parameterefficient transfer learning. Instead of modifying the architecture of the model, diff pruning extends the base model through a task-specific difference vector.\nIn order to learn this vector, we reparameterize the task-specific model parameters as θtask = θpretrained + δtask, where the pretrained parameter vector θpretrained is fixed and the task-specific diff vector δtask is finetuned. The diff vector is regularized with a differentiable approximation to the L0-norm penalty (Louizos et al., 2018) to encourage sparsity.\nDiff pruning can become extremely parameterefficient, as it only requires storing the nonzero positions and weights of the diff vector for each task. The cost of storing the shared pretrained model remains constant and is amortized across multiple tasks. On the GLUE benchmark (Wang et al., 2019a), diff pruning can match the performance of the fully finetuned BERT baselines while finetuning only 0.5% of the pretrained parameters per task. As the number of tasks increase, diff pruning outperforms popular pruning-based methods in amount of storage required."
+    }, {
+      "heading" : "2 Background: Transfer Learning",
+      "text" : "Transfer learning in NLP mostly uses a pretrainand-finetune paradigm, which initializes a subset of the model parameters for all tasks from a pretrained model and then finetunes on a task-specific objective. Pretraining objectives include context prediction (Mikolov et al., 2013), autoencoding (Dai & Le, 2015), machine translation (McCann et al., 2017), and more recently, variants of language modeling (Peters et al., 2018; Radford et al., 2018; Devlin et al., 2019) objectives.\nHere we consider applying transfer learning to multiple tasks. We consider a setting with a potentially unknown set of tasks (which may arrive in stream), where each task τ ∈ T has an associated training set Dτ = {x(n)τ , y(n)τ }Nn=1. For all tasks, the goal is to produce (possibly tied) model parameters θτ to minimize the empirical risk,\nmin θτ\n1\nN N∑ n=1 C ( fτ (x (n) τ ;θτ ), y (n) τ ) + λR(θτ )\nwhere fτ (·;θτ ) is a parameterized function over the input (e.g. a neural network), C(·, ·) is a loss function (e.g. cross-entropy),1 and R(·) is an optional regularizer with hyperparameter λ.\nWe can use the pretrain-finetune approach by simply learning independent parameters for each\n1While the loss function can be in principle task-specific, in practice we use cross entropy for all tasks and hence omit the subscript in C(·, ·).\ntask. However, the large size of pretrained models makes this approach exceedingly parameter inefficient. For example, widely-adopted models such as BERTBASE and BERTLARGE have 110M and 340M parameters respectively, while their contemporaries have parameter counts in the billions (Raffel et al., 2020; Shoeybi et al., 2019; Rajbhandari et al., 2019). Storing the fully finetuned models therefore becomes difficult even for a moderate number of tasks.2 A classic approach to tackling this parameter-inefficiencyis to train a single shared model (along with a task-specific output layer) against multiple tasks through joint training (Caruana, 1997). However, the usual formulation of multi-task learning requires the set of tasks T to be known in advance in order to prevent catastrophic forgetting (French, 1999),3 making it unsuitable for applications in which the set of tasks is unknown or when tasks arrive in stream."
+    }, {
+      "heading" : "3 Diff Pruning",
+      "text" : "Diff pruning formulates task-specific finetuning as learning a diff vector δτ that is added to the pretrained model parameters θ, which remain fixed. We first reparameterize the task-specific model parameters,\nθτ = θ + δτ ,\nwhich results in the following empirical risk minimization problem,\nmin δτ\nL(Dτ , fτ ,θ + δτ ) + λR(θ + δτ ),\nwhere for brevity we define L(Dτ , fτ ,θτ ) as\nL(Dτ , fτ ,θτ ) = 1\nN N∑ n=1 C ( fτ (x (n) τ ;θτ ), y (n) τ ) .\nThis trivial reparameterization shows that the cost of storing the pretrained parameters θ is amortized across tasks, and the only marginal cost for new tasks is the diff vector. If we can regularize δτ to be sparse such that ‖δτ‖0 ‖θ‖0, then this approach can become more parameter-efficient as\n2An intriguing line of work suggests that large-scale language models can be used without finetuning for a variety of tasks if given the appropriate context (Radford et al., 2019; Brown et al., 2020). While interesting, these models generally underperform task-specific models and require billions of parameters, though recent work suggests that they can be made substantially smaller (Schick & Schutze, 2020).\n3However, work on continual learning mitigates these issues to an extent (Shin et al., 2017; Lopez-Paz & Ranzato, 2017; Lee et al., 2017; Kirkpatrick et al., 2017).\nthe number of tasks increases. We can specify this goal with an L0-norm penalty on the diff vector,\nR(θ + δτ ) = ‖δτ‖0 = d∑ i=1 1{δτ,i 6= 0}."
+    }, {
+      "heading" : "3.1 Differentiable approximation to the",
+      "text" : "L0-norm This regularizer is difficult to optimize as it is nondifferentiable. In order to approximate this L0 objective, we follow an approach for gradient-based learning with L0 sparsity using a relaxed mask vector (Louizos et al., 2018). This approach involves relaxing a binary vector into continuous space, and then multiplying it with a dense weight vector to determine how much of the weight vector is applied during training. After training, the mask is made deterministic, and a large portion of the diff vector is zero.4\nTo apply this method we first decompose δτ into a binary mask vector multiplied with a dense vector,\nδτ = zτ wτ , zτ ∈ {0, 1}d,wτ ∈ Rd.\nWe now lower bound the true objective and optimize an expectation with respect to zτ , whose distribution p(zτ ;ατ ) is initially Bernoulli with introduced parameters ατ ,\nmin ατ ,wτ\nEzτ∼p(zτ ;ατ ) [ L(Dτ , fτ ,θ + δτ ) + λ‖δτ‖0 ] .\nThis objective is still complicated by the discrete nature of zτ ’s, but the expectation provides some guidance for empirically effective relaxations. We follow prior work (Louizos et al., 2018; Wang et al., 2019b) and relax zτ into continuous space [0, 1]d with a stretched Hard-Concrete distribution (Jang et al., 2017; Maddison et al., 2017), which allows for the use of pathwise gradient estimators. Specifically, zτ is now defined to be a deterministic and (sub)differentiable function of a sample u from a uniform distribution,\nu ∼ U(0,1), sτ = σ (logu− log(1− u) + ατ ) , s̄τ = sτ × (r − l) + l, zτ = min(1,max(0, s̄τ )).\nHere l < 0 and r > 1 are two constants used to stretch sτ into the interval (l, r)d before it is\n4It is also possible to learn sparse diff vectors through other penalties such as the L1-norm. We chose to work with the relaxed L0-norm formulation as past work has shown that SGD-based optimization works well in this setting.\nclamped to [0, 1]d with the min(1,max(0, ·)) operation. In this case we have a differentiable closedform expression for the expected L0-norm,\nE [‖δτ‖0] = d∑ i=1 σ ( ατ,i − log −l r ) .\nThus the final optimization problem is given by,\nmin ατ ,wτ\nEu∼U [0,1] [L(Dτ , fτ ,θ + zτ wτ )]\n+λ d∑ i=1 σ ( ατ,i − log −l r ) ,\nand we can now utilize pathwise gradient estimators to optimize the first term with respect to ατ since the expectation no longer depends on it.5 After training we obtain the final diff vector δτ by sampling u once to obtain zτ (which is not necessarily a binary vector but has a significant number of dimensions equal to exactly zero due to the clamping function), then setting δτ = zτ wτ .6\n3.2 L0-ball projection with magnitude pruning for sparsity control\nDifferentiable L0 regularization allows us to achieve a high sparsity rate. However, it would be ideal to set an exact sparsity rate, especially considering applications which require parameter budgets. As the regularization coefficient λ is a Lagrangian multiplier for the constraint E [‖δτ‖0] < η for some η, this could be achieved in principle by searching over different values of λ. However we found it more efficient and empirically effective to achieve an exact sparsity rate by projecting onto a target L0-ball after training.\nSpecifically, we use magnitude pruning on the diff vector δτ and target a sparsity rate t% by only keeping the top t% × d values in δτ .7 Note that unlike standard magnitude pruning, this is based on the magnitude of the diff vector values and not the model parameters. We found it important to further finetune δτ with the nonzero masks fixed to maintain good performance, as is often the case\n5To reduce notation clutter we subsume the parameters of the task-specific output layer, which is not pretrained, into θ. We do not apply the L0-norm penalty on these parameters during training.\n6We found sampling once to work as well as other alternatives (e.g. based on multiple samples).\n7Wang et al. (2019b) show that it also is possible to inject such a constraint softly into the training objective by regularizing the expected model size towards a certain rate. However, since the constraint is soft this approach also makes it difficult to target an exact sparsity rate.\nin magnitude pruning (Han et al., 2016). Since this type of parameter-efficiency through projection onto the L0-ball can be applied without adaptive diff pruning,8 such an approach will serve as one of our baselines in the empirical study."
+    }, {
+      "heading" : "3.3 Structured Diff Pruning",
+      "text" : "To allow diff pruning to adapt to the model architecture, we consider a structured extension which incorporates dependence between dimensions. We hypothesize that this approach can allow the model to learn to modify parameters in local regions, as opposed to treating each parameter independently.\nWe modify the regularizer to first partition the parameter indices into G groups {g(1), . . . , g(G)} where g(j) is a subset of parameter indices governed by group g(j).9 We then introduce a scalar zjτ (with the associated parameter α j τ ) for each group g(j), and decompose the task-specific parameter for index i ∈ g(j) as δjτ,i = zτ,i · z j τ ·wτ,i. The expected L0-norm is then given by\nE [‖δτ‖0] = G∑ j=1 ∑ i∈g(j) E [1{zτ,i · zgτ > 0}]\n= G∑ j=1 ∑ i∈g(j) σ ( ατ,i − log −l r ) · σ ( αjτ − log −l r ) .\nWe can train with gradient-based optimization as before. Parameters in a group are encouraged by the regularizer to be removed jointly."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Model and datasets",
+      "text" : "For evaluation we use the GLUE benchmark (Wang et al., 2019b) as well as the SQuAD extractive question answering dataset (Rajpurkar et al., 2016). Following Adapters (Houlsby et al., 2019), we test our approach on the following subset of the GLUE tasks: Multi-Genre Natural Language Inference (MNLI), where the goal is two predict whether the relationship between two sentences is entailment, contradiction, or neutral (we test on both MNLIm and MNLImm which respectively tests on matched/mismatched domains); Quora Question Pairs (QQP), a classification task to predict whether two question are semantically equivalent; Question Natural Language Inference (QNLI), which\n8Concretely, one can obtain θτ through usual finetuning, set δτ = θτ − θ, and then apply magnitude pruning followed by additional finetuning on δτ .\n9While groups can be defined in various ways, we found that defining groups based on each matrix/bias vector of the pretrained model was simple and worked well enough.\nmust predict whether a sentence is a correct answer to the question; Stanford Sentiment Treebank (SST-2), a sentence classification task to predict the sentiment of movie reviews; Corpus of Linguistic Acceptability (CoLA), where the goal is predict whether a sentence is linguistically acceptable or not; Semantic Textual Similarity Benchmark (STSB), which must predict a similarity rating between two sentences; Microsoft Research Paraphrase Corpus (MRPC), where the goal is to predict whether two sentences are semantically equivalent; Recognizing Textual Entailment (RTE), which must predict whether a second sentence is entailed by the first. The benchmark uses Matthew’s correlation for CoLA, Spearman for STS-B, F1 score for MRPC/QQP, and accuracy for MNLI/QNLI/SST2/RTE.\nFor the main experiments and analysis, we use the BERTLARGE model from Devlin et al. (2019) to compare against the adapter-based approach of Houlsby et al. (2019). Our implementation is based on the Hugging Face Transformer library (Wolf et al., 2019)."
+    }, {
+      "heading" : "4.2 Baselines",
+      "text" : "We compare both structured and non-structured variants of diff pruning against the following baselines: Full finetuning, which fully finetunes BERTLARGE as usual; Last layer finetuning, which only finetunes the penultimate layer (along with the final output layer)10; Adapters from Houlsby et al. (2019), which train task-specific bottleneck layers between each layer of a pretrained model, where parameter-efficiency can be controlled by varying the size of the bottleneck layers; and Non-adaptive diff pruning, which performs diff pruning just based on magnitude pruning (i.e., we obtain θτ through usual finetuning, set δτ = θτ − θ, and then apply magnitude pruning followed by additional finetuning on δτ ). For diff pruning we set our target sparsity rate to 0.5% and investigate the effect of different target sparsity rates in section 6.1."
+    }, {
+      "heading" : "4.3 Implementation details and hyperparameters",
+      "text" : "Diff pruning introduces additional hyperparameters l, r (for stretching the Hard-Concrete distribution) and λ (for weighting the approximate L0norm penalty). We found l = −1.5, r = 1.5, λ = 1.25 × 10−7 to work well across all tasks. We\n10Wu et al. (2020) observe that finetuning later layers generally performs better than finetuning earlier layers\nalso initialize the weight vector wτ to 0, and ατ to a positive vector (we use 5) to encourage zτ to be close to 1 at the start of training.11 While we mainly experiment with BERT models to faciliate comparison against existing work, in preliminary experiments we found these hyperparameters to work for finetuning RoBERTa (Liu et al., 2019c) and XLNet (Yang et al., 2019) models as well.\nFor all tasks we initially train for 3 epochs and perform a hyperparameter search over batch size ∈ {5, 8, 12, 16} and learning rate ∈ {1×10−5, 2× 10−5, 5× 10−5}.12 Finetuning with the fixed mask after projecting onto the L0-ball with magnitude pruning is done for 3 epochs with a learning rate of 5× 10−5 for all datasets except for MRPC/STSB/RTE/SST-2 dataset, where we finetune for 5 epochs. The exact hyperparameters for each task are given in section A.1 of the appendix. Grouping for the structured version of diff pruning is based on the matrix/bias vectors (i.e. parameters that belong to the same matrix or bias vector are assumed to be in the same group), which results in 393 groups.13"
+    }, {
+      "heading" : "5 Results",
+      "text" : ""
+    }, {
+      "heading" : "5.1 Results on GLUE",
+      "text" : "Our main results on the GLUE benchmark are shown in Table 1. Structured diff pruning can match the performance of a fully finetuned BERTLARGE model while only requiring 0.5% ad-\n11These values were found via by a light hyperparameter search on the SST-2 validation set.\n12However we found the default settings used for regular finetuning as suggested in the original BERT paper to work well for most tasks.\n13This definition of groups is implementation-specific since it depends on how one concatenates the input vector before each affine layer. Our grouping is based on Hugging Face’s BERT implementation at commit 656e1386a296d696327a9db37de2ccccc79e2cc7. We found this simple definition to work well compared to alternative definitions (e.g. based on individual neurons).\nditional parameters per task. Diff pruning without structured sparsity also performs well, though slightly worse than the structured approach. Nonadaptive diff pruning, which magnitude prunes the diff vector without learning the binary mask zτ , performs significantly worse, indicating the importance of learning the masking vector. Compared to Adapters, diff pruning obtains similar performance while requiring many fewer parameters per task, making it a potential alternative for parameterefficient transfer learning.14"
+    }, {
+      "heading" : "5.2 Results on SQuAD",
+      "text" : "To demonstrate the effectiveness of our approach beyond the GLUE tasks, we additionally experiment on SQuAD (Rajpurkar et al., 2016), an extractive question answering dataset where the model has to select the answer span to a question given a Wikipedia paragraph. To make direct comparisons with Houlsby et al. (2019), we run all experiments on SQuAD v1.1. For diff pruning, we use the same general hyperparameters as our full finetuning baseline (see section A.1). As shown in Figure 1 (right), diff pruning is able achieve comparable or better performance with only 1.0% additional parameters. Interestingly, diff pruning measurably improves the upon the full finetuning baseline while modifying fewer parameters, which indicates that diff pruning can have a useful regularization effect on top of parameter-efficiency."
+    }, {
+      "heading" : "6 Analysis",
+      "text" : ""
+    }, {
+      "heading" : "6.1 Varying the target sparsity",
+      "text" : "In Figure 1 (left), we plot results on the GLUE validation set averaged across all tasks at target sparsity\n14Comparing storage costs is a bit more challenging as it is implementation-specific. Diff pruning incurs additional storage cost due to storing the nonzero positions of the diff vector. See section 6.6 for storage comparison against Adapters assuming float32 for weights and int32 for positions.\nrates of 0.1%, 0.25%, 0.5%, 1.0% for the different baselines. Structured diff pruning consistently outperforms non-structured and and non-adaptive variants across different sparsity rates. The advantage of adaptive methods becomes more pronounced at extreme sparsity rates. In Table 2, we report the breakdown of accuracy of structured diff pruning across different tasks and sparsity rates, where we observe that different tasks have different sensitivity to target sparsity rates. This suggests that we can obtain even greater parameter-efficiency through targeting task-specific sparsity rates in the diff vector."
+    }, {
+      "heading" : "6.2 Structured vs. Non-structured Diff Pruning",
+      "text" : "Structured diff pruning introduces an additional mask per group, which encourages pruning of entire groups. This is less restrictive than traditional group sparsity techniques that have been used with L0-norm relaxations, which force all parameters in a group to share the same mask (Louizos et al., 2018; Wang et al., 2019b). However we still expect entire groups to be pruned out more often, which might bias the learning process towards either eliminating completely or clustering together nonzero diffs. In Table 3, we indeed find that structured diff pruning leads to finetuned models that are much more likely to leave entire groups unchanged from their pretrained values (zero diffs)."
+    }, {
+      "heading" : "6.3 Task-specific Sparsity",
+      "text" : "Different layers of pretrained models have been argued to encode different information (Liu et al., 2019a; Tenney et al., 2019). Given that each task will likely recruit different kinds of language phenomena embedded in the hidden layers, we hypothesize that diff pruning will modify different parts of the pretrained model through task-specific finetuning. Figure 2 shows the percentage of nonzero diff parameters attributable to the different layers for each task. We find that different tasks indeed modify different parts of the network, although there are some qualitative similarities between some tasks, for example between QNLI & QQP (both must encode questions), and MRPC & STS-B (both must predict similarity between sentences). The embedding layer is very sparsely modified for all tasks. While some of the variations in the sparsity distributions is due to simple randomness, we do observe some level of consistency over multiple runs of the same task, as shown in section A.2 of the appendix.\nThe ability to modify different parts of the pretrained model for each task could explain the improved parameter-efficiency of our approach compared to Houlsby et al. (2019)’s Adapters, which can only read/write to the pretrained model at certain points of the computational graph.15 This po-\n15To simulate this restricted setting, we tried applying diff pruning only on the fully-connected layers after the selfattention layers, and observed much worse performance.\ntentially suggests that Adapters with more finegrained access into model internals (e.g. Adapters for key/value/query transformations) might result in even greater parameter-efficiency. While left as future work, we also note that diff pruning can be applied in conjunction with Adapters, which might further improve results.\n6.4 Effect of L0-ball projection Applying magnitude pruning to project onto the L0ball was crucial in achieving exact sparsity targets. As shown in Table 4, we observed little loss in performance through this approach. We reiterate that it was crucial to finetune with a fixed mask, even for the approach which does not apply magnitude pruning.16"
+    }, {
+      "heading" : "6.5 Comparison against BERT compression",
+      "text" : "Direct BERT compression methods also provide a straightforward approach to parameter-efficient transfer learning. Here we compare diff pruning against existing BERT compression methods, in particular DistilBERT (Sanh et al., 2019), MobileBERT (Sun et al., 2020b) and TinyBERT (Jiao et al., 2020). In these experiments we apply diff pruning on the smaller BERTBASE model as these works typically utilize BERTBASE as the baseline. As shown in Table 5, we observe that diff pruning is more parameter-efficient when considering all GLUE tasks while maintaining better performance. Of course, BERT compression methods typically have faster inference time (e.g. TinyBERT4 is 9.4× faster that BERTBASE). However we note that diff\n16Without fixed-mask finetuning, GLUE performance decreases from 84.9 to 81.4.\npruning can be applied on these methods, which may further improve parameter-efficiency while maintaining fast inference."
+    }, {
+      "heading" : "6.6 Storage cost",
+      "text" : "Finally, Table 6 shows the actual memory requirements for diff pruning compared to Adapters for a Python implementation. While diff pruning requires storing positions in addition to the weights (unlike Adapters which can just store the weights), diff pruning is still more storage-efficient due to the greater parameter-efficiency."
+    }, {
+      "heading" : "6.7 Discussion and caveats",
+      "text" : "For training, our approach requires more memory than usual finetuning due to additionally optimizing ατ and wτ . Since the majority of GPU memory is typically utilized by a minibatch’s intermediate layers, this did not present a significant challenge for pretrained models that we experimented with in this study. However, this could present an issue as model sizes get larger and larger. After training, storing the task-specific diff vector requires storing a compressed version with both the nonzero positions and weights, which incurs additional storage requirements. Finally, while training efficiency was not a primary concern of this work, diff pruning was also approximately 1.5× to 2× slower to train per minibatch than regular finetuning."
+    }, {
+      "heading" : "7 Related Work",
+      "text" : "Multi-task learning Multi-task learning (Caruana, 1997), broadly construed, aims to learn models and representations that can be utilized across a diverse range of tasks, and offers a natural approach\nto training parameter-efficient deep models. Several works have shown that a single BERT model can obtain good performance across multiple tasks when jointly trained (Liu et al., 2019b; Clark et al., 2019; Stickland & Murray, 2019). An alternative approach to multi-task learning that does not require access to all tasks during training involve training smaller task-specific layers that interact with a fixed pretrained model (Rebuffi et al., 2018; Zhang et al., 2020a). In particular, Adapters (Rebuffi et al., 2018), which learn to read and write to layers of a shared model, have been applied to obtain parameter-efficient BERT models (Houlsby et al., 2019; Pfeiffer et al., 2020a,b,c). In recent work, Li & Liang (2021) and Qin & Eisner (2021) explore the use of learned prompts on top of pretrained models to obtain task-specific models. Yet another line of work targets extreme parameterefficiency through task-agnostic sentence representations that can be used without finetuning for downstream tasks (Le & Mikolov, 2014; Kiros et al., 2015; Wieting et al., 2016; Hill et al., 2016; Arora et al., 2017; Conneau et al., 2017; Cer et al., 2018; Zhang et al., 2018; Subramanian et al., 2018;\nReimers & Gurevych, 2019; Zhang et al., 2020b). These feature-based transfer learning methods are however generally outperformed by fully finetuned models (Howard & Ruder, 2018).\nModel compression There has been much recent work on compressing pretrained trained with selfsupervision (see (Ganesh et al., 2020) for a recent survey). A particularly promising line of work focuses on obtaining smaller pretrained models (for subsequent finetuning) through weight pruning (Gordon et al., 2020; Sajjad et al., 2020; Chen et al., 2020) and/or knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Turc et al., 2019; Jiao et al., 2020; Sun et al., 2020b). It would be interesting to see whether our approach can be applied on top of these smaller pretrained models to for even greater parameter-efficiency.\nLearning to mask Our work is closely related to the line of work on learning to mask parts of deep networks with differentiable relaxations of binary masks for model pruning and parameter sharing (Wang et al., 2019b; Zhao et al., 2020; Sanh et al., 2020; Radiya-Dixit & Wang, 2020; Mallya et al., 2018; Guo et al., 2019; Sun et al., 2020a; Cao et al., 2021). While these works also enable parameterefficient transfer learning, they generally apply the masks directly on the pretrained parameters instead of on the difference vector as in the present work. Regularization towards pretrained models Finally, diff pruning is also related to works which regularize the learning process towards pre-\ntrained/shared models for continual learning (Rusu et al., 2016; Kirkpatrick et al., 2017; Schwarz et al., 2018), domain adaptation (Wiese et al., 2017; Miceli Barone et al., 2017), and stable finetuning (Lee et al., 2020). These works typically do not utilize sparse regularizers and target a different goal than parameter-efficiency."
+    }, {
+      "heading" : "8 Conclusion",
+      "text" : "We propose diff pruning as a simple approach for parameter-efficient transfer learning with pretrained models. Experiments on standard NLP benchmarks and models show that diff pruning can match the performance of fully finetuned baselines while requiring only a few additional parameters per task, and can sometimes have a regularization effect and improve upon regular finetuning. We also propose a structured variant of diff pruning which provides further improvements. Avenues for future work include (i) injecting parameter-efficiency objectives directly into the pretraining process (to pretrain models that are better suited towards sparse transfer learning), and (ii) combining diff pruning with other techniques (e.g. adapters, model compression) to achieve even greater parameter-efficiency."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "The authors would like to thank the anonymous reviewers for their valuable feedback on the initial draft. AMR was supported by NSF 1704834 and NSF Career 2037519."
+    }, {
+      "heading" : "A Appendix",
+      "text" : "A.1 Hyperparameters Table 7 shows hyperparameters we used for training GLUE tasks. For SQuAD v1.1 experiments, we ran distributed training across 8 GPUs, and used per gpu batch size 3, maximum sequence length 384, document stride 128, learning rate 3× 10−5, number of initial training epochs 2 and number of finetuning epochs 2.\nA.2 Consistency of Nonzero Parameters Figure 3 shows the percentage of modified parameters attributable to each layer across 5 runs of SST-2. We find that there is nonotrivial variation in sparsity across runs, but also a degree of consistency. For example, the first layer is modified considerably more than other layers across all runs."
+    } ],
+    "references" : [ {
+      "title" : "A Simple but Tough-to-Beat Baseline for Sentence Embeddings",
+      "author" : [ "Sanjeev Arora", "Yingyu Liang", "Tengyu Ma" ],
+      "venue" : "Proceedings of ICLR,",
+      "citeRegEx" : "Arora et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Arora et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Low-Complexity Probing via Finding Subnetworks",
+      "author" : [ "Steven Cao", "Victor Sanh", "Alexander M. Rush" ],
+      "venue" : "In Proceedings of NAACL,",
+      "citeRegEx" : "Cao et al\\.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Cao et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Multitask Learning",
+      "author" : [ "Rich Caruana" ],
+      "venue" : "Machine Learning,",
+      "citeRegEx" : "Caruana.,? \\Q1997\\E",
+      "shortCiteRegEx" : "Caruana.",
+      "year" : 1997
+    }, {
+      "title" : "The Lottery Ticket Hypothesis for Pretrained",
+      "author" : [ "Tianlong Chen", "Jonathan Frankle", "Shiyu Chang", "Sijia Liu", "Yang Zhang", "Zhangyang Wang", "Michael Carbin" ],
+      "venue" : "BERT Networks",
+      "citeRegEx" : "Chen et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BAM! Born-Again Multi-Task Networks for Natural Language Understanding",
+      "author" : [ "Kevin Clark", "Minh-Thang Luong", "Urvashi Khandelwal", "Christopher D. Manning", "Quoc V. Le" ],
+      "venue" : "In Proceedings of ACL,",
+      "citeRegEx" : "Clark et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Clark et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Supervised Learning of Universal Sentence Representations from Natural Language Inference Data",
+      "author" : [ "Alexis Conneau", "Douwe Kiela", "Holger Schwenk", "Loic Barrault", "Antoine Bordes" ],
+      "venue" : "In Proceedings of EMNLP,",
+      "citeRegEx" : "Conneau et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Semi-Supervised Sequence Learning",
+      "author" : [ "Andrew Dai", "Quoc V. Le" ],
+      "venue" : "In Proceedings of NIPS,",
+      "citeRegEx" : "Dai and Le.,? \\Q2015\\E",
+      "shortCiteRegEx" : "Dai and Le.",
+      "year" : 2015
+    }, {
+      "title" : "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova" ],
+      "venue" : "In Proceedings of NAACL,",
+      "citeRegEx" : "Devlin et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Catastrophic forgetting in connectionist networks",
+      "author" : [ "Robert French" ],
+      "venue" : "Trends in cognitive sciences,",
+      "citeRegEx" : "French.,? \\Q1999\\E",
+      "shortCiteRegEx" : "French.",
+      "year" : 1999
+    }, {
+      "title" : "Compressing Large-Scale Transformer-Based Models: A Case Study on BERT",
+      "author" : [ "Prakhar Ganesh", "Yao Chen", "Xin Lou", "Mohammad Ali Khan", "Yin Yang", "Deming Chen", "Marianne Winslett", "Hassan Sajjad", "Preslav Nakov" ],
+      "venue" : null,
+      "citeRegEx" : "Ganesh et al\\.,? \\Q2002\\E",
+      "shortCiteRegEx" : "Ganesh et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Compressing BERT: Studying the Effects of Weight Pruning on Transfer Learning",
+      "author" : [ "Mitchell A. Gordon", "Kevin Duh", "Nicholas Andrews" ],
+      "venue" : "In Proceedings of Rep4NLP",
+      "citeRegEx" : "Gordon et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Gordon et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "SpotTune: Transfer Learning Through Adaptive FineTuning",
+      "author" : [ "Yunhui Guo", "Honghui Shi", "Abhishek Kumar", "Kristen Grauman", "Tajana Rosing", "Rogerio Feris" ],
+      "venue" : "In Proceedings of CVPR,",
+      "citeRegEx" : "Guo et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Deep Compression: Compressing Deep Neural Networks with Pruning, Trained Quantization and Huffman Coding",
+      "author" : [ "Song Han", "Huizi Mao", "William J. Dally" ],
+      "venue" : "In Proceedings of ICLR,",
+      "citeRegEx" : "Han et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Han et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Learning distributed representations of sentences from unlabelled data",
+      "author" : [ "Felix Hill", "Kyunghyun Cho", "Anna Korhonen" ],
+      "venue" : "In Proceedings of ACL,",
+      "citeRegEx" : "Hill et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Hill et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Parameter-efficient transfer learning for nlp",
+      "author" : [ "Neil Houlsby", "Andrei Giurgiu", "Stanislaw Jastrzebski", "Bruna Morrone", "Quentin de Laroussilhe", "Andrea Gesmundo", "Mona Attariyanand Sylvain Gelly" ],
+      "venue" : "In Proceedings of ICML,",
+      "citeRegEx" : "Houlsby et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Houlsby et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Universal Language Model Fine-tuning for Text Classification",
+      "author" : [ "Jeremy Howard", "Sebastian Ruder" ],
+      "venue" : "In Proceedings of ACL,",
+      "citeRegEx" : "Howard and Ruder.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Howard and Ruder.",
+      "year" : 2018
+    }, {
+      "title" : "Categorical Reparameterization with Gumbel-Softmax",
+      "author" : [ "Eric Jang", "Shixiang Gu", "Ben Poole" ],
+      "venue" : "In Proceedings of ICLR,",
+      "citeRegEx" : "Jang et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Jang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "TinyBERT: Distilling BERT for Natural Language Understanding",
+      "author" : [ "Xiaoqi Jiao", "Yichun Yin", "Lifeng Shang", "Xin Jiang", "Xiao Chen", "Linlin Li", "Fang Wang", "Qun Liu" ],
+      "venue" : "In Proceedings of EMNLP (Findings),",
+      "citeRegEx" : "Jiao et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Jiao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Skip-Thought Vectors",
+      "author" : [ "Ryan Kiros", "Yukun Zhu", "Ruslan Salakhutdinov", "Richard S. Zemel", "Antonio Torralba", "Raquel Urtasun", "Sanja Fidler" ],
+      "venue" : "In Proceedings of NeurIPS,",
+      "citeRegEx" : "Kiros et al\\.,? \\Q2015\\E",
+      "shortCiteRegEx" : "Kiros et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "ALBERT: A Lite BERT for Self-supervised Learning of Language Representations",
+      "author" : [ "Zhenzhong Lan", "Mingda Chen", "Sebastian Goodman", "Kevin Gimpel", "Piyush Sharma", "Radu Soricut" ],
+      "venue" : "In Proceedings of ICLR,",
+      "citeRegEx" : "Lan et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Distributed Representations of Sentences and Documents",
+      "author" : [ "Quoc V. Le", "Tomas Mikolov" ],
+      "venue" : "In Proceedings of ICML,",
+      "citeRegEx" : "Le and Mikolov.,? \\Q2014\\E",
+      "shortCiteRegEx" : "Le and Mikolov.",
+      "year" : 2014
+    }, {
+      "title" : "Mixout: Effective Regularization to Finetune Largescale Pretrained Language Models",
+      "author" : [ "Cheolhyoung Lee", "Kyunghyun Cho", "Wanmo Kang" ],
+      "venue" : "In Proceedings of ICLR,",
+      "citeRegEx" : "Lee et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Overcoming catastrophic forgetting by incremental moment matching",
+      "author" : [ "Sang-Woo Lee", "Jin-Hwa Kim", "Jaehyun Jun", "Jung-Woo Ha", "Byoung-Tak Zhang" ],
+      "venue" : "In Advances in Neural Information Processing Systems",
+      "citeRegEx" : "Lee et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Prefix-Tuning: Optimizing Continuous Prompts for Generation",
+      "author" : [ "Xiang Lisa Li", "Percy Liang" ],
+      "venue" : null,
+      "citeRegEx" : "Li and Liang.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Li and Liang.",
+      "year" : 2021
+    }, {
+      "title" : "Linguistic Knowledge and Transferability of Contextual Representations",
+      "author" : [ "Nelson F. Liu", "Matt Gardner", "Yonatan Belinkov", "Matthew E. Peters", "Noah A. Smith" ],
+      "venue" : "In Proceedings of ACL,",
+      "citeRegEx" : "Liu et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Multi-Task Deep Neural Networks for Natural Language Understanding",
+      "author" : [ "Xiaodong Liu", "Pengcheng He", "Weizhu Chen", "Jianfeng Gao" ],
+      "venue" : "In Proceedings of ACL,",
+      "citeRegEx" : "Liu et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Gradient Episodic Memory for Continual Learning",
+      "author" : [ "David Lopez-Paz", "Marc’Aurelio Ranzato" ],
+      "venue" : "In Proceedings of NeurIPS,",
+      "citeRegEx" : "Lopez.Paz and Ranzato.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Lopez.Paz and Ranzato.",
+      "year" : 2017
+    }, {
+      "title" : "Learning Sparse Neural Networks through L0 Regularization",
+      "author" : [ "Christos Louizos", "Max Welling", "Diederik P", "Kingma" ],
+      "venue" : "In Proceedings of ICLR,",
+      "citeRegEx" : "Louizos et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Louizos et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Piggyback: Adapting a Single Network to Multiple Tasks by Learning to Mask Weights",
+      "author" : [ "Arun Mallya", "Dillon Davis", "Svetlana Lazebnik" ],
+      "venue" : "In Proceedings of ECCV,",
+      "citeRegEx" : "Mallya et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Mallya et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Learned in translation: Contextualized word vectors",
+      "author" : [ "Bryan McCann", "James Bradbury", "Caiming Xiong", "Richard Socher" ],
+      "venue" : "In Proceedings of NeurIPS",
+      "citeRegEx" : "McCann et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "McCann et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Regularization techniques for fine-tuning in neural machine translation",
+      "author" : [ "Antonio Valerio Miceli Barone", "Barry Haddow", "Ulrich Germann", "Rico Sennrich" ],
+      "venue" : "In Proceedings of EMNLP,",
+      "citeRegEx" : "Barone et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Barone et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Efficient Estimation of Word Representations in Vector Space",
+      "author" : [ "Tomas Mikolov", "Kai Chen", "Greg Corrado", "Jeffrey Dean" ],
+      "venue" : null,
+      "citeRegEx" : "Mikolov et al\\.,? \\Q2013\\E",
+      "shortCiteRegEx" : "Mikolov et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Deep Contextualized Word Representations",
+      "author" : [ "Matthew Peters", "Mark Neumann", "Mohit Iyyer", "Matt Gardner", "Christopher Clark", "Kenton Lee", "Luke Zettlemoyer" ],
+      "venue" : "In Proceedings of NAACL,",
+      "citeRegEx" : "Peters et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Peters et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "AdapterFusion: Non-Destructive Task Composition for Transfer Learning",
+      "author" : [ "Jonas Pfeiffer", "Aishwarya Kamath", "Andreas Ruckle", "Kyunghyun Cho amd Iryna Gurevych" ],
+      "venue" : null,
+      "citeRegEx" : "Pfeiffer et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Pfeiffer et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "AdapterHub: A Framework for Adapting Transformers",
+      "author" : [ "Jonas Pfeiffer", "Andreas Ruckle", "Clifton Poth", "Aishwarya Kamath", "Ivan Vulic", "Sebastian Ruder", "Iryna Gurevych Kyunghyun Cho" ],
+      "venue" : null,
+      "citeRegEx" : "Pfeiffer et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Pfeiffer et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "MAD-X: An Adapter-based Framework for Multi-task Cross-lingual Transfer",
+      "author" : [ "Jonas Pfeiffer", "Ivan Vulic", "Iryna Gurevych", "Sebastian Ruder" ],
+      "venue" : null,
+      "citeRegEx" : "Pfeiffer et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Pfeiffer et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Learning How to Ask: Querying LMs with Mixtures of Soft Prompts",
+      "author" : [ "Guanghui Qin", "Jason Eisner" ],
+      "venue" : "In Proceedings of NAACL,",
+      "citeRegEx" : "Qin and Eisner.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Qin and Eisner.",
+      "year" : 2021
+    }, {
+      "title" : "Improving language understanding by generative pre-training",
+      "author" : [ "Alec Radford", "Karthik Narasimhan", "Tim Salimans", "Ilya Sutskever" ],
+      "venue" : null,
+      "citeRegEx" : "Radford et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Language Models are Unsupervised Multitask Learners",
+      "author" : [ "Alec Radford", "Jeff Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever" ],
+      "venue" : null,
+      "citeRegEx" : "Radford et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "How fine can finetuning be? Learning efficient language models",
+      "author" : [ "Evani Radiya-Dixit", "Xin Wang" ],
+      "venue" : "In Proceedings of AISTATS,",
+      "citeRegEx" : "Radiya.Dixit and Wang.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Radiya.Dixit and Wang.",
+      "year" : 2020
+    }, {
+      "title" : "ZeRO: Memory Optimizations Toward Training Trillion",
+      "author" : [ "Samyam Rajbhandari", "Jeff Rasley", "Olatunji Ruwase", "Yuxiong He" ],
+      "venue" : "Parameter Models",
+      "citeRegEx" : "Rajbhandari et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Rajbhandari et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "SQuAD: 100,000+ questions for machine comprehension of text",
+      "author" : [ "Pranav Rajpurkar", "Jian Zhang", "Konstantin Lopyrev", "Percy Liang" ],
+      "venue" : "In Proceedings of EMNLP,",
+      "citeRegEx" : "Rajpurkar et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Rajpurkar et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Efficient Parametrization of Multi-domain Deep Neural Networks",
+      "author" : [ "S. Rebuffi", "A. Vedaldi", "H. Bilen" ],
+      "venue" : "In Proceedings of CVPR,",
+      "citeRegEx" : "Rebuffi et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Rebuffi et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "SentenceBERT: Sentence Embeddings using Siamese BERTNetworks",
+      "author" : [ "Nils Reimers", "Iryna Gurevych" ],
+      "venue" : "In Proceedings of EMNLP,",
+      "citeRegEx" : "Reimers and Gurevych.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Reimers and Gurevych.",
+      "year" : 2019
+    }, {
+      "title" : "DistilBERT, a distilled version of BERT: smaller, faster, cheaper and lighter",
+      "author" : [ "Victor Sanh", "Lysandre Debut", "Julien Chaumond", "Thomas Wolf" ],
+      "venue" : "In Proceedings of 5th Workshop on Energy Efficient Machine Learning and Cognitive Computing,",
+      "citeRegEx" : "Sanh et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Sanh et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Movement Pruning: Adaptive Sparsity by FineTuning",
+      "author" : [ "Victor Sanh", "Thomas Wolf", "Alexander M. Rush" ],
+      "venue" : null,
+      "citeRegEx" : "Sanh et al\\.,? \\Q2005\\E",
+      "shortCiteRegEx" : "Sanh et al\\.",
+      "year" : 2005
+    }, {
+      "title" : "It’s Not Just Size That Matters: Small Language Models Are Also Few-Shot Learners",
+      "author" : [ "Timo Schick", "Hinrich Schutze" ],
+      "venue" : null,
+      "citeRegEx" : "Schick and Schutze.,? \\Q2009\\E",
+      "shortCiteRegEx" : "Schick and Schutze.",
+      "year" : 2009
+    }, {
+      "title" : "Progress & Compress: A scalable framework for continual learning",
+      "author" : [ "Jonathan Schwarz", "Jelena Luketina", "Wojciech M. Czarnecki", "Agnieszka Grabska-Barwinska", "Yee Whye Teh", "Razvan Pascanu", "Raia Hadsell" ],
+      "venue" : "In Proceedings of ICML,",
+      "citeRegEx" : "Schwarz et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Schwarz et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Continual Learning with Deep Generative Replay",
+      "author" : [ "Hanul Shin", "Jung Kwon Lee", "Jaehong Kim", "Jiwon Kim" ],
+      "venue" : "In Proceedings of NeurIPS",
+      "citeRegEx" : "Shin et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Shin et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism",
+      "author" : [ "Mohammad Shoeybi", "Mostofa Patwary", "Raul Puri", "Patrick LeGresley", "Jared Casper", "Bryan Catanzaro" ],
+      "venue" : null,
+      "citeRegEx" : "Shoeybi et al\\.,? \\Q1909\\E",
+      "shortCiteRegEx" : "Shoeybi et al\\.",
+      "year" : 1909
+    }, {
+      "title" : "BERT and PALs: Projected attention layers for efficient adaptation in multi-task learning",
+      "author" : [ "Asa Cooper Stickland", "Iain Murray" ],
+      "venue" : "In Proceedings of ICML,",
+      "citeRegEx" : "Stickland and Murray.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Stickland and Murray.",
+      "year" : 2019
+    }, {
+      "title" : "Learning General Purpose Distributed Sentence Representations via Large Scale Multi-task Learning",
+      "author" : [ "Sandeep Subramanian", "Adam Trischler", "Yoshua Bengio", "Christopher J. Pal" ],
+      "venue" : "In Proceedings of ICLR,",
+      "citeRegEx" : "Subramanian et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Subramanian et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Patient Knowledge Distillation for BERT Model Compression",
+      "author" : [ "Siqi Sun", "Yu Cheng", "Zhe Gan", "Jingjing Liu" ],
+      "venue" : "In Proceedings of EMNLP,",
+      "citeRegEx" : "Sun et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "AdaShare: Learning What To Share For Efficient Deep Multi-Task Learning",
+      "author" : [ "Ximeng Sun", "Rameswar Panda", "Rogerio Feris" ],
+      "venue" : "In Proceedings of NeurIPS,",
+      "citeRegEx" : "Sun et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "MobileBERT: a compact task-agnostic BERT for resource-limited devices",
+      "author" : [ "Zhiqing Sun", "Hongkun Yu", "Xiaodan Song", "Renjie Liu", "Yiming Yang", "Denny Zhou" ],
+      "venue" : "In Proceedings of ACL, July 2020b",
+      "citeRegEx" : "Sun et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BERT Rediscovers the Classical NLP Pipeline",
+      "author" : [ "Ian Tenney", "Dipanjan Das", "Ellie Pavlick" ],
+      "venue" : "In Proceedings of ACL,",
+      "citeRegEx" : "Tenney et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Tenney et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Well-Read Students Learn Better: On the Importance of Pre-training",
+      "author" : [ "Iulia Turc", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova" ],
+      "venue" : "Compact Models",
+      "citeRegEx" : "Turc et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Turc et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "GLUE: A multi-task benchmark and analysis platform for natural language understanding",
+      "author" : [ "Alex Wang", "Amanpreet Singh", "Julian Michael", "Felix Hill", "Omer Levy", "Samuel Bowman" ],
+      "venue" : "In Proceedings of ICLR,",
+      "citeRegEx" : "Wang et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Neural domain adaptation for biomedical question answering",
+      "author" : [ "Georg Wiese", "Dirk Weissenborn", "Mariana Neves" ],
+      "venue" : "In Proceedings of CoNLL,",
+      "citeRegEx" : "Wiese et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Wiese et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Towards Universal Paraphrastic Sentence Embeddings",
+      "author" : [ "John Wieting", "Mohit Bansal", "Kevin Gimpel", "Karen Livescu" ],
+      "venue" : "In Proceedings of ICLR,",
+      "citeRegEx" : "Wieting et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Wieting et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Huggingface’s transformers: State-of-the-art natural language",
+      "author" : [ "Teven Le Scao", "Sylvain Gugger", "Mariama Drame", "Quentin Lhoest", "Alexander M. Rush" ],
+      "venue" : "processing. ArXiv,",
+      "citeRegEx" : "Scao et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Scao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Similarity Analysis of Contextual Word Representation Models",
+      "author" : [ "John M. Wu", "Yonatan Belinkov", "Hassan Sajjad", "Nadir Durrani", "Fahim Dalvi", "James Glass" ],
+      "venue" : "In Proceedings of ACL,",
+      "citeRegEx" : "Wu et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "XLNet: Generalized Autoregressive Pretraining for Language Understanding",
+      "author" : [ "Zhilin Yang", "Zihang Dai", "Yiming Yang", "Jaime Carbonell", "Russ R Salakhutdinov", "Quoc V Le" ],
+      "venue" : "In Proceedings of NeurIPS,",
+      "citeRegEx" : "Yang et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Side-Tuning: A Baseline for Network Adaptation via Additive Side Networks",
+      "author" : [ "Jeffrey O Zhang", "Alexander Sax", "Amir Zamir", "Leonidas Guibas", "Jitendra Malik" ],
+      "venue" : "In Proceedings of ECCV,",
+      "citeRegEx" : "Zhang et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Learning universal sentence representations with mean-max attention autoencoder",
+      "author" : [ "Minghua Zhang", "Yunfang Wu", "Weikang Li", "Wei Li" ],
+      "venue" : "In Proceedings of EMNLP,",
+      "citeRegEx" : "Zhang et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "An Unsupervised Sentence Embedding Method byMutual Information Maximization",
+      "author" : [ "Yan Zhang", "Ruidan He", "Zuozhu Liu", "Kwan Hui Lim", "Lidong Bing" ],
+      "venue" : "In Proceedings of EMNLP,",
+      "citeRegEx" : "Zhang et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Masking as an Efficient Alternative to Finetuning for Pretrained Language Models",
+      "author" : [ "Mengjie Zhao", "Tao Lin", "Martin Jaggi", "Hinrich Schutze" ],
+      "venue" : null,
+      "citeRegEx" : "Zhao et al\\.,? \\Q2004\\E",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2004
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 7,
+      "context" : "Task-specific finetuning of pretrained deep networks is the dominant paradigm in contemporary NLP, achieving state-of-the-art results across a suite of natural language understanding tasks (Devlin et al., 2019; Liu et al., 2019c; Yang et al., 2019; Lan et al., 2020).",
+      "startOffset" : 189,
+      "endOffset" : 266
+    }, {
+      "referenceID" : 62,
+      "context" : "Task-specific finetuning of pretrained deep networks is the dominant paradigm in contemporary NLP, achieving state-of-the-art results across a suite of natural language understanding tasks (Devlin et al., 2019; Liu et al., 2019c; Yang et al., 2019; Lan et al., 2020).",
+      "startOffset" : 189,
+      "endOffset" : 266
+    }, {
+      "referenceID" : 19,
+      "context" : "Task-specific finetuning of pretrained deep networks is the dominant paradigm in contemporary NLP, achieving state-of-the-art results across a suite of natural language understanding tasks (Devlin et al., 2019; Liu et al., 2019c; Yang et al., 2019; Lan et al., 2020).",
+      "startOffset" : 189,
+      "endOffset" : 266
+    }, {
+      "referenceID" : 10,
+      "context" : "com/dguo98/DiffPruning A popular approach to parameter-efficiency is to learn smaller compressed models for each task (Gordon et al., 2020; Sajjad et al., 2020; Zhao et al., 2020; Sanh et al., 2020).",
+      "startOffset" : 118,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 4,
+      "context" : "Multi-task learning and featurebased transfer allow for more parameter-efficient transfer learning per task (Liu et al., 2019b; Clark et al., 2019; Stickland & Murray, 2019; Reimers & Gurevych, 2019).",
+      "startOffset" : 108,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 8,
+      "context" : "However, multi-task learning generally requires access to all tasks during training to prevent catastrophic forgetting (French, 1999), while feature-based transfer learning (e.",
+      "startOffset" : 119,
+      "endOffset" : 133
+    }, {
+      "referenceID" : 42,
+      "context" : "For example, Adapters (Rebuffi et al., 2018) use smaller, task-specific modules that are inserted between layers of a model This approach does not require access to all tasks during training, targeting realistic settings where as new tasks arrive in stream (Houlsby et al.",
+      "startOffset" : 22,
+      "endOffset" : 44
+    }, {
+      "referenceID" : 27,
+      "context" : "The diff vector is regularized with a differentiable approximation to the L0-norm penalty (Louizos et al., 2018) to encourage sparsity.",
+      "startOffset" : 90,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 31,
+      "context" : "Pretraining objectives include context prediction (Mikolov et al., 2013), autoencoding (Dai & Le, 2015), machine translation (McCann",
+      "startOffset" : 50,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 32,
+      "context" : ", 2017), and more recently, variants of language modeling (Peters et al., 2018; Radford et al., 2018; Devlin et al., 2019) objectives.",
+      "startOffset" : 58,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 37,
+      "context" : ", 2017), and more recently, variants of language modeling (Peters et al., 2018; Radford et al., 2018; Devlin et al., 2019) objectives.",
+      "startOffset" : 58,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 7,
+      "context" : ", 2017), and more recently, variants of language modeling (Peters et al., 2018; Radford et al., 2018; Devlin et al., 2019) objectives.",
+      "startOffset" : 58,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 40,
+      "context" : "For example, widely-adopted models such as BERTBASE and BERTLARGE have 110M and 340M parameters respectively, while their contemporaries have parameter counts in the billions (Raffel et al., 2020; Shoeybi et al., 2019; Rajbhandari et al., 2019).",
+      "startOffset" : 175,
+      "endOffset" : 244
+    }, {
+      "referenceID" : 2,
+      "context" : "2 A classic approach to tackling this parameter-inefficiencyis to train a single shared model (along with a task-specific output layer) against multiple tasks through joint training (Caruana, 1997).",
+      "startOffset" : 182,
+      "endOffset" : 197
+    }, {
+      "referenceID" : 8,
+      "context" : "However, the usual formulation of multi-task learning requires the set of tasks T to be known in advance in order to prevent catastrophic forgetting (French, 1999),3 making it unsuitable for applications in which the set of tasks is unknown or when tasks arrive in stream.",
+      "startOffset" : 149,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 38,
+      "context" : "An intriguing line of work suggests that large-scale language models can be used without finetuning for a variety of tasks if given the appropriate context (Radford et al., 2019; Brown et al., 2020).",
+      "startOffset" : 156,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 48,
+      "context" : "(3)However, work on continual learning mitigates these issues to an extent (Shin et al., 2017; Lopez-Paz & Ranzato, 2017; Lee et al., 2017; Kirkpatrick et al., 2017).",
+      "startOffset" : 75,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 22,
+      "context" : "(3)However, work on continual learning mitigates these issues to an extent (Shin et al., 2017; Lopez-Paz & Ranzato, 2017; Lee et al., 2017; Kirkpatrick et al., 2017).",
+      "startOffset" : 75,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 27,
+      "context" : "In order to approximate this L0 objective, we follow an approach for gradient-based learning with L0 sparsity using a relaxed mask vector (Louizos et al., 2018).",
+      "startOffset" : 138,
+      "endOffset" : 160
+    }, {
+      "referenceID" : 27,
+      "context" : "We follow prior work (Louizos et al., 2018; Wang et al., 2019b) and relax zτ into continuous space [0, 1]d with a stretched Hard-Concrete distribution (Jang et al.",
+      "startOffset" : 21,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2019b) and relax zτ into continuous space [0, 1]d with a stretched Hard-Concrete distribution (Jang et al., 2017; Maddison et al., 2017), which allows for the use of pathwise gradient estimators.",
+      "startOffset" : 96,
+      "endOffset" : 138
+    }, {
+      "referenceID" : 41,
+      "context" : ", 2019b) as well as the SQuAD extractive question answering dataset (Rajpurkar et al., 2016).",
+      "startOffset" : 68,
+      "endOffset" : 92
+    }, {
+      "referenceID" : 14,
+      "context" : "Following Adapters (Houlsby et al., 2019), we test our approach on the following subset of the GLUE tasks: Multi-Genre Natural Language Inference (MNLI), where the goal is two predict whether the relationship between two sentences is entailment, contradiction, or neutral (we test on both MNLIm and MNLImm which respectively tests on matched/mismatched domains); Quora Question Pairs (QQP), a classification task to predict whether two question are semantically equivalent; Question Natural Language Inference (QNLI), which",
+      "startOffset" : 19,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 62,
+      "context" : ", 2019c) and XLNet (Yang et al., 2019) models as well.",
+      "startOffset" : 19,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 41,
+      "context" : "To demonstrate the effectiveness of our approach beyond the GLUE tasks, we additionally experiment on SQuAD (Rajpurkar et al., 2016), an extractive question answering dataset where the model has to select the answer span to a question given a Wikipedia paragraph.",
+      "startOffset" : 108,
+      "endOffset" : 132
+    }, {
+      "referenceID" : 27,
+      "context" : "This is less restrictive than traditional group sparsity techniques that have been used with L0-norm relaxations, which force all parameters in a group to share the same mask (Louizos et al., 2018; Wang et al., 2019b).",
+      "startOffset" : 175,
+      "endOffset" : 217
+    }, {
+      "referenceID" : 55,
+      "context" : "Different layers of pretrained models have been argued to encode different information (Liu et al., 2019a; Tenney et al., 2019).",
+      "startOffset" : 87,
+      "endOffset" : 127
+    }, {
+      "referenceID" : 44,
+      "context" : "Here we compare diff pruning against existing BERT compression methods, in particular DistilBERT (Sanh et al., 2019), MobileBERT (Sun et al.",
+      "startOffset" : 97,
+      "endOffset" : 116
+    }, {
+      "referenceID" : 2,
+      "context" : "Multi-task learning Multi-task learning (Caruana, 1997), broadly construed, aims to learn models and representations that can be utilized across a diverse range of tasks, and offers a natural approach",
+      "startOffset" : 40,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 4,
+      "context" : "Several works have shown that a single BERT model can obtain good performance across multiple tasks when jointly trained (Liu et al., 2019b; Clark et al., 2019; Stickland & Murray, 2019).",
+      "startOffset" : 121,
+      "endOffset" : 186
+    }, {
+      "referenceID" : 42,
+      "context" : "An alternative approach to multi-task learning that does not require access to all tasks during training involve training smaller task-specific layers that interact with a fixed pretrained model (Rebuffi et al., 2018; Zhang et al., 2020a).",
+      "startOffset" : 195,
+      "endOffset" : 238
+    }, {
+      "referenceID" : 42,
+      "context" : "In particular, Adapters (Rebuffi et al., 2018), which learn to read and write to layers of a shared model, have been applied to obtain parameter-efficient BERT models (Houlsby et al.",
+      "startOffset" : 24,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 18,
+      "context" : "Yet another line of work targets extreme parameterefficiency through task-agnostic sentence representations that can be used without finetuning for downstream tasks (Le & Mikolov, 2014; Kiros et al., 2015; Wieting et al., 2016; Hill et al., 2016; Arora et al., 2017; Conneau et al., 2017; Cer et al., 2018; Zhang et al., 2018; Subramanian et al., 2018; Reimers & Gurevych, 2019; Zhang et al., 2020b).",
+      "startOffset" : 165,
+      "endOffset" : 399
+    }, {
+      "referenceID" : 59,
+      "context" : "Yet another line of work targets extreme parameterefficiency through task-agnostic sentence representations that can be used without finetuning for downstream tasks (Le & Mikolov, 2014; Kiros et al., 2015; Wieting et al., 2016; Hill et al., 2016; Arora et al., 2017; Conneau et al., 2017; Cer et al., 2018; Zhang et al., 2018; Subramanian et al., 2018; Reimers & Gurevych, 2019; Zhang et al., 2020b).",
+      "startOffset" : 165,
+      "endOffset" : 399
+    }, {
+      "referenceID" : 13,
+      "context" : "Yet another line of work targets extreme parameterefficiency through task-agnostic sentence representations that can be used without finetuning for downstream tasks (Le & Mikolov, 2014; Kiros et al., 2015; Wieting et al., 2016; Hill et al., 2016; Arora et al., 2017; Conneau et al., 2017; Cer et al., 2018; Zhang et al., 2018; Subramanian et al., 2018; Reimers & Gurevych, 2019; Zhang et al., 2020b).",
+      "startOffset" : 165,
+      "endOffset" : 399
+    }, {
+      "referenceID" : 0,
+      "context" : "Yet another line of work targets extreme parameterefficiency through task-agnostic sentence representations that can be used without finetuning for downstream tasks (Le & Mikolov, 2014; Kiros et al., 2015; Wieting et al., 2016; Hill et al., 2016; Arora et al., 2017; Conneau et al., 2017; Cer et al., 2018; Zhang et al., 2018; Subramanian et al., 2018; Reimers & Gurevych, 2019; Zhang et al., 2020b).",
+      "startOffset" : 165,
+      "endOffset" : 399
+    }, {
+      "referenceID" : 5,
+      "context" : "Yet another line of work targets extreme parameterefficiency through task-agnostic sentence representations that can be used without finetuning for downstream tasks (Le & Mikolov, 2014; Kiros et al., 2015; Wieting et al., 2016; Hill et al., 2016; Arora et al., 2017; Conneau et al., 2017; Cer et al., 2018; Zhang et al., 2018; Subramanian et al., 2018; Reimers & Gurevych, 2019; Zhang et al., 2020b).",
+      "startOffset" : 165,
+      "endOffset" : 399
+    }, {
+      "referenceID" : 64,
+      "context" : "Yet another line of work targets extreme parameterefficiency through task-agnostic sentence representations that can be used without finetuning for downstream tasks (Le & Mikolov, 2014; Kiros et al., 2015; Wieting et al., 2016; Hill et al., 2016; Arora et al., 2017; Conneau et al., 2017; Cer et al., 2018; Zhang et al., 2018; Subramanian et al., 2018; Reimers & Gurevych, 2019; Zhang et al., 2020b).",
+      "startOffset" : 165,
+      "endOffset" : 399
+    }, {
+      "referenceID" : 51,
+      "context" : "Yet another line of work targets extreme parameterefficiency through task-agnostic sentence representations that can be used without finetuning for downstream tasks (Le & Mikolov, 2014; Kiros et al., 2015; Wieting et al., 2016; Hill et al., 2016; Arora et al., 2017; Conneau et al., 2017; Cer et al., 2018; Zhang et al., 2018; Subramanian et al., 2018; Reimers & Gurevych, 2019; Zhang et al., 2020b).",
+      "startOffset" : 165,
+      "endOffset" : 399
+    }, {
+      "referenceID" : 44,
+      "context" : "2020) and/or knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Turc et al., 2019; Jiao et al., 2020; Sun et al., 2020b).",
+      "startOffset" : 36,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 52,
+      "context" : "2020) and/or knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Turc et al., 2019; Jiao et al., 2020; Sun et al., 2020b).",
+      "startOffset" : 36,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 56,
+      "context" : "2020) and/or knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Turc et al., 2019; Jiao et al., 2020; Sun et al., 2020b).",
+      "startOffset" : 36,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 17,
+      "context" : "2020) and/or knowledge distillation (Sanh et al., 2019; Sun et al., 2019; Turc et al., 2019; Jiao et al., 2020; Sun et al., 2020b).",
+      "startOffset" : 36,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 28,
+      "context" : "Learning to mask Our work is closely related to the line of work on learning to mask parts of deep networks with differentiable relaxations of binary masks for model pruning and parameter sharing (Wang et al., 2019b; Zhao et al., 2020; Sanh et al., 2020; Radiya-Dixit & Wang, 2020; Mallya et al., 2018; Guo et al., 2019; Sun et al., 2020a; Cao et al., 2021).",
+      "startOffset" : 196,
+      "endOffset" : 357
+    }, {
+      "referenceID" : 11,
+      "context" : "Learning to mask Our work is closely related to the line of work on learning to mask parts of deep networks with differentiable relaxations of binary masks for model pruning and parameter sharing (Wang et al., 2019b; Zhao et al., 2020; Sanh et al., 2020; Radiya-Dixit & Wang, 2020; Mallya et al., 2018; Guo et al., 2019; Sun et al., 2020a; Cao et al., 2021).",
+      "startOffset" : 196,
+      "endOffset" : 357
+    }, {
+      "referenceID" : 1,
+      "context" : "Learning to mask Our work is closely related to the line of work on learning to mask parts of deep networks with differentiable relaxations of binary masks for model pruning and parameter sharing (Wang et al., 2019b; Zhao et al., 2020; Sanh et al., 2020; Radiya-Dixit & Wang, 2020; Mallya et al., 2018; Guo et al., 2019; Sun et al., 2020a; Cao et al., 2021).",
+      "startOffset" : 196,
+      "endOffset" : 357
+    }, {
+      "referenceID" : 47,
+      "context" : "4892 trained/shared models for continual learning (Rusu et al., 2016; Kirkpatrick et al., 2017; Schwarz et al., 2018), domain adaptation (Wiese et al.",
+      "startOffset" : 50,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 58,
+      "context" : ", 2018), domain adaptation (Wiese et al., 2017; Miceli Barone et al., 2017), and stable finetuning (Lee et al.",
+      "startOffset" : 27,
+      "endOffset" : 75
+    } ],
+    "year" : 2021,
+    "abstractText" : "The large size of pretrained networks makes them difficult to deploy for multiple tasks in storage-constrained settings. Diff pruning enables parameter-efficient transfer learning that scales well with new tasks. The approach learns a task-specific “diff” vector that extends the original pretrained parameters. This diff vector is adaptively pruned during training with a differentiable approximation to the L0-norm penalty to encourage sparsity. As the number of tasks increases, diff pruning remains parameter-efficient, as it requires storing only a small diff vector for each task. Since it does not require access to all tasks during training, it is attractive in on-device deployment settings where tasks arrive in stream or even from different providers. Diff pruning can match the performance of finetuned baselines on the GLUE benchmark while only modifying 0.5% of the pretrained model’s parameters per task and scales favorably in comparison to popular pruning approaches.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

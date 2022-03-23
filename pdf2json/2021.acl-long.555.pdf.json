@@ -1,0 +1,781 @@
+{
+  "name" : "2021.acl-long.555.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Conditional Generation of Temporally-ordered Event Sequences",
+    "authors" : [ "Shih-Ting Lin", "Nathanael Chambers", "Greg Durrett" ],
+    "emails" : [ "j0717lin@cs.utexas.edu,", "nchamber@usna.edu,", "gdurrett@cs.utexas.edu" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 7142–7157\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n7142"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "This paper proposes a single model of events to support inferences in two seemingly different tasks: (1) temporal event ordering and (2) event infilling, or inferring unseen or unmentioned events occurring as part of a larger scenario. Figure 1 shows an example illustrating these two goals. Unlike prior approaches, we aim to address both with the same model architecture, rather than having to annotate data and build ad-hoc models for each task separately; our goal is to work towards models that cap-\nture temporal event knowledge broadly and support a wide range of inferences. We thus need a suitably general modeling framework to capture temporal knowledge about events, which in our case will be a BART-based (Lewis et al., 2020) model we call TemporalBART. Note that classic temporal relation extraction models, which model temporal ordering in context for a particular document, may chiefly learn how to use local discourse cues rather than generalizable event knowledge (Chambers et al., 2014; Ning et al., 2018b).\nThe goals in this work relate to past work on learning narrative schemas (Mooney and DeJong, 1985; Chambers, 2013; Peng and Roth, 2016; Peng et al., 2017). Our approach particularly follows a recent line of work using distributed representations of schemas (Pichotta and Mooney, 2016; Weber et al., 2018b), which support inferences about events without explicitly materializing a discrete schema library. The target tasks in this work are directly motivated by downstream applications of schema learning. Text generation tasks like story completion rely on understanding what makes narratives plausible and what events might be likely to happen before, after, and between other events (Jain et al., 2017; Yao et al., 2019), motivating our event infilling task. Answering questions about causes, effects, or what might happen next in a scenario requires knowing typical temporal orders of event sequences (Zhou et al., 2019, 2020; Ning et al., 2020), motivating our temporal ordering task.\nPrior work has not combined traditional event cooccurrence with event temporality as we do.\nWe propose a conditional generation model to tackle temporal event ordering and event infilling, and train it as a denoising autoencoder over outof-context temporal event sequences. As shown in Figure 1, the encoder of our TemporalBART model reads a temporally scrambled sequence of a subset of input events, obtained by corrupting a temporally-ordered sequence of events from a corpus. The decoder, which can be viewed as a conditional event language model (Kiyomaru et al., 2019; Bosselut et al., 2019; Madaan et al., 2020), then reconstructs the complete, temporally-ordered event sequence. Such denoising training has been successful exploited in many applications (Vincent et al., 2010; Lu et al., 2013; Lample et al., 2018; Lewis et al., 2020), and using seq2seq models to reorder and smooth inputs has been explored before (Goyal and Durrett, 2020), but to our knowledge we are the first to apply this in this temporal modeling setting. The conditional generation architecture of our model is flexible enough to address a variety of tasks, including our temporal ordering and event infilling tasks, by either sampling from the model or using it to score sequences. Capitalizing on the success of recent pre-trained encoder-decoder transformers (Lewis et al., 2020; Raffel et al., 2020), our model itself is based on BART, consuming and producing predicate-argument structures rendered in surface order.\nGathering large-scale high-quality labeled data with temporal annotations is often expensive and requires specially designed annotation schemes (Pustejovsky et al., 2003a; Cassidy et al., 2014; Ning et al., 2018b; Zhao et al., 2021). Here, we instead turn to a narrative documents corpus, EventsNarratives (Yao and Huang, 2018) and design an automatic method to extract the training data we need. In these documents, discourse order is loosely assumed to reflect temporal order, so events extracted from this text can directly provide training data for our models. This use of automatic annotation allows us to use broad-domain data, giving us a strong domain-independent temporal model (Zhao et al., 2021).\nTo evaluate how well our proposed models capture temporal knowledge and solve the two targeted tasks, we apply them on out-of domain test sets in a zero-shot manner. Specifically, for event ordering, we first extract test temporal event sequences from\nthe CaTeRS (Mostafazadeh et al., 2016b) and MCTaco (Zhou et al., 2019) datasets, which include the annotations on temporal relations between events. We then compare the performance of our models with two baselines: a BERT-based pairwise model and a BERT-based pointer network. For event infilling, we use the test event sequences from CaTeRS and examine the ability of our models to order unseen events and generate infilled events in comparison with GPT-2 baselines from story generation. Our BART-based models significantly outperform the baseline models on the ordering settings we consider, and human evaluation verifies that our models can generate infilled events that are better temporally-ordered with respect to the input."
+    }, {
+      "heading" : "2 Background and Related Work",
+      "text" : "Learning temporal knowledge to order events and generate new events as part of schemas or stories are two problems that have received significant attention, but in contrast to our work, previous work typically focuses on each in isolation."
+    }, {
+      "heading" : "2.1 Temporal Event Ordering",
+      "text" : "Closely related to the temporal ordering aspect of this paper is temporal relation extraction, which orders pairs of events in text in document context (Pustejovsky et al., 2003b; Cassidy et al., 2014; Ning et al., 2018b). This problem has been addressed as pairwise classification (Mani et al., 2006; Verhagen et al., 2007; Chambers et al., 2007; Verhagen and Pustejovsky, 2008; Cheng and Miyao, 2017; Tourille et al., 2017; Goyal and Durrett, 2019) or as a structured learning problem to enforce constraints on the output (Do et al., 2012; Ning et al., 2017, 2018a; Leeuwenberg and Moens, 2017; Han et al., 2019a,b). However, even in these latter works, the models focus on pairwise relations. In contrast, our work here views temporal event ordering as a sequence generation problem, which provides models a stronger inductive bias to capture global temporal relations between events. One recent effort (Madaan and Yang, 2020) treats this task as a graph generation problem, and so is able to predict more complex structures, but it focuses solely on ordering and is not suitable for our event infilling goals."
+    }, {
+      "heading" : "2.2 Schema Induction",
+      "text" : "Schema learning systems are often evaluated on their ability to predict unseen events. Initial work\nattempted to use statistical methods to derive a library of schematic information (Mooney and DeJong, 1985; Chambers and Jurafsky, 2008; Jans et al., 2012). Another thread exploits event language modeling to learn the distributions over events (Pichotta and Mooney, 2016; Peng and Roth, 2016; Weber et al., 2018b), or focuses on learning event representations (Modi, 2016; Weber et al., 2018a) rather than writing down discrete schemas. However, most of this work only models the cooccurrence between events instead of directly considering temporal information, and only represent events as a small tuple of S-V-O headwords.\nAnother line of work instead directly focuses on extracting coherent narratives from “story salads” (Wang et al., 2018) or more broadly generating narratives given predefined scenarios (Wang et al., 2019; Qin et al., 2020). However, without considering temporal ordering, these systems are prone to learn discourse ordering of events instead of a strong representation of temporal knowledge."
+    }, {
+      "heading" : "3 Method",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Task Formulation and Model",
+      "text" : "Our framework involves modeling a conditional distribution P (y | x) over temporal event sequences y = {e1, · · · , el}, which are sequences of events taken out of context (i.e., not represented as spans in a document) which are part of the same scenario, involve shared actors, and are temporally ordered. The input of the model is a (not necessarily temporal) sequence of events x = {e1, · · · , em} that represents incomplete information abut the scenario y: a partial set of unordered events. Our model should learn distribu-\ntions over a true underlying order of events, without obvious gaps in the event sequence, given this incomplete information. By taking events out of context rather than in the context of a document, we are encouraging the model to encode temporal knowledge between events rather than superficial cues like surface textual order or discourse connectives that might determine their order.\nFor the definition of events, we follow Chambers and Jurafsky (2008) where an event e is a predicate ve along with its arguments (Palmer et al., 2005).\nOur model can be formulated as a denoising autoencoder if x is created as a noised version of y. Specifically, given a temporal event sequence y as defined above, we first corrupt it to get the required input x by performing two transformation functions consecutively (see Figure 2):\nEvent Shuffling We first perform a random shuffling of the events in y to produce x. To perfectly reconstruct the original sequence y, the model must capture the temporal relations between events.\nEvent Deletion We randomly delete each event in y with probability p to produce x. This denoising scheme is similar to the token deletion transformation in Lewis et al. (2020). To perfectly reconstruct the original event sequence, the model needs to encode schema-like event knowledge so as to generate events not included in the input x and insert them at correct positions. As a result, this denoising can help the model learn event infilling.\nWe train our model to maximize logP (y | x) on this automatically-constructed data."
+    }, {
+      "heading" : "3.2 Model Architecture",
+      "text" : "To leverage the power of pretrained transformers, we adopt BART (Lewis et al., 2020) as the underlying architecture for our model, and initialize our model with its pretrained weights.\nThe overall model, shown in Figure 3, takes a corrupted event sequence x = {ei} as input, and outputs the true event sequence y = {ej}. To feed the event-based inputs and outputs to BART, we need to represent each event e in a textual format Repr(e). We represent e with the concatenation of its predicate and all arguments. Unlike previous work which only uses the syntactic heads of the predicate and certain arguments (Pichotta and Mooney, 2016; Weber et al., 2018a,b), our approach preserves complex noun phrase arguments and exposes to the model arguments like temporal modifiers. We strike a balance between using\nenough information to have meaningful event representations and not consuming entire documents (Han et al., 2019a,b), which would result in a model that overly relies on discourse clues. We then consider two variants for input and output:\nTemporalBART This model first encodes each event ei in x as Repr(ei), and concatenates them with a special token [E] prepended in front of each event. This special token can help the model identify the boundary between the input events; such placeholder tokens have been used in related tasks like entity tracking in procedural text (Gupta and Durrett, 2019). For the output, we instead prepend [E] vej [A] in front of each Repr(ej). This setup not only provides an extra supervision signal that encourages the model to predict ordering on the basis of predicates, but also allows us to post-hoc recover an event sequence by checking the predicate part of the generation.\nTemporalBART-indexed This model, depicted in Figure 3, uses the same input and output format as TemporalBART, except the prepended special token [E] is instead [Ei] before each event ei. For the output, if ej is one of the input events and ej = ei, then we also change the prepended tokens ej to [Ei] vej [A]. Otherwise, we still use [E] as the special event token. Note that the model is not able to “cheat” using the [Ei] tokens to do the prediction since the input events are scrambled by the shuffling denoising training scheme described in §3.1. Compared to TemporalBART, the use of [Ei] here provides an extra clue for the model to associate input events to output events, which can benefit the event ordering. It also provides a potential way to focus only on modeling the ordering of the target sequence, rather than also mixing in generation decisions, many of which are copying event arguments and often affect the prediction.1\n1We experiment with this method, which is denoted as “TemporalBART-indexed (tags only)”, in Appendix A\nTraining details of these BART-based models are described in the Appendix."
+    }, {
+      "heading" : "3.3 Training Data Collection",
+      "text" : "For our framework, the training data we need is event sequences in temporal order. Note that most text data occurs in discourse order, which is not the same thing: human annotations of temporal relation datasets like TimeBank (Pustejovsky et al., 2003b) show that many events mentioned earlier in the text occur later in time. Existing datasets of temporal relations (Cassidy et al., 2014; Vashishtha et al., 2019) are small-scale, and annotating more data is expensive and prone to low agreement (Ning et al., 2018b). To combat this issue, we instead try to automatically gather the training data we need.\nCorpus We use the English-language EventsNarratives corpus (Yao and Huang, 2018), which contains more than 200,000 narrative-structured documents identified from three different source domains including news articles, novel books, and blogs. Yao and Huang (2018) use a weakly supervised method to identify narrative texts, describing a sequence of events in such a way that the discourse order is very likely to reflect the temporal order. This gives us an entry point to collect temporal event sequences automatically from each document. Here we focus on documents in the novel domain as our source for temporal event sequences.\nExtracting Temporal Event Sequences To obtain the training event sequences, we first use an SRL model from AllenNLP (Gardner et al., 2017) to extract verbs (events) and their arguments. Then, temporal event sequences are constructed by connecting only the events in different sentences, since the relations between events within the same sentence are unclear even in narrative documents. Here, to ensure all the events in a sequence have a strong relation with each other, we only include chains of events that are associated with a com-\nmon entity (Chambers and Jurafsky, 2008), as determined by checking whether the arguments of two event have some shared non-stopword tokens. With this procedure, we are able to collect nearly 2 million temporal event sequences to train on, with nearly 70% of the sequences consisting of three or more events."
+    }, {
+      "heading" : "4 Target Task Formulation",
+      "text" : "Here we describe the two target tasks of our model and how they can be handled as event-based conditional generation problems. A visual of the task formulations is shown in Figure 4.\nTemporal Event Ordering Given an unordered set of events {ei}, this task’s goal is to produce the temporal ordering of {ei}, as shown in Figure 4(a). We ask the model to generate an ordered sequence of events {ef(i)} given the set {ei}, where f(·) is a mapping function to determine the event to put at position i. This is a conditional generation problem that is directly solved by our proposed models.\nEvent Infilling The goal of event infilling is to generate inserted events at some pre-selected insertion positions in a seed event sequence (Wang et al., 2020). To simplify the evaluation, here we assume that given an event sequence x = {ei}, models will only be required to generate one inserted event at one insertion position i∗, as shown in Figure 4(b). We first feed {ei} as the input to our model, then generate one event e∗ using xprefix = {ei | i < i∗} as the decoding prefix. To force our models to produce e∗ /∈ x, we prevent our model from generating {vei} during the decoding process."
+    }, {
+      "heading" : "4.1 Baselines: Temporal Event Ordering",
+      "text" : "We compare against two baselines: a state-of-theart pairwise model used for the in-context temporal\nordering task and a pointer network model that directly models event sequence permutations discriminatively.\nBERT-based Pairwise Model + SSVM We follow the architecture of the Deep SSVM model used in Han et al. (2019a) as our first baseline, which tackles event ordering as a pairwise classification problem. This network first exploits a BERT-based model (Devlin et al., 2019) to compute pairwise scores for ei preceding ej in the output y. The final output is then obtained by solving an ILP over all the pairwise scores. The overall network is trained with the structured SVM loss so that it can learn to make joint predictions with transitivity constraint. To make this baseline more comparable to our models, we take Repr(ei) prepended with [E] as the event representation instead of using the sentence containing vei as in Han et al. (2019a). Detailed formulas are in Appendix B. We denote this baseline as “Pairwise+SSVM” in the evaluations.\nBERT-based Pointer Network This network first follows the BERT-based Pairwise Model + SSVM to extract the the vectorized representation Upi for each ei, where U is the final BERT encoded matrix, and pi is the position of the first token of ei in the input sequence. These event representations are then instead fed into a LSTM-based pointer network to model the ordering probability by decomposing it in a sequential fashion:\nP seq(y | x) = ∏ j P (j | h1, . . . ,Up1 , . . .) (1)\nht is the decoder hidden state in the pointer network. Compared to the above pairwise baseline, this model has a stronger inductive bias for exploiting global event relations. We train the sequential model with teacher forcing to maximize the probability of the gold ordering. We denote this baseline as “BERT-based PN” in the evaluation section."
+    }, {
+      "heading" : "4.2 Baselines: Event Infilling",
+      "text" : "HAQAE HAQAE (Weber et al., 2018b) is a vector quantized variational autoencoder which encodes schema knowledge with hierarchical latent variables. Since HAQAE is also an event-level seq2seq autoencoder, we can easily apply it to our setting. During training we follow Weber et al. (2018b) except that we use our narrative event sequences for training and represent each event with the predicate-argument format described in §3.2 so it is more comparable to our BART-based models.\nGPT-2 GPT-2 (Radford et al., 2019) is a transformer-based pretrained language model that has been exploited in various generation tasks like story generation (Dathathri et al., 2020; Rashkin et al., 2020). However, one issue with the GPT-2 model is that it can only perform uni-directional generation. To apply GPT-2 to generate an inserted event e∗, we first concatenate {Repr(ei) | ei ∈ xprefix} with periods in between, and treat it as the decoding prefix only. We then decode until another period is generated, and take the model’s output as the text representation of e∗. Except where otherwise specified, we use the GPT2-medium pretrained model from HuggingFace’s Transformer (Wolf et al., 2020), whose model size is comparable to BART-large.\nInfilling GPT-2 To build a stronger GPT-2 baseline that doesn’t only condition on the prefix events, we follow the baselines from Qin et al. (2020) to adapt GPT-2 to infilling tasks. Infilling GPT-2 generates the infilling events by “wrapping” the events after the insertion position to the front. That is, the decoding prefix fed to the infilling GPT-2 becomes the concatenation of {Repr(ei) | i >= i∗}, <SEP> and {Repr(ei) | i < i∗}, again with a period appended after each event. The special token <SEP> is used to help the model to differentiate the events before and after the insertion position."
+    }, {
+      "heading" : "5 Evaluation",
+      "text" : ""
+    }, {
+      "heading" : "5.1 Experimental Setup",
+      "text" : "All the models used in the evaluation are trained with the temporal event sequences automatically collected on EventsNarratives except GPT-2, since we want to compare the learned knowledge in GPT2 with our proposed models. Although we are able to gather millions of sequences, for efficiency, we train on 100,000 sequences unless specified otherwise. For each sequence, we extract 2 distinct permutations from the corruption process. This results in 200,000 training examples in total.\nDuring evaluation, all the models are evaluated on out-of-domain datasets in a zero-shot way, i.e., no fine-tuning is performed on the evaluation sets."
+    }, {
+      "heading" : "5.2 Temporal Event Ordering",
+      "text" : ""
+    }, {
+      "heading" : "5.2.1 Datasets",
+      "text" : "We use two out-of-domain English datasets to extract the test temporal event sequences: CaTeRS and MCTaco. As during training, two different\nContext: In Colombia, the drug-financed guerrillas trying to seize the country and destroy democracy include M-19, which Castro has clearly backed. Question: What would the guerrillas do if able to seize the country ?\npermutations are produced from each extracted sequence.\nCaTeRS (Mostafazadeh et al., 2016b) CaTeRS includes annotations of events and their casual and temporal relations on 320 five-sentence short stories sampled from the ROCStories corpus (Mostafazadeh et al., 2016a). To extract the evaluation data from CaTeRS, we first apply the SRL model used in §3.3 on each story. Then, a directed acyclic graph is constructed with a node being an event e whose predicate ve can be captured by the SRL model, and an edge (ei, ej) indicating ei happens temporally before ej . Note that here we treat all types of annotated relations except “IDENTITY”, “DURING” and “CAUSE_TO_END” as “BEFORE”, as suggested in Mostafazadeh et al. (2016b). Test temporal event sequences are then extracted by retrieving all the path from the source nodes to sink nodes in the graph. With this procedure, we are able to gather 842 event sequences, 60% of which contain 3 or more events. With permutations, the final CaTeRS evaluation set has 1684 examples.\nMCTaco (Zhou et al., 2019) MCTaco is a multiple-choice QA dataset for evaluating model understanding on 5 different types of temporal com-\nmonsense. To extract suitable test data, we focus on questions with the reasoning type of “event ordering” and their positive candidates. Each data point here consists of a sentence describing multiple events {eci}, a question asking what event could happen temporally before/after a particular event eq ∈ {eci}, and a candidate event ea. Critically, the question itself tells us whether ea should happen before/after eq in the temporal event sequence formed by {eci} ∪ {ea}.\nWith this annotation, we evaluate our models by first feeding the randomly shuffled {eci}∪{ea} into a model, then checking the ordering between ea and eq in the output sequence. Here, we were able to extract 585 test sequences from MCTaco. For each sequence, {eci} and ea are extracted with the SRL model used in §3.3. For the question, we first use a set of pre-defined regex templates to extract an event eq and a temporal relation (“before” / “after”). We then match eq to one of eci by ROUGE-L scores. See Figure 5 for an example of the extracted data.\nCompared to CaTeRS, since the sentences here are from 9 different domains in MultiRC (Khashabi et al., 2018), the types of events are more diverse. The event arguments are also more complex."
+    }, {
+      "heading" : "5.2.2 Results on CaTeRS",
+      "text" : "We first examine the temporal ordering results on CaTeRS, shown in Table 1. We compute the pairwise accuracy of the predicted event sequences, or how many pairs of events in the output are ordered correctly by a model. Note that the BART-based models can deviate from generating permutations of the input; however, we found that the most probable generated sequences were almost exact permutations of the input or easily aligned to the input using a heuristic.\nOur BART-based models outperform the BERTbased pointer network by more than 20 points, a\nhuge margin. One possible reason is that the decoder of BART can condition on the token-level embeddings of the events when generating the output events, whereas in the pointer network, the decoder is only aware of the condensed event embeddings Upi . Our two BART-based models also outperform the BERT-based pairwise model on both all sequences and long sequences."
+    }, {
+      "heading" : "5.2.3 Results on MCTaco",
+      "text" : "Results on MCTaco are shown in Table 2. Here since we only know the gold temporal relation of one pair of events in the input, i.e eq and ea, the averaged accuracy on predicting the order of eq and ea is computed. In addition, since the ratio of before/after questions is significantly unbalanced in MCTaco, with 90% asking about the “after” relationship, we also compute the macro F1 score as our metric (averaging F1 across these two classes).\nOur two baselines perform worse than just picking the majority label. This is possibly due to the high diversity of events in MCTaco, which makes it much harder to apply a zero-shot model. In contrast, TemporalBART achieves an F1 score about 3 points higher than the Pairwise+SSVM baseline, and TemporalBART-indexed further performs best among all.\nIn Appendix E, we also show that our models are able to learn temporal phenomenon not explicitly annotated in our training data, which is another demonstration of our model’s ability to generalize."
+    }, {
+      "heading" : "5.3 Ordering Unseen Events",
+      "text" : "We evaluate our BART-based models on an additional variant of this ordering problem that better tests their capability as generative models. Recall that previously, BART conditions on the complete (but possibly scrambled) sequence of events. We now consider ordering an event in the decoder that the model does not condition on in the encoder.\nConcretely, for each temporal event sequence in CaTeRS, we randomly select one event e∗, and treat the rest of the sequence as the seed input event sequence {e1, · · · , eN}. Then we check if a model can correctly determine where to insert e∗ into the input sequence. Specifically, for both the BARTbased models and the GPT-2 baselines, we use the generation probability to rank event sequences {e1, · · · , ei∗−1, e∗, ei∗ , · · · , eN} for i∗ between 1 and N + 1 (all possible locations). If a model correctly ranks the gold candidate higher, it indicates that it can model temporal relations between seen events and new unseen events it may generate.\nThe results are shown in Table 3, where we compute the top-1 and top-2 exact match (EM): did the model rank the gold sequence 1st or 2nd highest? Our GPT-2 variants are only slightly better than random. HAQAE, also using an autoencoder framework, performs worse than infilling GPT-2, likely due to the lack of large-scale pretraining and the loss of information when compressing input into latent variables. Our BART-based models are significantly better, with TemporalBART-indexed showing the benefit of using indexed event markers to help the model capture order. We also perform an ablation of deletion during training (Figure 2). Unsurprisingly for this unseen event evaluation, not deleting events in training (setting p to 0) causes a major drop by 14 EM points. Deletion denoising is evidently critical to model new events."
+    }, {
+      "heading" : "5.4 Event Infilling",
+      "text" : "Now we turn to temporal event infilling: given a CaTeRS sequence, remove a random event at index i∗, and denote the resulting sequence {e1, · · · , eN}. We then ask a model to generate one event e∗ at position i∗ so {e1, · · · , ei∗−1, e∗, ei∗ , · · · , eN} is temporally ordered with the new event.\nWe evaluate the quality of the generated (inserted) events by human evaluation on Amazon Mechanical Turk. Specifically, we randomly sample 30 examples from CaTeRS and have 5 raters judge the coherence and temporality (on a scale from 0 to 2) of the inserted event from each model. See Figure 8 in Appendix for our exact prompt. The final scores for each model on coherence and temporality are computed by taking the average of the majority rating on each prediction. Here we only include GPT-2 models as baselines since HAQAE is also using the autoencoder framework, and already performs significantly worse in §5.3.\nThe results of this evaluation are shown in Table 4. All models achieve reasonable coherence scores. However in terms of temporality, GPT-2 performs worst, as expected, since it can only condition on partial input event sequences while the other three consider the whole event sequence as input. Both of the BART-based models achieve better performance than infilling GPT-2. The improvements on the temporal score are significant with p < 0.05 according to bootstrap resampling for both TemporalBART models with respect to infilling GPT-2.\nFigure 6 gives examples of infilled events generated by GPT-2, infilling GPT-2, and TemporalBART. On this specific test example, GPT-2 generates an event generally about the Apple watch, which is less relevant to the input scenario about Mike making a tree. The event generated by infilling GPT-2 is coherent with the scenario, but doesn’t occur in the correct order with respect to the input events. The event generated by TemporalBART is the best in terms of coherence and temporality. More examples are in Table 7 of the Appendix."
+    }, {
+      "heading" : "5.5 The Effectiveness of Narrative Data",
+      "text" : "Figure 7 shows that the performance of both our models on the CaTeRS ordering task improves when increasing the amount of narrative training data. This demonstrates that the automatically ex-\ntracted temporal event sequences are useful and diverse enough to help the models to learn temporalrelated knowledge. The TemporalBART-indexed model is effective on surprisingly small amounts of data, but also scales well with data size; however, we observe a plateau in both models which motivated our decision to use 100k training sequences.\nFor comparison, we train our TemporalBARTindexed model on 1266 event sequences gathered from the MATRES dataset, a human-labeled dataset for temporal relation extraction, using the same procedure we applied to CaTeRS. However, Figure 7 shows that the resulting performance, 65.6 on MATRES, is significantly lower than the best number we get on narrative data. Even with the same size training set, using narrative data achieves over 7 points of improvement over using MATRES. This suggests that the small-scale human-labeled dataset is not enough for models to learn generalized temporal knowledge, and even with the same amount of data, narrative data may be a better source for general temporal knowledge."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "This work presents a BART-based conditional generation model and a denoising autoencoder framework to learn temporal event knowledge, and addresses both temporal ordering and event infilling tasks by pretraining on automatically collected data.\nOur experiments demonstrate that our model is able to perform temporal ordering and infilling in a zeroshot manner, not fine-tuned on our target datasets, which suggests that it can also be applied to other settings requiring event schematic and temporal knowledge."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "Thanks to Mahnaz Koupaee from Stony Brook University for providing directions on our HAQAE baseline and to the members of the UT TAUR lab for helpful discussion, particularly Yasumasa Onoe and Jiacheng Xu for suggestions on the human evaluation. Thanks as well to the anonymous reviewers for their comments. This work is based on research that is in part supported by the Air Force Research Laboratory (AFRL), DARPA, for the KAIROS program under agreement number FA8750-19-2-1003. The U.S. Government is authorized to reproduce and distribute reprints for Governmental purposes notwithstanding any copyright notation thereon. The views and conclusions contained herein are those of the authors and should not be interpreted as necessarily representing the official policies or endorsements, either expressed or implied, of the Air Force Research Laboratory (AFRL), DARPA, or the U.S. Government."
+    }, {
+      "heading" : "A Scoring Orderings with TemporalBART-indexed (tags only)",
+      "text" : "TemporalBART-indexed (tags only) scores whether an output sequence y is temporally ordered by gathering the generation scores on the special tokens [Ei] only as its final ordering score:\nP tag(y|x) = ∏ t∈I BART(wyt |x, w y 1 , · · · , w y t−1)\n(2) where {wyt } is the text representation of y and I is the set of the positions of the special tokens [Ei] in {wyt }. This allows us to make a judgment only depending on the predicted temporal order of the events rather than mixing in general token order. In contrast, TemporalBART scores a sequence of events y with the generation probability on the entire text representation of y:\nP gen(y|x) = ∏ t BART(wyt |x, w y 1 , · · · , w y t−1)\n(3) Since many of the generation decisions here are copying event arguments, the prediction could be largely affected by the correlation of tokens within each argument.\nWe evaluate “TemporalBART-indexed (tags only)” on the temporal event ordering with the procedure used for the models in Table 2. Table 5 shows that this (tags only) variant further boosts the performance of TemporalBART-indexed by 1.3 points on the macro F1. This result verifies that this setting can help prevent the ordering scores from being overly affected by the text generation probabilities, which is particularly important for MCTaco, where the arguments of events are more complex."
+    }, {
+      "heading" : "B Architecture of BERT-based Pairwise Model + SSVM",
+      "text" : "This network uses a BERT-based model (Devlin et al., 2019) to obtain a vectorized representation\nfor each input event ei in x. As with the BARTbased models, the input to the BERT model is the concatenation of Repr(ei) with [E] being prepended in front of each event. The vectorized representation for ei is then extracted by Upi , where U is the final BERT encoded matrix, and pi is the position of the first token of ei in the input sequence. Each pair of event representations, Upi and Upj are then fed into a feed-forward function g to compute a score B for ei preceding ej in the output y:\nB(ei, ej) = g([Upi ;Upj ;Upi Upj ]) (4)\nFinally, the final output y is computed by finding the best permutation over all of the pairwise scores by solving an ILP."
+    }, {
+      "heading" : "C Training Details of BART-based Models",
+      "text" : "We train our BART-based conditional generation models to minimize negative log likelihood of reconstructing the original event sequence. We set the learning rate to 1e-5, and use a polynomial decay scheduling with 500 steps of warm-up. All of the models are trained for 10 epochs, with each epoch being 2000 updates and the batch size being 64. For the deletion training scheme, we set the event deletion probability p to 0.15. The framework is implemented with PyTorch (Paszke et al., 2019) and AllenNLP (Gardner et al., 2017), and we use the BART-large pretrained model from HuggingFace’s Transformers library (Wolf et al., 2020).\nDuring the evaluation for temporal event ordering, we decode the output event sequences using beam search with the beam size being 4. For event infilling task, we use nucleus sampling with p set to 0.8."
+    }, {
+      "heading" : "D Human Evaluation",
+      "text" : "Figure 8 shows the prompt for the human evaluation described in §5.4, where we ask the MTurk raters to evaluate the coherence and temporality of the generation outputs. To help the raters ignore grammatical issues when making decisions, we first ask them to check the grammaticality, then separately judge the coherence and the temporality."
+    }, {
+      "heading" : "E Learning Timex Knowledge",
+      "text" : "The temporal ordering and event infilling tasks correspond to information that we might expect to be\nencoded by our model pre-training. To test whether our models generalize to slightly more distant temporal phenomena, we examine whether they are able to capture the temporal relationships between timexes. This knowledge has been shown to be hard to learn in temporal relation extraction models (Goyal and Durrett, 2019).\nE.1 Evaluation Setup\nThe timexes we examine here include years, months, weekdays, 24-hour clock time in “hour:minute” format and 12-hour clock time in “hour:minute am/pm” format. We evaluate the ability of our models to order events that are anchored with a timex in their arguments. To prepare the test input event sequences of a given type of timex, we first artificially make up a template event sequence with 3 typical daily events that have no\ntemporal order relations. We then randomly sample 3 different timexes, e.g “June”, “May”, “July” for “Month”, and append each of them to the events in the template sequence respectively with proper prepositions. At the end, 100 examples are created with this process for each type of timex. More concrete examples are shown in Figure 9. For the baselines, here we use GPT-2 models to do the ordering by using the generation probability to rank all permutations of the input events.\nE.2 Results\nThe results are shown in Table 6. First, we examine the results of the GPT-2 models. In general both the unsupervised GPT-2 (the medium model) and GPT-2 large perform worse than the random baseline, indicating that they have a limited ability to order timexes. Our BART-based models achieve stronger results. The results are strongest on years. For 12-hour clock time, even though the model has to make a challenging link between the temporal knowledge on “am’ and “pm” and numerical comparisons, both of the BART-based models still performs significantly better the random baseline."
+    }, {
+      "heading" : "F Examples for Event Infilling",
+      "text" : "In Table 7, we demonstrate more examples of the infilled events generated by GPT-2, infilling GPT-2 and TemporalBART given the seed event sequences from CaTeRS. In general, while the events output\nby TemporalBART are coherent and temporallysensible, those from the GPT-2 models has a worse quality in terms of the temporality. Note that the nature of the event representation does not necessarily guarantee a grammatical sentence when the event is rendered in surface order."
+    } ],
+    "references" : [ {
+      "title" : "COMET: Commonsense transformers for automatic knowledge graph construction",
+      "author" : [ "Antoine Bosselut", "Hannah Rashkin", "Maarten Sap", "Chaitanya Malaviya", "Asli Celikyilmaz", "Yejin Choi." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association",
+      "citeRegEx" : "Bosselut et al\\.,? 2019",
+      "shortCiteRegEx" : "Bosselut et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "An annotation framework for dense event ordering",
+      "author" : [ "Taylor Cassidy", "Bill McDowell", "Nathanael Chambers", "Steven Bethard." ],
+      "venue" : "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers),",
+      "citeRegEx" : "Cassidy et al\\.,? 2014",
+      "shortCiteRegEx" : "Cassidy et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Event schema induction with a probabilistic entity-driven model",
+      "author" : [ "Nathanael Chambers." ],
+      "venue" : "Proceedings of the 2013 Conference on Empirical Methods in Natural Language Processing, pages 1797–1807, Seattle, Washington, USA. Association for Compu-",
+      "citeRegEx" : "Chambers.,? 2013",
+      "shortCiteRegEx" : "Chambers.",
+      "year" : 2013
+    }, {
+      "title" : "Dense event ordering with a multi-pass architecture",
+      "author" : [ "Nathanael Chambers", "Taylor Cassidy", "Bill McDowell", "Steven Bethard." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 2:273– 284.",
+      "citeRegEx" : "Chambers et al\\.,? 2014",
+      "shortCiteRegEx" : "Chambers et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Unsupervised learning of narrative event chains",
+      "author" : [ "Nathanael Chambers", "Dan Jurafsky." ],
+      "venue" : "Proceedings of ACL-08: HLT, pages 789–797, Columbus, Ohio. Association for Computational Linguistics.",
+      "citeRegEx" : "Chambers and Jurafsky.,? 2008",
+      "shortCiteRegEx" : "Chambers and Jurafsky.",
+      "year" : 2008
+    }, {
+      "title" : "Classifying temporal relations between events",
+      "author" : [ "Nathanael Chambers", "Shan Wang", "Dan Jurafsky." ],
+      "venue" : "Proceedings of the 45th Annual Meeting of the Association for Computational Linguistics Companion Volume Proceedings of the Demo and",
+      "citeRegEx" : "Chambers et al\\.,? 2007",
+      "shortCiteRegEx" : "Chambers et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "Classifying temporal relations by bidirectional LSTM over dependency paths",
+      "author" : [ "Fei Cheng", "Yusuke Miyao." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers), pages 1–6, Van-",
+      "citeRegEx" : "Cheng and Miyao.,? 2017",
+      "shortCiteRegEx" : "Cheng and Miyao.",
+      "year" : 2017
+    }, {
+      "title" : "Plug and play language models: A simple approach to controlled text generation",
+      "author" : [ "Sumanth Dathathri", "Andrea Madotto", "Janice Lan", "Jane Hung", "Eric Frank", "Piero Molino", "Jason Yosinski", "Rosanne Liu." ],
+      "venue" : "International Conference on Learning Represen-",
+      "citeRegEx" : "Dathathri et al\\.,? 2020",
+      "shortCiteRegEx" : "Dathathri et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Joint inference for event timeline construction",
+      "author" : [ "Quang Do", "Wei Lu", "Dan Roth." ],
+      "venue" : "Proceedings of the 2012 Joint Conference on Empirical Methods in Natural Language Processing and Computational Natural Language Learning, pages 677–687, Jeju Is-",
+      "citeRegEx" : "Do et al\\.,? 2012",
+      "shortCiteRegEx" : "Do et al\\.",
+      "year" : 2012
+    }, {
+      "title" : "AllenNLP: A Deep Semantic Natural Language Processing Platform",
+      "author" : [ "Matt Gardner", "Joel Grus", "Mark Neumann", "Oyvind Tafjord", "Pradeep Dasigi", "Nelson F. Liu", "Matthew Peters", "Michael Schmitz", "Luke S. Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Gardner et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Gardner et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Embedding time expressions for deep temporal ordering models",
+      "author" : [ "Tanya Goyal", "Greg Durrett." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 4400– 4406, Florence, Italy. Association for Computational",
+      "citeRegEx" : "Goyal and Durrett.,? 2019",
+      "shortCiteRegEx" : "Goyal and Durrett.",
+      "year" : 2019
+    }, {
+      "title" : "Neural syntactic preordering for controlled paraphrase generation",
+      "author" : [ "Tanya Goyal", "Greg Durrett." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 238– 252, Online. Association for Computational Linguis-",
+      "citeRegEx" : "Goyal and Durrett.,? 2020",
+      "shortCiteRegEx" : "Goyal and Durrett.",
+      "year" : 2020
+    }, {
+      "title" : "Tracking discrete and continuous entity state for process understanding",
+      "author" : [ "Aditya Gupta", "Greg Durrett." ],
+      "venue" : "Proceedings of the Third Workshop on Structured Prediction for NLP, pages 7–12, Minneapolis, Minnesota. Association for Computational",
+      "citeRegEx" : "Gupta and Durrett.,? 2019",
+      "shortCiteRegEx" : "Gupta and Durrett.",
+      "year" : 2019
+    }, {
+      "title" : "Deep structured neural network for event temporal relation extraction",
+      "author" : [ "Rujun Han", "I-Hung Hsu", "Mu Yang", "Aram Galstyan", "Ralph Weischedel", "Nanyun Peng." ],
+      "venue" : "Proceedings of the 23rd Conference on Computational Natural Language Learning",
+      "citeRegEx" : "Han et al\\.,? 2019a",
+      "shortCiteRegEx" : "Han et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Joint event and temporal relation extraction with shared representations and structured prediction",
+      "author" : [ "Rujun Han", "Qiang Ning", "Nanyun Peng." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Han et al\\.,? 2019b",
+      "shortCiteRegEx" : "Han et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Story generation from sequence of independent short descriptions",
+      "author" : [ "Parag Jain", "Priyanka Agrawal", "Abhijit Mishra", "Mohak Sukhwani", "Anirban Laha", "Karthik Sankaranarayanan." ],
+      "venue" : "CoRR, abs/1707.05501.",
+      "citeRegEx" : "Jain et al\\.,? 2017",
+      "shortCiteRegEx" : "Jain et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Skip n-grams and ranking functions for predicting script events",
+      "author" : [ "Bram Jans", "Steven Bethard", "Ivan Vulic", "MarieFrancine Moens." ],
+      "venue" : "EACL.",
+      "citeRegEx" : "Jans et al\\.,? 2012",
+      "shortCiteRegEx" : "Jans et al\\.",
+      "year" : 2012
+    }, {
+      "title" : "Looking beyond the surface: A challenge set for reading comprehension over multiple sentences",
+      "author" : [ "Daniel Khashabi", "Snigdha Chaturvedi", "Michael Roth", "Shyam Upadhyay", "Dan Roth." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chap-",
+      "citeRegEx" : "Khashabi et al\\.,? 2018",
+      "shortCiteRegEx" : "Khashabi et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Diversity-aware event prediction based on a conditional variational autoencoder with reconstruction",
+      "author" : [ "Hirokazu Kiyomaru", "Kazumasa Omura", "Yugo Murawaki", "Daisuke Kawahara", "Sadao Kurohashi." ],
+      "venue" : "Proceedings of the First Workshop on Com-",
+      "citeRegEx" : "Kiyomaru et al\\.,? 2019",
+      "shortCiteRegEx" : "Kiyomaru et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unsupervised machine translation using monolingual corpora only",
+      "author" : [ "Guillaume Lample", "Alexis Conneau", "Ludovic Denoyer", "Marc’Aurelio Ranzato" ],
+      "venue" : "In International Conference on Learning Representations",
+      "citeRegEx" : "Lample et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Lample et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Structured learning for temporal relation extraction from clinical records",
+      "author" : [ "Artuur Leeuwenberg", "Marie-Francine Moens." ],
+      "venue" : "Proceedings of the 15th Conference of the European Chapter of the Association for Computational Linguistics: Volume 1, Long",
+      "citeRegEx" : "Leeuwenberg and Moens.,? 2017",
+      "shortCiteRegEx" : "Leeuwenberg and Moens.",
+      "year" : 2017
+    }, {
+      "title" : "BART: Denoising sequence-to-sequence pretraining for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Speech enhancement based on deep denoising autoencoder",
+      "author" : [ "X. Lu", "Y. Tsao", "S. Matsuda", "C. Hori." ],
+      "venue" : "INTERSPEECH.",
+      "citeRegEx" : "Lu et al\\.,? 2013",
+      "shortCiteRegEx" : "Lu et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Eigen: Event influence generation using pre-trained language models",
+      "author" : [ "Aman Madaan", "Dheeraj Rajagopal", "Yiming Yang", "Abhilasha Ravichander", "E. Hovy", "Shrimai Prabhumoye." ],
+      "venue" : "ArXiv, abs/2010.11764.",
+      "citeRegEx" : "Madaan et al\\.,? 2020",
+      "shortCiteRegEx" : "Madaan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Neural language modeling for contextualized temporal graph generation",
+      "author" : [ "Aman Madaan", "Yiming Yang." ],
+      "venue" : "ArXiv, abs/2010.10077.",
+      "citeRegEx" : "Madaan and Yang.,? 2020",
+      "shortCiteRegEx" : "Madaan and Yang.",
+      "year" : 2020
+    }, {
+      "title" : "Machine learning of temporal relations",
+      "author" : [ "Inderjeet Mani", "Marc Verhagen", "Ben Wellner", "Chong Min Lee", "James Pustejovsky." ],
+      "venue" : "Proceedings of the 21st International Conference on Computational Linguistics and 44th Annual Meeting of",
+      "citeRegEx" : "Mani et al\\.,? 2006",
+      "shortCiteRegEx" : "Mani et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "Event embeddings for semantic script modeling",
+      "author" : [ "Ashutosh Modi." ],
+      "venue" : "CoNLL.",
+      "citeRegEx" : "Modi.,? 2016",
+      "shortCiteRegEx" : "Modi.",
+      "year" : 2016
+    }, {
+      "title" : "Learning schemata for natural language processing",
+      "author" : [ "Raymond Mooney", "Gerald DeJong." ],
+      "venue" : "IJCAI.",
+      "citeRegEx" : "Mooney and DeJong.,? 1985",
+      "shortCiteRegEx" : "Mooney and DeJong.",
+      "year" : 1985
+    }, {
+      "title" : "A corpus and cloze evaluation for deeper understanding of commonsense stories",
+      "author" : [ "Nasrin Mostafazadeh", "Nathanael Chambers", "Xiaodong He", "Devi Parikh", "Dhruv Batra", "Lucy Vanderwende", "Pushmeet Kohli", "James Allen." ],
+      "venue" : "Proceedings of the 2016",
+      "citeRegEx" : "Mostafazadeh et al\\.,? 2016a",
+      "shortCiteRegEx" : "Mostafazadeh et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "CaTeRS: Causal and temporal relation scheme for semantic annotation of event structures",
+      "author" : [ "Nasrin Mostafazadeh", "Alyson Grealish", "Nathanael Chambers", "James Allen", "Lucy Vanderwende." ],
+      "venue" : "Proceedings of the Fourth Workshop on Events,",
+      "citeRegEx" : "Mostafazadeh et al\\.,? 2016b",
+      "shortCiteRegEx" : "Mostafazadeh et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "A structured learning approach to temporal relation extraction",
+      "author" : [ "Qiang Ning", "Zhili Feng", "Dan Roth." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 1027–1037, Copenhagen, Denmark. Associa-",
+      "citeRegEx" : "Ning et al\\.,? 2017",
+      "shortCiteRegEx" : "Ning et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "TORQUE: A reading comprehension dataset of temporal ordering questions",
+      "author" : [ "Qiang Ning", "Hao Wu", "Rujun Han", "Nanyun Peng", "Matt Gardner", "Dan Roth." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Process-",
+      "citeRegEx" : "Ning et al\\.,? 2020",
+      "shortCiteRegEx" : "Ning et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Improving temporal relation extraction with a globally acquired statistical resource",
+      "author" : [ "Qiang Ning", "Hao Wu", "Haoruo Peng", "Dan Roth." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational",
+      "citeRegEx" : "Ning et al\\.,? 2018a",
+      "shortCiteRegEx" : "Ning et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A multiaxis annotation scheme for event temporal relations",
+      "author" : [ "Qiang Ning", "Hao Wu", "Dan Roth." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1318–1328, Melbourne, Aus-",
+      "citeRegEx" : "Ning et al\\.,? 2018b",
+      "shortCiteRegEx" : "Ning et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "The Proposition Bank: An annotated corpus of semantic roles",
+      "author" : [ "Martha Palmer", "Daniel Gildea", "Paul Kingsbury." ],
+      "venue" : "Computational Linguistics, 31(1):71–106.",
+      "citeRegEx" : "Palmer et al\\.,? 2005",
+      "shortCiteRegEx" : "Palmer et al\\.",
+      "year" : 2005
+    }, {
+      "title" : "Pytorch: An imperative style, high-performance deep learning library",
+      "author" : [ "jani", "Sasank Chilamkurthy", "Benoit Steiner", "Lu Fang", "Junjie Bai", "Soumith Chintala" ],
+      "venue" : null,
+      "citeRegEx" : "jani et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "jani et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A joint model for semantic sequences: Frames, entities, sentiments",
+      "author" : [ "Haoruo Peng", "Snigdha Chaturvedi", "Dan Roth." ],
+      "venue" : "Proceedings of the 21st Conference on Computational Natural Language Learning (CoNLL 2017), pages 173–183,",
+      "citeRegEx" : "Peng et al\\.,? 2017",
+      "shortCiteRegEx" : "Peng et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Two discourse driven language models for semantics",
+      "author" : [ "Haoruo Peng", "Dan Roth." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 290–300, Berlin, Germany. Association",
+      "citeRegEx" : "Peng and Roth.,? 2016",
+      "shortCiteRegEx" : "Peng and Roth.",
+      "year" : 2016
+    }, {
+      "title" : "Learning Statistical Scripts with LSTM Recurrent Neural Networks",
+      "author" : [ "Karl Pichotta", "Raymond J. Mooney." ],
+      "venue" : "Proceedings of the Thirtieth AAAI Conference on Artificial Intelligence, AAAI’16, page 2800–2806. AAAI Press.",
+      "citeRegEx" : "Pichotta and Mooney.,? 2016",
+      "shortCiteRegEx" : "Pichotta and Mooney.",
+      "year" : 2016
+    }, {
+      "title" : "TimeML: Robust Specification of Event and Temporal Expressions in Text",
+      "author" : [ "James Pustejovsky", "José M. Castaño", "Robert Ingria", "Roser Saurí", "Robert J. Gaizauskas", "Andrea Setzer", "Graham Katz", "Dragomir R. Radev." ],
+      "venue" : "New Directions in Ques-",
+      "citeRegEx" : "Pustejovsky et al\\.,? 2003a",
+      "shortCiteRegEx" : "Pustejovsky et al\\.",
+      "year" : 2003
+    }, {
+      "title" : "The timebank corpus",
+      "author" : [ "James Pustejovsky", "Patrick Hanks", "Roser Saurí", "Andrew See", "Rob Gaizauskas", "Andrea Setzer", "Dragomir Radev", "Beth Sundheim", "David Day", "Lisa Ferro", "Marcia Lazo." ],
+      "venue" : "Proceedings of Corpus Linguistics.",
+      "citeRegEx" : "Pustejovsky et al\\.,? 2003b",
+      "shortCiteRegEx" : "Pustejovsky et al\\.",
+      "year" : 2003
+    }, {
+      "title" : "Back to the future: Unsupervised backprop-based decoding for counterfactual and abductive commonsense reasoning",
+      "author" : [ "Lianhui Qin", "Vered Shwartz", "Peter West", "Chandra Bhagavatula", "Jena D. Hwang", "Ronan Le Bras", "Antoine Bosselut", "Yejin Choi." ],
+      "venue" : "In",
+      "citeRegEx" : "Qin et al\\.,? 2020",
+      "shortCiteRegEx" : "Qin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "A. Radford", "Jeffrey Wu", "R. Child", "David Luan", "Dario Amodei", "Ilya Sutskever" ],
+      "venue" : null,
+      "citeRegEx" : "Radford et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Exploring the limits of transfer learning with a unified text-to-text transformer",
+      "author" : [ "Colin Raffel", "Noam Shazeer", "Adam Roberts", "Katherine Lee", "Sharan Narang", "M. Matena", "Yanqi Zhou", "W. Li", "Peter J. Liu." ],
+      "venue" : "J. Mach. Learn. Res., 21:140:1–140:67.",
+      "citeRegEx" : "Raffel et al\\.,? 2020",
+      "shortCiteRegEx" : "Raffel et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "PlotMachines: Outlineconditioned generation with dynamic plot state tracking",
+      "author" : [ "Hannah Rashkin", "Asli Celikyilmaz", "Yejin Choi", "Jianfeng Gao." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Process-",
+      "citeRegEx" : "Rashkin et al\\.,? 2020",
+      "shortCiteRegEx" : "Rashkin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Neural architecture for temporal relation extraction: A Bi-LSTM approach for detecting narrative containers",
+      "author" : [ "Julien Tourille", "Olivier Ferret", "Aurélie Névéol", "Xavier Tannier." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Compu-",
+      "citeRegEx" : "Tourille et al\\.,? 2017",
+      "shortCiteRegEx" : "Tourille et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "SemEval-2007 task 15: TempEval temporal relation identification",
+      "author" : [ "Marc Verhagen", "Robert Gaizauskas", "Frank Schilder", "Mark Hepple", "Graham Katz", "James Pustejovsky." ],
+      "venue" : "Proceedings of the Fourth International Workshop on Semantic Evalua-",
+      "citeRegEx" : "Verhagen et al\\.,? 2007",
+      "shortCiteRegEx" : "Verhagen et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "Temporal processing with the TARSQI toolkit",
+      "author" : [ "Marc Verhagen", "James Pustejovsky." ],
+      "venue" : "Coling 2008: Companion volume: Demonstrations, pages 189–192, Manchester, UK. Coling 2008 Organizing Committee.",
+      "citeRegEx" : "Verhagen and Pustejovsky.,? 2008",
+      "shortCiteRegEx" : "Verhagen and Pustejovsky.",
+      "year" : 2008
+    }, {
+      "title" : "Stacked denoising autoencoders: Learning useful representations in a deep network with a local denoising criterion",
+      "author" : [ "P. Vincent", "H. Larochelle", "Isabelle Lajoie", "Yoshua Bengio", "Pierre-Antoine Manzagol." ],
+      "venue" : "J. Mach. Learn. Res., 11:3371–3408.",
+      "citeRegEx" : "Vincent et al\\.,? 2010",
+      "shortCiteRegEx" : "Vincent et al\\.",
+      "year" : 2010
+    }, {
+      "title" : "Queryfocused scenario construction",
+      "author" : [ "Su Wang", "Greg Durrett", "Katrin Erk." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natural Language Processing",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Narrative interpolation for generating and understanding stories",
+      "author" : [ "Su Wang", "Greg Durrett", "Katrin Erk." ],
+      "venue" : "CoRR, abs/2008.07466.",
+      "citeRegEx" : "Wang et al\\.,? 2020",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Picking apart story salads",
+      "author" : [ "Su Wang", "Eric Holgate", "Greg Durrett", "Katrin Erk." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 1455–1465, Brussels, Belgium. Association for Computational Lin-",
+      "citeRegEx" : "Wang et al\\.,? 2018",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Event representations with tensor-based compositions",
+      "author" : [ "Noah Weber", "Niranjan Balasubramanian", "Nathanael Chambers." ],
+      "venue" : "Proceedings of the Thirty-Second AAAI Conference on Artificial Intelligence, (AAAI-18), the 30th innovative",
+      "citeRegEx" : "Weber et al\\.,? 2018a",
+      "shortCiteRegEx" : "Weber et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Hierarchical quantized representations for script generation",
+      "author" : [ "Noah Weber", "Leena Shekhar", "Niranjan Balasubramanian", "Nathanael Chambers." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Weber et al\\.,? 2018b",
+      "shortCiteRegEx" : "Weber et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Transformers: State-of-the-art natural language processing",
+      "author" : [ "Teven Le Scao", "Sylvain Gugger", "Mariama Drame", "Quentin Lhoest", "Alexander Rush." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing:",
+      "citeRegEx" : "Scao et al\\.,? 2020",
+      "shortCiteRegEx" : "Scao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Planand-write: Towards better automatic storytelling",
+      "author" : [ "Lili Yao", "Nanyun Peng", "Ralph M. Weischedel", "Kevin Knight", "Dongyan Zhao", "Rui Yan." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, 33:7378–7385.",
+      "citeRegEx" : "Yao et al\\.,? 2019",
+      "shortCiteRegEx" : "Yao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Temporal event knowledge acquisition via identifying narratives",
+      "author" : [ "Wenlin Yao", "Ruihong Huang." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 537–547, Melbourne,",
+      "citeRegEx" : "Yao and Huang.,? 2018",
+      "shortCiteRegEx" : "Yao and Huang.",
+      "year" : 2018
+    }, {
+      "title" : "Effective distant supervision for temporal relation extraction",
+      "author" : [ "Xinyu Zhao", "Shih-Ting Lin", "Greg Durrett." ],
+      "venue" : "Proceedings of the Second Workshop on Domain Adaptation for NLP, pages 195–203, Kyiv, Ukraine. Association for Computational Lin-",
+      "citeRegEx" : "Zhao et al\\.,? 2021",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "going on a vacation” takes longer than “going for a walk”: A study of temporal commonsense understanding",
+      "author" : [ "Ben Zhou", "Daniel Khashabi", "Qiang Ning", "Dan Roth." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natu-",
+      "citeRegEx" : "Zhou et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Temporal reasoning on implicit events from distant supervision",
+      "author" : [ "Ben Zhou", "Kyle Richardson", "Qiang Ning", "Tushar Khot", "A. Sabharwal", "D. Roth." ],
+      "venue" : "ArXiv, abs/2010.12753.",
+      "citeRegEx" : "Zhou et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Architecture of BERT-based Pairwise Model + SSVM This network uses a BERT-based model (Devlin et al., 2019) to obtain a vectorized representation",
+      "author" : [ "B complex" ],
+      "venue" : null,
+      "citeRegEx" : "complex.,? \\Q2019\\E",
+      "shortCiteRegEx" : "complex.",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 22,
+      "context" : "We thus need a suitably general modeling framework to capture temporal knowledge about events, which in our case will be a BART-based (Lewis et al., 2020) model we call TemporalBART.",
+      "startOffset" : 134,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 3,
+      "context" : "extraction models, which model temporal ordering in context for a particular document, may chiefly learn how to use local discourse cues rather than generalizable event knowledge (Chambers et al., 2014; Ning et al., 2018b).",
+      "startOffset" : 179,
+      "endOffset" : 222
+    }, {
+      "referenceID" : 34,
+      "context" : "extraction models, which model temporal ordering in context for a particular document, may chiefly learn how to use local discourse cues rather than generalizable event knowledge (Chambers et al., 2014; Ning et al., 2018b).",
+      "startOffset" : 179,
+      "endOffset" : 222
+    }, {
+      "referenceID" : 28,
+      "context" : "The goals in this work relate to past work on learning narrative schemas (Mooney and DeJong, 1985; Chambers, 2013; Peng and Roth, 2016; Peng et al., 2017).",
+      "startOffset" : 73,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 2,
+      "context" : "The goals in this work relate to past work on learning narrative schemas (Mooney and DeJong, 1985; Chambers, 2013; Peng and Roth, 2016; Peng et al., 2017).",
+      "startOffset" : 73,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 38,
+      "context" : "The goals in this work relate to past work on learning narrative schemas (Mooney and DeJong, 1985; Chambers, 2013; Peng and Roth, 2016; Peng et al., 2017).",
+      "startOffset" : 73,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 37,
+      "context" : "The goals in this work relate to past work on learning narrative schemas (Mooney and DeJong, 1985; Chambers, 2013; Peng and Roth, 2016; Peng et al., 2017).",
+      "startOffset" : 73,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 39,
+      "context" : "Our approach particularly follows a recent line of work using distributed representations of schemas (Pichotta and Mooney, 2016; Weber et al., 2018b), which support inferences about events without explicitly materializing a discrete",
+      "startOffset" : 101,
+      "endOffset" : 149
+    }, {
+      "referenceID" : 54,
+      "context" : "Our approach particularly follows a recent line of work using distributed representations of schemas (Pichotta and Mooney, 2016; Weber et al., 2018b), which support inferences about events without explicitly materializing a discrete",
+      "startOffset" : 101,
+      "endOffset" : 149
+    }, {
+      "referenceID" : 16,
+      "context" : "Text generation tasks like story completion rely on understanding what makes narratives plausible and what events might be likely to happen before, after, and between other events (Jain et al., 2017; Yao et al., 2019), motivating our event infilling task.",
+      "startOffset" : 180,
+      "endOffset" : 217
+    }, {
+      "referenceID" : 56,
+      "context" : "Text generation tasks like story completion rely on understanding what makes narratives plausible and what events might be likely to happen before, after, and between other events (Jain et al., 2017; Yao et al., 2019), motivating our event infilling task.",
+      "startOffset" : 180,
+      "endOffset" : 217
+    }, {
+      "referenceID" : 32,
+      "context" : "Answering questions about causes, effects, or what might happen next in a scenario requires knowing typical temporal orders of event sequences (Zhou et al., 2019, 2020; Ning et al., 2020), motivating our temporal ordering task.",
+      "startOffset" : 143,
+      "endOffset" : 187
+    }, {
+      "referenceID" : 19,
+      "context" : "The decoder, which can be viewed as a conditional event language model (Kiyomaru et al., 2019; Bosselut et al., 2019; Madaan et al., 2020), then reconstructs the complete, temporally-ordered event sequence.",
+      "startOffset" : 71,
+      "endOffset" : 138
+    }, {
+      "referenceID" : 0,
+      "context" : "The decoder, which can be viewed as a conditional event language model (Kiyomaru et al., 2019; Bosselut et al., 2019; Madaan et al., 2020), then reconstructs the complete, temporally-ordered event sequence.",
+      "startOffset" : 71,
+      "endOffset" : 138
+    }, {
+      "referenceID" : 24,
+      "context" : "The decoder, which can be viewed as a conditional event language model (Kiyomaru et al., 2019; Bosselut et al., 2019; Madaan et al., 2020), then reconstructs the complete, temporally-ordered event sequence.",
+      "startOffset" : 71,
+      "endOffset" : 138
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2020), and using seq2seq models to reorder and smooth inputs has been explored before (Goyal and Durrett, 2020), but to our knowledge we are the first to apply this in this temporal modeling setting.",
+      "startOffset" : 88,
+      "endOffset" : 113
+    }, {
+      "referenceID" : 22,
+      "context" : "formers (Lewis et al., 2020; Raffel et al., 2020), our model itself is based on BART, consuming and producing predicate-argument structures rendered in surface order.",
+      "startOffset" : 8,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 44,
+      "context" : "formers (Lewis et al., 2020; Raffel et al., 2020), our model itself is based on BART, consuming and producing predicate-argument structures rendered in surface order.",
+      "startOffset" : 8,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 40,
+      "context" : "requires specially designed annotation schemes (Pustejovsky et al., 2003a; Cassidy et al., 2014; Ning et al., 2018b; Zhao et al., 2021).",
+      "startOffset" : 47,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 1,
+      "context" : "requires specially designed annotation schemes (Pustejovsky et al., 2003a; Cassidy et al., 2014; Ning et al., 2018b; Zhao et al., 2021).",
+      "startOffset" : 47,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 34,
+      "context" : "requires specially designed annotation schemes (Pustejovsky et al., 2003a; Cassidy et al., 2014; Ning et al., 2018b; Zhao et al., 2021).",
+      "startOffset" : 47,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 58,
+      "context" : "requires specially designed annotation schemes (Pustejovsky et al., 2003a; Cassidy et al., 2014; Ning et al., 2018b; Zhao et al., 2021).",
+      "startOffset" : 47,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 57,
+      "context" : "Here, we instead turn to a narrative documents corpus, EventsNarratives (Yao and Huang, 2018) and design an automatic method to extract the training data we need.",
+      "startOffset" : 72,
+      "endOffset" : 93
+    }, {
+      "referenceID" : 58,
+      "context" : "This use of automatic annotation allows us to use broad-domain data, giving us a strong domain-independent temporal model (Zhao et al., 2021).",
+      "startOffset" : 122,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 30,
+      "context" : "Specifically, for event ordering, we first extract test temporal event sequences from the CaTeRS (Mostafazadeh et al., 2016b) and MC-",
+      "startOffset" : 97,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 59,
+      "context" : "Taco (Zhou et al., 2019) datasets, which include the annotations on temporal relations between events.",
+      "startOffset" : 5,
+      "endOffset" : 24
+    }, {
+      "referenceID" : 39,
+      "context" : "Another thread exploits event language modeling to learn the distributions over events (Pichotta and Mooney, 2016; Peng and Roth, 2016; Weber et al., 2018b), or focuses on learning",
+      "startOffset" : 87,
+      "endOffset" : 156
+    }, {
+      "referenceID" : 38,
+      "context" : "Another thread exploits event language modeling to learn the distributions over events (Pichotta and Mooney, 2016; Peng and Roth, 2016; Weber et al., 2018b), or focuses on learning",
+      "startOffset" : 87,
+      "endOffset" : 156
+    }, {
+      "referenceID" : 54,
+      "context" : "Another thread exploits event language modeling to learn the distributions over events (Pichotta and Mooney, 2016; Peng and Roth, 2016; Weber et al., 2018b), or focuses on learning",
+      "startOffset" : 87,
+      "endOffset" : 156
+    }, {
+      "referenceID" : 27,
+      "context" : "event representations (Modi, 2016; Weber et al., 2018a) rather than writing down discrete schemas.",
+      "startOffset" : 22,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 53,
+      "context" : "event representations (Modi, 2016; Weber et al., 2018a) rather than writing down discrete schemas.",
+      "startOffset" : 22,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 52,
+      "context" : "Another line of work instead directly focuses on extracting coherent narratives from “story salads” (Wang et al., 2018) or more broadly generating narratives given predefined scenarios (Wang et al.",
+      "startOffset" : 100,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 35,
+      "context" : "For the definition of events, we follow Chambers and Jurafsky (2008) where an event e is a predicate ve along with its arguments (Palmer et al., 2005).",
+      "startOffset" : 129,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 22,
+      "context" : "To leverage the power of pretrained transformers, we adopt BART (Lewis et al., 2020) as the underlying architecture for our model, and initialize our model with its pretrained weights.",
+      "startOffset" : 64,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 13,
+      "context" : "This special token can help the model identify the boundary between the input events; such placeholder tokens have been used in related tasks like entity tracking in procedural text (Gupta and Durrett, 2019).",
+      "startOffset" : 182,
+      "endOffset" : 207
+    }, {
+      "referenceID" : 41,
+      "context" : "text data occurs in discourse order, which is not the same thing: human annotations of temporal relation datasets like TimeBank (Pustejovsky et al., 2003b) show that many events mentioned earlier in the text occur later in time.",
+      "startOffset" : 128,
+      "endOffset" : 155
+    }, {
+      "referenceID" : 1,
+      "context" : "temporal relations (Cassidy et al., 2014; Vashishtha et al., 2019) are small-scale, and annotating more data is expensive and prone to low agreement (Ning et al.",
+      "startOffset" : 19,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 34,
+      "context" : ", 2019) are small-scale, and annotating more data is expensive and prone to low agreement (Ning et al., 2018b).",
+      "startOffset" : 90,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 57,
+      "context" : "Corpus We use the English-language EventsNarratives corpus (Yao and Huang, 2018), which contains more than 200,000 narrative-structured documents identified from three different source do-",
+      "startOffset" : 59,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 10,
+      "context" : "Extracting Temporal Event Sequences To obtain the training event sequences, we first use an SRL model from AllenNLP (Gardner et al., 2017) to extract verbs (events) and their arguments.",
+      "startOffset" : 116,
+      "endOffset" : 138
+    }, {
+      "referenceID" : 4,
+      "context" : "mon entity (Chambers and Jurafsky, 2008), as determined by checking whether the arguments of two event have some shared non-stopword tokens.",
+      "startOffset" : 11,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 51,
+      "context" : "Event Infilling The goal of event infilling is to generate inserted events at some pre-selected insertion positions in a seed event sequence (Wang et al., 2020).",
+      "startOffset" : 141,
+      "endOffset" : 160
+    }, {
+      "referenceID" : 8,
+      "context" : "This network first exploits a BERT-based model (Devlin et al., 2019) to compute pairwise scores for ei preceding ej in the output y.",
+      "startOffset" : 47,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 54,
+      "context" : "HAQAE HAQAE (Weber et al., 2018b) is a vector quantized variational autoencoder which encodes schema knowledge with hierarchical latent variables.",
+      "startOffset" : 12,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 7,
+      "context" : "transformer-based pretrained language model that has been exploited in various generation tasks like story generation (Dathathri et al., 2020; Rashkin et al., 2020).",
+      "startOffset" : 118,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 45,
+      "context" : "transformer-based pretrained language model that has been exploited in various generation tasks like story generation (Dathathri et al., 2020; Rashkin et al., 2020).",
+      "startOffset" : 118,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 29,
+      "context" : "includes annotations of events and their casual and temporal relations on 320 five-sentence short stories sampled from the ROCStories corpus (Mostafazadeh et al., 2016a).",
+      "startOffset" : 141,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 59,
+      "context" : "MCTaco (Zhou et al., 2019) MCTaco is a multiple-choice QA dataset for evaluating model understanding on 5 different types of temporal com-",
+      "startOffset" : 7,
+      "endOffset" : 26
+    }, {
+      "referenceID" : 18,
+      "context" : "Compared to CaTeRS, since the sentences here are from 9 different domains in MultiRC (Khashabi et al., 2018), the types of events are more diverse.",
+      "startOffset" : 85,
+      "endOffset" : 108
+    } ],
+    "year" : 2021,
+    "abstractText" : "Models of narrative schema knowledge have proven useful for a range of event-related tasks, but they typically do not capture the temporal relationships between events. We propose a single model that addresses both temporal ordering, sorting given events into the order they occurred, and event infilling, predicting new events which fit into an existing temporally-ordered sequence. We use a BARTbased conditional generation model that can capture both temporality and common event co-occurrence, meaning it can be flexibly applied to different tasks in this space. Our model is trained as a denoising autoencoder: we take temporally-ordered event sequences, shuffle them, delete some events, and then attempt to recover the original event sequence. This task teaches the model to make inferences given incomplete knowledge about the events in an underlying scenario. On the temporal ordering task, we show that our model is able to unscramble event sequences from existing datasets without access to explicitly labeled temporal training data, outperforming both a BERT-based pairwise model and a BERT-based pointer network. On event infilling, human evaluation shows that our model is able to generate events that fit better temporally into the input events when compared to GPT-2 story completion models.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

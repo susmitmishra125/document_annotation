@@ -1,0 +1,604 @@
+{
+  "name" : "2021.acl-long.404.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "A Cognitive Regularizer for Language Modeling",
+    "authors" : [ "Jason Wei", "Clara Meister", "Ryan Cotterell" ],
+    "emails" : [ "jasonwei@google.com", "clara.meister@inf.ethz.ch", "ryan.cotterell@inf.ethz.ch" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 5191–5202\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n5191"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Language has been hypothesized to follow certain information-theoretic constraints. One of the most famous of these constraints is the uniform information density (UID) hypothesis (Fenk and Fenk, 1980; Jaeger, 2010), which states that, subject to the rules of the grammar, speakers aim to distribute information density across a linguistic signal as uniformly as possible. That is, speakers behaving optimally should structure their utterances such that the differences between the peaks and troughs in information are minimized.\nIn the psycholinguistics literature, the UID hypothesis has been used to explain a variety of linguistic phenomena ranging from how we shorten the phonetic duration of more-predictable linguistic\nunits (Aylett and Turk, 2004) to when we decide to use optional syntactic relativizers (Levy and Jaeger, 2007), among other phenomena (Bell et al., 2003; Frank and Jaeger, 2008). These studies often use language models to estimate the information density of linguistic units, taking observations of low variation of information density in well-formed utterances as evidence for the UID hypothesis.\nIn this paper, we propose a new experimental paradigm that uses modern-day NLP models to test the UID hypothesis. Whereas prior work has used language modeling as a tool for observing UID,1 we explore the converse—can UID be used as a tool to train better language models? Specifically, if the UID hypothesis is true, then we should be able to operationalize UID as a regularizer to help train language models. Moreover, observing lower perplexity in language models trained with this regularization would imply that the concept of UID is a good inductive bias for language modeling, thereby providing a new type of evidence for the UID hypothesis at scale.\nIn experiments, we indeed find such evidence: across a variety of languages and dataset sizes, UID regularization consistently improves performance, having a larger effect when training data is limited. Moreover, we observe that—in comparison with their unregularized counterparts—UIDregularized language models are (1) higher entropy while achieving the same (or better) test set perplexity and (2) generate text that is longer and more lexically diverse. Our work is the first to explore the interaction between UID and training modernday neural language models, and our findings—that a cognitively motivated objective can improve language model performance—open up new avenues for testing other psycholinguistic hypotheses in a similar framework."
+    }, {
+      "heading" : "2 Preliminaries: Language Modeling",
+      "text" : "The task of language modeling aims to estimate a model of the probability of observing any given string in (a subset of) natural language. Formally, a language model p is an (unconditional) probability distribution over sequences of words w = 〈w1, w2, . . . 〉, where w consists of tokens from some vocabulary and begins and ends with special tokens BOS and EOS, respectively.\nToday’s language models are typically parameterized by neural networks (e.g., transformers (Vaswani et al., 2017)), that follow a localnormalization scheme. Specifically, the model provides a conditional distribution over the vocabulary at each time step; we can then compute the proba-\n1On its own, the term ‘UID’ is formally an attribute of a linguistic signal. We also use it throughout this work to refer to the concept that UID is a desirable property.\nbility of an entire sequence w as:\npθ(w) = |w|∏ t=1 pθ(wt | w<t) (1)\nwhere θ are the parameters of the model and we use w<t to represent the first t − 1 tokens of w. Parameters are estimated by optimizing over some objective L(θ). The standard objective for language modeling is the negative log-likelihood of a datasetW under the model:\nL(θ) = − ∑ w∈W log pθ(w) (2)\nSubsequently, we drop explicit dependence on θ when it is obvious from context.\nTo assess the goodness of fit of a model p, we typically evaluate its perplexity on some held-out datasetWtest, where perplexity (PPL) is defined as\nPPL(p) = exp ( −\n∑ w∈Wtest 1 |w| log p(w)\n) (3)\nNote that under this definition of perplexity, our evaluation metric is slightly different than the training objective; the former computes an average over each sequence while the later treats all tokens equally, regardless of the length of the sequence in which they are present."
+    }, {
+      "heading" : "3 Uniform Information Density",
+      "text" : "Communication via natural language is a complicated and nuanced process that takes place under a host of cognitive and environmental constraints. As a result, speakers have to make (perhaps subconscious) choices to best navigate this communicative dance. A rational speaker would use these choices to optimize the communicative properties of their utterances. One such locus of optimization is outlined by the Uniform Information Density (UID) hypothesis."
+    }, {
+      "heading" : "3.1 The UID Hypothesis",
+      "text" : "At its core, the UID hypothesis aims to explain certain phenomena in human language processing using an information-theoretic approach: we can view language as a transfer of information, which is transmitted with a certain density through a communication channel. The UID hypothesis posits that speakers that behave optimally will structure\ntheir utterances to avoid peaks and troughs in this information density (Aylett and Turk, 2004; Levy and Jaeger, 2007; Jaeger, 2010). More formally stated: “Within the bounds defined by grammar, speakers prefer utterances that distribute information uniformly across the signal (information density). Where speakers have a choice between several variants to encode their message, they prefer the variant with more-uniform information density (ceteris paribus)” (Jaeger, 2010)."
+    }, {
+      "heading" : "3.2 Example: UID in syntactic reduction",
+      "text" : "To better understand the UID hypothesis, consider the concrete example of syntactic reduction (thatmentioning) from Jaeger (2010), which we show graphically in Figure 1 and also describe below.\nEx. A. My boss confirmed [that] we are crazy. Ex. B. My boss thinks [that] I am crazy.\nIn both these sentences, the use of the relativizer that is syntactically optional—at the onset of a relative clause (RC), speakers can, but do not have to, include the relativizer. Many speakers, however, would argue that the sentence flows better with the relativizer included in Example A and the relativizer omitted in Example B.\nThe UID hypothesis provides a potential explanation for this phenomenon. When a RC is used without a relativizer, the first word of the RC conveys two pieces of information: both the onset of the RC, as well as part of the RC’s internal contents. In Example A, many speakers would find that the information density of the first word in the RC, we, is high, and so adding in the relative clause distributes the information over two words, making it easier to parse. In Example B, the information density of the first word in the RC, I, is lower relatively, and so we do not need to (or it is not as beneficial to) include the relativizer."
+    }, {
+      "heading" : "3.3 Measuring UID",
+      "text" : "Now that we better understand what the UID hypothesis attempts to explain, how might we operationalize UID and find quantitative evidence of the pressure for it in language? First, to quantify the amount of information conveyed by a word, we turn to the most basic information-theoretic definition: the information conveyed by a word w in context is its Shannon information content (Shannon, 1948), also called surprisal. Ideally, this surprisal would be measured using the “true” distribution over human language. Because we do not have access to\nsuch a distribution, we often estimate it using a statistical language model. That is, given a statistical language model p, which estimates the probability of a word given its context, the surprisal u(wt) of word wt is defined as the following:\nu(wt) = − log p(wt | w<t) (4)\nThis setup provides a natural approach to exploring how UID might manifest—if the UID hypothesis is true, then we should observe that variation in surprisal, as estimated by a language model, is minimized in natural language.\nUsing this approach, prior work has accumulated evidence for UID across various levels of linguistic representation (Pluymaekers et al., 2005; Bell et al., 2009, inter alia). As some of the earliest examples, Aylett and Turk (2004) showed that linguistic units that had high surprisal according to a tri-gram language model were uttered with longer syllable durations, and Levy and Jaeger (2007) found that for RCs in which the first word had higher surprisal, relativizers were more likely to be used in the RC during actual speech. Further examples are given in our related work section (§7)."
+    }, {
+      "heading" : "4 UID-Regularized Language Modeling",
+      "text" : "While prior work has shown evidence that UID can help explain many of the choices we make when generating language, to the best of our knowledge, operationalizations of UID have not been explicitly employed as part of the training objective in modern-day NLP models. This raises the simple question that is central to our paper:\nCan UID serve as an inductive bias for training statistical language models?\nIn an effort to answer this question, we present a scheme for incorporating operationalizations of UID into the language model training objective. Formally, we augment the canonical maximum likelihood estimation objective2 in eq. (2) with UID\n2Note that the maximum likelihood estimation objective minimizes (over w ∈ W) − log p(wt | w<t), i.e., surprisal. Although such an objective may indirectly minimize peaks and dips in surprisal across a sequence simply by pushing them towards 0, it does not explicitly include any sequence level penalty for even surprisal distribution.\noperationalizations as regularizers R. Under this new objective, we minimize\nLR(θ) = L(θ) + β · R(θ) (5)\nwhere β > 0 is the strength coefficient of the regularizer. We consider two natural operationalizations of UID—inspired by Collins (2014)—as regularizers for training language models:\nVariance Regularizer. UID concerns the distribution of information in language production, and so a natural measure of this behavior is the variance of surprisals. Thus, we first consider a regularizer that penalizes high variance among the surprisals of words in a given sequence:\nR(θ) = 1 |w| |w|∑ t=1 (u(wt)− µ)2 (6)\nwhere µ = 1|w| ∑|w|\nt=1 u(wt). Note that here, and in our subsequent regularizers, we estimate u(·) via eq. (4) using our model pθ.\nLocal Consistency. Next, we consider a local consistency regularizer that encourages the surprisals of adjacent words to have similar magnitude:\nR(θ) = 1 |w|−1 |w|−1∑ t=1 ( u(wt)− u(wt+1) )2 (7)\nThis regularizer is also a reasonable operationalization of UID—if every surprisal is similar to its neighbor, then the density of information in the sequence will be close to uniform.\nThough we focus on these two regularizers, other operationalizations of UID certainly exist. For example, a similar variant of the above regularizers is the max regularizer (Meister et al., 2020a), which penalizes the highest surprisal in a sentence.3 Furthermore, UID may also be defined in terms of parse steps (Hale, 2001) or structural integrations (Gibson, 2000), as well as in spoken language in the form of filler words like uh and um or word repetition during challenging lexical retrieval. We consider these operationalizations (as well as the broader discussion of how to operationalize UID) as future work.\n3We also tried this operationalization in preliminary experiments, but results were not as strong as the variance or local consistency regularizers."
+    }, {
+      "heading" : "5 Experimental Setup",
+      "text" : "To empirically evaluate UID regularization, we train various language models with the UIDregularized objective (eq. (5)) using the following experimental setup.\nDatasets. We employ datasets from multiple languages and of varying sizes. We use the EuroParl corpus (Koehn, 2005)—a multi-lingual dataset of discussions from the European Parliament that has been commonly used for language modeling (Cotterell et al., 2018; Mielke et al., 2019)—since it is roughly semantically controlled in that all utterances are presumably about the same topics. We use EuroParl v7 download from the ACL 2014 SMT Workshop4 and perform a 80–10–10 traindev-test split on all five languages—Czech, English, French, German, and Spanish—which yields 46.7, 42.2, 47.2, 51.3, and 12.4 million training tokens for each language respectively.\nMoreover, we experiment on languages from several language families; the five languages in Europarl that we consider are all Indo-European, and so we look to Wiki-40B (Guo et al., 2020), which contains Wikipedia dumps of a wide range of languages. We choose a set of diverse languages with training set sizes relatively similar to that of EuroParl: Finnish (a Uralic language; 59.3M training tokens), Indonesian (an Austronesian language; 45.7M training tokens), and Turkish (a Turkic language; 38.1M training tokens). To explore performance on lower-resource languages, we additionally experiment with Swahili5 (a Niger-Congo language; 6.3M training tokens) and Tagalog (an Austronesian language; 4.2M training tokens). For all languages, we performed tokenization using the MosesTokenizer.6 Train, dev, and test set splits are shown in Table 5 in the Appendix.\nModel Framework and Architecture. For our experiments, we use the fairseq library (Ott et al., 2019), a standard sequence modeling toolkit in PyTorch. As our model, we use fairseq’s default transformer (with six decoder layers and eight\n4http://statmt.org/wmt14/ translation-task.html\n5Since there are no Niger-Congo languages in Wiki-40B, we perform a 80-10-10 split on Swahili Wikidumps (see https://github.com/google-research/bert/ blob/master/multilingual.md).\n6https://pypi.org/project/ mosestokenizer/\nattention heads), which achieves competitive7 language modeling performance (although the purpose of our paper is not to achieve or compare with the state of the art). For all experiments, we followed the data-preprocessing scripts and recommended hyperparameters provided in fairseq’s language modeling module; more detailed information can be found on the Github page.8\nUID Regularizers. For UID regularization, we experiment with the variance (eq. (6)) and local consistency regularizers (eq. (7)). We found in preliminary experiments that effective regularization strengths were often near β = 0.01, and so we performed a grid search over values within an order of magnitude around β = 0.01: β ∈ {0.006, 0.008, 0.01, 0.02, 0.03, 0.04, 0.05}. We choose the model with the lowest dev loss to evaluate on the test set."
+    }, {
+      "heading" : "6 Results",
+      "text" : "In this section, we report results for models trained under the UID-regularized objective. We find that UID regularization consistently improves perplexity for models trained on various languages (§6.1) and dataset sizes (§6.2). Additionally, we examine properties of text generated by UID-regularized models (§6.3) and analyze the relationship between our operationalization of UID and perplexity (§6.4)."
+    }, {
+      "heading" : "6.1 Languages",
+      "text" : "Table 1 shows the results of UID-regularized language models trained on various languages from EuroParl and Wiki-40B, and includes statistical significance of changes in perplexity, as compared with baselines, computed using permutation tests9 (Efron and Tibshirani, 1994). For all languages, UID regularization significantly improves perplexity for at least one of the two regularizers. Further-\n7On Wikitext-103, the largest dataset we train on (103 million tokens), we achieve a competitive perplexity of 29.89 (c.f. Merity et al. (2018)). For smaller datasets, we tried a smaller transformer architecture of four decoder layers and four attention heads, but it did not perform better than the six decoder layer and eight attention heads version, suggesting that this architecture was not too large for the datasets we use in this paper (even the Tagalog dataset we use is larger than the commonly used Penn Treebank and WikiText-2).\n8https://github.com/pytorch/fairseq/ tree/master/examples/language_model\n9http://www2.stat.duke.edu/~ar182/rr/ examples-gallery/PermutationTest.html\nmore, UID regularization (under the best performing β) never leads to worse perplexity. These results suggest that incorporating UID operationalizations into a model’s training objective leads to a better model of language, substantiating uniform information density as a valid inductive bias. Moreover, the improvement for many languages corroborates the expectation that UID should, due to its information theoretic nature, hold across languages (Jaeger and Tily, 2011)."
+    }, {
+      "heading" : "6.2 Dataset Size",
+      "text" : "Notably, we observe the largest improvements (1.6–2.9%) in perplexity in Table 1 for the lowest resource languages, Tagalog and Swahili (with 4.2 and 6.3 million training tokens respectively). Conversely, improvement was most marginal (0.2– 0.5%) on the highest-resource languages, French and Finnish (51.3 and 59.3 million training tokens respectively). To remove language as a confounding factor from this observation, we perform a controlled analysis of the effects of UID regularization as a function of dataset size.\nWe focus on English; in addition to the result on English EuroParl 2014 from Table 1, which contains 47.0 million training tokens, we experiment with the smaller monolingual English dataset from the 2006 NAACL Workshop on Statistical Machine Translation (WMT’06),10 which has 17.0M tokens in its training set, as well as the larger Wikitext-103 benchmark (Merity et al., 2017), which contains 103 million tokens in its training set.\nTable 2 shows the perplexities for models with and without UID regulariztion for these three datasets. As suggested by earlier results, improvements were strongest for the WMT’06 dataset, with an improvement of 1.4 perplexity points for the variance regularizer and 0.9 PPL points for local consistency. For the larger EuroParl and WT-103 datasets, on the other hand, improvement was more modest, ranging from 0.1 to 0.3 perplexity points.\nAs further confirmation that UID regularization has a greater impact on smaller datasets, we perform an ablation study that roughly controls for language content by training models on the subsets of the same dataset. For this ablation, we take subsets of 2, 4, 8, 12, 16, 24, and 32 million sentences from the 47 million sentences in English EuroParl,\n10We downloaded the given train-dev-test splits from https://www.statmt.org/wmt06/.\nand observe how much the UID regularizers improve perplexity for each training dataset size. As shown in Figure 2, the results tell the same story as Table 2—UID regularization improves perplexity more for smaller datasets.\nThese results are consistent with the expectation that models trained on smaller datasets are more likely to overfit and could therefore benefit more from regularization (Melis et al., 2018). As it is possible that the models trained on smaller datasets could benefit from any kind of regularization, we experiment with label smoothing (Szegedy et al., 2016), another regularization technique that similarly augments the training objective with a penalty. Table 4 shows these results for models trained on WMT’06 and EuroParl with label smoothing—our experiments indicate that, across the board, label smoothing leads to worse perplexity compared with baseline models.11 We take this result as further evidence that the improvement from UID regularization stems from the UID hypothesis as a valid inductive bias, rather than simply a need for any kind of regularization when training on smaller datasets.\n11This negative result for applying label smoothing to language modeling is consistent with prior empirical findings (Müller et al., 2019; Gao et al., 2020; Meister et al., 2020b)."
+    }, {
+      "heading" : "6.3 Evaluating Generated Text",
+      "text" : "Unconditional models of language have been observed to produce generic text that can be short, bland, or repetitive (Fan et al., 2018; Kulikov et al., 2019; Holtzman et al., 2020), and so in this subsection we investigate how UID regularization might affect these characteristics in generated text. For these experiments, we consider the baseline model, the variance-regularized model, and the local consistency-regularized model trained on English EuroParl. To obtain text samples, we generate samples by sequentially sampling tokens according to the model’s predicted distribution until the endof-sequence (EOS) token is sampled, i.e., ancestral sampling. Note that for language model p, this sampling scheme is equivalent to directly sampling y ∼ p. We obtain 10,000 samples for each model and report statistics in Table 3.\nWe analyze each set of generated sentences for several metrics. First, we compute the average length of generated sentences. Next, we evaluate the lexical diversity of generated texts by computing the percent of unique n-grams for n ∈ {2, 3, 4}. Finally, sampling from a model also gives us a means for estimating the language model’s entropy:\nH(p) = − ∑\ny∈supp(p)\np(y) log p(y) (8)\n= −Ey∼p (log p(y)) (9)\nIn the case of language models, supp(p) is the set of all strings that can be generated from the model’s\nvocabulary V . As this is exponentially large in |V|, directly computing H(p) is intractable. We can use its equivalence to eq. (9), however, to estimate H(p) with a simple Monte-Carlo estimator:\nĤ(p) = − 1 K K∑ k=1 log p(y(k)) (10)\nwhere we sample y(k) ∼ p for k = 1, . . . ,K. Table 3 shows results from UID-regularized models compared with the baseline. The models trained with the variance and local consistency regularizers exhibit a preference for longer sequence length and higher lexical diversity. Additionally, the entropy estimates of these models are notably higher, which, following the principle of maximum entropy (Jaynes, 1957),12 can be seen as an additional advantage of UID-regularized models over their unregularized counterparts."
+    }, {
+      "heading" : "6.4 UID Behavior",
+      "text" : "To take a closer look at how UID regularization affects language models, we examine the relationship between minimizing perplexity and UID behavior, where we quantify UID behavior as the variance of models’ surprisals. We consider models trained on the English EuroParl dataset with the variance regularizer at strengths β ∈ {0.01, 0.03, 0.05, 0.07, 0.09} and our baseline (which is equivalent to β = 0), For further comparison, we also train a model with β = −0.01 to observe the effects of penalizing UID behavior. We report results on the EuroParl test set in Figure 3.\nWe observe that the model trained with a UID penalty (negative β) indeed exhibits worse perplexity and UID behavior (variance of surprisals) on the test set. And as we might expect, models trained with higher β exhibit UID behavior more strongly, as our quantification is part of their training objective. Overall, from β = 0.01 to β = 0.05, both\n12The principle of maximum entropy states that the probability distribution that best represents the current knowledge state is the one with the largest entropy.\nperplexity and UID behavior are positively correlated with β, but when we optimize too much for UID (β ≥ 0.07), there is a trade-off in which model perplexity begins to increase.\nWe also observe an intriguing phenomenon in Figure 3. Models that achieve similar perplexity can have substantially different UID behavior values on the test set. Specifically, the β = 0 and β = 0.07 models, which have almost the same perplexity, have variance of surprisals of 17.8 and 15.8—a difference of more than ten percent! If such models with similar perplexity can have varying definitions of what constitutes good UID behavior, then prior work, which has drawn conclusions on UID based on surprisals computed by a single model (Aylett and Turk, 2004; Levy and Jaeger, 2007; Jain et al., 2018), may need revisiting. As this direction is outside the scope of the present paper, we leave it as future work."
+    }, {
+      "heading" : "7 Discussion and Related Work",
+      "text" : "We discussed how operationalizing UID for language modeling leads to better models in a wide variety of settings. These results both provide a new form of evidence for the UID hypothesis and build on prior work exploring UID in modern-day NLP models.\nEvidence for the UID hypothesis. Our work extends the body of psycholinguistic research on uniform information density, which has largely corroborated the UID hypothesis by providing evidence that variation in surprisal, as estimated by a lan-\nguage model, is minimized in natural language. In addition to early studies that used this approach to find evidence for UID in syntactic reduction (Levy and Jaeger, 2007), morphosyntactic contractions (Frank and Jaeger, 2008), and prosodic structure (Aylett and Turk, 2004), the same line of reasoning has been used by more recent work exploring a variety of other linguistic properties. These studies have found that word duration can be predicted by syntactic surprisal (Demberg et al., 2012; MooreCantwell, 2013), construction probability (Kuperman and Bresnan, 2012), informativity (Seyfarth, 2014), and contextual predictability (Jurafsky et al., 2001; Bell et al., 2003; Gahl and Garnsey, 2004). They have also observed that word length is reflected by conceptual complexity (Lewis and Frank, 2016); word order choice can be predicted by processing cost (Bloem, 2016; Sikos et al., 2017); phonological patterns can be shaped by word predictability (Hall et al., 2018); and UID computed at the sequence level predicts human preferences for syntactic alternatives of the same sentence.\nWhereas the above prior work has used language modeling as a tool for measuring UID, our paper has explored the exact converse—we have asked whether UID, operationalized as a regularizer, can be used as a tool for training better language models. We argue that if the UID hypothesis holds as a general principle, then we should be able to exploit it as a training criterion that improves language modeling. And accordingly, our results show that—across a variety of languages and dataset sizes—regularization for UID did indeed improve perplexity, which we view as an alternative kind of evidence for the UID hypothesis at scale.\nNotably, Figure 3 at first could appear to contradict the UID hypothesis, since models with better UID behavior did not always achieve better perplexity. We do not consider this as evidence against the UID hypothesis, however. Rather, we posit that when β is too large, we may be optimizing for UID to the point of tending towards unnatural language—a perfectly uniform dispersion of information across an utterance may come at the cost of strange lexical choices. In this light, such a trade-off should be somewhat expected.\nUID in modern NLP. In addition to the traditional line of psycholinguistic work, there have also been more-recent studies on UID in the context of modern NLP, although this work is relatively sparse. Rubino et al. (2016) leverage infor-\nmation density encoded as surprisal at the word, part of speech, and syntax levels to help build a state-of-the-art model for mixed-domain translationese detection. Jain et al. (2018) incorporate UID measures across sentences into models designed to detect natural versus manipulated text. Perhaps the work that is most related to ours, Meister et al. (2020a), leverages UID to explain why beam search is an effective decoding algorithm and uses operationalizations of UID during beam search to alleviate problems with decoding poorly calibrated machine translation models. Whereas Meister et al. (2020a) focuses on decoding, our work shows the first evidence that UID can be operationalized to aid training."
+    }, {
+      "heading" : "8 Conclusions",
+      "text" : "In closing, we have proposed encoding uniform information density as a regularizer for training language models—a novel manner of incorporating an established psycholinguistic theory into modern statistical language modeling. In experiments on a range of languages and dataset sizes, UID regularization consistently improves perplexity over baselines. Our results suggest that UID is a valid inductive bias for improving the canonical maximum likelihood objective in language modeling, providing a new, alternative type of evidence that supports the UID hypothesis at scale. Our work opens the door to future research directions such as using similar techniques to validate other psycholinguistic phenomena, applying UID regularization in conditional language generation tasks, and exploring how UID regularized models perform in downstream NLP applications.\nEthical Concerns\nLanguage models have various ethical, environmental, and financial concerns. We cannot do justice to them here, but do see Bender et al. (2021) for a pointer. We do not foresee any additional ethical concerns with the contributions made in our work beyond those discussed in Bender et al. (2021)."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "We thank Roger Levy for feedback in the middle stages of our work and Tiago Pimentel, David Reitter, Tal Linzen, and Slav Petrov for feedback on the manuscript."
+    }, {
+      "heading" : "A Appendix",
+      "text" : "Datasets. Table 5 shows the train, dev, and test set splits for the language modeling datasets we use.\nHyperparameters. Table 6 shows the optimized β hyperparameter from a grid-search over β ∈ {0.006, 0.008, 0.01, 0.02, 0.03, 0.04, 0.05} for both regularizers on all datasets we use. Notably, the best β for variance ranged from 1×10−2 to 5×10−2, and the best β for local consistency ranged from 6×10−3 to 2×10−2. For use on a new dataset, we recommend starting with 1×10−2, which we found almost always improved perplexity for both regularizers (on these datasets, at least)."
+    } ],
+    "references" : [ {
+      "title" : "The smooth signal redundancy hypothesis: A functional explanation for relationships between redundancy, prosodic prominence, and duration in spontaneous speech",
+      "author" : [ "Matthew Aylett", "Alice Turk." ],
+      "venue" : "Language and Speech, 47(1):31–56. PMID:",
+      "citeRegEx" : "Aylett and Turk.,? 2004",
+      "shortCiteRegEx" : "Aylett and Turk.",
+      "year" : 2004
+    }, {
+      "title" : "Predictability effects on durations of content and function words in conversational English",
+      "author" : [ "Alan Bell", "Jason M. Brenier", "Michelle Gregory", "Cynthia Girand", "Dan Jurafsky." ],
+      "venue" : "Journal of Memory and Language, 60(1):92–111.",
+      "citeRegEx" : "Bell et al\\.,? 2009",
+      "shortCiteRegEx" : "Bell et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Effects of disfluencies, predictability, and utterance position on word form variation in English conversation",
+      "author" : [ "Alan Bell", "Daniel Jurafsky", "Eric Fosler-Lussier", "Cynthia Girand", "Michelle Gregory", "Daniel Gildea." ],
+      "venue" : "The Journal of the Acoustical Society",
+      "citeRegEx" : "Bell et al\\.,? 2003",
+      "shortCiteRegEx" : "Bell et al\\.",
+      "year" : 2003
+    }, {
+      "title" : "McMillanMajor, and Shmargaret Shmitchell",
+      "author" : [ "Emily M. Bender", "Timnit Gebru", "Angelina" ],
+      "venue" : "In Proceedings of the 2021 ACM Conference on Fairness, Accountability, and Transparency,",
+      "citeRegEx" : "Bender et al\\.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Bender et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Testing the processing hypothesis of word order variation using a probabilistic language model",
+      "author" : [ "Jelke Bloem." ],
+      "venue" : "Proceedings of the Workshop on Computational Linguistics for Linguistic Complexity (CL4LC), pages 174–185, Osaka, Japan. The",
+      "citeRegEx" : "Bloem.,? 2016",
+      "shortCiteRegEx" : "Bloem.",
+      "year" : 2016
+    }, {
+      "title" : "Information density and dependency length as complementary cognitive models",
+      "author" : [ "Michael Xavier Collins." ],
+      "venue" : "Journal of Psycholinguistic Research, 43(5):651–681.",
+      "citeRegEx" : "Collins.,? 2014",
+      "shortCiteRegEx" : "Collins.",
+      "year" : 2014
+    }, {
+      "title" : "Are all languages equally hard to language-model",
+      "author" : [ "Ryan Cotterell", "Sabrina J. Mielke", "Jason Eisner", "Brian Roark" ],
+      "venue" : "In Proceedings of the 2018 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Cotterell et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Cotterell et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Syntactic surprisal affects spoken word duration in conversational contexts",
+      "author" : [ "Vera Demberg", "Asad Sayeed", "Philip Gorinski", "Nikolaos Engonopoulos." ],
+      "venue" : "Proceedings of the 2012 Joint Conference on Empirical Methods in Natural Language Process-",
+      "citeRegEx" : "Demberg et al\\.,? 2012",
+      "shortCiteRegEx" : "Demberg et al\\.",
+      "year" : 2012
+    }, {
+      "title" : "An Introduction to the Bootstrap",
+      "author" : [ "Bradley Efron", "Robert J. Tibshirani." ],
+      "venue" : "CRC Press.",
+      "citeRegEx" : "Efron and Tibshirani.,? 1994",
+      "shortCiteRegEx" : "Efron and Tibshirani.",
+      "year" : 1994
+    }, {
+      "title" : "Hierarchical neural story generation",
+      "author" : [ "Angela Fan", "Mike Lewis", "Yann Dauphin." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for",
+      "citeRegEx" : "Fan et al\\.,? 2018",
+      "shortCiteRegEx" : "Fan et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Konstanz im kurzzeitgedächtnis-konstanz im sprachlichen informationsfluß",
+      "author" : [ "August Fenk", "Gertraud Fenk." ],
+      "venue" : "Zeitschrift für Experimentelle und Angewandte Psychologie, 27:400–414.",
+      "citeRegEx" : "Fenk and Fenk.,? 1980",
+      "shortCiteRegEx" : "Fenk and Fenk.",
+      "year" : 1980
+    }, {
+      "title" : "Speaking rationally: Uniform information density as an optimal strategy for language production",
+      "author" : [ "Austin F. Frank", "T. Florian Jaeger." ],
+      "venue" : "Proceedings of the Annual Meeting of the Cognitive Science Society, volume 30.",
+      "citeRegEx" : "Frank and Jaeger.,? 2008",
+      "shortCiteRegEx" : "Frank and Jaeger.",
+      "year" : 2008
+    }, {
+      "title" : "Knowledge of grammar, knowledge of usage: Syntactic probabilities affect pronunciation variation",
+      "author" : [ "Susanne Gahl", "Susan M. Garnsey." ],
+      "venue" : "Language, pages 748–775.",
+      "citeRegEx" : "Gahl and Garnsey.,? 2004",
+      "shortCiteRegEx" : "Gahl and Garnsey.",
+      "year" : 2004
+    }, {
+      "title" : "Towards a better understanding of label smoothing in neural machine translation",
+      "author" : [ "Yingbo Gao", "Weiyue Wang", "Christian Herold", "Zijian Yang", "Hermann Ney." ],
+      "venue" : "Proceedings of the 1st Conference of the Asia-Pacific Chapter of the Associa-",
+      "citeRegEx" : "Gao et al\\.,? 2020",
+      "shortCiteRegEx" : "Gao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "The dependency locality theory: A distance-based theory of linguistic complexity",
+      "author" : [ "Edward Gibson." ],
+      "venue" : "Image, language, brain: Papers from the first mind articulation project symposium, 2000:95–126.",
+      "citeRegEx" : "Gibson.,? 2000",
+      "shortCiteRegEx" : "Gibson.",
+      "year" : 2000
+    }, {
+      "title" : "Wiki-40B: Multilingual language model dataset",
+      "author" : [ "Mandy Guo", "Zihang Dai", "Denny Vrandečić", "Rami Al-Rfou." ],
+      "venue" : "Proceedings of the 12th Language Resources and Evaluation Conference, pages 2440–2452, Marseille, France. European Language",
+      "citeRegEx" : "Guo et al\\.,? 2020",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A probabilistic Earley parser as a psycholinguistic model",
+      "author" : [ "John Hale." ],
+      "venue" : "Second Meeting of the North American Chapter of the Association for Computational Linguistics.",
+      "citeRegEx" : "Hale.,? 2001",
+      "shortCiteRegEx" : "Hale.",
+      "year" : 2001
+    }, {
+      "title" : "The role of predictability in shaping phonological patterns",
+      "author" : [ "Kathleen Currie Hall", "Elizabeth Hume", "T. Florian Jaeger", "Andrew Wedel." ],
+      "venue" : "Linguistics Vanguard, 4(s2).",
+      "citeRegEx" : "Hall et al\\.,? 2018",
+      "shortCiteRegEx" : "Hall et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "The curious case of neural text degeneration",
+      "author" : [ "Ari Holtzman", "Jan Buys", "Maxwell Forbes", "Yejin Choi." ],
+      "venue" : "Proceedings of the International Conference on Learning Representations.",
+      "citeRegEx" : "Holtzman et al\\.,? 2020",
+      "shortCiteRegEx" : "Holtzman et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Redundancy and reduction: Speakers manage syntactic information density",
+      "author" : [ "T. Florian Jaeger." ],
+      "venue" : "Cognitive Psychology, 61(1).",
+      "citeRegEx" : "Jaeger.,? 2010",
+      "shortCiteRegEx" : "Jaeger.",
+      "year" : 2010
+    }, {
+      "title" : "On language ‘utility’: Processing complexity and communicative efficiency",
+      "author" : [ "T. Florian Jaeger", "Harry Tily." ],
+      "venue" : "Wiley Interdisciplinary Reviews: Cognitive Science, 2.",
+      "citeRegEx" : "Jaeger and Tily.,? 2011",
+      "shortCiteRegEx" : "Jaeger and Tily.",
+      "year" : 2011
+    }, {
+      "title" : "Uniform Information Density effects on syntactic choice in Hindi",
+      "author" : [ "Ayush Jain", "Vishal Singh", "Sidharth Ranjan", "Rajakrishnan Rajkumar", "Sumeet Agarwal." ],
+      "venue" : "Proceedings of the Workshop on Linguistic Complexity and Natural Language Processing,",
+      "citeRegEx" : "Jain et al\\.,? 2018",
+      "shortCiteRegEx" : "Jain et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Information Theory and Statistical Mechanics",
+      "author" : [ "Edwin T. Jaynes." ],
+      "venue" : "Physical Review, 106(4):620.",
+      "citeRegEx" : "Jaynes.,? 1957",
+      "shortCiteRegEx" : "Jaynes.",
+      "year" : 1957
+    }, {
+      "title" : "Probabilistic relations between words: Evidence from reduction in lexical production",
+      "author" : [ "Daniel Jurafsky", "Alan Bell", "Michelle Gregory", "William D. Raymond." ],
+      "venue" : "Typological Studies in Language, 45:229–254.",
+      "citeRegEx" : "Jurafsky et al\\.,? 2001",
+      "shortCiteRegEx" : "Jurafsky et al\\.",
+      "year" : 2001
+    }, {
+      "title" : "Europarl: A parallel corpus for statistical machine translation",
+      "author" : [ "Philipp Koehn." ],
+      "venue" : "MT Summit, pages 79–86.",
+      "citeRegEx" : "Koehn.,? 2005",
+      "shortCiteRegEx" : "Koehn.",
+      "year" : 2005
+    }, {
+      "title" : "Importance of search and evaluation strategies in neural dialogue modeling",
+      "author" : [ "Ilia Kulikov", "Alexander Miller", "Kyunghyun Cho", "Jason Weston." ],
+      "venue" : "Proceedings of the 12th International Conference on Natural Language Generation, pages 76–87, Tokyo,",
+      "citeRegEx" : "Kulikov et al\\.,? 2019",
+      "shortCiteRegEx" : "Kulikov et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The effects of construction probability on word durations during spontaneous incremental sentence production",
+      "author" : [ "Victor Kuperman", "Joan Bresnan." ],
+      "venue" : "Journal of Memory and Language, 66(4):588–611.",
+      "citeRegEx" : "Kuperman and Bresnan.,? 2012",
+      "shortCiteRegEx" : "Kuperman and Bresnan.",
+      "year" : 2012
+    }, {
+      "title" : "Speakers optimize information density through syntactic reduction",
+      "author" : [ "Roger P. Levy", "T.F. Jaeger." ],
+      "venue" : "Advances in Neural Information Processing Systems.",
+      "citeRegEx" : "Levy and Jaeger.,? 2007",
+      "shortCiteRegEx" : "Levy and Jaeger.",
+      "year" : 2007
+    }, {
+      "title" : "The length of words reflects their conceptual complexity",
+      "author" : [ "Molly L. Lewis", "Michael C. Frank." ],
+      "venue" : "Cognition, 153:182–195.",
+      "citeRegEx" : "Lewis and Frank.,? 2016",
+      "shortCiteRegEx" : "Lewis and Frank.",
+      "year" : 2016
+    }, {
+      "title" : "If beam search is the answer, what was the question? In Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 2173–2185, Online",
+      "author" : [ "Clara Meister", "Ryan Cotterell", "Tim Vieira." ],
+      "venue" : "Association for Computa-",
+      "citeRegEx" : "Meister et al\\.,? 2020a",
+      "shortCiteRegEx" : "Meister et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Generalized entropy regularization or: There’s nothing special about label smoothing",
+      "author" : [ "Clara Meister", "Elizabeth Salesky", "Ryan Cotterell." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, Online. Asso-",
+      "citeRegEx" : "Meister et al\\.,? 2020b",
+      "shortCiteRegEx" : "Meister et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "On the state of the art of evaluation in neural language models",
+      "author" : [ "Gábor Melis", "Chris Dyer", "Phil Blunsom." ],
+      "venue" : "Proceedings of the International Conference on Learning Representations.",
+      "citeRegEx" : "Melis et al\\.,? 2018",
+      "shortCiteRegEx" : "Melis et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "An analysis of neural language modeling at multiple scales",
+      "author" : [ "Stephen Merity", "Nitish Shirish Keskar", "Richard Socher." ],
+      "venue" : "CoRR, abs/1803.08240.",
+      "citeRegEx" : "Merity et al\\.,? 2018",
+      "shortCiteRegEx" : "Merity et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Pointer sentinel mixture models",
+      "author" : [ "Stephen Merity", "Caiming Xiong", "James Bradbury", "Richard Socher." ],
+      "venue" : "Proceedings of the International Conference on Learning Representations.",
+      "citeRegEx" : "Merity et al\\.,? 2017",
+      "shortCiteRegEx" : "Merity et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "What kind of language is hard to language-model",
+      "author" : [ "Sabrina J. Mielke", "Ryan Cotterell", "Kyle Gorman", "Brian Roark", "Jason Eisner" ],
+      "venue" : "In Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Mielke et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Mielke et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Syntactic predictability influences duration",
+      "author" : [ "Claire Moore-Cantwell." ],
+      "venue" : "Proceedings of Meetings on Acoustics. Acoustical Society of America.",
+      "citeRegEx" : "Moore.Cantwell.,? 2013",
+      "shortCiteRegEx" : "Moore.Cantwell.",
+      "year" : 2013
+    }, {
+      "title" : "When does label smoothing help",
+      "author" : [ "Rafael Müller", "Simon Kornblith", "Geoffrey E. Hinton" ],
+      "venue" : "In Advances in Neural Information Processing Systems",
+      "citeRegEx" : "Müller et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Müller et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "fairseq: A fast, extensible toolkit for sequence modeling",
+      "author" : [ "Myle Ott", "Sergey Edunov", "Alexei Baevski", "Angela Fan", "Sam Gross", "Nathan Ng", "David Grangier", "Michael Auli." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chap-",
+      "citeRegEx" : "Ott et al\\.,? 2019",
+      "shortCiteRegEx" : "Ott et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Lexical frequency and acoustic reduction in spoken dutch",
+      "author" : [ "Mark Pluymaekers", "Mirjam Ernestus", "R. Harald Baayen." ],
+      "venue" : "The Journal of the Acoustical Society of America, 118(4):2561–2569.",
+      "citeRegEx" : "Pluymaekers et al\\.,? 2005",
+      "shortCiteRegEx" : "Pluymaekers et al\\.",
+      "year" : 2005
+    }, {
+      "title" : "Information density and quality estimation features as translationese indicators for human translation classification",
+      "author" : [ "Raphael Rubino", "Ekaterina Lapshinova-Koltunski", "Josef van Genabith." ],
+      "venue" : "Proceedings of the 2016 Conference of the North Amer-",
+      "citeRegEx" : "Rubino et al\\.,? 2016",
+      "shortCiteRegEx" : "Rubino et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Word informativity influences acoustic duration: Effects of contextual predictability on lexical representation",
+      "author" : [ "Scott Seyfarth." ],
+      "venue" : "Cognition, 133(1):140– 155.",
+      "citeRegEx" : "Seyfarth.,? 2014",
+      "shortCiteRegEx" : "Seyfarth.",
+      "year" : 2014
+    }, {
+      "title" : "A mathematical theory of communication",
+      "author" : [ "Claude E. Shannon." ],
+      "venue" : "The Bell System Technical Journal, 27(3):379–423.",
+      "citeRegEx" : "Shannon.,? 1948",
+      "shortCiteRegEx" : "Shannon.",
+      "year" : 1948
+    }, {
+      "title" : "Information density of encodings: The role of syntactic variation in comprehension",
+      "author" : [ "Les Sikos", "Clayton Greenberg", "Heiner Drenhaus", "Matthew W. Crocker." ],
+      "venue" : "Proceedings of the 39th Annual Meeting of the Cognitive Science Society.",
+      "citeRegEx" : "Sikos et al\\.,? 2017",
+      "shortCiteRegEx" : "Sikos et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Rethinking the inception architecture for computer vision",
+      "author" : [ "Christian Szegedy", "Vincent Vanhoucke", "Sergey Ioffe", "Jon Shlens", "Zbigniew Wojna." ],
+      "venue" : "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition, pages 2818–2826.",
+      "citeRegEx" : "Szegedy et al\\.,? 2016",
+      "shortCiteRegEx" : "Szegedy et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Łukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 10,
+      "context" : "One of the most famous of these constraints is the uniform information density (UID) hypothesis (Fenk and Fenk, 1980; Jaeger, 2010), which states that, subject to the rules of the grammar, speakers aim to distribute information density across a linguistic signal as uniformly as possible.",
+      "startOffset" : 96,
+      "endOffset" : 131
+    }, {
+      "referenceID" : 19,
+      "context" : "One of the most famous of these constraints is the uniform information density (UID) hypothesis (Fenk and Fenk, 1980; Jaeger, 2010), which states that, subject to the rules of the grammar, speakers aim to distribute information density across a linguistic signal as uniformly as possible.",
+      "startOffset" : 96,
+      "endOffset" : 131
+    }, {
+      "referenceID" : 0,
+      "context" : "units (Aylett and Turk, 2004) to when we decide to use optional syntactic relativizers (Levy and Jaeger, 2007), among other phenomena (Bell et al.",
+      "startOffset" : 6,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 27,
+      "context" : "units (Aylett and Turk, 2004) to when we decide to use optional syntactic relativizers (Levy and Jaeger, 2007), among other phenomena (Bell et al.",
+      "startOffset" : 87,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 2,
+      "context" : "units (Aylett and Turk, 2004) to when we decide to use optional syntactic relativizers (Levy and Jaeger, 2007), among other phenomena (Bell et al., 2003; Frank and Jaeger, 2008).",
+      "startOffset" : 134,
+      "endOffset" : 177
+    }, {
+      "referenceID" : 11,
+      "context" : "units (Aylett and Turk, 2004) to when we decide to use optional syntactic relativizers (Levy and Jaeger, 2007), among other phenomena (Bell et al., 2003; Frank and Jaeger, 2008).",
+      "startOffset" : 134,
+      "endOffset" : 177
+    }, {
+      "referenceID" : 44,
+      "context" : ", transformers (Vaswani et al., 2017)), that follow a localnormalization scheme.",
+      "startOffset" : 15,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 0,
+      "context" : "5193 their utterances to avoid peaks and troughs in this information density (Aylett and Turk, 2004; Levy and Jaeger, 2007; Jaeger, 2010).",
+      "startOffset" : 77,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 27,
+      "context" : "5193 their utterances to avoid peaks and troughs in this information density (Aylett and Turk, 2004; Levy and Jaeger, 2007; Jaeger, 2010).",
+      "startOffset" : 77,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 19,
+      "context" : "5193 their utterances to avoid peaks and troughs in this information density (Aylett and Turk, 2004; Levy and Jaeger, 2007; Jaeger, 2010).",
+      "startOffset" : 77,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 41,
+      "context" : "Now that we better understand what the UID hypothesis attempts to explain, how might we operationalize UID and find quantitative evidence of the pressure for it in language? First, to quantify the amount of information conveyed by a word, we turn to the most basic information-theoretic definition: the information conveyed by a word w in context is its Shannon information content (Shannon, 1948), also called surprisal.",
+      "startOffset" : 382,
+      "endOffset" : 397
+    }, {
+      "referenceID" : 29,
+      "context" : "For example, a similar variant of the above regularizers is the max regularizer (Meister et al., 2020a), which penalizes the highest surprisal in a sentence.",
+      "startOffset" : 80,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 16,
+      "context" : "3 Furthermore, UID may also be defined in terms of parse steps (Hale, 2001) or structural integrations (Gibson, 2000), as well as in spoken language in the form of filler words like uh and um or word repetition during challenging lexical retrieval.",
+      "startOffset" : 63,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 14,
+      "context" : "3 Furthermore, UID may also be defined in terms of parse steps (Hale, 2001) or structural integrations (Gibson, 2000), as well as in spoken language in the form of filler words like uh and um or word repetition during challenging lexical retrieval.",
+      "startOffset" : 103,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 24,
+      "context" : "We use the EuroParl corpus (Koehn, 2005)—a multi-lingual dataset of discussions from the European Parliament that has been commonly used for language modeling (Cotterell et al.",
+      "startOffset" : 27,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 6,
+      "context" : "We use the EuroParl corpus (Koehn, 2005)—a multi-lingual dataset of discussions from the European Parliament that has been commonly used for language modeling (Cotterell et al., 2018; Mielke et al., 2019)—since it is roughly semantically controlled in that all utterances are presumably about the same topics.",
+      "startOffset" : 159,
+      "endOffset" : 204
+    }, {
+      "referenceID" : 34,
+      "context" : "We use the EuroParl corpus (Koehn, 2005)—a multi-lingual dataset of discussions from the European Parliament that has been commonly used for language modeling (Cotterell et al., 2018; Mielke et al., 2019)—since it is roughly semantically controlled in that all utterances are presumably about the same topics.",
+      "startOffset" : 159,
+      "endOffset" : 204
+    }, {
+      "referenceID" : 15,
+      "context" : "Moreover, we experiment on languages from several language families; the five languages in Europarl that we consider are all Indo-European, and so we look to Wiki-40B (Guo et al., 2020), which contains Wikipedia dumps of a wide range of languages.",
+      "startOffset" : 167,
+      "endOffset" : 185
+    }, {
+      "referenceID" : 37,
+      "context" : "For our experiments, we use the fairseq library (Ott et al., 2019), a standard sequence modeling toolkit in PyTorch.",
+      "startOffset" : 48,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 8,
+      "context" : "Table 1 shows the results of UID-regularized language models trained on various languages from EuroParl and Wiki-40B, and includes statistical significance of changes in perplexity, as compared with baselines, computed using permutation tests9 (Efron and Tibshirani, 1994).",
+      "startOffset" : 244,
+      "endOffset" : 272
+    }, {
+      "referenceID" : 20,
+      "context" : "Moreover, the improvement for many languages corroborates the expectation that UID should, due to its information theoretic nature, hold across languages (Jaeger and Tily, 2011).",
+      "startOffset" : 154,
+      "endOffset" : 177
+    }, {
+      "referenceID" : 33,
+      "context" : "0M tokens in its training set, as well as the larger Wikitext-103 benchmark (Merity et al., 2017), which contains 103 million tokens in its training set.",
+      "startOffset" : 76,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 31,
+      "context" : "These results are consistent with the expectation that models trained on smaller datasets are more likely to overfit and could therefore benefit more from regularization (Melis et al., 2018).",
+      "startOffset" : 170,
+      "endOffset" : 190
+    }, {
+      "referenceID" : 43,
+      "context" : "As it is possible that the models trained on smaller datasets could benefit from any kind of regularization, we experiment with label smoothing (Szegedy et al., 2016), another regularization technique that similarly augments the training objective with a penalty.",
+      "startOffset" : 144,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 36,
+      "context" : "This negative result for applying label smoothing to language modeling is consistent with prior empirical findings (Müller et al., 2019; Gao et al., 2020; Meister et al., 2020b).",
+      "startOffset" : 115,
+      "endOffset" : 177
+    }, {
+      "referenceID" : 13,
+      "context" : "This negative result for applying label smoothing to language modeling is consistent with prior empirical findings (Müller et al., 2019; Gao et al., 2020; Meister et al., 2020b).",
+      "startOffset" : 115,
+      "endOffset" : 177
+    }, {
+      "referenceID" : 30,
+      "context" : "This negative result for applying label smoothing to language modeling is consistent with prior empirical findings (Müller et al., 2019; Gao et al., 2020; Meister et al., 2020b).",
+      "startOffset" : 115,
+      "endOffset" : 177
+    }, {
+      "referenceID" : 9,
+      "context" : "Unconditional models of language have been observed to produce generic text that can be short, bland, or repetitive (Fan et al., 2018; Kulikov et al., 2019; Holtzman et al., 2020), and so in this subsection we investigate how UID regularization might affect these characteristics in generated text.",
+      "startOffset" : 116,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 25,
+      "context" : "Unconditional models of language have been observed to produce generic text that can be short, bland, or repetitive (Fan et al., 2018; Kulikov et al., 2019; Holtzman et al., 2020), and so in this subsection we investigate how UID regularization might affect these characteristics in generated text.",
+      "startOffset" : 116,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 18,
+      "context" : "Unconditional models of language have been observed to produce generic text that can be short, bland, or repetitive (Fan et al., 2018; Kulikov et al., 2019; Holtzman et al., 2020), and so in this subsection we investigate how UID regularization might affect these characteristics in generated text.",
+      "startOffset" : 116,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 22,
+      "context" : "Additionally, the entropy estimates of these models are notably higher, which, following the principle of maximum entropy (Jaynes, 1957),12 can be seen as an additional advantage of UID-regularized models over their unregularized counterparts.",
+      "startOffset" : 122,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 27,
+      "context" : "In addition to early studies that used this approach to find evidence for UID in syntactic reduction (Levy and Jaeger, 2007), morphosyntactic contractions (Frank and Jaeger, 2008), and prosodic structure (Aylett and Turk, 2004), the same line of reasoning has been used by more recent work exploring a variety of other linguistic properties.",
+      "startOffset" : 101,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 11,
+      "context" : "In addition to early studies that used this approach to find evidence for UID in syntactic reduction (Levy and Jaeger, 2007), morphosyntactic contractions (Frank and Jaeger, 2008), and prosodic structure (Aylett and Turk, 2004), the same line of reasoning has been used by more recent work exploring a variety of other linguistic properties.",
+      "startOffset" : 155,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 0,
+      "context" : "In addition to early studies that used this approach to find evidence for UID in syntactic reduction (Levy and Jaeger, 2007), morphosyntactic contractions (Frank and Jaeger, 2008), and prosodic structure (Aylett and Turk, 2004), the same line of reasoning has been used by more recent work exploring a variety of other linguistic properties.",
+      "startOffset" : 204,
+      "endOffset" : 227
+    }, {
+      "referenceID" : 7,
+      "context" : "These studies have found that word duration can be predicted by syntactic surprisal (Demberg et al., 2012; MooreCantwell, 2013), construction probability (Kuperman and Bresnan, 2012), informativity (Seyfarth, 2014), and contextual predictability (Jurafsky et al.",
+      "startOffset" : 84,
+      "endOffset" : 127
+    }, {
+      "referenceID" : 26,
+      "context" : ", 2012; MooreCantwell, 2013), construction probability (Kuperman and Bresnan, 2012), informativity (Seyfarth, 2014), and contextual predictability (Jurafsky et al.",
+      "startOffset" : 55,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 40,
+      "context" : ", 2012; MooreCantwell, 2013), construction probability (Kuperman and Bresnan, 2012), informativity (Seyfarth, 2014), and contextual predictability (Jurafsky et al.",
+      "startOffset" : 99,
+      "endOffset" : 115
+    }, {
+      "referenceID" : 23,
+      "context" : ", 2012; MooreCantwell, 2013), construction probability (Kuperman and Bresnan, 2012), informativity (Seyfarth, 2014), and contextual predictability (Jurafsky et al., 2001; Bell et al., 2003; Gahl and Garnsey, 2004).",
+      "startOffset" : 147,
+      "endOffset" : 213
+    }, {
+      "referenceID" : 2,
+      "context" : ", 2012; MooreCantwell, 2013), construction probability (Kuperman and Bresnan, 2012), informativity (Seyfarth, 2014), and contextual predictability (Jurafsky et al., 2001; Bell et al., 2003; Gahl and Garnsey, 2004).",
+      "startOffset" : 147,
+      "endOffset" : 213
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2012; MooreCantwell, 2013), construction probability (Kuperman and Bresnan, 2012), informativity (Seyfarth, 2014), and contextual predictability (Jurafsky et al., 2001; Bell et al., 2003; Gahl and Garnsey, 2004).",
+      "startOffset" : 147,
+      "endOffset" : 213
+    }, {
+      "referenceID" : 28,
+      "context" : "They have also observed that word length is reflected by conceptual complexity (Lewis and Frank, 2016); word order choice can be predicted by processing cost (Bloem, 2016; Sikos et al.",
+      "startOffset" : 79,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 4,
+      "context" : "They have also observed that word length is reflected by conceptual complexity (Lewis and Frank, 2016); word order choice can be predicted by processing cost (Bloem, 2016; Sikos et al., 2017); phonological patterns can be shaped by word predictability (Hall et al.",
+      "startOffset" : 158,
+      "endOffset" : 191
+    }, {
+      "referenceID" : 42,
+      "context" : "They have also observed that word length is reflected by conceptual complexity (Lewis and Frank, 2016); word order choice can be predicted by processing cost (Bloem, 2016; Sikos et al., 2017); phonological patterns can be shaped by word predictability (Hall et al.",
+      "startOffset" : 158,
+      "endOffset" : 191
+    }, {
+      "referenceID" : 17,
+      "context" : ", 2017); phonological patterns can be shaped by word predictability (Hall et al., 2018); and UID computed at the sequence level predicts human preferences for syntactic alternatives of the same sentence.",
+      "startOffset" : 68,
+      "endOffset" : 87
+    } ],
+    "year" : 2021,
+    "abstractText" : "The uniform information density (UID) hypothesis, which posits that speakers behaving optimally tend to distribute information uniformly across a linguistic signal, has gained traction in psycholinguistics as an explanation for certain syntactic, morphological, and prosodic choices. In this work, we explore whether the UID hypothesis can be operationalized as an inductive bias for statistical language modeling. Specifically, we augment the canonical MLE objective for training language models with a regularizer that encodes UID. In experiments on ten languages spanning five language families, we find that using UID regularization consistently improves perplexity in language models, having a larger effect when training data is limited. Moreover, via an analysis of generated sequences, we find that UID-regularized language models have other desirable properties, e.g., they generate text that is more lexically diverse. Our results not only suggest that UID is a reasonable inductive bias for language modeling, but also provide an alternative validation of the UID hypothesis using modern-day NLP tools.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

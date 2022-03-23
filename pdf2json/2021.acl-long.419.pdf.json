@@ -1,0 +1,727 @@
+{
+  "name" : "2021.acl-long.419.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "On Sample Based Explanation Methods for NLP: Faithfulness, Efficiency and Semantic Evaluation",
+    "authors" : [ "Wei Zhang", "Ziming Huang", "Yada Zhu", "Guangnan Ye", "Xiaodong Cui", "Fan Zhang" ],
+    "emails" : [ "wzhang5@wayfair.com", "hzmyouxiang@gmail.com", "yzhu@us.ibm.com", "gye@us.ibm.com", "xcui@us.ibm.com", "fzhang@us.ibm.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 5399–5411\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n5399"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "As complex NLP models such as the Transformers family (Vaswani et al., 2017; Devlin et al., 2019) become an indispensable tool in many applications, there are growing interests to explain the working mechanism of these “black-box” models. Among the vast of existing techniques for explaining machine learning models, Influence Functions (Hampel, 1974; Koh and Liang, 2017) that uses training instances as explanations to a model’s behavior have gained popularity in NLP very recently. Different from other methods such as using input erasure (Li et al., 2016), saliency maps or attention matrices (Serrano and Smith, 2019; Jain and Wallace, 2019; Wiegreffe and Pinter, 2019) that only look at\n∗Equal Contribution. Wei Zhang did the work while being a research scientist at IBM T.J. Watson Research Center at Yorktown Heights, NY, USA; Ziming Huang was a research scientist at IBM Research Lab at Beijing, China.\nhow a specific input or input sequence impacts the model decision, explaining with training instances can cast light on the knowledge a model has encoded about a problem, by answering questions like ’what knowledge did the model capture from which training instances so that it makes decision in such a manner during test?’. Very recently, the method has been applied to explain BERT-based (Devlin et al., 2019) text classification (Han et al., 2020; Meng et al., 2020b) and natural language inference (Han et al., 2020) models, as well as to aid text generation for data augmentation (Yang et al., 2020a) using GPT-2 (Radford et al., 2019). Although useful, Influence Function may not be entirely bullet-proof for NLP applications.\nFirst, following the original formulation (Koh and Liang, 2017), the majority of existing works use entire training instances as explanations. However, for long natural language texts that are common in many high-impact application domains (e.g., healthcare, finance, or security), it may be difficult, if not impossible, to comprehend an entire instance as an explanation. For example, a model’s decision may depend only on a specific part of a long training instance.\nSecond, for modern NLP models and large-scale datasets, the application of Influence Functions can lead to prohibitive computing costs due to inverse Hessian matrix approximation. Although hessianfree influence score such as TracIn (Pruthi et al., 2020b) was introduced very recently, it may not be faithful to the model in question and can result in spurious explanations for the involvement of sub-optimal checkpoints.\nLast, the evaluation of explanation methods, in particular, for the training-instance-based ones, remains an open question. Previous evaluation is either under an over-simplified assumption on the agreement of labels between training and test instances (Hanawa et al., 2020; Han et al., 2020) or\nis based on indirect or manual inspection (Hooker et al., 2019; Meng et al., 2020b; Han et al., 2020; Pruthi et al., 2020a). A method to automatically measure the semantic relations at scale and that highly correlates to human judgment is still missing in the evaluation toolset.\nTo address the above problems, we propose a framework to explain model behavior that includes both a set of new methods and a new metric that can measure the semantic relations between the test instance and its explanations. The new method allows for arbitrary text spans as the explanation unit and is Hessian-free while being faithful to the final model. Our contributions are:\n1. We propose a new explanation framework that can use arbitrary explanation units as explanations and be Hessian-free and faithful at the same time;\n2. A new metric to measure the semantic relatedness between a test instance and its explanation for BERT-based deep models."
+    }, {
+      "heading" : "2 Preliminaries",
+      "text" : "Suppose a model parameterized by θ̂ is trained on classification dataset D = {Dtrain, Dtest} by empirical risk minimization over Dtrain. Let z = (x, y) ∈ Dtrain and z′ = (x′, y′) ∈ Dtest denote a training and a test instance respectively, where x is a token sequence, and y is a scalar. The goal of training instance based explanation is to provide for a given test z′ an ordered list of training instances as explanation. Two notable methods to calculate the influence score are IF and TracIn: IF (Koh and Liang, 2017) assumes the influence of z can be measured by perturbing the loss function L with a fraction of the loss on z, and obtain\nIpert,loss(z, z′; θ̂) = −∇θL(z′, θ̂)H−1θ̂ ∇θL(z, θ̂),\n(1)\nwhere H is the Hessian matrix calculated on the entire training dataset, a potential computation bottleneck for large dataset D and complex model with high dimensional θ̂. TracIn (Pruthi et al., 2020b) instead assumes the influence of a training instance z is the sum of its contribution to the overall loss all through the\nentire training history, and conveniently it leads to\nTracIn(z, z′) =∑ i ηi∇θ̂iL(θ̂i, z)∇θ̂iL(θ̂i, z ′), (2)\nwhere i iterates through the checkpoints saved at different training steps and ηi is a weight for each checkpoint. TracIn does not involve Hessian matrix and more efficient to compute. We can summarize the key differences between them according to the following desiderata of an explanation method:\nEfficiency for each z′, TracIn requiresO(CG) where C is the number of models and G is the time spent for gradient calculation; whereas IF needs O(N2G) where N is the number of training instances, and N >> C in general. 1\nFaithfulness IF is faithful to θ̂ since all its calculation is based on a single final model, yet TracIn may be less faithful to θ̂ since it obtains gradients from a set of checkpoints 2.\nInterpretability Both methods use the entire training instance as an explanation. Explanations with a finer-grained unit, e.g., phrases, may be easier to interpret in many applications where the texts are lengthy."
+    }, {
+      "heading" : "3 Proposed Method",
+      "text" : "To improve on the above desiderata, a new method should be able to: 1) use any appropriate granularity of span(s) as the explanation unit; 2) avoid the need of Hessian while maintaining faithfulness. We discuss the solutions for both in Section 3.1 and 3.2, and combine them into one formation in Section 3.3 followed by critical implementation details."
+    }, {
+      "heading" : "3.1 Improved Interpretability with Spans",
+      "text" : "To achieve 1), we first start with influence functions (Koh and Liang, 2017) and consider an arbitrary span of training sequence x to be evaluated for the qualification as explanation 3. Our core idea is to see how the model loss on test instance z′ changes\n1some approximation such as hessian-inverse-vectorproduct (Baydin et al., 2016) may improve efficiency to O(NSG) where S is the approximation step and S < N\n2We may say TracIn is faithful to the data rather than to the model. And in the case where checkpoint averaging can be used as model prediction, the number of checkpoints may be too few to justify Eq. 2.\n3the method can be trivially generalized to multiple spans\nwith the training span’s importance. The more important a training span is to z′, the greater this influence score should be. We derive it in three following steps.\nFirst, we define the training span from token i to token j to be xij , and the sequence with xij masked is x−ij = [x0, ..., xi−1, [MASK], ..., [MASK], xj+1, ...] and its corresponding training data is z−ij . We use logit difference (Li et al., 2020) as importance score based on the empirical-riskestimated parameter θ̂ obtained from Dtrain as: imp(xij |z, θ̂) = logity(x; θ̂) − logity(x−ij ; θ̂), where every term in the right hand side (RHS) is the logit output evaluated at a model prediction y from model θ̂ right before applying the SoftMax function. This equation tells us how important a training span is. It is equivalent to the loss difference\nimp(xij |z; θ̂) = L(z−ij ; θ̂)− L(z; θ̂), (3) when the cross entropy loss L(z; θ) = − ∑\nyi I(y = yi)logityi(x; θ) is applied.\nThen, we measure xij’s influence on model θ̂ by adding a fraction of imp(xij |z; θ̂) scaled by a small value to the overall loss and obtain θ̂ ,xij |z := argminθEzi∈Dtrain [L(zi, θ)] + L(z−ij ; θ)− L(z; θ). Applying the classical result in (Cook and Weisberg, 1982; Koh and Liang, 2017), the influence of up-weighing the importance of xij on θ̂ is\ndθ̂ ,xij |z\nd\n∣∣∣ =0 =\nH−1 θ̂ (∇θ̂L(z; θ̂)−∇θ̂L(z−ij ; θ̂)).\nFinally, applying the above equation and the chain rule, we obtain the influence of xij to z′ as:\nIF+(xij |z, z′; θ̂) := ∇ L(z′; θ̂ ,xij |z)| =0 = ∇θL(z′; θ̂)H−1θ̂ (∇θL(z; θ̂)−∇θL(z−ij ; θ̂)).\nIF+ measures the influence of a training span on an entire test sequence. Similarly, we also measure the influence of a training span to a test span x′kl by applying Eq. 3 and obtain\nIF++(xij |z,x′kl|z′; θ̂) :=∇ L(z′−kl; θ̂ ,xij |z)−∇ L(z\n′; θ̂ ,xij |z)| =0 =(∇θL(z′−kl; θ̂)−∇θL(z′; θ̂)) H−1 θ̂ (∇θL(z; θ̂)−∇θL(z−ij ; θ̂)).\nThe complete derivation can be found in Appendix.\nOn the choice of Spans Theoretically, IF+ and IF++ can be applied to any text classification problem and dataset with an appropriate choice of the span. If no information about valid span is available, shallow parsing tools or sentence split-tools can be used to shatter an entire text sequence into chunks, and each chunk can be used as span candidates. In this situation, the algorithm can work in two steps: 1) using masking method (Li et al., 2020) to determine the important test spans; and 2) for each span we apply IF++ to find training instances/spans as explanations.\nUsually, we can choose top-K test spans, and even can choose K=1 in some cases. In this work, we look at the later case without loss of generality, and adopt two aspect-based sentiment analysis datasets that can conveniently identify a deterministic span in each text sequence, and frame the span selection task as a Reading Comprehension task (Rajpurkar et al., 2016). We discuss the details in Section 5. Note that the discussion can be trivially generalized to the case where K>1 using Bayesian approach such as imp(xij) = EP (x′kl)[imp(xij |xkl)\n′] which can be explored in future work."
+    }, {
+      "heading" : "3.2 Faithful & Hessian-free Explanations",
+      "text" : "To achieve 2), we would start with the method of TracIn (Pruthi et al., 2020b) described in Eq. 2 which is Hessian free by design. TracIn defines the contribution of a training instance to be the sum of its contribution (loss) throughout the entire training life cycle, which eradicated the need for Hessian. However, this assumption is drastically different from IF’s where the contribution of z is obtained solely from the final model θ̂. By nature, IF is a faithful method, and its explanation is faithful to θ̂, and TracIn in its vanilla form is arguably not a faithful method.\nProposed treatment Based on the assumption that the influence of z on θ̂ is the sum of influences of all variants close to θ̂, we define a set of “faithful” variants satisfying the constraint of {θ̂i|1 > δ >> ||θ̂i − θ̂||2}, namely δ-faithful to θ̂. The smaller δ is, the more faithful the explanation method is. Instead, the δ for TracIn can be arbitrary large without faithfulness guarantees, as some checkpoints can be far from the final θ̂. Thus, we construct a δ-faithful explanation method that\nmirrors TracIn as:\nTracInF(z, z′) =∑ i ∇θ̂+δiL(θ̂ + δi, z)∇θ̂+δiL(θ̂ + δi, z ′).\nThe difference between TracIn and TracInF is that the checkpoints used in TracIn are correlated in time whereas all variants of TracInF are conditionally independent. Finding a proper δi can be tricky. If ill-chosen, δi may diverge θ̂ so much that hurts gradient estimation. In practice, we estimate δi = ηig(zi|θ̂) obtained from a single-step gradient descent g(zi|θ̂) with some training instance zi on model θ̂, scaled by an i-specific weighting parameter ηi, which in the simplest case is uniform for all i. Usually ηi should be small enough so that θ̂+ δi can stay close to θ̂. In this paper we set η as the model learning rate for proof of concept.\nIs TracInF faithful? First, any θ̂ + δi is close to θ̂. Under the assumption of Lipschitz continuity, there exists a k ∈ R+ such that ∇L(θ̂ + δi, z) is bounded around ∇L(θ̂, z) by k|ηig2(zi|θ̂)|, the second derivative, because |∇L(θ̂ + δi, z) − ∇L(θ̂, z)| < k|ηig2(zi|θ̂)|. A proper ηi can be chosen so that the right hand side (RHS) is sufficiently small to bound the loss within a small range. Thus, the gradient of loss, and in turn the TracInF score can stay δ-faithful to θ̂ for an sufficiently small δ, which TracIn can not guarantee."
+    }, {
+      "heading" : "3.3 The Combined Method",
+      "text" : "By combining the insights from Section 3.1 and 3.2, we obtain a final form named TracIn++:\nTracIn++(x′kl|z′, xij |z; θ̂) =∑ i [ ∇L(θ̂ + δi, z′−kl)−∇L(θ̂ + δi, z′) ] [ ∇L(θ̂ + δi, z)−∇L(θ̂ + δi, z−ij) ] .\nThis ultimate form mirrors the IF++ method, and it satisfies all of our desiderata on an improved explanability method. Similarly, TracIn+ that mirrors IF+ is\nTracIn+(z′, xij |z; θ̂) = ∑ i\n∇L(z′; θ̂ + δi)[ ∇L(θ̂ + δi, z)−∇L(θ̂ + δi, z−ij) ] ."
+    }, {
+      "heading" : "3.4 Additional Details",
+      "text" : "Since the RHS of IF, IF+ and IF++ equations all involve the inverse of Hessian Matrix, here\nwe discuss the computation challenge. Following (Koh and Liang, 2017), we adopt the vectorHessian-inverse-product (VHP) with stochastic estimation (Baydin et al., 2016). The series of stochastic updates, one for each training instance, is performed by the vhp() function in the torch.autograd.functional package and the update stops until convergence. Unfortunately, we found that naively applying this approach leads to VHP explosion due to large parameter size. To be specific, in our case, the parameters are the last two layers of RoBERTa-large (Liu et al., 2019) plus the output head, a total of 12M parameters per gradient vector. To stabilize the process, we take three approaches: 1) applying gradient clipping (set to 100) to avoid accumulating the extreme gradient values; 2) adopting early termination when the norm of VHP stabilizes (usually < 1000 training instances, i.e., the depth); and 3) slowly decaying the accumulated VHP with a factor of 0.99 (i.e., the damp) and update with a new vhp() estimate with a small learning rate (i.e., the scale) of 0.004. Please refer to our code for more details. Once obtained, the VHP is first cached and then retrieved to perform the dot-product with the last term. The complexity for each test instance is O(dt) where d is the depth of estimation and t is the time spent on each vhp() operation. The time complexity of different IF methods only vary on a constant factor of two.\nFor each of TracIn, TracIn+ and TracIn++, we need to create multiple model variants. For TracIn, we save three checkpoints of the most recent training epochs; For TracIn+ or TracIn++, we start with the same checkpoint and randomly sample a mini-batch 3 times and perform one-step training (learning rate 1E-4) for each selection to obtain three variants. We do not over-tune those hyper-parameters for replicability concerns."
+    }, {
+      "heading" : "4 Evaluation Metrics",
+      "text" : "This section introduces our semantic evaluation method, followed by a description of two other popular metrics for comparison.\n4.1 Semantic Agreement (Sag)\nIntuitively, a rational explanation method should rank explanations that are semantically related to the given test instance relatively higher than the less relevant ones. Our idea is to first define the\nsemantic representation of a training span xij of z and measure its similarity to that of a test span x′kl of z′. Since our method uses BERT family as the base model, we obtain the embedding of a training span by the difference of x and its span-masked version xij as\nemb(xij) = emb(x)− emb(x−ij), (4)\nwhere emb is obtained from the embedding of sentence start token such as “[CLS]” in BERT (Devlin et al., 2019) at the last embedding layer. To obtain embedding of the entire sequence we can simply use the emb(x) without the last term in Eq. 4. Thus, all spans are embedded in the same semantic space and the geometric quantities such as cosine or dot-product can measure the similarities of embeddings. We define the semantic agreement Sag as:\nSag(z′, {z}|K1 ) = 1\nK ∑ z cos(emb(xij |z), emb(x′kl|z′)), (5)\nIntuitively, the metric measures the degree to which top-K training spans align with a test span on semantics."
+    }, {
+      "heading" : "4.2 Other metrics",
+      "text" : "Label Agreement (Lag) label agreement (Hanawa et al., 2020) assumes that the label of an explanation z should agree with that of the text case z′. Accordingly, we retrieve the top-K training instances from the ordered explanation list and calculate the label agreement (Lag) as follows:\nLag(z′, {z}|N1 ) = 1\nK ∑ k∈[1,K] I(y′ == yk),\nwhere I(·) is an indicator function. Lag measures the degree to which the top-ranked z agree with z′ on class label, e.g., if the sentiment of the test z′ and explanation z agree.\nRe-training Accuracy Loss (Ral) Ral measures the loss of test accuracy after removing the top-K most influential explanations identified by an explanation method (Hanawa et al., 2020; Hooker et al., 2019; Han et al., 2020). The assumption is that the higher the loss the better the explanation method is. Formally,\nRal(f, θ̂) = Acc(θ̂)−Acc(θ̂′),\nwhere θ̂′ is the model re-trained by the set Dtrain/{z}|K1 . Notice the re-training uses the same set of hyper-parameter settings as training (Section 6.1). To obtain {z}|K1 , we combine the explanation lists for all test instances (by score addition) and then remove the top-K from this list."
+    }, {
+      "heading" : "5 Data",
+      "text" : "Our criteria for dataset selection are two folds: 1. The dataset should have relatively high classification accuracy so that the trained model can behave rationally; and 2. The dataset should allow for easy identification of critical/useful text spans to compare span-based explanation methods. We chose two aspect-based sentiment analysis (ABSA) datasets; one is ATSA, a subset of MAMS (Jiang et al., 2019) for product reviews, where aspects are the terms in the text. The other is sentihood (Saeidi et al., 2016) of location reviews. We can identify the relevant span of an aspect term semiautomatically and train models with high classification accuracy in both datasets. (see Section 6.1 for details). Data statistics and instances are in Table 1 and 2.\nAutomatic Span Annotation As shown in the colored text in Table 2, we extract the spans for each term to serve as explanation units for IF+, IF++, TracIn+ and TracIn++. To reduce annotation effort, we convert span extraction into a question answering task (Rajpurkar et al., 2016) where we use aspect terms to formulate questions such as “How is the service?” which concatenates with the text before being fed into pre-trained machine reading comprehension (RC) models. The output answer is used as the span. When the RC model fails, we use heuristics to extract words before and after the term word, up to the closest sentence boundary. See appendix for more details. We sampled a subset of 100 annotations and found that the RC model has about 70% of Exact Match (Rajpurkar et al., 2016) and the overall annotation has a high recall of over 90% but low EM due to the involvement of heuristics.\n(Not) Mitigating the Annotation Error Wrongly-annotated spans may confuse the explanation methods. For example, as shown in 2, if the span of location2 is annotated as “I love it”, span-based explanation methods will use it to find wrong examples for explanation. Thus test instances with incorrectly annotated spans are omitted, i.e., no tolerance to annotation error for test instances. To the contrary, for training instances, we do not correct the annotation error. The major reason is the explanation methods have a chance to rank the wrongly annotated spans lower (its importance score imp() of Eq. 3 can be lower and in turn for its influence scores.) Also, It is labor-intensive to do so."
+    }, {
+      "heading" : "6 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "6.1 Model Training Details",
+      "text" : "We train two separate models for MAMS and sentihood. The model’s input is the concatenation of the aspect term and the entire text, and the output is a sentiment label. The two models share similar settings: 1. they both use ROBERTA-LARGE (Liu et al., 2019) from Huggingface (Wolf et al., 2019) which is fed into the BertForSequenceClassification function for initialization. We fine-tune the parameters of the last two layers and the output head using a batch size of 200 for ATSA and 100 for sentihood and max epochs of 100. We use AdamW optimizer (Loshchilov and Hutter, 2019) with weight decay 0.01 and learning rate 1E-4. Both models are written in Pytorch and are trained on a single Tesla V100 GPU and took less than 2 hours for each model to train. The models are selected on dev set performance, and both trained models are state-of-the-art: 88.3% on MAMS and 97.6% for sentihood at the time of writing."
+    }, {
+      "heading" : "6.2 Comparing Explanation Methods",
+      "text" : "We compare the six explanation methods on two datasets and three evaluation metrics in Table 3 from which we can draw the following conclusions:\n1) TracIn family outperforms IF family according to Sag and Lag metrics. We see that both metrics are robust against the choice of K. It it worth noting that TracIn family methods are not only efficient, but also effective for extracting explanations compared to IF family as per Sag and Lag.\n2) Span-based methods (with +) outperform Vanilla methods (w/o +). It is good news because an explanation can be much easier to comprehend if we can highlight essential spans in text, and IF++ and TracIn++ shows us that such highlighting can be justified by their superiority on the evaluation of Sag and Lag.\n3) Sag and Lag shows a consistent trend of TracIn++ and IF++ being superior to the rest of the methods, while Ral results are inconclusive, which resonates with the findings in (Hooker et al., 2019) where they also observed randomness after removing examples under different explanation methods. This suggests that the re-training method may not be a reliable metric due to the randomness and intricate details involved in the re-training process.\n4) The Sagmeasures TracIn+ differently than Lag shows that Lag may be an over-simplistic measure by assuming that label y can represent the entire semantics of x, which may be problematic. But Sag looks into the x for semantics and can properly reflect and align with humans judgments.\nThe Impact of K on Metrics One critical parameter for evaluation metrics is the choice of K for Sag and Lag (We do not discuss K for Ral due to its randomness). Here we use 200 MAMS test instances as subjects to study the influence of K, as shown in Figure 1.\nWe found that as K increases, all methods, except for IF and TracInF, decrease on Sag and Lag. The decrease is favorable because the explanation method is putting useful training instances before less useful ones. In contrast, the increase suggests the explanation method fails to rank useful ones on top. This again confirms that spanbased explanation can take into account the useful information in x and reduce the impact of noisy information involved in IF and TracInF."
+    }, {
+      "heading" : "6.3 Comparing Faithfulness",
+      "text" : "How faithful our proposed TracIn++ to θ̂? To answer this question, we first define the notion of strictly faithful explanation and then test an explanation method’s faithfulness against it. Note that none of the discussed methods is strictly faithful, since IF++ used approximated inverseHessian and TracIn++ is a δ away from being strictly faithful. To obtain ground truth, we modify TracIn++ to use a single checkpoint θ̂ as the “ultimately faithful” explanation method 4. Then, we obtain an explanation list for each test instance and compute its Spearman Correlation with the list obtained from the ground truth. The higher the correlation, the more faithful the method is.\nIn Table 4 we discovered that TracIn++ has similar mean as IF++ but has a much lower variance, showing its stability over IF++. This aligns with the finding of Basu et al. (2021) which argues that in deep non-convex networks, influence function usually is non-stable across test instances. TracIn family arguably may be a promising direction to stability. Both methods are more faithful to Ground truth than Control that uses checkpoints,\n4The choice of ground truth can also be the exact computation of inverse-Hessian in IF (our future work). Faithfulness does not equal to correctness; there is no guarantee the ground truth is a valid explanation method, but it can be a valid benchmark for faithfulness\nshowing that the model “ensemble” around θ̂ may be a better choice than “checkpoint averaging” for model explanations. Further explorations may be needed since there are many variables in this comparison."
+    }, {
+      "heading" : "7 A Case Study",
+      "text" : "Table 5 demonstrate the differences of explanation methods. In action, TracIn++ shows both the test span and explanation span to a user; TracIn+ shows only the training span, and TracIn does not show spans. Interestingly we can observe the top-1 explanation found by TracIn++ is more semantically related than others in the example, a common pattern among the test cases."
+    }, {
+      "heading" : "8 Related Work",
+      "text" : "Popular explanation methods include gradientbased (Sundararajan et al., 2017), attention-based (Clark et al., 2019; Jain and Wallace, 2019; Wiegreffe and Pinter, 2019), as well as sample-based (Koh and Liang, 2017; Yeh et al., 2018; Pruthi et al., 2020b) methods.\nMajor Progress on Sample-based Explanation Methods There have been a series of recent efforts to explain black-box deep neural nets (DNN), such as LIME (Ribeiro et al., 2016) that approximates the behavior of DNN with an interpretable model learned from local samples around prediction, Influence Functions (Koh and Liang, 2017; Koh et al., 2019) that picks training samples as explanation via its impact on the overall loss, and Exemplar Points (Yeh et al., 2018) that can assign weights to training samples. TracIn (Pruthi et al., 2020b) is the latest breakthrough that overcomes the computational bottleneck of Influence Functions with the cost of faithfulness.\nThe Discussion of Explanation Faithfulness in NLP The issue of Faithfulness of Explanations was primarily discussed under the explanation generation context (Camburu et al., 2018) where there is no guarantee that a generated explanation would be faithful to a model’s inner-workings (Jacovi and Goldberg, 2020). In this work, we discuss faithfulness in the sample-based explanations framework. The faithfulness to model either can be guaranteed only in theory but not in practice (Koh and Liang, 2017) or can not be guaranteed at all (Pruthi et al., 2020b).\nSample-based explanation methods for NLP Han et al. (2020) applied IF for sentiment analysis and natural language inference and also studied its utility on detecting data artefacts (Gururangan et al., 2019). Yang et al. (2020b) used Influence Functions to filter the generated texts. The one closest to our work is (Meng et al., 2020a) where a single word is used as the explanation unit. Their formation uses gradient-based methods for single words, while ours can be applied to any text unit granularity using text masking.\nExplanation of NLP Models by Input Erasure Input erasure has been a popular trick for measuring input impact for NLP models by replacing input by zero vector (Li et al., 2016) or by marginalization of all possible candidate tokens (Kim et al., 2020) that arguably dealt with the out of distribution issue introduced by using zero as input mask. Similar to (Kim et al., 2020; Li et al., 2020; Jacovi and Goldberg, 2021) we also use “[MASK]” token, with the difference that we allow masking of arbitrary length of an input sequence.\nEvaluations of Sample-based Methods A benchmark of evaluating sample-based explanation methods has not been agreed upon. For diagnostic purposes, Koh et al. (2017) proposed a selfexplanation method that uses the training instances to explain themselves; Hanawa et al. (2020) proposed the label and instance consistency as a way of model sanity check. On the non-diagnostic setting, sample removal and re-training (Han et al., 2020; Hooker et al., 2019) assumes that removing useful training instances can cause significant accuracy loss; input enhancement method assumes useful explanations can also improve model’s decision making at model input side (Hao, 2020), and manual inspections (Han et al., 2020; Meng et al., 2020a) were also used to examine if the\nmeanings of explanations align with that of the test instance. In this paper, we automate this semantic examination using the embedding similarities."
+    }, {
+      "heading" : "9 Future Work",
+      "text" : "TracIn++ opens some new questions: 1) how can we generalize TracIn++ to cases where test spans are unknown? 2) Can we understand the connection between IF and TracInwhich may spark discoveries on sample-based explanation methods? 3) How can we apply TracIn++ to understand sequence generation models?"
+    }, {
+      "heading" : "Acknowledgement",
+      "text" : "This work is supported by the MIT-IBM Watson AI Lab. The views and conclusions are those of the authors and should not be interpreted as representing the official policies of the funding agencies. We thank anonymous reviewers for their valuable feedback. We also thank your family for the support during this special time."
+    }, {
+      "heading" : "A Span extraction details",
+      "text" : "The model we apply the huggingface (Wolf et al., 2019) pre-trained RC model “phiyodr/roberta-largefinetuned-squad2” (Phiyodr, 2020) which is chosen based on our comparison to a set of similar models on SQuAD 2.0 dataset. We use the SQuAD 2.0-trained model instead of 1.0 because the data is more challenging since it involves multiple passages, and the model has to compare valid and invalid passages for answer span extraction, a case similar to the dataset we use. Templates we used are: The heuristics\nwhen the RC model fails: 1) We consider RC model fails when no span is extracted, or the entire text is returned as an answer. 2) We identify the location of the term in the text and expand the scope from the location both on the left and on the right, and when sentence boundary is found, we stop and return the span as the span for the term. Note that we do find cases where the words around a term do not necessarily talk about the term. However, we found such a case to be extremely rare.\nB Derivation of IF++\nIpert,loss(Xij , z−kl; θ̂)\n:= ∇ imp(Xij |X; θ̂ ,z−ij ,z) ∣∣∣∣∣ =0\n= dimp(Xij |X; θ̂) dθ̂ ( dθ̂ ,z−kl,z d ∣∣∣∣∣ =0 )\n= (∇θOy(X, θ̂)−∇θOy(X−ij , θ̂))( dθ̂ ,z−kl,z\nd\n∣∣∣∣∣ =0 )\n= −(∇θOy(X, θ̂)−∇θOy(X−ij , θ̂))H−1θ̂ (∇θL(z−kl, θ̂)−∇θL(z, θ̂))\nC Derivation of TracIn+ and TracIn++\nSimilar to IF(Koh and Liang, 2017) and TracIn(Pruthi et al., 2020b), we start from the Taylor expansion on point θ̂t around z′ and z′−ij as\nL(θ̂t+1, z′) ∼ L(θ̂t, z′) +∇L(θ̂t, z′)(θ̂t+1 − θ̂t) L(θ̂t+1, z′−ij) ∼ L(θ̂t, z′−ij) +∇L(θ̂t, z′−ij)(θ̂t+1 − θ̂t)\nIf SGD is assumed for optimization for simplicity, (θ̂t+1 − θ̂t) = λ∇L(θ̂t, z). Thus, putting it in above equations and perform subtraction, we obtain\nL(θ̂t+1, z′)− L(θ̂t+1, z′−ij) ∼ L(θ̂t, z′−ij)− L(θ̂t, z′) + [∇L(θ̂t, z′)−∇L(θ̂t, z′−ij)]λ∇L(θ̂t, z)\nAnd,\nimp(x′ij |z′; θ̂t+1)− imp(x′ij |z′; θ̂t) ∼ [∇L(θ̂t, z′−ij)−∇L(θ̂t, z′)]λ∇L(θ̂t, z)\nSo, the left term is the change of importance by parameter change; we can interpret it as the change of importance score of span xij w.r.t the parameter of networks. Then, we integrate over all the contributions from different points in the training process and obtain\nTracIn+(x′ij |z′, z) = ∑ t [∇L(θ̂t, z′−ij)−∇L(θ̂t, z′)]λ∇L(θ̂t, z)\nThe above formation is very similar to TracInwhere a single training instance z is evaluated as a whole. But we are interested in the case where an meaning unit xkl in z can be evaluated for influence. Thus, we apply the same logic of the above equation to z−kl, the perturbed training instance where token k to l is masked, as\nTracIn+(x′ij |z′, z−kl) = ∑ t [∇L(θ̂t, z′−ij)−∇L(θ̂t, z′)]λ∇L(θ̂t, z−kl)\nThen, the difference TracIn+(x′ij |z′, z) − TracIn+(x′ij |z′, z−kl) can indicate how much impact a training span xkl on test span x′ij . Formally, the influence of xkl on x ′ ij is\nTracIn++(x′ij , x−kl|z′, z) = λ ∑ t [∇L(θ̂t, z′−ij)−∇L(θ̂t, z′)][∇L(θ̂t, z)−∇L(θ̂t, z−kl)]\nWe denote that such a form is very easy to implement, since each item in summation requires only four (4) gradient estimates."
+    } ],
+    "references" : [ {
+      "title" : "Influence functions in deep learning are fragile",
+      "author" : [ "Samyadeep Basu", "Philip Pope", "Soheil Feizi." ],
+      "venue" : "ICLR.",
+      "citeRegEx" : "Basu et al\\.,? 2021",
+      "shortCiteRegEx" : "Basu et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Tricks from deep learning",
+      "author" : [ "Atılım Güneş Baydin", "Barak A Pearlmutter", "Jeffrey Mark Siskind." ],
+      "venue" : "arXiv preprint arXiv:1611.03777.",
+      "citeRegEx" : "Baydin et al\\.,? 2016",
+      "shortCiteRegEx" : "Baydin et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "e-snli: Natural language inference with natural language explanations",
+      "author" : [ "Oana-Maria Camburu", "Tim Rocktäschel", "Thomas Lukasiewicz", "Phil Blunsom." ],
+      "venue" : "NIPS.",
+      "citeRegEx" : "Camburu et al\\.,? 2018",
+      "shortCiteRegEx" : "Camburu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "What does BERT look at? an analysis of bert’s attention",
+      "author" : [ "Kevin Clark", "Urvashi Khandelwal", "Omer Levy", "Christopher D. Manning." ],
+      "venue" : "BlackBoxNLP, abs/1906.04341.",
+      "citeRegEx" : "Clark et al\\.,? 2019",
+      "shortCiteRegEx" : "Clark et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Residuals and influence in regression",
+      "author" : [ "R Dennis Cook", "Sanford Weisberg." ],
+      "venue" : "New York: Chapman and Hall.",
+      "citeRegEx" : "Cook and Weisberg.,? 1982",
+      "shortCiteRegEx" : "Cook and Weisberg.",
+      "year" : 1982
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Variational pretraining for semi-supervised text classification",
+      "author" : [ "Suchin Gururangan", "Tam Dang", "Dallas Card", "Noah A. Smith." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 5880–5894, Flo-",
+      "citeRegEx" : "Gururangan et al\\.,? 2019",
+      "shortCiteRegEx" : "Gururangan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The influence curve and its role in robust estimation",
+      "author" : [ "Frank R Hampel." ],
+      "venue" : "Journal of the american statistical association, 69(346):383–393.",
+      "citeRegEx" : "Hampel.,? 1974",
+      "shortCiteRegEx" : "Hampel.",
+      "year" : 1974
+    }, {
+      "title" : "Explaining black box predictions and unveiling data artifacts through influence functions",
+      "author" : [ "Xiaochuang Han", "Byron C. Wallace", "Yulia Tsvetkov." ],
+      "venue" : "ACL.",
+      "citeRegEx" : "Han et al\\.,? 2020",
+      "shortCiteRegEx" : "Han et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Evaluation criteria for instance-based explanation",
+      "author" : [ "Kazuaki Hanawa", "Sho Yokoi", "Satoshi Hara", "Kentaro Inui." ],
+      "venue" : "arXiv preprint arXiv:2006.04528.",
+      "citeRegEx" : "Hanawa et al\\.,? 2020",
+      "shortCiteRegEx" : "Hanawa et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Evaluating attribution methods using white-box LSTMs",
+      "author" : [ "Yiding Hao." ],
+      "venue" : "Proceedings of the Third BlackboxNLP Workshop on Analyzing and Interpreting Neural Networks for NLP, pages 300–313, Online. Association for Computational Linguistics.",
+      "citeRegEx" : "Hao.,? 2020",
+      "shortCiteRegEx" : "Hao.",
+      "year" : 2020
+    }, {
+      "title" : "A benchmark for interpretability methods in deep neural networks",
+      "author" : [ "Sara Hooker", "Dumitru Erhan", "Pieter-Jan Kindermans", "Been Kim." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 32. Curran Associates, Inc.",
+      "citeRegEx" : "Hooker et al\\.,? 2019",
+      "shortCiteRegEx" : "Hooker et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Towards faithfully interpretable NLP systems: How should we define and evaluate faithfulness? In Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 4198–4205, Online",
+      "author" : [ "Alon Jacovi", "Yoav Goldberg." ],
+      "venue" : "As-",
+      "citeRegEx" : "Jacovi and Goldberg.,? 2020",
+      "shortCiteRegEx" : "Jacovi and Goldberg.",
+      "year" : 2020
+    }, {
+      "title" : "Aligning Faithful Interpretations with their Social Attribution",
+      "author" : [ "Alon Jacovi", "Yoav Goldberg." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 9:294–310.",
+      "citeRegEx" : "Jacovi and Goldberg.,? 2021",
+      "shortCiteRegEx" : "Jacovi and Goldberg.",
+      "year" : 2021
+    }, {
+      "title" : "Attention is not Explanation",
+      "author" : [ "Sarthak Jain", "Byron C. Wallace." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long and Short Pa-",
+      "citeRegEx" : "Jain and Wallace.,? 2019",
+      "shortCiteRegEx" : "Jain and Wallace.",
+      "year" : 2019
+    }, {
+      "title" : "A challenge dataset and effective models for aspect-based sentiment analysis",
+      "author" : [ "Qingnan Jiang", "Lei Chen", "Ruifeng Xu", "Xiang Ao", "Min Yang." ],
+      "venue" : "EMNLP-IJCNLP, pages 6281–6286.",
+      "citeRegEx" : "Jiang et al\\.,? 2019",
+      "shortCiteRegEx" : "Jiang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Interpretation of NLP models through input marginalization",
+      "author" : [ "Siwon Kim", "Jihun Yi", "Eunji Kim", "Sungroh Yoon." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 3154–3167, Online. As-",
+      "citeRegEx" : "Kim et al\\.,? 2020",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "On the accuracy of influence functions for measuring group effects",
+      "author" : [ "Pang Wei Koh", "Kai-Siang Ang", "Hubert H.K. Teo", "Percy Liang." ],
+      "venue" : "CoRR, abs/1905.13289.",
+      "citeRegEx" : "Koh et al\\.,? 2019",
+      "shortCiteRegEx" : "Koh et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Understanding black-box predictions via influence functions",
+      "author" : [ "Pang Wei Koh", "Percy Liang." ],
+      "venue" : "ICML, pages 1885–1894.",
+      "citeRegEx" : "Koh and Liang.,? 2017",
+      "shortCiteRegEx" : "Koh and Liang.",
+      "year" : 2017
+    }, {
+      "title" : "Understanding neural networks through representation erasure",
+      "author" : [ "Jiwei Li", "Will Monroe", "Dan Jurafsky." ],
+      "venue" : "arXiv preprint arXiv:1612.08220.",
+      "citeRegEx" : "Li et al\\.,? 2016",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Bert-attack: Adversarial attack against bert using bert",
+      "author" : [ "Linyang Li", "Ruotian Ma", "Qipeng Guo", "Xiangyang Xue", "Xipeng Qiu." ],
+      "venue" : "EMNLP.",
+      "citeRegEx" : "Li et al\\.,? 2020",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Roberta: A robustly optimized BERT pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "CoRR.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Decoupled weight decay regularization",
+      "author" : [ "Ilya Loshchilov", "Frank Hutter." ],
+      "venue" : "ICLR.",
+      "citeRegEx" : "Loshchilov and Hutter.,? 2019",
+      "shortCiteRegEx" : "Loshchilov and Hutter.",
+      "year" : 2019
+    }, {
+      "title" : "A structure-enhanced graph convolutional network for sentiment analysis",
+      "author" : [ "Fanyu Meng", "Junlan Feng", "Danping Yin", "Si Chen", "Min Hu." ],
+      "venue" : "Findings of the Association for Computational Linguistics: EMNLP 2020, pages 586–595, Online. Associ-",
+      "citeRegEx" : "Meng et al\\.,? 2020a",
+      "shortCiteRegEx" : "Meng et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Pair the dots: Jointly examining training history and test stimuli for model interpretability",
+      "author" : [ "Yuxian Meng", "Chun Fan", "Zijun Sun", "Eduard Hovy", "Fei Wu", "Jiwei Li." ],
+      "venue" : "arXiv preprint arXiv:2010.06943.",
+      "citeRegEx" : "Meng et al\\.,? 2020b",
+      "shortCiteRegEx" : "Meng et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "roberta-large-finetuned-squad2",
+      "author" : [ "Phiyodr." ],
+      "venue" : "https://huggingface.co/phiyodr/ bart-large-finetuned-squad2. [Online; accessed 19-Dec-2020].",
+      "citeRegEx" : "Phiyodr.,? 2020",
+      "shortCiteRegEx" : "Phiyodr.",
+      "year" : 2020
+    }, {
+      "title" : "Evaluating explanations: How much do explanations from the teacher aid students? arXiv preprint arXiv:2012.00893",
+      "author" : [ "Danish Pruthi", "Bhuwan Dhingra", "Livio Baldini Soares", "Michael Collins", "Zachary C Lipton", "Graham Neubig", "William W Cohen" ],
+      "venue" : null,
+      "citeRegEx" : "Pruthi et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Pruthi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Estimating training data influence by tracking gradient descent",
+      "author" : [ "Garima Pruthi", "Frederick Liu", "Mukund Sundararajan", "Satyen Kale." ],
+      "venue" : "NIPS.",
+      "citeRegEx" : "Pruthi et al\\.,? 2020b",
+      "shortCiteRegEx" : "Pruthi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "Alec Radford", "Jeffrey Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever" ],
+      "venue" : null,
+      "citeRegEx" : "Radford et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "SQuAD: 100,000+ questions for machine comprehension of text",
+      "author" : [ "Pranav Rajpurkar", "Jian Zhang", "Konstantin Lopyrev", "Percy Liang." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 2383–2392, Austin,",
+      "citeRegEx" : "Rajpurkar et al\\.,? 2016",
+      "shortCiteRegEx" : "Rajpurkar et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "why should i trust you?”: Explaining the predictions of any classifier",
+      "author" : [ "Marco Tulio Ribeiro", "Sameer Singh", "Carlos Guestrin." ],
+      "venue" : "Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining, KDD",
+      "citeRegEx" : "Ribeiro et al\\.,? 2016",
+      "shortCiteRegEx" : "Ribeiro et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Sentihood: Targeted aspect based sentiment analysis dataset for urban neighbourhoods",
+      "author" : [ "Marzieh Saeidi", "Guillaume Bouchard", "Maria Liakata", "Sebastian Riedel." ],
+      "venue" : "COLING.",
+      "citeRegEx" : "Saeidi et al\\.,? 2016",
+      "shortCiteRegEx" : "Saeidi et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Is attention interpretable? In Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 2931–2951, Florence, Italy",
+      "author" : [ "Sofia Serrano", "Noah A. Smith." ],
+      "venue" : "Association for Computational Linguistics.",
+      "citeRegEx" : "Serrano and Smith.,? 2019",
+      "shortCiteRegEx" : "Serrano and Smith.",
+      "year" : 2019
+    }, {
+      "title" : "Axiomatic attribution for deep networks",
+      "author" : [ "Mukund Sundararajan", "Ankur Taly", "Qiqi Yan." ],
+      "venue" : "CoRR, abs/1703.01365.",
+      "citeRegEx" : "Sundararajan et al\\.,? 2017",
+      "shortCiteRegEx" : "Sundararajan et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Ł ukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "NIPS.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Attention is not not explanation",
+      "author" : [ "Sarah Wiegreffe", "Yuval Pinter." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natural Language Processing (EMNLP-",
+      "citeRegEx" : "Wiegreffe and Pinter.,? 2019",
+      "shortCiteRegEx" : "Wiegreffe and Pinter.",
+      "year" : 2019
+    }, {
+      "title" : "Huggingface’s transformers: State-of-the-art natural language",
+      "author" : [ "Thomas Wolf", "Lysandre Debut", "Victor Sanh", "Julien Chaumond", "Clement Delangue", "Anthony Moi", "Pierric Cistac", "Tim Rault", "R’emi Louf", "Morgan Funtowicz", "Jamie Brew" ],
+      "venue" : null,
+      "citeRegEx" : "Wolf et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Wolf et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "G-daug: Generative data augmentation for commonsense reasoning",
+      "author" : [ "Yiben Yang", "Chaitanya Malaviya", "Jared Fernandez", "Swabha Swayamdipta", "Ronan Le Bras", "Ji-Ping Wang", "Chandra Bhagavatula", "Yejin Choi", "Doug Downey." ],
+      "venue" : "arXiv preprint",
+      "citeRegEx" : "Yang et al\\.,? 2020a",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Generative data augmentation for commonsense reasoning",
+      "author" : [ "Yiben Yang", "Chaitanya Malaviya", "Jared Fernandez", "Swabha Swayamdipta", "Ronan Le Bras", "Ji-Ping Wang", "Chandra Bhagavatula", "Yejin Choi", "Doug Downey." ],
+      "venue" : "Findings of the Associ-",
+      "citeRegEx" : "Yang et al\\.,? 2020b",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Representer point selection for explaining deep neural networks",
+      "author" : [ "Chih-Kuan Yeh", "Joon Sik Kim", "Ian E.H. Yen", "Pradeep Ravikumar." ],
+      "venue" : "NIPS.",
+      "citeRegEx" : "Yeh et al\\.,? 2018",
+      "shortCiteRegEx" : "Yeh et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Derivation of TracIn and TracIn Similar to IF(Koh and Liang, 2017) and TracIn(Pruthi et al., 2020b), we start from the Taylor expansion on point θ̂t around z′ and z",
+      "author" : [ "θ̂ (∇θL(z−kl", "θ̂)−∇θL(z", "θ̂)) C" ],
+      "venue" : null,
+      "citeRegEx" : ".∇θL.z−kl et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : ".∇θL.z−kl et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 34,
+      "context" : "As complex NLP models such as the Transformers family (Vaswani et al., 2017; Devlin et al., 2019) become an indispensable tool in many applications, there are growing interests to explain the working mechanism of these “black-box” models.",
+      "startOffset" : 54,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 5,
+      "context" : "As complex NLP models such as the Transformers family (Vaswani et al., 2017; Devlin et al., 2019) become an indispensable tool in many applications, there are growing interests to explain the working mechanism of these “black-box” models.",
+      "startOffset" : 54,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 7,
+      "context" : "Among the vast of existing techniques for explaining machine learning models, Influence Functions (Hampel, 1974; Koh and Liang, 2017) that uses training instances as explanations to a model’s behavior have gained popularity in NLP very recently.",
+      "startOffset" : 98,
+      "endOffset" : 133
+    }, {
+      "referenceID" : 18,
+      "context" : "Among the vast of existing techniques for explaining machine learning models, Influence Functions (Hampel, 1974; Koh and Liang, 2017) that uses training instances as explanations to a model’s behavior have gained popularity in NLP very recently.",
+      "startOffset" : 98,
+      "endOffset" : 133
+    }, {
+      "referenceID" : 19,
+      "context" : "Different from other methods such as using input erasure (Li et al., 2016), saliency maps or attention matrices (Serrano and Smith, 2019; Jain and Wallace, 2019; Wiegreffe and Pinter, 2019) that only look at",
+      "startOffset" : 57,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 32,
+      "context" : ", 2016), saliency maps or attention matrices (Serrano and Smith, 2019; Jain and Wallace, 2019; Wiegreffe and Pinter, 2019) that only look at",
+      "startOffset" : 45,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2016), saliency maps or attention matrices (Serrano and Smith, 2019; Jain and Wallace, 2019; Wiegreffe and Pinter, 2019) that only look at",
+      "startOffset" : 45,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 35,
+      "context" : ", 2016), saliency maps or attention matrices (Serrano and Smith, 2019; Jain and Wallace, 2019; Wiegreffe and Pinter, 2019) that only look at",
+      "startOffset" : 45,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 5,
+      "context" : "Very recently, the method has been applied to explain BERT-based (Devlin et al., 2019) text classification (Han et al.",
+      "startOffset" : 65,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2019) text classification (Han et al., 2020; Meng et al., 2020b) and natural language inference (Han et al.",
+      "startOffset" : 28,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 24,
+      "context" : ", 2019) text classification (Han et al., 2020; Meng et al., 2020b) and natural language inference (Han et al.",
+      "startOffset" : 28,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2020b) and natural language inference (Han et al., 2020) models, as well as to aid text generation for data augmentation (Yang et al.",
+      "startOffset" : 40,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 37,
+      "context" : ", 2020) models, as well as to aid text generation for data augmentation (Yang et al., 2020a) using GPT-2 (Radford et al.",
+      "startOffset" : 72,
+      "endOffset" : 92
+    }, {
+      "referenceID" : 18,
+      "context" : "First, following the original formulation (Koh and Liang, 2017), the majority of existing works use entire training instances as explanations.",
+      "startOffset" : 42,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 27,
+      "context" : "Although hessianfree influence score such as TracIn (Pruthi et al., 2020b) was introduced very recently, it may not be faithful to the model in question and can result in spurious explanations for the involvement of sub-optimal checkpoints.",
+      "startOffset" : 52,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 9,
+      "context" : "Previous evaluation is either under an over-simplified assumption on the agreement of labels between training and test instances (Hanawa et al., 2020; Han et al., 2020) or",
+      "startOffset" : 129,
+      "endOffset" : 168
+    }, {
+      "referenceID" : 8,
+      "context" : "Previous evaluation is either under an over-simplified assumption on the agreement of labels between training and test instances (Hanawa et al., 2020; Han et al., 2020) or",
+      "startOffset" : 129,
+      "endOffset" : 168
+    }, {
+      "referenceID" : 11,
+      "context" : "5400 is based on indirect or manual inspection (Hooker et al., 2019; Meng et al., 2020b; Han et al., 2020; Pruthi et al., 2020a).",
+      "startOffset" : 47,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 24,
+      "context" : "5400 is based on indirect or manual inspection (Hooker et al., 2019; Meng et al., 2020b; Han et al., 2020; Pruthi et al., 2020a).",
+      "startOffset" : 47,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 8,
+      "context" : "5400 is based on indirect or manual inspection (Hooker et al., 2019; Meng et al., 2020b; Han et al., 2020; Pruthi et al., 2020a).",
+      "startOffset" : 47,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 18,
+      "context" : "IF (Koh and Liang, 2017) assumes the influence of z can be measured by perturbing the loss function L with a fraction of the loss on z, and obtain",
+      "startOffset" : 3,
+      "endOffset" : 24
+    }, {
+      "referenceID" : 27,
+      "context" : "TracIn (Pruthi et al., 2020b) instead assumes the influence of a training instance z is the sum of its contribution to the overall loss all through the entire training history, and conveniently it leads to",
+      "startOffset" : 7,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 18,
+      "context" : "To achieve 1), we first start with influence functions (Koh and Liang, 2017) and consider an arbitrary span of training sequence x to be evaluated for the qualification as explanation 3.",
+      "startOffset" : 55,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 1,
+      "context" : "some approximation such as hessian-inverse-vectorproduct (Baydin et al., 2016) may improve efficiency to O(NSG) where S is the approximation step and S < N (2)We may say TracIn is faithful to the data rather than to the model.",
+      "startOffset" : 57,
+      "endOffset" : 78
+    }, {
+      "referenceID" : 20,
+      "context" : "We use logit difference (Li et al., 2020) as importance score based on the empirical-riskestimated parameter θ̂ obtained from Dtrain as: imp(xij |z, θ̂) = logity(x; θ̂) − logity(x−ij ; θ̂), where every term in the right hand side (RHS) is the logit output evaluated at a model prediction y from model θ̂ right before applying the SoftMax function.",
+      "startOffset" : 24,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 4,
+      "context" : "Applying the classical result in (Cook and Weisberg, 1982; Koh and Liang, 2017), the influence of up-weighing the importance of xij on θ̂ is",
+      "startOffset" : 33,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 18,
+      "context" : "Applying the classical result in (Cook and Weisberg, 1982; Koh and Liang, 2017), the influence of up-weighing the importance of xij on θ̂ is",
+      "startOffset" : 33,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 20,
+      "context" : "In this situation, the algorithm can work in two steps: 1) using masking method (Li et al., 2020) to determine the important test spans; and 2) for each span we apply IF++ to find training instances/spans as explanations.",
+      "startOffset" : 80,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 29,
+      "context" : "terministic span in each text sequence, and frame the span selection task as a Reading Comprehension task (Rajpurkar et al., 2016).",
+      "startOffset" : 106,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 27,
+      "context" : "To achieve 2), we would start with the method of TracIn (Pruthi et al., 2020b) described in Eq.",
+      "startOffset" : 56,
+      "endOffset" : 78
+    }, {
+      "referenceID" : 18,
+      "context" : "Following (Koh and Liang, 2017), we adopt the vectorHessian-inverse-product (VHP) with stochastic estimation (Baydin et al.",
+      "startOffset" : 10,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 1,
+      "context" : "Following (Koh and Liang, 2017), we adopt the vectorHessian-inverse-product (VHP) with stochastic estimation (Baydin et al., 2016).",
+      "startOffset" : 109,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 21,
+      "context" : "To be specific, in our case, the parameters are the last two layers of RoBERTa-large (Liu et al., 2019) plus the output head, a total of 12M parameters per gradient vector.",
+      "startOffset" : 85,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 5,
+      "context" : "where emb is obtained from the embedding of sentence start token such as “[CLS]” in BERT (Devlin et al., 2019) at the last embedding layer.",
+      "startOffset" : 89,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 9,
+      "context" : "Label Agreement (Lag) label agreement (Hanawa et al., 2020) assumes that the label of an explanation z should agree with that of the text case z′.",
+      "startOffset" : 38,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 9,
+      "context" : "Re-training Accuracy Loss (Ral) Ral measures the loss of test accuracy after removing the top-K most influential explanations identified by an explanation method (Hanawa et al., 2020; Hooker et al., 2019; Han et al., 2020).",
+      "startOffset" : 162,
+      "endOffset" : 222
+    }, {
+      "referenceID" : 11,
+      "context" : "Re-training Accuracy Loss (Ral) Ral measures the loss of test accuracy after removing the top-K most influential explanations identified by an explanation method (Hanawa et al., 2020; Hooker et al., 2019; Han et al., 2020).",
+      "startOffset" : 162,
+      "endOffset" : 222
+    }, {
+      "referenceID" : 8,
+      "context" : "Re-training Accuracy Loss (Ral) Ral measures the loss of test accuracy after removing the top-K most influential explanations identified by an explanation method (Hanawa et al., 2020; Hooker et al., 2019; Han et al., 2020).",
+      "startOffset" : 162,
+      "endOffset" : 222
+    }, {
+      "referenceID" : 31,
+      "context" : "The other is sentihood (Saeidi et al., 2016) of location reviews.",
+      "startOffset" : 23,
+      "endOffset" : 44
+    }, {
+      "referenceID" : 29,
+      "context" : "To reduce annotation effort, we convert span extraction into a question answering task (Rajpurkar et al., 2016) where we use aspect terms to formulate questions such as “How is the service?” which concatenates with the text before being fed into pre-trained machine reading comprehension (RC) models.",
+      "startOffset" : 87,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 29,
+      "context" : "We sampled a subset of 100 annotations and found that the RC model has about 70% of Exact Match (Rajpurkar et al., 2016) and the overall annotation has a high recall of over 90% but low EM due to the involvement of heuristics.",
+      "startOffset" : 96,
+      "endOffset" : 120
+    }, {
+      "referenceID" : 21,
+      "context" : "they both use ROBERTA-LARGE (Liu et al., 2019) from Huggingface (Wolf et al.",
+      "startOffset" : 28,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 36,
+      "context" : ", 2019) from Huggingface (Wolf et al., 2019) which is fed into the BertForSequenceClassification function for initialization.",
+      "startOffset" : 25,
+      "endOffset" : 44
+    }, {
+      "referenceID" : 22,
+      "context" : "We use AdamW optimizer (Loshchilov and Hutter, 2019) with weight decay 0.",
+      "startOffset" : 23,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 11,
+      "context" : "3) Sag and Lag shows a consistent trend of TracIn++ and IF++ being superior to the rest of the methods, while Ral results are inconclusive, which resonates with the findings in (Hooker et al., 2019) where they also observed randomness after removing examples under different explanation methods.",
+      "startOffset" : 177,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 33,
+      "context" : "Popular explanation methods include gradientbased (Sundararajan et al., 2017), attention-based (Clark et al.",
+      "startOffset" : 50,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 3,
+      "context" : ", 2017), attention-based (Clark et al., 2019; Jain and Wallace, 2019; Wiegreffe and Pinter, 2019), as well as sample-based (Koh and Liang, 2017; Yeh et al.",
+      "startOffset" : 25,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2017), attention-based (Clark et al., 2019; Jain and Wallace, 2019; Wiegreffe and Pinter, 2019), as well as sample-based (Koh and Liang, 2017; Yeh et al.",
+      "startOffset" : 25,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 35,
+      "context" : ", 2017), attention-based (Clark et al., 2019; Jain and Wallace, 2019; Wiegreffe and Pinter, 2019), as well as sample-based (Koh and Liang, 2017; Yeh et al.",
+      "startOffset" : 25,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 18,
+      "context" : ", 2019; Jain and Wallace, 2019; Wiegreffe and Pinter, 2019), as well as sample-based (Koh and Liang, 2017; Yeh et al., 2018; Pruthi et al., 2020b) methods.",
+      "startOffset" : 85,
+      "endOffset" : 146
+    }, {
+      "referenceID" : 39,
+      "context" : ", 2019; Jain and Wallace, 2019; Wiegreffe and Pinter, 2019), as well as sample-based (Koh and Liang, 2017; Yeh et al., 2018; Pruthi et al., 2020b) methods.",
+      "startOffset" : 85,
+      "endOffset" : 146
+    }, {
+      "referenceID" : 27,
+      "context" : ", 2019; Jain and Wallace, 2019; Wiegreffe and Pinter, 2019), as well as sample-based (Koh and Liang, 2017; Yeh et al., 2018; Pruthi et al., 2020b) methods.",
+      "startOffset" : 85,
+      "endOffset" : 146
+    }, {
+      "referenceID" : 30,
+      "context" : "Major Progress on Sample-based Explanation Methods There have been a series of recent efforts to explain black-box deep neural nets (DNN), such as LIME (Ribeiro et al., 2016) that approximates the behavior of DNN with an interpretable model learned from local samples around prediction, Influence Functions (Koh and Liang, 2017; Koh et al.",
+      "startOffset" : 152,
+      "endOffset" : 174
+    }, {
+      "referenceID" : 18,
+      "context" : ", 2016) that approximates the behavior of DNN with an interpretable model learned from local samples around prediction, Influence Functions (Koh and Liang, 2017; Koh et al., 2019) that picks training samples as explanation via its impact on the overall loss, and Exemplar Points (Yeh et al.",
+      "startOffset" : 140,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 17,
+      "context" : ", 2016) that approximates the behavior of DNN with an interpretable model learned from local samples around prediction, Influence Functions (Koh and Liang, 2017; Koh et al., 2019) that picks training samples as explanation via its impact on the overall loss, and Exemplar Points (Yeh et al.",
+      "startOffset" : 140,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 39,
+      "context" : ", 2019) that picks training samples as explanation via its impact on the overall loss, and Exemplar Points (Yeh et al., 2018) that can assign weights to training samples.",
+      "startOffset" : 107,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 27,
+      "context" : "TracIn (Pruthi et al., 2020b) is the latest breakthrough that overcomes the computational bottleneck of Influence Functions with the cost of faithfulness.",
+      "startOffset" : 7,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 2,
+      "context" : "The Discussion of Explanation Faithfulness in NLP The issue of Faithfulness of Explanations was primarily discussed under the explanation generation context (Camburu et al., 2018) where there is no guarantee that a generated explanation would be faithful to a model’s inner-workings (Jacovi and Goldberg, 2020).",
+      "startOffset" : 157,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2018) where there is no guarantee that a generated explanation would be faithful to a model’s inner-workings (Jacovi and Goldberg, 2020).",
+      "startOffset" : 111,
+      "endOffset" : 138
+    }, {
+      "referenceID" : 18,
+      "context" : "The faithfulness to model either can be guaranteed only in theory but not in practice (Koh and Liang, 2017) or can not be guaranteed at all (Pruthi et al.",
+      "startOffset" : 86,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 27,
+      "context" : "The faithfulness to model either can be guaranteed only in theory but not in practice (Koh and Liang, 2017) or can not be guaranteed at all (Pruthi et al., 2020b).",
+      "startOffset" : 140,
+      "endOffset" : 162
+    }, {
+      "referenceID" : 6,
+      "context" : "(2020) applied IF for sentiment analysis and natural language inference and also studied its utility on detecting data artefacts (Gururangan et al., 2019).",
+      "startOffset" : 129,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 23,
+      "context" : "The one closest to our work is (Meng et al., 2020a) where a single word is used as the explanation unit.",
+      "startOffset" : 31,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 19,
+      "context" : "Explanation of NLP Models by Input Erasure Input erasure has been a popular trick for measuring input impact for NLP models by replacing input by zero vector (Li et al., 2016) or by marginalization of all possible candidate tokens (Kim et al.",
+      "startOffset" : 158,
+      "endOffset" : 175
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2016) or by marginalization of all possible candidate tokens (Kim et al., 2020) that arguably dealt with the out of distribution issue introduced by using zero as input mask.",
+      "startOffset" : 63,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 16,
+      "context" : "Similar to (Kim et al., 2020; Li et al., 2020; Jacovi and Goldberg, 2021) we also use “[MASK]” token, with the difference that we allow masking of arbitrary length of an input sequence.",
+      "startOffset" : 11,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 20,
+      "context" : "Similar to (Kim et al., 2020; Li et al., 2020; Jacovi and Goldberg, 2021) we also use “[MASK]” token, with the difference that we allow masking of arbitrary length of an input sequence.",
+      "startOffset" : 11,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 13,
+      "context" : "Similar to (Kim et al., 2020; Li et al., 2020; Jacovi and Goldberg, 2021) we also use “[MASK]” token, with the difference that we allow masking of arbitrary length of an input sequence.",
+      "startOffset" : 11,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 8,
+      "context" : "On the non-diagnostic setting, sample removal and re-training (Han et al., 2020; Hooker et al., 2019) assumes that removing useful training instances can cause significant accuracy loss; input enhancement method assumes useful explanations can also improve model’s decision making at model input side (Hao, 2020), and manual inspections (Han et al.",
+      "startOffset" : 62,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 11,
+      "context" : "On the non-diagnostic setting, sample removal and re-training (Han et al., 2020; Hooker et al., 2019) assumes that removing useful training instances can cause significant accuracy loss; input enhancement method assumes useful explanations can also improve model’s decision making at model input side (Hao, 2020), and manual inspections (Han et al.",
+      "startOffset" : 62,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2019) assumes that removing useful training instances can cause significant accuracy loss; input enhancement method assumes useful explanations can also improve model’s decision making at model input side (Hao, 2020), and manual inspections (Han et al.",
+      "startOffset" : 207,
+      "endOffset" : 218
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2019) assumes that removing useful training instances can cause significant accuracy loss; input enhancement method assumes useful explanations can also improve model’s decision making at model input side (Hao, 2020), and manual inspections (Han et al., 2020; Meng et al., 2020a) were also used to examine if the",
+      "startOffset" : 243,
+      "endOffset" : 281
+    }, {
+      "referenceID" : 23,
+      "context" : ", 2019) assumes that removing useful training instances can cause significant accuracy loss; input enhancement method assumes useful explanations can also improve model’s decision making at model input side (Hao, 2020), and manual inspections (Han et al., 2020; Meng et al., 2020a) were also used to examine if the",
+      "startOffset" : 243,
+      "endOffset" : 281
+    } ],
+    "year" : 2021,
+    "abstractText" : "In the recent advances of natural language processing, the scale of the state-of-the-art models and datasets is usually extensive, which challenges the application of sample-based explanation methods in many aspects, such as explanation interpretability, efficiency, and faithfulness. In this work, for the first time, we can improve the interpretability of explanations by allowing arbitrary text sequences as the explanation unit. On top of this, we implement a hessian-free method with a model faithfulness guarantee. Finally, to compare our method with the others, we propose a semantic-based evaluation metric that can better align with humans’ judgment of explanations than the widely adopted diagnostic or retraining measures. The empirical results on multiple real data sets demonstrate the proposed method’s superior performance to popular explanation techniques such as Influence Function or TracIn on semantic evaluation.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

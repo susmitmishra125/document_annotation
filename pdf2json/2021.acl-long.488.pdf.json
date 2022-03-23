@@ -1,0 +1,808 @@
+{
+  "name" : "2021.acl-long.488.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Joint Biomedical Entity and Relation Extraction with Knowledge-Enhanced Collective Inference",
+    "authors" : [ "Tuan Lai", "Heng Ji", "ChengXiang Zhai", "Quan Hung Tran" ],
+    "emails" : [ "czhai}@illinois.edu", "qtran@adobe.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 6248–6260\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n6248"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "With the accelerating growth of biomedical publications, it has become increasingly challenging to manually keep up with all the latest articles. As\n1The code is publicly available at https://github.com/ laituan245/bio_relex\na result, developing methods for automatic extraction of biomedical entities and their relations has attracted much research attention recently (Li et al., 2017; Fei et al., 2020; Luo et al., 2020). Many related tasks and datasets have been introduced, ranging from binding interaction detection (BioRelEx) (Khachatrian et al., 2019) to adverse drug event extraction (ADE) (Gurulingappa et al., 2012).\nMany recent joint models for entity and relation extraction rely mainly on distributional representations and do not utilize any external knowledge source (Eberts and Ulges, 2020; Ji et al., 2020; Zhao et al., 2020). However, different from the general news domain, information extraction for the biomedical domain typically requires much broader domain-specific knowledge. Biomedical documents, either formal (e.g., scientific papers) or informal ones (e.g., clinical notes), are written for domain experts. As such, they contain many highly specialized terms, acronyms, and abbreviations. In the BioRelEx dataset, we find that about 65% of the annotated entity mentions are abbreviations of biological entities, and an example is shown in Figure 1. These unique characteristics bring great challenges to general-domain systems and even to existing scientific language models that\ndo not use any external knowledge base during inference (Beltagy et al., 2019; Lee et al., 2019). For example, even though SciBERT (Beltagy et al., 2019) was pretrained on 1.14M scientific papers, our baseline SciBERT model still incorrectly predicts the type of the term UIM in Figure 1 to be “DNA”, which should be a “Protein Motif” instead. Since the biomedical literature is expanding at an exponential rate, models that do not go beyond their fixed set of parameters will likely fall behind.\nIn this paper, we introduce KECI (KnowledgeEnhanced Collective Inference), a novel end-to-end framework that utilizes external domain knowledge for joint entity and relation extraction. Inspired by how humans comprehend a complex piece of scientific text, the framework operates in three main steps (Figure 2). KECI first reads the input text and constructs an initial span graph representing its initial understanding of the text. In a span graph, each node represents a (predicted) entity mention, and each edge represents a (predicted) relation between two entity mentions. KECI then uses an entity linker to form a background knowledge graph containing all potentially relevant biomedical entities from an external knowledge base (KB). For each entity, we extract its semantic types, its definition sentence, and its relational information from the external KB. Finally, KECI uses an attention mechanism to fuse the initial span graph and the background knowledge graph into a more refined graph repre-\nsenting the final output. Different from previous methods that link mentions to entities based solely on local contexts (Li et al., 2020b), our framework takes a more collective approach to link multiple semantically related mentions simultaneously by leveraging global topical coherence. Our hypothesis is that if multiple mentions co-occur in the same discourse and they are probably semantically related, their reference entities should also be connected in the external KB. KECI integrates global relational information into mention and entity representations using graph convolutional networks (GCNs) before linking.\nThe benefit of collective inference can be illustrated by the example shown in Figure 2. The entity linker proposes two candidate entities for the mention FKBP12; one is of semantic type “AA, Peptide, or Protein” and the other is of semantic type “Gene or Genome”. It can be tricky to select the correct candidate as FKBP12 is already tagged with the wrong type in the initial span graph (i.e., it is predicted to be a “Chemical” instead of a “Protein”). However, because of the structural resemblance between the mention-pair 〈FK506, FKBP12〉 and the pair 〈“Organic Chemical”, “AA, Peptide, or Protein”〉, KECI will link FKBP12 to the entity of semantic type “AA, Peptide, or Protein”. As a result, the final predicted type of FKBP12 will also be corrected to “Protein” in the final span graph.\nOur extensive experimental results show that the\nproposed framework is highly effective, achieving new state-of-the-art biomedical entity and relation extraction performance on two benchmark datasets: BioRelEx (Khachatrian et al., 2019) and ADE (Gurulingappa et al., 2012). For example, KECI achieves absolute improvements of 4.59% and 4.91% in F1 scores over the state-of-the-art on the BioRelEx entity and relation extraction tasks. Our analysis also shows that KECI can automatically learn to select relevant candidate entities without any explicit entity linking supervision during training. Furthermore, because KECI considers text spans as the basic units for prediction, it can extract nested entity mentions."
+    }, {
+      "heading" : "2 Methods",
+      "text" : ""
+    }, {
+      "heading" : "2.1 Overview",
+      "text" : "KECI considers text spans as the basic units for feature extraction and prediction. This design choice allows us to handle nested entity mentions (Sohrab and Miwa, 2018). Also, joint entity and relation extraction can be naturally formulated as the task of extracting a span graph from an input document (Luan et al., 2019). In a span graph, each node represents a (predicted) entity mention, and each edge represents a (predicted) relation between two entity mentions.\nGiven an input document D, KECI first enumerates all the spans (up to a certain length) and embeds them into feature vectors (Sec. 2.2). With these feature vectors, KECI predicts an initial span graph and applies a GCN to integrate initial relational information into each span representation (Sec. 2.3). KECI then uses an entity linker to build a background knowledge graph and applies another GCN to encode each node of the graph (Sec. 2.4). Finally, KECI aligns the nodes of the initial span graph and the background knowledge graph to make the final predictions (Sec. 2.5). We train KECI in an end-to-end manner without using any additional entity linking supervision (Sec. 2.6).\nOverall, the design of KECI is partly inspired by previous research in educational psychology. Students’ background knowledge plays a vital role in guiding their understanding and comprehension of scientific texts (Alvermann et al., 1985; Braasch and Goldman, 2010). “Activating” relevant and accurate prior knowledge will aid students’ reading comprehension."
+    }, {
+      "heading" : "2.2 Span Encoder",
+      "text" : "Our model first constructs a contextualized representation for each input token using SciBERT (Beltagy et al., 2019). Let X = (x1, ..., xn) be the output of the token-level encoder, where n denotes the number of tokens in D. Then, for each span si whose length is not more than L, we compute its span representation si ∈ Rd as:\nsi = FFNNg ([ xSTART(i), xEND(i), x̂i, φ(si) ]) (1)\nwhere START(i) and END(i) denote the start and end indices of si respectively. xSTART(i) and xEND(i) are the boundary token representations. x̂i is an attention-weighted sum of the token representations in the span (Lee et al., 2017). φ(si) is a feature vector denoting the span length. FFNNg is a feedforward network with ReLU activations."
+    }, {
+      "heading" : "2.3 Initial Span Graph Construction",
+      "text" : "With the extracted span representations, we predict the type of each span and also the relation between each span pair jointly. LetE denote the set of entity types (including non-entity), and R denote the set of relation types (including non-relation). We first classify each span si:\nei = Softmax ( FFNNe(si) ) (2)\nwhere FFNNe is a feedforward network mapping from Rd → R|E|. We then employ another network to classify the relation of each span pair 〈si, sj〉:\nrij = Softmax ( FFNNr ([ si, sj , si ◦ sj ])) (3)\nwhere ◦ denotes the element-wise multiplication, FFNNr is a mapping from R3×d → R|R|. We will use the notation rij [k] to refer to the predicted probability of si and sj having the relation k.\nAt this point, one can already obtain a valid output for the task from the predicted entity and relation scores. However, these predictions are based solely on the local document context, which can be difficult to understand without any external domain knowledge. Therefore, our framework uses these predictions only to construct an initial span graph that will be refined later based on information extracted from an external knowledge source.\nTo maintain computational efficiency, we first prune out spans of text that are unlikely to be entity mentions. We only keep up to λn spans with the lowest probability scores of being a non-entity. The value of λ is selected empirically and set to be\n0.5. Spans that pass the filter are represented as nodes in the initial span graph. For every span pair 〈si, sj〉, we create |R| directed edges from the node representing si to the node representing sj . Each edge represents one relation type and is weighted by the corresponding probability score in rij .\nLet Gs = {Vs, Es} denote the initial span graph. We use a bidirectional GCN (Marcheggiani and Titov, 2017; Fu et al., 2019) to recursively update each span representation:\n~hli = ∑\nsj∈Vs\\{si}\n∑ k∈R rij [k] ( ~W(l)k h l j + ~b(l)k ) ~hli =\n∑ sj∈Vs\\{si} ∑ k∈R rji[k] ( ~W(l)k h l j + ~b(l)k )\nhl+1i = h l i + FFNN (l) a\n( ReLU ([~hli, ~hli]) )\n(4)\nwhere hli is the hidden feature vector of span si at layer l. We initialize h0i to be si (Eq. 1). FFNN (l) a is a feedforward network whose output dimension is the same as the dimension of hli.\nAfter multiple iterations of message passing, each span representation will contain the global relational information of Gs. Let hi denote the feature vector at the final layer of the GCN. Note that the dimension of hi is the same as the dimension of si (i.e., hi ∈ Rd)."
+    }, {
+      "heading" : "2.4 Background Knowledge Graph Construction",
+      "text" : "In this work, we utilize external knowledge from the Unified Medical Language System (UMLS) (Bodenreider, 2004). UMLS consists of three main components: Metathesaurus, Semantic Network, and Specialist Lexicon and Lexical Tools. The Metathesaurus provides information about millions of fine-grained biomedical concepts and relations between them. To be consistent with the existing literature on knowledge graphs, we will refer to UMLS concepts as entities. Each entity is annotated with one or more higher-level semantic types, such as Anatomical Structure, Cell, or Virus. In addition to relations between entities, there are also semantic relations between semantic types. For example, there is an affects relation from Acquired Abnormality to Physiologic Function. This information is provided by the Semantic Network.\nWe first extract UMLS biomedical entities from the input document D using MetaMap, an entity\nmapping tool for UMLS (Aronson and Lang, 2010). We then construct a background knowledge graph (KG) from the extracted information. More specifically, we first create a node for every extracted biomedical entity. The semantic types of each entity node are also modeled as type nodes that are linked with associated entity nodes. Finally, we create an edge for every relevant relation found in the Metathesaurus and the Semantic Network. An example KG is in the grey shaded region of Figure 2. Circles represent entity nodes, and rectangles represent nodes that correspond to semantic types.\nNote that we simply run MetaMap with the default options and do not tune it. In our experiments, we found that MetaMap typically returns many candidate entities unrelated to the input text. However, as to be discussed in Section 3.4, we show that KECI can learn to ignore the irrelevant entities.\nLetGk = {Vk, Ek} denote the constructed background KG, where Vk and Ek are the node and edge sets, respectively. We use a set of UMLS embeddings pretrained by Maldonado et al. (2019) to initialize the representation of each node in Vk. We also use SciBERT to encode the UMLS definition sentence of each node into a vector and concatenate it to the initial representation. After that, since Gk is a heterogeneous relational graph, we use a relational GCN (Schlichtkrull et al., 2018) to update the representation of each node vi:\nvl+1i = ReLU ( U(l)vli+ ∑ k∈R ∑ vj∈Nki ( 1 ci,k U(l)k v l j )) (5) where vli is the feature vector of vi at layer l. Nki is the set of neighbors of vi under relation k ∈ R. ci,k is a normalization constant and set to be |Nki |.\nAfter multiple iterations of message passing are performed, the global relational information of the KG will be integrated into each node’s representation. Let vi denote the feature vector at the final layer of the relational GCN. We further project each vector vi to another vector ni using a simple feedforward network, so that ni has the same dimension as the span representations (i.e., ni ∈ Rd)."
+    }, {
+      "heading" : "2.5 Final Span Graph Prediction",
+      "text" : "At this point, we have two graphs: the initial span graph Gs = {Vs, Es} (Sec. 2.3) and the background knowledge graph Gk = {Vk, Ek} (Sec. 2.4). We have also obtained a structure-aware representation for each node in each graph (i.e., hi for\neach span si ∈ Vs and nj for each entity vj ∈ Vk). The next step is to soft-align the mentions and the candidate entities using an attention mechanism (Figure 3). Let C(si) denote the set of candidate entities for a span si ∈ Vs. For example, in Figure 2, the mention FKBP12 has two candidate entities, while FK506 has only one candidate. For each candidate entity vj ∈ C(si), we calculate a scalar score αij indicating how relevant vj is to si:\nαij = FFNNc ([ hi,nj ])\n(6)\nwhere FFNNc is a feedforward network mapping from R2×d → R. Then we compute an additional sentinel vector ci (Yang and Mitchell, 2017; He et al., 2020) and also compute a score αi for it:\nci = FFNNs ( hi )\nαi = FFNNc ([ hi, ci ]) (7)\nwhere FFNNs is another feedforward network mapping from Rd → Rd. Intuitively, ci records the information of the local context of si, and αi measures the importance of such information. After that, we compute a final knowledge-aware representation fi for each span si as follows:\nZ = exp (αi) + ∑\nvz∈C(si)\nexp (αiz)\nβi = exp (αi)/Z and βij = exp (αij)/Z fi = βi ci + ∑\nvj∈C(si)\nβijnj\n(8)\nThe attention mechanism is illustrated in Figure 3. With the extracted knowledge-aware span representations, we predict the final span graph in a way\nsimilar to Eq. 2 and Eq. 3: êi = Softmax ( FFNNê(fi) ) r̂ij = Softmax ( FFNNr̂( [ fi, fj , fi ◦ fj ] ) ) (9)\nwhere FFNNê is a mapping from Rd → R|E|, and FFNNr̂ is a mapping from R3×d → R|R|. êi is the final predicted probability distribution over possible entity types for span si. r̂ij is the final predicted probability distribution over possible relation types for span pair 〈si, sj〉."
+    }, {
+      "heading" : "2.6 Training",
+      "text" : "The total loss is computed as:\nLtotal = (Le1 + Lr1) + 2(Le2 + Lr2) (10)\nwhere Le* denotes the cross-entropy loss of span classification. Lr* denotes the binary cross-entropy loss of relation classification. Le1 and Lr1 are loss terms for the initial span graph prediction (Eq. 2 and Eq. 3 of Section 2.3). Le2 and Lr2 are loss terms for the final span graph prediction (Eq. 9 of Section 2.5). We apply a larger weight score to the loss terms Le2 and Lr2. We train the framework using only ground-truth labels of the entity and relation extraction tasks. We do not make use of any entity linking supervision in this work."
+    }, {
+      "heading" : "3 Experiments and Results",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Data and Experiments Setup",
+      "text" : "Datasets and evaluation metrics We evaluate KECI on two benchmark datasets: BioRelEx and ADE. The BioRelEx dataset (Khachatrian et al., 2019) consists of 2,010 sentences from biomedical literature that capture binding interactions between proteins and/or biomolecules. BioRelEx has annotations for 33 types of entities and 3 types of relations for binding interactions. The training, development, and test splits contain 1,405, 201, and 404 sentences, respectively. The training and development sets are publicly available. The test set is unreleased and can only be evaluated against using CodaLab 2. For BioRelEx, we report Micro-F1 scores. The ADE dataset (Gurulingappa et al., 2012) consists of 4,272 sentences extracted from medical reports that describe drug-related adverse effects. Two entity types (Adverse-Effect and Drug) and a single relation type (Adverse-Effect) are pre-defined. Similar to previous work (Eberts\n2 https://competitions.codalab.org/ competitions/20468\nand Ulges, 2020; Ji et al., 2020), we conduct 10- fold cross-validation and report averaged Macro-F1 scores. All the reported results take overlapping entities into consideration.\nImplementation details We implement KECI using PyTorch (Paszke et al., 2019) and Huggingface’s Transformers (Wolf et al., 2020). KECI uses SciBERT as the Transformer encoder (Beltagy et al., 2019). All details about hyperparameters and reproducibility information are in the appendix.\nBaselines for comparison In addition to comparing our method with state-of-the-art methods on the above two datasets, we implement the following baselines for further comparison and analysis:\n1. SentContextOnly: This baseline does not use any external knowledge. It uses only the local sentence context for prediction. It extracts the final output directly from the predictions obtained using Eq. 2 and Eq. 3. 2. FlatAttention: This baseline does not rely on collective inference. It does not integrate any global relational information into mention and entity representations. Each hi mentioned in Sec. 2.3 is set to be si (Eq. 1), and each vi mentioned in Sec. 2.4 is set to be v0i . Then, the prediction of the final span graph is the same as described in Sec. 2.5. 3. KnowBertAttention: This baseline uses the Knowledge Attention and Recontextualization (KAR) mechanism of KnowBert (Peters et al., 2019), a state-of-the-art knowledge-enhanced\nlanguage model. The baseline first uses SciBERT to construct initial token-level representations. It then uses the KAR mechanism to inject external knowledge from UMLS into the token-level vectors. Finally, it embeds text spans into feature vectors (Eq. 1) and uses the span representations to extract entities and relations in one pass (similar to Eq. 9).\nFor fair comparison, all the baselines use SciBERT as the Transformer encoder.\nA major difference between KECI and KnowBertAttention (Peters et al., 2019) is that KECI explicitly builds and extracts information from a multi-relational graph structure of the candidate entity mentions before the knowledge fusion process. In contrast, KnowBertAttention only uses SciBERT to extract features from the candidate entity mentions. Therefore, KnowBertAttention only takes advantage of the entity-entity co-occurrence information. On the other hand, KECI integrates more fine-grained global relational information (e.g., the binding interactions shown in Figure 2) into the mention representations. This difference makes KECI achieve better overall performance, as to be discussed next."
+    }, {
+      "heading" : "3.2 Overall Results",
+      "text" : "Table 1 and Table 2 show the overall results on the development and test sets of BioRelEx, respectively. Compared to SentContextOnly, KECI achieves much higher performance. This demonstrates the importance of incorporating external knowledge for biomedical information extraction. KECI also outperforms the baseline FlatAttention by a large margin, which shows the benefit of collective inference. In addition, we see that our model performs better than the baseline KnowBertAttention. Finally, at the time of writing, KECI achieves the first position on the BioRelEx leaderboard 3.\nTable 3 shows the overall results on ADE. KECI again outperforms all the baselines and state-of-theart models such as SpERT (Eberts and Ulges, 2020) and SPANMulti-Head (Ji et al., 2020). This further confirms the effectiveness of our framework.\nOverall, the two datasets used in this work focus on two very different subareas of the biomedical domain, and KECI was able to push the state-ofthe-art results of both datasets. This indicates that our proposed approach is highly generalizable."
+    }, {
+      "heading" : "3.3 Ablation Study",
+      "text" : "Table 4 shows the results of ablation studies we did on the development set of the BioRelEx benchmark. We compare our full model against several partial variants. The variant [w/o external knowledge] is the same as the baseline SentContextOnly, and the variant [w/o collective inference] is the same as the baseline FlatAttention (Section 3.1). For the variant [w/o the bidirectional GCN], we simply set each hi mentioned in Section 2.3 to be si. Similarly, for the variant [w/o the relational GCN], we set each vi in Section 2.4 to be v0i . The last two variants are related to the initialization of each vector v0i .\nWe see that all the partial variants perform worse than our full model. This shows that each component of KECI plays an important role."
+    }, {
+      "heading" : "3.4 Attention Pattern Analysis",
+      "text" : "There is no gold-standard set of correspondences between the entity mentions in the datasets and the UMLS entities. Therefore, we cannot directly evaluate the entity linking performance of KECI. However, for each UMLS semantic type, we compute the average attention weight that an entity of that type gets assigned (Table 5). Overall, we see\n3 https://competitions.codalab.org/ competitions/20468\nthat KECI typically pays the most attention to the relevant informative entities while ignoring the irrelevant ones."
+    }, {
+      "heading" : "3.5 Qualitative Analysis",
+      "text" : "Table 6 shows some examples from the ADE dataset that illustrate how incorporating external knowledge can improve the performance of joint biomedical entity and relation extraction.\nIn the first example, initially, there is no edge between the node “bleeding symptoms” and the node “warfarin”, probably because of the distance between their corresponding spans in the original input sentence. However, KECI can link the term “warfarin” to a UMLS entity (CUI: C0043031), and the definition in UMLS says that warfarin is a type of anticoagulant that prevents the formation of blood clots. As the initial feature vector of each entity contains the representation of its definition (Sec. 2.4), KECI can recover the missing edge.\nIn the second example, the initial span graph is predicted to have three entities of type AdverseEffect, which correspond to three different overlapping text spans. Among these three, only “retroperitoneal fibrosis” can be linked to a UMLS entity. It is also evident from the input sentence that one of these spans is related to “methysergide”. As a result, KECI successfully removes the other two unlinked span nodes to create the final span graph.\nIn the third example, probably because of the phrase “due to”, the node “endometriosis” is initially predicted to be of type Drug, and the node “acute abdomen” is predicted to be its AdverseEffect. However, KECI can link the term “endometriosis” to a UMLS entity of semantic type Disease or Syndrome. As a result, the system can correct the term’s type and also predict the right edges for the final span graph.\nFinally, we also examined the errors made by KECI. One major issue is that MetaMap sometimes fails to return any candidate entity from UMLS for an entity mention. We leave the extension of this work to using multiple KBs as future work."
+    }, {
+      "heading" : "4 Related Work",
+      "text" : "Traditional pipelined methods typically treat entity extraction and relation extraction as two separate tasks (Zelenko et al., 2002; Zhou et al., 2005; Chan and Roth, 2011). Such approaches ignore the close interaction between named entities and their relation information and typically suffer from the error\npropagation problem. To overcome these limitations, many studies have proposed joint models that perform entity extraction and relation extraction simultaneously (Roth and Yih, 2007; Li and Ji, 2014; Li et al., 2017; Zheng et al., 2017; Bekoulis et al., 2018a,b; Wadden et al., 2019; Fu et al., 2019; Luan et al., 2019; Zhao et al., 2020; Wang and Lu, 2020; Li et al., 2020b; Lin et al., 2020). Particularly, span-based joint extraction methods have gained much popularity lately because of their ability to detect overlapping entities. For example, Eberts and Ulges (2020) propose SpERT, a simple but effective span-based model that utilizes BERT as its core. The recent work of Ji et al. (2020) also closely follows the overall architecture of SpERT but differs in span-specific and contextual semantic representations. Despite their impressive performance, these methods are not designed specifically for the biomedical domain, and they do not utilize any external knowledge base. To the best of our knowledge, our work is the first span-based framework that utilizes external knowledge for joint entity and relation extraction from biomedical text. Biomedical event extraction is a closely related task that has also received a lot of attention from the research community (Poon and Vanderwende, 2010; Kim et al., 2013; V S S Patchigolla et al., 2017; Rao et al., 2017; Espinosa et al., 2019; Li et al., 2019; Wang et al., 2020; Huang et al., 2020; Ramponi et al., 2020; Yadav et al., 2020). Several studies have proposed to incorporate external knowledge from domain-specific KBs into neural models for biomedical event extraction. For example, Li et al. (2019) incorporate entity information from Gene Ontology into tree-LSTM models. However, their approach does not explicitly use any external relational information. Recently, Huang et al. (2020) introduce a framework that uses a novel Graph Edge conditioned Attention Network (GEANet) to utilize domain knowledge from UMLS. In the framework, a global KG for the entire corpus is first constructed, and then a\nsentence-level KG is created for each individual sentence in the corpus. Our method of KG construction is more flexible as we directly create a KG for each input text. Furthermore, the work of Huang et al. (2020) only deals with event extraction and assumes that gold-standard entity mentions are provided at inference time.\nSome previous work has focused on integrating external knowledge into neural architectures for other tasks, such as reading comprehension (Mihaylov and Frank, 2018), question answering (Pan et al., 2019), natural language inference (Sharma et al., 2019), and conversational modeling (Parthasarathi and Pineau, 2018). Different from these studies, our work explicitly emphasizes the benefit of collective inference using global relational information.\nMany previous studies have also used GNNs for various IE tasks (Nguyen and Grishman, 2018; Liu et al., 2018; Subburathinam et al., 2019; Zeng et al., 2021; Zhang and Ji, 2021). Many of these methods use a dependency parser or a semantic parser to construct a graph capturing global interactions between tokens/spans. However, parsers for specialized biomedical domains are expensive to build. KECI does not rely on such expensive resources."
+    }, {
+      "heading" : "5 Conclusions and Future Work",
+      "text" : "In this work, we propose a novel span-based framework named KECI that utilizes external domain knowledge for joint entity and relation extraction from biomedical text. Experimental results show that KECI is highly effective, achieving new stateof-the-art results on two datasets: BioRelEx and ADE. Theoretically, KECI can take an entire document as input; however, the tested datasets are only sentence-level datasets. In the future, we plan to evaluate our framework on more document-level datasets. We also plan to explore a broader range of properties and information that can be extracted from external KBs to facilitate biomedical IE tasks. Finally, we also plan to apply KECI to other information extraction tasks (Li et al., 2020a; Lai et al., 2021; Wen et al., 2021)."
+    }, {
+      "heading" : "Acknowledgement",
+      "text" : "We thank the three reviewers and the Area Chair for their insightful comments and suggestions. This research is based upon work supported by the Molecule Maker Lab Institute: An AI Research Institutes program supported by NSF under Award\nNo. 2019897, NSF No. 2034562, U.S. DARPA KAIROS Program No. FA8750-19-2-1004, the Office of the Director of National Intelligence (ODNI), Intelligence Advanced Research Projects Activity (IARPA), via contract No. FA8650-17-C9116. Any opinions, findings and conclusions or recommendations expressed in this document are those of the authors and should not be interpreted as representing the official policies, either expressed or implied, of the U.S. Government. The U.S. Government is authorized to reproduce and distribute reprints for Government purposes notwithstanding any copyright notation here on."
+    }, {
+      "heading" : "A Reproducibility Checklist",
+      "text" : "In this section, we present the reproducibility information of the paper. We are planning to make the code publicly available after the paper is reviewed.\nImplementation Dependencies Libraries Pytorch 1.6.0 (Paszke et al., 2019), Transformers 4.0.0 (Wolf et al., 2020), DGL 0.5.34, Numpy 1.19.1 (Harris et al., 2020), CUDA 10.2.\nComputing Infrastructure The experiments were conducted on a server with Intel(R) Xeon(R) Gold 5120 CPU @ 2.20GHz and NVIDIA Tesla V100 GPUs. The allocated RAM is 187G. GPU memory is 16G.\nDatasets The BioRelEx dataset (Khachatrian et al., 2019) is available at https://github.com/ YerevaNN/BioRelEx. The ADE dataset (Gurulingappa et al., 2012) can be downloaded by using the script at https://github.com/markus-eberts/spert.\n4https://www.dgl.ai/\nAverage Runtime Table 7 shows the estimated average run time of our full model.\nNumber of Model Parameters The number of parameters in a full model trained on BioRelEx is about 121.0M parameters. The number of parameters in a full model trained on ADE is about 119.9M parameters.\nHyperparameters of Best-Performing Models The span length limit L is set to be 20 tokens. Note that the choice of L only has some noticeable effects on the training time of KECI during the first epoch. KECI with randomly initialized parameters may include many non-relevant spans in the initial span graph. However, after a few training iterations, KECI typically can filter out most nonrelevant spans. The pruning parameter λ is set to be 0.5. All of our models use SciBERT as the Transformer encoder (Beltagy et al., 2019). We use two different learning rates, one for the lower pretrained Transformer encoder and one for the upper layers. Table 8 summarizes the hyperparameter configurations of best-performing models.\nExpected Validation Performance The main paper has the results on the dev set of BioRelEx. For ADE, as in previous work, we conduct a 10- fold cross validation.\nHyperparameter Tuning Process We experimented with the following range of possible values: {16, 32} for batch size, {2e-5, 3e-5, 4e-5, 5e-5} for lower learning rate, {1e-4, 2e-4, 5e-4} for upper learning rate, and {50, 100} for number of training epochs. For each particular set of hyperparameters, we repeat training for 3 times and compute the average performance."
+    } ],
+    "references" : [ {
+      "title" : "Prior knowledge activation and the comprehension of compatible and incompatible text",
+      "author" : [ "D. Alvermann", "L. Smith", "J. Readence." ],
+      "venue" : "Reading Research Quarterly, 20:420.",
+      "citeRegEx" : "Alvermann et al\\.,? 1985",
+      "shortCiteRegEx" : "Alvermann et al\\.",
+      "year" : 1985
+    }, {
+      "title" : "An overview of metamap: historical perspective and recent advances",
+      "author" : [ "A. Aronson", "F. Lang." ],
+      "venue" : "Journal of the American Medical Informatics Association : JAMIA, 17 3:229–36.",
+      "citeRegEx" : "Aronson and Lang.,? 2010",
+      "shortCiteRegEx" : "Aronson and Lang.",
+      "year" : 2010
+    }, {
+      "title" : "Joint entity recognition and relation extraction as a multi-head selection problem",
+      "author" : [ "Giannis Bekoulis", "J. Deleu", "Thomas Demeester", "Chris Develder." ],
+      "venue" : "ArXiv, abs/1804.07847.",
+      "citeRegEx" : "Bekoulis et al\\.,? 2018a",
+      "shortCiteRegEx" : "Bekoulis et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Adversarial training for multi-context joint entity and relation extraction",
+      "author" : [ "Giannis Bekoulis", "Johannes Deleu", "Thomas Demeester", "Chris Develder." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Bekoulis et al\\.,? 2018b",
+      "shortCiteRegEx" : "Bekoulis et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Scibert: Pretrained language model for scientific text",
+      "author" : [ "Iz Beltagy", "Kyle Lo", "Arman Cohan." ],
+      "venue" : "EMNLP.",
+      "citeRegEx" : "Beltagy et al\\.,? 2019",
+      "shortCiteRegEx" : "Beltagy et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Benchmarking biorelex for entity tagging and relation extraction",
+      "author" : [ "Abhinav Bhatt", "Kaustubh D. Dhole." ],
+      "venue" : "ArXiv, abs/2006.00533.",
+      "citeRegEx" : "Bhatt and Dhole.,? 2020",
+      "shortCiteRegEx" : "Bhatt and Dhole.",
+      "year" : 2020
+    }, {
+      "title" : "The unified medical language system (umls): integrating biomedical terminology",
+      "author" : [ "O. Bodenreider." ],
+      "venue" : "Nucleic acids research, 32 Database issue:D267–70.",
+      "citeRegEx" : "Bodenreider.,? 2004",
+      "shortCiteRegEx" : "Bodenreider.",
+      "year" : 2004
+    }, {
+      "title" : "The role of prior knowledge in learning from analogies in science texts",
+      "author" : [ "Jason Braasch", "S. Goldman." ],
+      "venue" : "Discourse Processes, 47:447 – 479.",
+      "citeRegEx" : "Braasch and Goldman.,? 2010",
+      "shortCiteRegEx" : "Braasch and Goldman.",
+      "year" : 2010
+    }, {
+      "title" : "Exploiting syntactico-semantic structures for relation extraction",
+      "author" : [ "Yee Seng Chan", "Dan Roth." ],
+      "venue" : "Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: Human Language Technologies, pages 551–560, Port-",
+      "citeRegEx" : "Chan and Roth.,? 2011",
+      "shortCiteRegEx" : "Chan and Roth.",
+      "year" : 2011
+    }, {
+      "title" : "Span-based joint entity and relation extraction with transformer pretraining",
+      "author" : [ "Markus Eberts", "A. Ulges." ],
+      "venue" : "European Conference on Artificial Intelligence.",
+      "citeRegEx" : "Eberts and Ulges.,? 2020",
+      "shortCiteRegEx" : "Eberts and Ulges.",
+      "year" : 2020
+    }, {
+      "title" : "A search-based neural model for biomedical nested and overlapping event detection",
+      "author" : [ "Kurt Junshean Espinosa", "Makoto Miwa", "Sophia Ananiadou." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Espinosa et al\\.,? 2019",
+      "shortCiteRegEx" : "Espinosa et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A span-graph neural model for overlapping entity relation extraction in biomedical texts",
+      "author" : [ "Hao Fei", "Yue Zhang", "Yafeng Ren", "Donghong Ji." ],
+      "venue" : "Bioinformatics. Btaa993.",
+      "citeRegEx" : "Fei et al\\.,? 2020",
+      "shortCiteRegEx" : "Fei et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "GraphRel: Modeling text as relational graphs for joint entity and relation extraction",
+      "author" : [ "Tsu-Jui Fu", "Peng-Hsuan Li", "Wei-Yun Ma." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 1409–1418, Flo-",
+      "citeRegEx" : "Fu et al\\.,? 2019",
+      "shortCiteRegEx" : "Fu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Development of a benchmark corpus to support the automatic extraction of drugrelated adverse effects from medical case reports",
+      "author" : [ "Harsha Gurulingappa", "Abdul Mateen Rajput", "Angus Roberts", "Juliane Fluck", "Martin Hofmann-Apitius", "Luca Toldo" ],
+      "venue" : null,
+      "citeRegEx" : "Gurulingappa et al\\.,? \\Q2012\\E",
+      "shortCiteRegEx" : "Gurulingappa et al\\.",
+      "year" : 2012
+    }, {
+      "title" : "Learning to tag OOV tokens by integrating contextual representation and background knowledge",
+      "author" : [ "Keqing He", "Yuanmeng Yan", "Weiran Xu." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 619–",
+      "citeRegEx" : "He et al\\.,? 2020",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Biomedical event extraction with hierarchical knowledge graphs",
+      "author" : [ "Kung-Hsiang Huang", "Mu Yang", "Nanyun Peng." ],
+      "venue" : "Findings of the Association for Computational Linguistics: EMNLP 2020, pages 1277–1285, Online. Association for Compu-",
+      "citeRegEx" : "Huang et al\\.,? 2020",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Span-based joint entity and relation extraction with attention-based spanspecific and contextual semantic representations",
+      "author" : [ "Bin Ji", "Jie Yu", "Shasha Li", "Jun Ma", "Qingbo Wu", "Yusong Tan", "Huijun Liu." ],
+      "venue" : "Proceedings of the 28th International Conference on",
+      "citeRegEx" : "Ji et al\\.,? 2020",
+      "shortCiteRegEx" : "Ji et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BioRelEx 1.0: Biological relation extraction benchmark",
+      "author" : [ "Hrant Khachatrian", "Lilit Nersisyan", "Karen Hambardzumyan", "Tigran Galstyan", "Anna Hakobyan", "Arsen Arakelyan", "Andrey Rzhetsky", "Aram Galstyan" ],
+      "venue" : null,
+      "citeRegEx" : "Khachatrian et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Khachatrian et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The Genia event extraction shared task, 2013 edition - overview",
+      "author" : [ "Jin-Dong Kim", "Yue Wang", "Yamamoto Yasunori." ],
+      "venue" : "Proceedings of the BioNLP Shared Task 2013 Workshop, pages 8–15, Sofia, Bulgaria. Association for Computational Linguistics.",
+      "citeRegEx" : "Kim et al\\.,? 2013",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "A contextdependent gated module for incorporating symbolic semantics into event coreference resolution",
+      "author" : [ "Tuan Lai", "Heng Ji", "Trung Bui", "Quan Hung Tran", "Franck Dernoncourt", "Walter Chang." ],
+      "venue" : "Proceedings of the 2021 Conference of the North Amer-",
+      "citeRegEx" : "Lai et al\\.,? 2021",
+      "shortCiteRegEx" : "Lai et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "BioBERT: a pretrained biomedical language representation model for biomedical text mining",
+      "author" : [ "Jinhyuk Lee", "Wonjin Yoon", "Sungdong Kim", "Donghyeon Kim", "Sunkyu Kim", "Chan Ho So", "Jaewoo Kang." ],
+      "venue" : "Bioinformatics,",
+      "citeRegEx" : "Lee et al\\.,? 2019",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "End-to-end neural coreference resolution",
+      "author" : [ "Kenton Lee", "Luheng He", "Mike Lewis", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 188–197, Copenhagen, Denmark. Association",
+      "citeRegEx" : "Lee et al\\.,? 2017",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Biomedical event extraction based on knowledgedriven tree-LSTM",
+      "author" : [ "Diya Li", "Lifu Huang", "Heng Ji", "Jiawei Han." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Lan-",
+      "citeRegEx" : "Li et al\\.,? 2019",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A neural joint model for entity and relation extraction from biomedical text",
+      "author" : [ "Fei Li", "Meishan Zhang", "G. Fu", "D. Ji." ],
+      "venue" : "BMC Bioinformatics, 18.",
+      "citeRegEx" : "Li et al\\.,? 2017",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "2020a. GAIA at SMKBP 2020 - a dockerlized multi-media multi-lingual knowledge extraction, clustering, temporal tracking",
+      "author" : [ "Freedman", "Pedro Szekely", "Haidong Zhu", "Ram Nevatia", "Yang Bai", "Yifan Wang", "Ali Sadeghian", "Haodi Ma", "Daisy Zhe Wang" ],
+      "venue" : null,
+      "citeRegEx" : "Freedman et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Freedman et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Incremental joint extraction of entity mentions and relations",
+      "author" : [ "Qi Li", "Heng Ji." ],
+      "venue" : "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 402–412, Baltimore, Maryland. Association",
+      "citeRegEx" : "Li and Ji.,? 2014",
+      "shortCiteRegEx" : "Li and Ji.",
+      "year" : 2014
+    }, {
+      "title" : "Bio-semantic relation extraction with attention-based external knowledge reinforcement",
+      "author" : [ "Zhijing Li", "Yuchen Lian", "Xiaoyong Ma", "Xiangrong Zhang", "Chen Li." ],
+      "venue" : "BMC Bioinformatics, 21.",
+      "citeRegEx" : "Li et al\\.,? 2020b",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A joint neural model for information extraction with global features",
+      "author" : [ "Ying Lin", "Heng Ji", "Fei Huang", "Lingfei Wu." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 7999–8009, Online. Association for",
+      "citeRegEx" : "Lin et al\\.,? 2020",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Jointly multiple events extraction via attentionbased graph information aggregation",
+      "author" : [ "Xiao Liu", "Zhunchen Luo", "Heyan Huang." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 1247–1256,",
+      "citeRegEx" : "Liu et al\\.,? 2018",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Multi-task identification of entities, relations, and coreference for scientific knowledge graph construction",
+      "author" : [ "Yi Luan", "Luheng He", "Mari Ostendorf", "Hannaneh Hajishirzi." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Lan-",
+      "citeRegEx" : "Luan et al\\.,? 2018",
+      "shortCiteRegEx" : "Luan et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A general framework for information extraction using dynamic span graphs",
+      "author" : [ "Yi Luan", "Dave Wadden", "Luheng He", "Amy Shah", "Mari Ostendorf", "Hannaneh Hajishirzi." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the",
+      "citeRegEx" : "Luan et al\\.,? 2019",
+      "shortCiteRegEx" : "Luan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A neural network-based joint learning approach for biomedical entity and relation extraction from biomedical literature",
+      "author" : [ "Ling Luo", "Zhihao Yang", "M. Cao", "Lei Wang", "Y. Zhang", "Hongfei Lin." ],
+      "venue" : "Journal of biomedical informatics, page 103384.",
+      "citeRegEx" : "Luo et al\\.,? 2020",
+      "shortCiteRegEx" : "Luo et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Adversarial learning of knowledge embeddings for the unified medical language system",
+      "author" : [ "R. Maldonado", "Meliha Yetisgen", "Sanda M. Harabagiu." ],
+      "venue" : "AMIA Joint Summits on Translational Science proceedings. AMIA Joint Summits on Transla-",
+      "citeRegEx" : "Maldonado et al\\.,? 2019",
+      "shortCiteRegEx" : "Maldonado et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Encoding sentences with graph convolutional networks for semantic role labeling",
+      "author" : [ "Diego Marcheggiani", "Ivan Titov." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 1506–1515, Copenhagen,",
+      "citeRegEx" : "Marcheggiani and Titov.,? 2017",
+      "shortCiteRegEx" : "Marcheggiani and Titov.",
+      "year" : 2017
+    }, {
+      "title" : "Knowledgeable reader: Enhancing cloze-style reading comprehension with external commonsense knowledge",
+      "author" : [ "Todor Mihaylov", "Anette Frank." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1:",
+      "citeRegEx" : "Mihaylov and Frank.,? 2018",
+      "shortCiteRegEx" : "Mihaylov and Frank.",
+      "year" : 2018
+    }, {
+      "title" : "Graph convolutional networks with argument-aware pooling for event detection",
+      "author" : [ "T. Nguyen", "R. Grishman." ],
+      "venue" : "AAAI.",
+      "citeRegEx" : "Nguyen and Grishman.,? 2018",
+      "shortCiteRegEx" : "Nguyen and Grishman.",
+      "year" : 2018
+    }, {
+      "title" : "Improving question answering with external knowledge",
+      "author" : [ "Xiaoman Pan", "Kai Sun", "Dian Yu", "Jianshu Chen", "Heng Ji", "Claire Cardie", "Dong Yu." ],
+      "venue" : "Proc. EMNLP2019 Workshop on Machine Reading for Question Answering.",
+      "citeRegEx" : "Pan et al\\.,? 2019",
+      "shortCiteRegEx" : "Pan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Extending neural generative conversational model using external knowledge sources",
+      "author" : [ "Prasanna Parthasarathi", "Joelle Pineau." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 690–695, Brus-",
+      "citeRegEx" : "Parthasarathi and Pineau.,? 2018",
+      "shortCiteRegEx" : "Parthasarathi and Pineau.",
+      "year" : 2018
+    }, {
+      "title" : "Pytorch: An imperative style, high-performance deep learning library",
+      "author" : [ "Lu Fang", "Junjie Bai", "Soumith Chintala." ],
+      "venue" : "NeurIPS.",
+      "citeRegEx" : "Fang et al\\.,? 2019",
+      "shortCiteRegEx" : "Fang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Knowledge enhanced contextual word representations",
+      "author" : [ "Matthew E. Peters", "Mark Neumann", "Robert Logan", "Roy Schwartz", "Vidur Joshi", "Sameer Singh", "Noah A. Smith." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language",
+      "citeRegEx" : "Peters et al\\.,? 2019",
+      "shortCiteRegEx" : "Peters et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Joint inference for knowledge extraction from biomedical literature",
+      "author" : [ "Hoifung Poon", "Lucy Vanderwende." ],
+      "venue" : "Human Language Technologies: The 2010 Annual Conference of the North American Chapter of the Association for Computational",
+      "citeRegEx" : "Poon and Vanderwende.,? 2010",
+      "shortCiteRegEx" : "Poon and Vanderwende.",
+      "year" : 2010
+    }, {
+      "title" : "Biomedical event extraction as sequence labeling",
+      "author" : [ "Alan Ramponi", "Rob van der Goot", "Rosario Lombardo", "Barbara Plank." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural",
+      "citeRegEx" : "Ramponi et al\\.,? 2020",
+      "shortCiteRegEx" : "Ramponi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Biomedical event extraction using Abstract Meaning Representation",
+      "author" : [ "Sudha Rao", "Daniel Marcu", "Kevin Knight", "Hal Daumé III." ],
+      "venue" : "BioNLP 2017, pages 126–135, Vancouver, Canada,. Association for Computational Linguistics.",
+      "citeRegEx" : "Rao et al\\.,? 2017",
+      "shortCiteRegEx" : "Rao et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Global inference for entity and relation identification via a linear programming formulation",
+      "author" : [ "Dan Roth", "Wen-tau Yih." ],
+      "venue" : "Introduction to statistical relational learning, pages 553–580.",
+      "citeRegEx" : "Roth and Yih.,? 2007",
+      "shortCiteRegEx" : "Roth and Yih.",
+      "year" : 2007
+    }, {
+      "title" : "Modeling relational data with graph convolutional networks",
+      "author" : [ "M. Schlichtkrull", "Thomas Kipf", "P. Bloem", "R.V. Berg", "Ivan Titov", "M. Welling." ],
+      "venue" : "ArXiv, abs/1703.06103.",
+      "citeRegEx" : "Schlichtkrull et al\\.,? 2018",
+      "shortCiteRegEx" : "Schlichtkrull et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Incorporating domain knowledge into medical NLI using knowledge graphs",
+      "author" : [ "Soumya Sharma", "Bishal Santra", "Abhik Jana", "Santosh Tokala", "Niloy Ganguly", "Pawan Goyal." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natu-",
+      "citeRegEx" : "Sharma et al\\.,? 2019",
+      "shortCiteRegEx" : "Sharma et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Deep exhaustive model for nested named entity recognition",
+      "author" : [ "Mohammad Golam Sohrab", "Makoto Miwa." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 2843–2849, Brussels, Belgium. Associa-",
+      "citeRegEx" : "Sohrab and Miwa.,? 2018",
+      "shortCiteRegEx" : "Sohrab and Miwa.",
+      "year" : 2018
+    }, {
+      "title" : "Cross-lingual structure transfer for relation and event extraction",
+      "author" : [ "Ananya Subburathinam", "Di Lu", "Heng Ji", "Jonathan May", "Shih-Fu Chang", "Avirup Sil", "Clare Voss." ],
+      "venue" : "Proc. 2019 Conference on Empirical Methods in Natural Language Processing",
+      "citeRegEx" : "Subburathinam et al\\.,? 2019",
+      "shortCiteRegEx" : "Subburathinam et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Neural metric learning for fast end-to-end relation extraction",
+      "author" : [ "T. Tran", "Ramakanth Kavuluru." ],
+      "venue" : "ArXiv, abs/1905.07458.",
+      "citeRegEx" : "Tran and Kavuluru.,? 2019",
+      "shortCiteRegEx" : "Tran and Kavuluru.",
+      "year" : 2019
+    }, {
+      "title" : "Biomedical event trigger identification using bidirectional recurrent neural network based models",
+      "author" : [ "Rahul V S S Patchigolla", "Sunil Sahu", "Ashish Anand." ],
+      "venue" : "BioNLP 2017, pages 316–321, Vancouver, Canada,. Association for Computational",
+      "citeRegEx" : "Patchigolla et al\\.,? 2017",
+      "shortCiteRegEx" : "Patchigolla et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Entity, relation, and event extraction with contextualized span representations",
+      "author" : [ "David Wadden", "Ulme Wennberg", "Yi Luan", "Hannaneh Hajishirzi." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Wadden et al\\.,? 2019",
+      "shortCiteRegEx" : "Wadden et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Two are better than one: Joint entity and relation extraction with tablesequence encoders",
+      "author" : [ "Jue Wang", "Wei Lu." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1706–1721, Online. As-",
+      "citeRegEx" : "Wang and Lu.,? 2020",
+      "shortCiteRegEx" : "Wang and Lu.",
+      "year" : 2020
+    }, {
+      "title" : "Biomedical event extraction as multi-turn question answering",
+      "author" : [ "Xing David Wang", "Leon Weber", "Ulf Leser." ],
+      "venue" : "Proceedings of the 11th International Workshop on Health Text Mining and Information Analysis, pages 88–96, Online. Association for Com-",
+      "citeRegEx" : "Wang et al\\.,? 2020",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "RESIN: A dockerized schemaguided cross-document cross-lingual cross-media information extraction and event tracking system",
+      "author" : [ "Brown", "Martha Palmer", "Chris Callison-Burch", "Carl Vondrick", "Jiawei Han", "Dan Roth", "Shih-Fu Chang", "Heng Ji." ],
+      "venue" : "In",
+      "citeRegEx" : "Brown et al\\.,? 2021",
+      "shortCiteRegEx" : "Brown et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Transformers: State-of-the-art natural language processing",
+      "author" : [ "Teven Le Scao", "Sylvain Gugger", "Mariama Drame", "Quentin Lhoest", "Alexander Rush." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing:",
+      "citeRegEx" : "Scao et al\\.,? 2020",
+      "shortCiteRegEx" : "Scao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Exploring disorder-aware attention for clinical event extraction",
+      "author" : [ "Shweta Yadav", "Pralay Ramteke", "Asif Ekbal", "Sriparna Saha", "Pushpak Bhattacharyya." ],
+      "venue" : "16(1s).",
+      "citeRegEx" : "Yadav et al\\.,? 2020",
+      "shortCiteRegEx" : "Yadav et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Leveraging knowledge bases in LSTMs for improving machine reading",
+      "author" : [ "Bishan Yang", "Tom Mitchell." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1436–1446, Van-",
+      "citeRegEx" : "Yang and Mitchell.,? 2017",
+      "shortCiteRegEx" : "Yang and Mitchell.",
+      "year" : 2017
+    }, {
+      "title" : "Kernel methods for relation extraction",
+      "author" : [ "Dmitry Zelenko", "Chinatsu Aone", "Anthony Richardella." ],
+      "venue" : "Proceedings of the 2002 Conference on Empirical Methods in Natural Language Processing (EMNLP 2002), pages 71–78. Association for Com-",
+      "citeRegEx" : "Zelenko et al\\.,? 2002",
+      "shortCiteRegEx" : "Zelenko et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "GENE: Global event",
+      "author" : [ "Qi Zeng", "Manling Li", "Tuan Lai", "Heng Ji", "Mohit Bansal", "Hanghang Tong" ],
+      "venue" : null,
+      "citeRegEx" : "Zeng et al\\.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Zeng et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Abstract Meaning Representation guided graph encoding and decoding for joint information extraction",
+      "author" : [ "Zixuan Zhang", "Heng Ji." ],
+      "venue" : "Proceedings of the 2021 Conference of the North American Chapter of the Association for Computational Linguistics:",
+      "citeRegEx" : "Zhang and Ji.,? 2021",
+      "shortCiteRegEx" : "Zhang and Ji.",
+      "year" : 2021
+    }, {
+      "title" : "Modeling dense cross-modal interactions for joint entity-relation extraction",
+      "author" : [ "Shan Zhao", "Minghao Hu", "Zhiping Cai", "Fang Liu." ],
+      "venue" : "Proceedings of the Twenty-Ninth International Joint Conference on Artificial Intelligence, IJCAI-20, pages 4032–4038.",
+      "citeRegEx" : "Zhao et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Joint extraction of entities and relations based on a novel tagging scheme",
+      "author" : [ "Suncong Zheng", "Feng Wang", "Hongyun Bao", "Yuexing Hao", "Peng Zhou", "Bo Xu." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Lin-",
+      "citeRegEx" : "Zheng et al\\.,? 2017",
+      "shortCiteRegEx" : "Zheng et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Exploring various knowledge in relation extraction",
+      "author" : [ "GuoDong Zhou", "Jian Su", "Jie Zhang", "Min Zhang." ],
+      "venue" : "Proceedings of the 43rd Annual Meeting of the Association for Computational Linguistics (ACL’05), pages 427–434, Ann Arbor, Michi-",
+      "citeRegEx" : "Zhou et al\\.,? 2005",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2005
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 23,
+      "context" : "a result, developing methods for automatic extraction of biomedical entities and their relations has attracted much research attention recently (Li et al., 2017; Fei et al., 2020; Luo et al., 2020).",
+      "startOffset" : 144,
+      "endOffset" : 197
+    }, {
+      "referenceID" : 11,
+      "context" : "a result, developing methods for automatic extraction of biomedical entities and their relations has attracted much research attention recently (Li et al., 2017; Fei et al., 2020; Luo et al., 2020).",
+      "startOffset" : 144,
+      "endOffset" : 197
+    }, {
+      "referenceID" : 31,
+      "context" : "a result, developing methods for automatic extraction of biomedical entities and their relations has attracted much research attention recently (Li et al., 2017; Fei et al., 2020; Luo et al., 2020).",
+      "startOffset" : 144,
+      "endOffset" : 197
+    }, {
+      "referenceID" : 17,
+      "context" : "lated tasks and datasets have been introduced, ranging from binding interaction detection (BioRelEx) (Khachatrian et al., 2019) to adverse drug event extraction (ADE) (Gurulingappa et al.",
+      "startOffset" : 101,
+      "endOffset" : 127
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2019) to adverse drug event extraction (ADE) (Gurulingappa et al., 2012).",
+      "startOffset" : 47,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 9,
+      "context" : "Many recent joint models for entity and relation extraction rely mainly on distributional representations and do not utilize any external knowledge source (Eberts and Ulges, 2020; Ji et al., 2020; Zhao et al., 2020).",
+      "startOffset" : 155,
+      "endOffset" : 215
+    }, {
+      "referenceID" : 16,
+      "context" : "Many recent joint models for entity and relation extraction rely mainly on distributional representations and do not utilize any external knowledge source (Eberts and Ulges, 2020; Ji et al., 2020; Zhao et al., 2020).",
+      "startOffset" : 155,
+      "endOffset" : 215
+    }, {
+      "referenceID" : 60,
+      "context" : "Many recent joint models for entity and relation extraction rely mainly on distributional representations and do not utilize any external knowledge source (Eberts and Ulges, 2020; Ji et al., 2020; Zhao et al., 2020).",
+      "startOffset" : 155,
+      "endOffset" : 215
+    }, {
+      "referenceID" : 4,
+      "context" : "do not use any external knowledge base during inference (Beltagy et al., 2019; Lee et al., 2019).",
+      "startOffset" : 56,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 20,
+      "context" : "do not use any external knowledge base during inference (Beltagy et al., 2019; Lee et al., 2019).",
+      "startOffset" : 56,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 4,
+      "context" : "For example, even though SciBERT (Beltagy et al., 2019) was pretrained on 1.",
+      "startOffset" : 33,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 26,
+      "context" : "Different from previous methods that link mentions to entities based solely on local contexts (Li et al., 2020b), our framework takes a more collective approach to link multiple semantically related mentions simultaneously by",
+      "startOffset" : 94,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 17,
+      "context" : "ing new state-of-the-art biomedical entity and relation extraction performance on two benchmark datasets: BioRelEx (Khachatrian et al., 2019) and ADE (Gurulingappa et al.",
+      "startOffset" : 115,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 46,
+      "context" : "This design choice allows us to handle nested entity mentions (Sohrab and Miwa, 2018).",
+      "startOffset" : 62,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 30,
+      "context" : "extraction can be naturally formulated as the task of extracting a span graph from an input document (Luan et al., 2019).",
+      "startOffset" : 101,
+      "endOffset" : 120
+    }, {
+      "referenceID" : 0,
+      "context" : "Students’ background knowledge plays a vital role in guiding their understanding and comprehension of scientific texts (Alvermann et al., 1985; Braasch and Goldman, 2010).",
+      "startOffset" : 119,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 7,
+      "context" : "Students’ background knowledge plays a vital role in guiding their understanding and comprehension of scientific texts (Alvermann et al., 1985; Braasch and Goldman, 2010).",
+      "startOffset" : 119,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 4,
+      "context" : "Our model first constructs a contextualized representation for each input token using SciBERT (Beltagy et al., 2019).",
+      "startOffset" : 94,
+      "endOffset" : 116
+    }, {
+      "referenceID" : 33,
+      "context" : "We use a bidirectional GCN (Marcheggiani and Titov, 2017; Fu et al., 2019) to recursively update each span representation:",
+      "startOffset" : 27,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 12,
+      "context" : "We use a bidirectional GCN (Marcheggiani and Titov, 2017; Fu et al., 2019) to recursively update each span representation:",
+      "startOffset" : 27,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 6,
+      "context" : "In this work, we utilize external knowledge from the Unified Medical Language System (UMLS) (Bodenreider, 2004).",
+      "startOffset" : 92,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 1,
+      "context" : "We first extract UMLS biomedical entities from the input document D using MetaMap, an entity mapping tool for UMLS (Aronson and Lang, 2010).",
+      "startOffset" : 115,
+      "endOffset" : 139
+    }, {
+      "referenceID" : 44,
+      "context" : "After that, since Gk is a heterogeneous relational graph, we use a relational GCN (Schlichtkrull et al., 2018) to update the representation of each node vi:",
+      "startOffset" : 82,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 56,
+      "context" : "Then we compute an additional sentinel vector ci (Yang and Mitchell, 2017; He et al., 2020) and also compute a score αi for it:",
+      "startOffset" : 49,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 14,
+      "context" : "Then we compute an additional sentinel vector ci (Yang and Mitchell, 2017; He et al., 2020) and also compute a score αi for it:",
+      "startOffset" : 49,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 17,
+      "context" : "The BioRelEx dataset (Khachatrian et al., 2019) consists of 2,010 sentences from biomedical literature that capture binding interactions between proteins and/or biomolecules.",
+      "startOffset" : 21,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 13,
+      "context" : "The ADE dataset (Gurulingappa et al., 2012) consists of 4,272 sentences extracted from medical reports that describe drug-related adverse effects.",
+      "startOffset" : 16,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 4,
+      "context" : "KECI uses SciBERT as the Transformer encoder (Beltagy et al., 2019).",
+      "startOffset" : 45,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 39,
+      "context" : "KnowBertAttention: This baseline uses the Knowledge Attention and Recontextualization (KAR) mechanism of KnowBert (Peters et al., 2019), a state-of-the-art knowledge-enhanced Model Entity (Macro-F1) Relation (Macro-F1)",
+      "startOffset" : 114,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 39,
+      "context" : "A major difference between KECI and KnowBertAttention (Peters et al., 2019) is that KECI explicitly builds and extracts information from a",
+      "startOffset" : 54,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 9,
+      "context" : "again outperforms all the baselines and state-of-theart models such as SpERT (Eberts and Ulges, 2020) and SPANMulti-Head (Ji et al.",
+      "startOffset" : 77,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 16,
+      "context" : "again outperforms all the baselines and state-of-theart models such as SpERT (Eberts and Ulges, 2020) and SPANMulti-Head (Ji et al., 2020).",
+      "startOffset" : 121,
+      "endOffset" : 138
+    }, {
+      "referenceID" : 57,
+      "context" : "Traditional pipelined methods typically treat entity extraction and relation extraction as two separate tasks (Zelenko et al., 2002; Zhou et al., 2005; Chan and Roth, 2011).",
+      "startOffset" : 110,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 62,
+      "context" : "Traditional pipelined methods typically treat entity extraction and relation extraction as two separate tasks (Zelenko et al., 2002; Zhou et al., 2005; Chan and Roth, 2011).",
+      "startOffset" : 110,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 8,
+      "context" : "Traditional pipelined methods typically treat entity extraction and relation extraction as two separate tasks (Zelenko et al., 2002; Zhou et al., 2005; Chan and Roth, 2011).",
+      "startOffset" : 110,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 43,
+      "context" : "To overcome these limitations, many studies have proposed joint models that perform entity extraction and relation extraction simultaneously (Roth and Yih, 2007; Li and Ji, 2014; Li et al., 2017; Zheng et al., 2017; Bekoulis et al., 2018a,b; Wadden et al., 2019; Fu et al., 2019; Luan et al., 2019; Zhao et al., 2020; Wang and Lu, 2020; Li et al., 2020b; Lin et al., 2020).",
+      "startOffset" : 141,
+      "endOffset" : 372
+    }, {
+      "referenceID" : 25,
+      "context" : "To overcome these limitations, many studies have proposed joint models that perform entity extraction and relation extraction simultaneously (Roth and Yih, 2007; Li and Ji, 2014; Li et al., 2017; Zheng et al., 2017; Bekoulis et al., 2018a,b; Wadden et al., 2019; Fu et al., 2019; Luan et al., 2019; Zhao et al., 2020; Wang and Lu, 2020; Li et al., 2020b; Lin et al., 2020).",
+      "startOffset" : 141,
+      "endOffset" : 372
+    }, {
+      "referenceID" : 23,
+      "context" : "To overcome these limitations, many studies have proposed joint models that perform entity extraction and relation extraction simultaneously (Roth and Yih, 2007; Li and Ji, 2014; Li et al., 2017; Zheng et al., 2017; Bekoulis et al., 2018a,b; Wadden et al., 2019; Fu et al., 2019; Luan et al., 2019; Zhao et al., 2020; Wang and Lu, 2020; Li et al., 2020b; Lin et al., 2020).",
+      "startOffset" : 141,
+      "endOffset" : 372
+    }, {
+      "referenceID" : 61,
+      "context" : "To overcome these limitations, many studies have proposed joint models that perform entity extraction and relation extraction simultaneously (Roth and Yih, 2007; Li and Ji, 2014; Li et al., 2017; Zheng et al., 2017; Bekoulis et al., 2018a,b; Wadden et al., 2019; Fu et al., 2019; Luan et al., 2019; Zhao et al., 2020; Wang and Lu, 2020; Li et al., 2020b; Lin et al., 2020).",
+      "startOffset" : 141,
+      "endOffset" : 372
+    }, {
+      "referenceID" : 50,
+      "context" : "To overcome these limitations, many studies have proposed joint models that perform entity extraction and relation extraction simultaneously (Roth and Yih, 2007; Li and Ji, 2014; Li et al., 2017; Zheng et al., 2017; Bekoulis et al., 2018a,b; Wadden et al., 2019; Fu et al., 2019; Luan et al., 2019; Zhao et al., 2020; Wang and Lu, 2020; Li et al., 2020b; Lin et al., 2020).",
+      "startOffset" : 141,
+      "endOffset" : 372
+    }, {
+      "referenceID" : 12,
+      "context" : "To overcome these limitations, many studies have proposed joint models that perform entity extraction and relation extraction simultaneously (Roth and Yih, 2007; Li and Ji, 2014; Li et al., 2017; Zheng et al., 2017; Bekoulis et al., 2018a,b; Wadden et al., 2019; Fu et al., 2019; Luan et al., 2019; Zhao et al., 2020; Wang and Lu, 2020; Li et al., 2020b; Lin et al., 2020).",
+      "startOffset" : 141,
+      "endOffset" : 372
+    }, {
+      "referenceID" : 30,
+      "context" : "To overcome these limitations, many studies have proposed joint models that perform entity extraction and relation extraction simultaneously (Roth and Yih, 2007; Li and Ji, 2014; Li et al., 2017; Zheng et al., 2017; Bekoulis et al., 2018a,b; Wadden et al., 2019; Fu et al., 2019; Luan et al., 2019; Zhao et al., 2020; Wang and Lu, 2020; Li et al., 2020b; Lin et al., 2020).",
+      "startOffset" : 141,
+      "endOffset" : 372
+    }, {
+      "referenceID" : 60,
+      "context" : "To overcome these limitations, many studies have proposed joint models that perform entity extraction and relation extraction simultaneously (Roth and Yih, 2007; Li and Ji, 2014; Li et al., 2017; Zheng et al., 2017; Bekoulis et al., 2018a,b; Wadden et al., 2019; Fu et al., 2019; Luan et al., 2019; Zhao et al., 2020; Wang and Lu, 2020; Li et al., 2020b; Lin et al., 2020).",
+      "startOffset" : 141,
+      "endOffset" : 372
+    }, {
+      "referenceID" : 51,
+      "context" : "To overcome these limitations, many studies have proposed joint models that perform entity extraction and relation extraction simultaneously (Roth and Yih, 2007; Li and Ji, 2014; Li et al., 2017; Zheng et al., 2017; Bekoulis et al., 2018a,b; Wadden et al., 2019; Fu et al., 2019; Luan et al., 2019; Zhao et al., 2020; Wang and Lu, 2020; Li et al., 2020b; Lin et al., 2020).",
+      "startOffset" : 141,
+      "endOffset" : 372
+    }, {
+      "referenceID" : 26,
+      "context" : "To overcome these limitations, many studies have proposed joint models that perform entity extraction and relation extraction simultaneously (Roth and Yih, 2007; Li and Ji, 2014; Li et al., 2017; Zheng et al., 2017; Bekoulis et al., 2018a,b; Wadden et al., 2019; Fu et al., 2019; Luan et al., 2019; Zhao et al., 2020; Wang and Lu, 2020; Li et al., 2020b; Lin et al., 2020).",
+      "startOffset" : 141,
+      "endOffset" : 372
+    }, {
+      "referenceID" : 27,
+      "context" : "To overcome these limitations, many studies have proposed joint models that perform entity extraction and relation extraction simultaneously (Roth and Yih, 2007; Li and Ji, 2014; Li et al., 2017; Zheng et al., 2017; Bekoulis et al., 2018a,b; Wadden et al., 2019; Fu et al., 2019; Luan et al., 2019; Zhao et al., 2020; Wang and Lu, 2020; Li et al., 2020b; Lin et al., 2020).",
+      "startOffset" : 141,
+      "endOffset" : 372
+    }, {
+      "referenceID" : 40,
+      "context" : "Biomedical event extraction is a closely related task that has also received a lot of attention from the research community (Poon and Vanderwende, 2010; Kim et al., 2013; V S S Patchigolla et al., 2017; Rao et al., 2017; Espinosa et al., 2019; Li et al., 2019; Wang et al., 2020; Huang et al., 2020; Ramponi et al., 2020; Yadav et al., 2020).",
+      "startOffset" : 124,
+      "endOffset" : 341
+    }, {
+      "referenceID" : 18,
+      "context" : "Biomedical event extraction is a closely related task that has also received a lot of attention from the research community (Poon and Vanderwende, 2010; Kim et al., 2013; V S S Patchigolla et al., 2017; Rao et al., 2017; Espinosa et al., 2019; Li et al., 2019; Wang et al., 2020; Huang et al., 2020; Ramponi et al., 2020; Yadav et al., 2020).",
+      "startOffset" : 124,
+      "endOffset" : 341
+    }, {
+      "referenceID" : 42,
+      "context" : "Biomedical event extraction is a closely related task that has also received a lot of attention from the research community (Poon and Vanderwende, 2010; Kim et al., 2013; V S S Patchigolla et al., 2017; Rao et al., 2017; Espinosa et al., 2019; Li et al., 2019; Wang et al., 2020; Huang et al., 2020; Ramponi et al., 2020; Yadav et al., 2020).",
+      "startOffset" : 124,
+      "endOffset" : 341
+    }, {
+      "referenceID" : 10,
+      "context" : "Biomedical event extraction is a closely related task that has also received a lot of attention from the research community (Poon and Vanderwende, 2010; Kim et al., 2013; V S S Patchigolla et al., 2017; Rao et al., 2017; Espinosa et al., 2019; Li et al., 2019; Wang et al., 2020; Huang et al., 2020; Ramponi et al., 2020; Yadav et al., 2020).",
+      "startOffset" : 124,
+      "endOffset" : 341
+    }, {
+      "referenceID" : 22,
+      "context" : "Biomedical event extraction is a closely related task that has also received a lot of attention from the research community (Poon and Vanderwende, 2010; Kim et al., 2013; V S S Patchigolla et al., 2017; Rao et al., 2017; Espinosa et al., 2019; Li et al., 2019; Wang et al., 2020; Huang et al., 2020; Ramponi et al., 2020; Yadav et al., 2020).",
+      "startOffset" : 124,
+      "endOffset" : 341
+    }, {
+      "referenceID" : 52,
+      "context" : "Biomedical event extraction is a closely related task that has also received a lot of attention from the research community (Poon and Vanderwende, 2010; Kim et al., 2013; V S S Patchigolla et al., 2017; Rao et al., 2017; Espinosa et al., 2019; Li et al., 2019; Wang et al., 2020; Huang et al., 2020; Ramponi et al., 2020; Yadav et al., 2020).",
+      "startOffset" : 124,
+      "endOffset" : 341
+    }, {
+      "referenceID" : 15,
+      "context" : "Biomedical event extraction is a closely related task that has also received a lot of attention from the research community (Poon and Vanderwende, 2010; Kim et al., 2013; V S S Patchigolla et al., 2017; Rao et al., 2017; Espinosa et al., 2019; Li et al., 2019; Wang et al., 2020; Huang et al., 2020; Ramponi et al., 2020; Yadav et al., 2020).",
+      "startOffset" : 124,
+      "endOffset" : 341
+    }, {
+      "referenceID" : 41,
+      "context" : "Biomedical event extraction is a closely related task that has also received a lot of attention from the research community (Poon and Vanderwende, 2010; Kim et al., 2013; V S S Patchigolla et al., 2017; Rao et al., 2017; Espinosa et al., 2019; Li et al., 2019; Wang et al., 2020; Huang et al., 2020; Ramponi et al., 2020; Yadav et al., 2020).",
+      "startOffset" : 124,
+      "endOffset" : 341
+    }, {
+      "referenceID" : 55,
+      "context" : "Biomedical event extraction is a closely related task that has also received a lot of attention from the research community (Poon and Vanderwende, 2010; Kim et al., 2013; V S S Patchigolla et al., 2017; Rao et al., 2017; Espinosa et al., 2019; Li et al., 2019; Wang et al., 2020; Huang et al., 2020; Ramponi et al., 2020; Yadav et al., 2020).",
+      "startOffset" : 124,
+      "endOffset" : 341
+    }, {
+      "referenceID" : 34,
+      "context" : "Some previous work has focused on integrating external knowledge into neural architectures for other tasks, such as reading comprehension (Mihaylov and Frank, 2018), question answering (Pan et al.",
+      "startOffset" : 138,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 36,
+      "context" : "Some previous work has focused on integrating external knowledge into neural architectures for other tasks, such as reading comprehension (Mihaylov and Frank, 2018), question answering (Pan et al., 2019), natural language inference (Sharma et al.",
+      "startOffset" : 185,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 45,
+      "context" : ", 2019), natural language inference (Sharma et al., 2019), and conversational modeling",
+      "startOffset" : 36,
+      "endOffset" : 57
+    }, {
+      "referenceID" : 19,
+      "context" : "Finally, we also plan to apply KECI to other information extraction tasks (Li et al., 2020a; Lai et al., 2021; Wen et al., 2021).",
+      "startOffset" : 74,
+      "endOffset" : 128
+    } ],
+    "year" : 2021,
+    "abstractText" : "Compared to the general news domain, information extraction (IE) from biomedical text requires much broader domain knowledge. However, many previous IE methods do not utilize any external knowledge during inference. Due to the exponential growth of biomedical publications, models that do not go beyond their fixed set of parameters will likely fall behind. Inspired by how humans look up relevant information to comprehend a scientific text, we present a novel framework that utilizes external knowledge for joint entity and relation extraction named KECI (Knowledge-Enhanced Collective Inference). Given an input text, KECI first constructs an initial span graph representing its initial understanding of the text. It then uses an entity linker to form a knowledge graph containing relevant background knowledge for the the entity mentions in the text. To make the final predictions, KECI fuses the initial span graph and the knowledge graph into a more refined graph using an attention mechanism. KECI takes a collective approach to link mention spans to entities by integrating global relational information into local representations using graph convolutional networks. Our experimental results show that the framework is highly effective, achieving new state-of-theart results in two different benchmark datasets: BioRelEx (binding interaction detection) and ADE (adverse drug event extraction). For example, KECI achieves absolute improvements of 4.59% and 4.91% in F1 scores over the stateof-the-art on the BioRelEx entity and relation extraction tasks 1.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

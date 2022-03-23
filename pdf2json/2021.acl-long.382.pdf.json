@@ -1,0 +1,543 @@
+{
+  "name" : "2021.acl-long.382.pdf",
+  "metadata" : {
+    "source" : "CRF",
+    "title" : "Lexicon Learning for Few-Shot Neural Sequence Modeling",
+    "authors" : [ "Ekin Akyürek", "Jacob Andreas" ],
+    "emails" : [ "akyurek@mit.edu", "jda@mit.edu" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 4934–4946\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n4934"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Humans exhibit a set of structured and remarkably consistent inductive biases when learning from language data. For example, in both natural language acquisition and toy language-learning problems like the one depicted in Fig. 1, human learners exhibit a preference for systematic and compositional interpretation rules (Guasti 2017, Chapter 4; Lake et al. 2019). These inductive biases in turn support behaviors like one-shot learning of new concepts (Carey and Bartlett, 1978). But in natural language processing, recent work has found that state-of-the-art neural models, while highly effective at in-domain prediction, fail to generalize in human-like ways when faced with rare phenomena\n1Our code is released under https://github.com/ ekinakyurek/lexical\nr , g , b , y . Humans can reliably fill in the missing test labels on the basis of a small training set, but standard neural models cannot. This paper describes a neural sequence model that obtains improved generalization via a learned lexicon of token translation rules.\nand small datasets (Lake and Baroni, 2018), posing a fundamental challenge for NLP tools in the low-data regime.\nPause for a moment to fill in the missing labels in Fig. 1. While doing so, which training examples did you pay the most attention to? How many times did you find yourself saying means or maps to? Explicit representations of lexical items and their meanings play a key role diverse models of syntax and semantics (Joshi and Schabes, 1997; Pollard and Sag, 1994; Bresnan et al., 2015). But one of the main findings in existing work on generalization in neural models is that they fail to cleanly separate lexical phenomena from syntactic ones (Lake and Baroni, 2018). Given a dataset like the one depicted in Fig. 1, models conflate (lexical) information about the correspondence between zup and y with the (syntactic) fact that y appears only in a sequence of length 1 at training time. Longer input sequences containing the word zup in new syntactic contexts cause models to output tokens only seen in longer sequences (Section 5).\nIn this paper, we describe a parameterization for sequence decoders that facilitates (but does not enforce) the learning of context-independent word meanings. Specifically, we augment decoder output layers with a lexical translation mechanism which generalizes neural copy mechanisms (e.g. See et al., 2017) and enables models to generate token-level translations purely attentionally. While the lexical translation mechanism is quite general, we focus here on its ability to improve few-shot learning in sequence-to-sequence models. On a suite of challenging tests of few-shot semantic parsing and instruction following, our model exhibits strong generalization, achieving the highest reported results for neural sequence models on datasets as diverse as COGS (Kim and Linzen 2020, with 24155 training examples) and Colors (Lake et al. 2019, with 14). Our approach also generalizes to real-world tests of few-shot learning, improving BLEU scores (Papineni et al., 2002) by 1.2 on a low-resource English–Chinese machine translation task (2.2 on test sentences requiring one-shot word learning).\nIn an additional set of experiments, we explore effective procedures for initializing the lexical translation mechanism using lexicon learning algorithms derived from information theory, statistical machine translation, and Bayesian cognitive modeling. We find that both mutual-informationand alignment- based lexicon initializers perform well across tasks. Surprisingly, however, we show that both approaches can be matched or outperformed by a rule-based initializer that identifies high-precision word-level token translation pairs. We then explore joint learning of the lexicon and decoder, but find (again surprisingly) that this gives only marginal improvements over a fixed initialization of the lexicon.\nIn summary, this work:\n• Introduces a new, lexicon-based output mechanism for neural encoder–decoder models.\n• Investigates and improves upon lexicon learning algorithms for initialising this mechanism.\n• Uses it to solve challenging tests of generalization in instruction following, semantic parsing and machine translation.\nA great deal of past work has suggested that neural models come equipped with an inductive bias that makes them fundamentally ill-suited to\nhuman-like generalization about language data, especially in the low-data regime (e.g. Fodor et al., 1988; Marcus, 2018). Our results suggest that the situation is more complicated: by offloading the easier lexicon learning problem to simpler models, neural sequence models are actually quite effective at modeling (and generalizing about) about syntax in synthetic tests of generalization and real translation tasks."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "Systematic generalization in neural sequence models The desired inductive biases noted above are usually grouped together as “systematicity” but in fact involve a variety of phenomena: one-shot learning of new concepts and composition rules (Lake and Baroni, 2018), zero-shot interpretation of novel words from context cues (Gandhi and Lake, 2020), and interpretation of known concepts in novel syntactic configurations (Keysers et al., 2020; Kim and Linzen, 2020). What they share is a common expectation that learners should associate specific production or transformation rules with specific input tokens (or phrases), and generalize to use of these tokens in new contexts.\nRecent years have seen tremendous amount of modeling work aimed at encouraging these generalizations in neural models, primarily by equipping them with symbolic scaffolding in the form of program synthesis engines (Nye et al., 2020), stack machines (Grefenstette et al., 2015; Liu et al., 2020), or symbolic data transformation rules (Gordon et al., 2019; Andreas, 2020). A parallel line of work has investigated the role of continuous representations in systematic generalization, proposing improved methods for pretraining (Furrer et al., 2020) and procedures for removing irrelevant contextual information from word representations (Arthur et al., 2016; Russin et al., 2019; Thrush, 2020). The latter two approaches proceed from similar intuition to ours, aiming to disentangle word meanings from syntax in encoder representations via alternative attention mechanisms and adversarial training. Our approach instead focuses on providing an explicit lexicon to the decoder; as discussed below, this appears to be considerably more effective.\nCopying and lexicon learning In neural encoder–decoder models, the clearest example of benefits from special treatment of word-level production rules is the copy mechanism. A great deal of past work has found that neural models\nInputs Outputs Lexicon Entries"
+    }, {
+      "heading" : "A crocodile blessed William .",
+      "text" : "William needed to walk .\ncrocodile(x_1) AND bless.agent (x_2, x_1) AND bless.theme (x_2, William) need.agent (x_1 , William) AND need.xcomp(x_1, x_3) AND walk.agent (x_3, William) blessed 7→ bless needed 7→ need William 7→ William\nMany moons orbit around Saturn Earth is a planet . 許多 衛星 繞著 土星 運行. 地球 是 一個 行星.\nsaturn 7→土星 earth 7→地球 moon 7→衛星\nwalk around left turn right turn left jump jump opposite right after look left LTURN IWALK LTURN IWALK LTURN IWALK LTURN IWALK RTURN LTURN IJUMP LTURN ILOOK RTRUN IJUMP RTURN IJUMP\nwalk 7→ IWALK jump 7→ IJUMP right 7→ RTURN left 7→ LTURN look 7→ ILOOK\nTable 1: We present example (input,output) pairs from COGS, English-to-Chinese machine translation and SCAN datasets. We also present some of the lexicon entries which can be learned by proposed lexicon learning methods and that are helpful to make generalizations required in each of the datasets.\nbenefit from learning a structural copy operation that selects output tokens directly from the input sequence without requiring token identity to be carried through all neural computation in the encoder and the decoder. These mechanisms are described in detail in Section 3, and are widely used in models for language generation, summarization and semantic parsing. Our work generalizes these models to structural operations on the input that replace copying with general context-independent token-level translation.\nAs will be discussed, the core of our approach is a (non-contextual) lexicon that maps individual input tokens to individual output tokens. Learning lexicons like this is of interest in a number of communities in NLP and language science more broadly. A pair of representative approaches (Brown et al., 1993; Frank et al., 2007) will be discussed in detail below; other work on lexicon learning for semantics and translation includes Liang et al. (2009); Goldwater (2007); Haghighi et al. (2008) among numerous others.\nFinally, and closest to the modeling contribution in this work, several previous papers have proposed alternative generalized copy mechanisms for tasks other than semantic lexicon learning. Concurrent work by Prabhu and Kann (2020) introduces a similar approach for grapheme-to-phoneme translation (with a fixed functional lexicon rather than a trainable parameter matrix), and Nguyen and Chiang (2018) and Gū et al. (2019) describe less expressive mechanisms that cannot smoothly interpolate between lexical translation and ordinary decoding at the token level. Pham et al. (2018) incorporate lexicon entries by rewriting input sequences prior to ordinary sequence-to-sequence translation. Akyürek et al. (2021) describe a model in which a copy mechanism is combined with a retrieval-\nbased generative model; like the present work, that model effectively disentangles syntactic and lexical information by using training examples as implicit representations of lexical correspondences.\nWe generalize and extend this previous work in a number of ways, providing a new parameterization of attentive token-level translation and a detailed study of initialization and learning. But perhaps the most important contribution of this work is the observation that many of the hard problems studied as “compositional generalization” have direct analogues in more conventional NLP problems, especially machine translation. Research on systematicity and generalization would benefit from closer attention to the ingredients of effective translation at scale."
+    }, {
+      "heading" : "3 Sequence-to-Sequence Models With Lexical Translation Mechanisms",
+      "text" : "This paper focuses on sequence-to-sequence language understanding problems like the ones depicted in Table 1, in which the goal is to map from a natural language input x = [x1, x2, . . . , xn] to a structured output y = [y1, y2, . . . , ym]—a logical form, action sequence, or translation. We assume input tokens xi are drawn from a input vocabulary Vx, and output tokens from a corresponding output vocabulary Vy.\nNeural encoder–decoders Our approach builds on the standard neural encoder–decoder model with attention (Bahdanau et al., 2014). In this model, an encoder represents the input sequence [x1, . . . , xn] as a sequence of representations [e1, . . . , en]\ne = encoder(x) (1)\nNext, a decoder generates a distribution over output sequences y according to the sequentially:\nlog p(y | x) = y∑\ni=1\nlog p(yi | y<i, e, x) (2)\nHere we specifically consider decoders with attention.2 When predicting each output token yi, we assign each input token an attention weight αji as in Eq. (3). Then, we construct a context representation ci as the weighted sum of encoder representations ei:\nαji ∝ exp(h > i Watt ej) (3)\nci = |x|∑ j=1 αji ej (4)\nThe output distribution over Vy, which we denote pwrite,i, is calculated by a final projection layer:\np(yi=w|x) = pwritei(w) ∝ exp(Wwrite[ci, hi]) (5)\nCopying A popular extension of the model described above is the copy mechanism, in which output tokens can be copied from the input sequence in addition to being generated directly by the decoder (Jia and Liang, 2016; See et al., 2017). Using the decoder hidden state hi from above, the model first computes a gate probability:\npgate = σ(w > gatehi) (6)\nand then uses this probability to interpolate between the distribution in Eq. (5) and a copy distribution that assigns to each word in the output vocabulary a probability proportional to that word’s weight in the attention vector over the input: pcopy(yi = w | x) = |x|∑ j=1 1[xj = w] · αji (7)\np(yi = w | x) = pgate · pwrite(yi = w | x) + (1− pgate) · pcopy(yi = w | x) (8)\n(note that this implies Vy ⊇ Vx). Content-independent copying is particularly useful in tasks like summarization and machine translation where rare words (like names) are often reused between the input and output.\n2All experiments in this paper use LSTM encoders and decoders, but it could be easily integrated with CNNs or transformers (Gehring et al. 2017; Vaswani et al. 2017). We only assume access to a final layer hi, and final attention weights αi; their implementation does not matter.\nOur model: Lexical translation When the input and output vocabularies are significantly different, copy mechanisms cannot provide further improvements on a sequence-to-sequence model. However, even for disjoint vocabularies as in Fig. 1, there may be strict correspondences between individual words on input and output vocabularies, e.g. zup 7→ y in Fig. 1. Following this intuition, the lexical translation mechanism we introduce in this work extends the copy mechanism by introducing an additional layer of indirection between the input sequence x and the output prediction yi as shown in Fig. 2. Specifically, after selecting an input token xj ∈ Vx, the decoder can “translate” it to a context-independent output token ∈ Vy prior to the final prediction. We equip the model with an additional lexicon parameter L, a |Vx| × |Vy| matrix in which ∑ w Lvw = 1, and finally define\nplex(yi = w | x) = |x|∑ j=1 Lxjw · α j i (9)\np(yi = w | x) = pgate · pwrite(yi = w | x) + (1− pgate) · plex(yi = w | x) (10)\nThe model is visualized in Fig. 2. Note that when Vx = Vy and L = I is diagonal, this is identical to the original copy mechanism. However, this approach can in general be used to produce a larger set of tokens. As shown in Table 1, coher-\nent token-level translation rules can be identified for many tasks; the lexical translation mechanism allows them to be stored explicitly, using parameters of the base sequence-to-sequence model to record general structural behavior and more complex, context-dependent translation rules."
+    }, {
+      "heading" : "4 Initializing the Lexicon",
+      "text" : "The lexicon parameter L in the preceding section can be viewed as an ordinary fully-connected layer inside the copy mechanism, and trained end-to-end with the rest of the network. As with other neural network parameters, however, our experiments will show that the initialization of the parameter L significantly impacts downstream model performance, and specifically benefits from initialization with a set of input–output mappings learned with an offline lexicon learning step. Indeed, while not widely used in neural sequence models (though c.f. Section 2), lexicon-based initialization was a standard feature of many complex non-neural sequence transduction models, including semantic parsers (Kwiatkowski et al., 2011) and phrase-based machine translation systems (Koehn et al., 2003).\nBut an important distinction between our approach and these others is the fact that we can handle outputs that are not (transparently) compositional. Not every fragment of an input will correspond to a fragment of an output: for example, thrice in SCAN has no corresponding output token and instead describes a structural transformation. Moreover, the lexicon is not the only way to generate: complex mappings can also be learned by pwrite without going through the lexicon at all.\nThus, while most existing work on lexicon learning aims for complete coverage of all word meanings, the model described in Section 3 benefits from a lexicon with high-precision coverage of rare phenomena that will be hard to learn in a normal neural model. Lexicon learning is widely studied in language processing and cognitive modeling, and several approaches with very different inductive biases exist. To determine how to best initialize L, we begin by reviewing three algorithms in Section 4.1, and identify ways in which each of them fail to satisfy the high precision criterion above. In Section 4.2, we introduce a simple new lexicon learning rule that addresses this shortcoming."
+    }, {
+      "heading" : "4.1 Existing Approaches to Lexicon Learning",
+      "text" : "Statistical alignment In the natural language processing literature, the IBM translation models (Brown et al., 1993) have served as some of the most popular procedures for learning token-level input–output mappings. While originally developed for machine translation, they have also been used to initialize semantic lexicons for semantic parsing (Kwiatkowski et al., 2011) and graphemeto-phoneme conversion (Rama et al., 2009). We initialize the lexicon parameter L using Model 2.\nModel 2 defines a generative process in which source words yi are generated from target words xj via latent alignments ai. Specifically, given a (source, target) pair with n source words and m target words, the probability that the target word i is aligned to the source word j is:\np(ai = j) ∝ exp ( − ∣∣∣ i m − j n ∣∣∣) (11) Finally, each target word is generated by its aligned source word via a parameter θ: p(yi = w) = θ(v, xai). Alignments ai and lexical parameters θ can be jointly estimated using the expectation– maximization algorithm (Dempster et al., 1977).\nIn neural models, rather than initializing lexical parameters L directly with corresponding IBM model parameters θ, we run Model 2 in both the forward and reverse directions, then extract counts by intersecting these alignments and applying a softmax with temperature τ :\nLvw ∝ exp ( τ−1 ∑ (x,y) |y|∑ i=1 1[xai = v]1[yi = w] )\n(12)\nFor all lexicon methods discussed in this paper, if an input v is not aligned to any output w, we map it to itself if Vx ⊆ Vy. Otherwise we align it uniformly to any unmapped output words (a mutual exclusivity bias, Gandhi and Lake 2020).\nMutual information Another, even simpler procedure for building a lexicon is based on identifying pairs that have high pointwise mutual information. We estimate this quantity directly from co-occurrence statistics in the training corpus:\npmi(v;w) = log #(v, w)\n#(v)#(w) + log |Dtrain| (13)\nwhere #(w) is the number of times the word w appears in the training corpus and #(w, v) is the\nnumber of times that w appears in the input and v appears in the output. Finally, we populate the parameter L via a softmax transformation: Lvw ∝ exp((1/τ) pmi (v;w)).\nBayesian lexicon learning Last, we explore the Bayesian cognitive model of lexicon learning described by Frank et al. (2007). Like IBM model 2, this model is defined by a generative process; here, however, the lexicon itself is part of the generative model. A lexicon ` is an (unweighted, manyto-many) map defined by a collection of pairs (x, y) with a description length prior: p(`) ∝ e−|`| (where |`| is the number of (input, output) pairs in the lexicon). As in Model 2, given a meaning y and a natural-language description x, each xi is generated independently. We define the probability of a word being used non-referentially as pNR(xi | `) ∝ 1 if xi 6∈ ` and κ otherwise. The probability of being used referentially is: pR(xj | yi, `) ∝ 1(xj ,yi)∈`. Finally,\np(xj | yi, `) = (1− γ)pNR(xj | `)\n+ γ |y|∑ i=1 pR(xj | yi, `) (14)\nTo produce a final lexical translation matrix L for use in our experiments, we set Lvw ∝ exp((1/τ) p((v, w) ∈ `)): each entry in L is the posterior probability that the given entry appears in a lexicon under the generative model above. Parameters are estimated using the Metropolis–Hastings algorithm, with details described in Appendix C."
+    }, {
+      "heading" : "4.2 A Simpler Lexicon Learning Rule",
+      "text" : "Example lexicons learned by the three models above are depicted in Fig. 3 for the SCAN task shown in Table 1. Lexicons learned for remaining tasks can be found in Appendix B. It can be seen that all three models produce errors: the PMI and Bayesian lexicons contain too many entries (in both cases, numbers are associated with the turn right action and prepositions are associated with the turn left action). For the IBM model, one of the alignments is confident but wrong, because the around preposition is associated with turn left action. In order to understand these errors, and to better characterize the difference between the demands of lexical translation model initializers and past lexicon learning schemes, we explore a simple logical procedure for extracting lexicon entries\nthat, surprisingly, matchers or outperforms all three baseline methods in most of our experiments.\nWhat makes an effective, precise lexicon learning rule? As a first step, consider a maximally restrictive criterion (which we’ll call C1) that extracts only pairs (v, w) for which the presence of v in the input is a necessary and sufficient condition for the presence of w in the output.\nnec.(v, w) = ∀xy. (w ∈ y)→ (v ∈ x) (15) suff.(v, w) = ∀xy. (v ∈ x)→ (w ∈ y) (16) C1(v, w) = nec.(v, w) ∧ suff.(v, w) (17)\nC1 is too restrictive: in many language understanding problems, the mapping from surface forms to meanings is many-to-one (in Table 1, both blessed and bless are associated with the logical form bless). Such mappings cannot be learned by the algorithm described above. We can relax the necessity condition slightly, requiring either that v is a necessary condition for w, or is part of a group that collectively explains all occurrences of w:\nno-winner(w) = @v′. C1(v′, w) (18)\nC2(v, w) = suff.(v, w) ∧ (nec.(v, w) ∨ no-win.(w)) (19)\nAs a final refinement, we note that C2 is likely to capture function words that are present in most sentences, and exclude these by restricting the lexicon to words below a certain frequency threshold:\nC3 = C2 ∧ ∣∣{v′ : suff.(v′, w)}∣∣ ≤ (20)\nThe lexicon matrix L is computed by taking the word co-occurrence matrix, zeroing out all entries where C3 does not hold, then computing a softmax: Lvw ∝ C3(v, w) exp((1/τ) #(v, w)). Surprisingly, as shown in Fig. 3 and and evaluated below, this rule (which we label Simple) produces the most effective lexicon initializer for three of the four tasks we study. The simplicity (and extreme conservativity) of this rule highlight the different demands on L made by our model and more conventional (e.g. machine translation) approaches: the lexical translation mechanism benefits from a small number of precise mappings rather than a large number of noisy ones."
+    }, {
+      "heading" : "5 Experiments",
+      "text" : "We investigate the effectiveness of the lexical translation mechanism on sequence-to-sequence models for four tasks, three focused on compositional generalization and one on low-resource machine translation. In all experiments, we use an LSTM encoder–decoder with attention as the base predictor. We compare our approach (and variants) with two other baselines: GECA (Andreas 2020; a data augmentation scheme) and SynAtt (Russin et al. 2019; an alternative seq2seq model parameterization). Hyper-parameter selection details are given in the Appendix C. Unless otherwise stated, we use τ = 0 and do not fine-tune L after initialization."
+    }, {
+      "heading" : "5.1 Colors",
+      "text" : "Task The Colors sequence translation task (see Appendix A for full dataset) was developed to measure human inductive biases in sequence-tosequence learning problems. It poses an extreme test of low-resource learning for neural sequence models: it has only 14 training examples that combine four named colors and three composition operations that perform concatenation, repetition and wrapping. Liu et al. (2020) solve this dataset with a symbolic stack machine; to the best of our knowledge, our approach is the first “pure” neural sequence model to obtain non-trivial accuracy.\nResults Both the Simple and IBMM2 initializers produce a lexicon that maps only color words to colors. Both, combined with the lexical translation mechanism, obtain an average test accuracy of 79% across 16 runs, nearly matching the human accuracy of 81% reported by Lake et al. (2019). The\ntwo test examples most frequently predicted incorrectly require generalization to longer sequences than seen during training. More details (including example-level model and human accuracies) are presented in the appendix Appendix A). These results show that LSTMs are quite effective at learning systematic sequence transformation rules from ≈ 3 examples per function word when equipped with lexical translations. Generalization to longer sequences remains as an important challenge for future work."
+    }, {
+      "heading" : "5.2 SCAN",
+      "text" : "Task SCAN (Lake and Baroni, 2018) is a larger collection of tests of systematic generalization that pair synthetic English commands (e.g. turn left twice and jump) to action sequences (e.g. LTURN LTURN IJUMP) as shown in Table 1. Following previous work, we focus on the jump and around right splits, each of which features roughly 15,000 training examples, and evaluate models’ ability to perform 1-shot learning of new primitives (jump) and zero-shot interpretation of composition rules (around right). While these tasks are now solved by a number of specialized approaches, they remain a challenge for conventional neural sequence models, and an important benchmark for new models.\nResults In the jump split, all initializers improve significantly over the base LSTM when combined with lexical translation. Most methods achieve 99% accuracy at least once across seeds. These results are slightly behind GECA (in which all runs succeed) but ahead of SynAtt.3 Again, they show that lexicon learning is effective for systematic generalization, and that simple initializers (PMI and Simple) outperform complex ones."
+    }, {
+      "heading" : "5.3 COGS",
+      "text" : "Task COGS (Compositional Generalization for Semantic Parsing; Kim and Linzen 2020) is an automatically generated English-language semantic parsing dataset that tests systematic generalization in learning language-to-logical-form mappings. It includes 24155 training examples. Compared to the Colors and SCAN datasets, it has a larger vocabulary (876 tokens) and finer-grained inventory of syntactic generalization tests (Table 3).\nResults Notably, because some tokens appear in both inputs and logical forms in the COGS\n3SynAtt results here are lower than reported in the original paper, which discarded runs with a test accuracy of 0%.\ntask, even a standard sequence-to-sequence model with copying significantly outperforms the baseline models in the original work of Kim and Linzen (2020), solving most tests of generalization over syntactic roles for nouns (but performing worse at generalizations over verbs, including passive and dative alternations). As above, the lexical translation mechanism (with any of the proposed initializers) provides further improvements, mostly for verbs that baselines model incorrectly (Table 3)."
+    }, {
+      "heading" : "5.4 Machine Translation",
+      "text" : "Task To demonstrate that this approach is useful beyond synthetic tests of generalization, we evaluate it on a low-resource English–Chinese translation task (the Tatoeba4 dataset processed by Kelly 2021). For our experiments, we split the data randomly into 19222 training and 2402 test pairs.\nResults Results are shown in Table 4. Models with a lexical translation mechanism obtain modest improvements (up to 1.5 BLEU) over the baseline. Notably, if we restrict evaluation to test sentences\n4https://tatoeba.org/\nfeaturing English words that appeared only once in the training set, BLEU improves by more than 2 points, demonstrating that this approach is particularly effective at one-shot word learning (or fast mapping; Carey and Bartlett 1978). Fig. 2 shows an example from this dataset, in which the model learns to reliably translate Saturn from a single training example. GECA, which makes specific generative assumptions about data distributions, does not generalize to a more realistic low resource MT problem. However, the lexical translation mechanism remains effective in natural tasks with large vocabularies and complex grammars."
+    }, {
+      "heading" : "5.5 Fine-Tuning the Lexicon",
+      "text" : "In all the experiments above, the lexicon was discretized (τ = 0) and frozen prior to training. In this final section, we revisit that decision, evaluating whether the parameter L can be learned from scratch, or effectively fine-tuned along with decoder parameters. Experiments in this section focus on the COGS dataset.\nOffline initialization of the lexicon is crucial. Rather than initializing L using any of the algorithms described in Section 3, we initialized L to a uniform distribution for each word and optimized\nit during training. This improves over the base LSTM (Uniform in Table 5), but performs significantly worse than pre-learned lexicons.\nBenefits from fine-tuning are minimal. We first increased the temperature parameter τ to 0.1 (providing a “soft” lexicon); this gave a 1% improvement on COGS (Table 5. Soft). Finally, we updated this soft initialization via gradient descent; this provided no further improvement (Table 5, Learned). One important feature of COGS (and other tests of compositional generalization) is perfect training accuracy is easily achieved; thus, there is little pressure on models to learn generalizable lexicons. This pressure must instead come from inductive bias in the initializer."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "We have described a lexical translation mechanism for representing token-level translation rules in neural sequence models. We have additionally described a simple initialization scheme for this lexicon that outperforms a variety of existing algorithms. Together, lexical translation and proper initialization enable neural sequence models to solve a diverse set of tasks—including semantic parsing and machine translation—that require 1-shot word learning and 0-shot compositional generalization. Future work might focus on generalization to longer sequences, learning of atomic but nonconcatenative translation rules, and online lexicon learning in situated contexts."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "This work was supported by the MachineLearningApplications initiative at MIT CSAIL and the MIT–IBM Watson AI lab. Computing re-\nsources were provided by a gift from NVIDIA through the NVAIL program and by the Lincoln Laboratory Supercloud."
+    }, {
+      "heading" : "A Colors Dataset & Detailed Results",
+      "text" : "Here we present the full dataset in Table 6 from Lake et al. (2019), and detailed comparisons of each model with human results in Table 7."
+    }, {
+      "heading" : "B Learned Lexicons",
+      "text" : "Here we provide lexicons for each model and dataset (see Fig. 2 and Fig. 3 for remaining datasets). For COGS, we show a representative subset of words."
+    }, {
+      "heading" : "C Hyper-parameter Settings",
+      "text" : "C.1 Neural Seq2Seq\nMost of the datasets we evaluate do not come with a out-of-distribution validation set, making principled hyperparameter tuning difficult. We were unable to reproduce the results of Kim and Linzen (2020) with the hyperparameter settings reported there with our base LSTM setup, and so adjusted them until training was stabilized. Like the original paper, we used a unidirectional 2-layer LSTM with 512 hidden units, an embedding size of 512, gradient clipping of 5.0, a Noam learning rate scheduler with 4000 warm-up steps, and a batch size of 512. Unlike the original paper, we found it necessary to reduce learning rate to 1.0, increase dropout value to 0.4, and the reduce maximum step size timeout\nto 8000. We use same parameters for all COGS, SCAN, and machine translation experiments. For SCAN and Colors, we applied additional dropout (p=0.5) in the last layer of pwrite.\nSince Colors has 14 training examples, we need a different batch size, set to 1/3 of the training set size (= 5). Qualitative evaluation of gradients in training time revealed that stricter gradient clipping was also needed (= 0.5). Similarly, we decreased warm-up steps to 32 epochs. All other hyper-parameters remain the same.\nC.2 Lexicon Learning\nSimple Lexicon The only parameter in the simple lexicon is , set to 3 in all experiments.\nBayesian The original work of Frank et al. (2007) did not report hyperparemeter settings or sampler details. We found α = 2, γ = 0.95 and κ = 0.1 to be effective. The M–H proposal distribution inserts or removes a word from the lexicon with 50% probability. For deletions, an entry is removed uniformly at random. For insertions, an entry is added with probability proportional to the empirical joint co-occurrence probability of the input and output tokens. Results were averaged across 5 runs, with a burn-in period of 1000 and a sample drawn every 10 steps.\nIBM Model 2 We used the FastAlign implementation (Dyer et al., 2013) and experimented with a variety of hyperparameters in the alignment algorithm itself (favoring diagonal alignment, optimizing tension, using dirichlet priors) and diagonalization heuristics (grow-diag, grow-diag-final, growdiag-final-and, union). We found that optimizing tension and using the “intersect” diagonalization heuristic works the best overall."
+    }, {
+      "heading" : "D Baseline Results",
+      "text" : "D.1 GECA\nWe reported best results for SCAN dataset from reproduced results in (Akyürek et al., 2021). For other datasets (COGS and Colors), we performed a hyperparameter search over augmentation ratios of 0.1 and 0.3 and hidden sizes of {128, 256, 512}. We report the best results for each dataset.\nD.2 SyntAtt We used the public GitHub repository of SyntAtt5 and reproduced reported results for the SCAN dataset. For other datasets, we also explored ”syntax action” option, in which both contextualized context (syntax) and un-contextualized embeddings (semantics) used in final layer Russin et al. (2019). We additionally performed a search over hidden layer sizes {128,256,512} and depths {1,2}. We report the best results for each dataset."
+    }, {
+      "heading" : "E Datasets & Evaluation & Tokenization",
+      "text" : "E.1 Datasets and Sizes around_right jump COGS Colors ENG-CHN\ntrain 15225 14670 24155 14 19222 validation - - 3000 - 2402 test 4476 7706 21000 10 2402\nE.2 Evaluation We report exact match accuracies and BLEU scores. In both evaluations we include punctuation. For BLEU we use NLTK 6 library’s default implementation.\nE.3 Tokenization We use Moses library7 for English tokenization, and jieba8 library for Chinese tokenization. In other datasets, we use default space tokenization."
+    }, {
+      "heading" : "F Computing Infrastructure",
+      "text" : "Experiments were performed on a DGX-2 with NVIDIA 32GB VOLTA-V100 GPUs. Experiments take at most 2.5 hours on a single GPU.\n5(https://github.com/jlrussin/syntactic_ attention)\n6https://www.nltk.org/ 7https://pypi.org/project/mosestokenizer/ 8https://github.com/fxsjy/jieba"
+    } ],
+    "references" : [ {
+      "title" : "Learning to recombine and resample data for compositional generalization",
+      "author" : [ "Ekin Akyürek", "Afra Feyza Akyürek", "Jacob Andreas." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Akyürek et al\\.,? 2021",
+      "shortCiteRegEx" : "Akyürek et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Good-enough compositional data augmentation",
+      "author" : [ "Jacob Andreas." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 7556–7566.",
+      "citeRegEx" : "Andreas.,? 2020",
+      "shortCiteRegEx" : "Andreas.",
+      "year" : 2020
+    }, {
+      "title" : "Incorporating discrete translation lexicons into neural machine translation",
+      "author" : [ "Philip Arthur", "Graham Neubig", "Satoshi Nakamura." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 1557–1567.",
+      "citeRegEx" : "Arthur et al\\.,? 2016",
+      "shortCiteRegEx" : "Arthur et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Neural machine translation by jointly learning to align and translate",
+      "author" : [ "Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio." ],
+      "venue" : "arXiv preprint arXiv:1409.0473.",
+      "citeRegEx" : "Bahdanau et al\\.,? 2014",
+      "shortCiteRegEx" : "Bahdanau et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Lexical-functional syntax",
+      "author" : [ "Joan Bresnan", "Ash Asudeh", "Ida Toivonen", "Stephen Wechsler." ],
+      "venue" : "John Wiley & Sons.",
+      "citeRegEx" : "Bresnan et al\\.,? 2015",
+      "shortCiteRegEx" : "Bresnan et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "The mathematics of statistical machine translation: Parameter estimation",
+      "author" : [ "Peter F Brown", "Stephen A Della Pietra", "Vincent J Della Pietra", "Robert L Mercer." ],
+      "venue" : "Computational linguistics, 19(2):263– 311.",
+      "citeRegEx" : "Brown et al\\.,? 1993",
+      "shortCiteRegEx" : "Brown et al\\.",
+      "year" : 1993
+    }, {
+      "title" : "Acquiring a single new word",
+      "author" : [ "Susan Carey", "Elsa Bartlett." ],
+      "venue" : "Papers and Reports on Child Language Development, 2.",
+      "citeRegEx" : "Carey and Bartlett.,? 1978",
+      "shortCiteRegEx" : "Carey and Bartlett.",
+      "year" : 1978
+    }, {
+      "title" : "Maximum likelihood from incomplete data via the EM algorithm",
+      "author" : [ "Arthur P Dempster", "Nan M Laird", "Donald B Rubin." ],
+      "venue" : "Journal of the Royal Statistical Society: Series B (Methodological), 39(1):1–22.",
+      "citeRegEx" : "Dempster et al\\.,? 1977",
+      "shortCiteRegEx" : "Dempster et al\\.",
+      "year" : 1977
+    }, {
+      "title" : "A simple, fast, and effective reparameterization of IBM Model 2",
+      "author" : [ "Chris Dyer", "Victor Chahuneau", "Noah A Smith." ],
+      "venue" : "Proceedings of the 2013 Conference of the North American Chapter of the Association for Computational Linguistics: Human",
+      "citeRegEx" : "Dyer et al\\.,? 2013",
+      "shortCiteRegEx" : "Dyer et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Connectionism and cognitive architecture: A critical analysis",
+      "author" : [ "Jerry A Fodor", "Zenon W Pylyshyn" ],
+      "venue" : null,
+      "citeRegEx" : "Fodor and Pylyshyn,? \\Q1988\\E",
+      "shortCiteRegEx" : "Fodor and Pylyshyn",
+      "year" : 1988
+    }, {
+      "title" : "A Bayesian framework for crosssituational word-learning",
+      "author" : [ "Michael C. Frank", "Noah D. Goodman", "J. Tenenbaum." ],
+      "venue" : "NeurIPS.",
+      "citeRegEx" : "Frank et al\\.,? 2007",
+      "shortCiteRegEx" : "Frank et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "Compositional generalization in semantic parsing: Pre-training vs",
+      "author" : [ "Daniel Furrer", "Marc van Zee", "Nathan Scales", "Nathanael Schärli." ],
+      "venue" : "specialized architectures. arXiv preprint arXiv:2007.08970.",
+      "citeRegEx" : "Furrer et al\\.,? 2020",
+      "shortCiteRegEx" : "Furrer et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Mutual exclusivity as a challenge for deep neural networks",
+      "author" : [ "Kanishk Gandhi", "Brenden M Lake." ],
+      "venue" : "Advances in Neural Information Processing Systems,",
+      "citeRegEx" : "Gandhi and Lake.,? 2020",
+      "shortCiteRegEx" : "Gandhi and Lake.",
+      "year" : 2020
+    }, {
+      "title" : "Convolutional sequence to sequence learning",
+      "author" : [ "Jonas Gehring", "M. Auli", "David Grangier", "Denis Yarats", "Yann Dauphin." ],
+      "venue" : "ICML.",
+      "citeRegEx" : "Gehring et al\\.,? 2017",
+      "shortCiteRegEx" : "Gehring et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Nonparametric Bayesian Models of Lexican Acquisition",
+      "author" : [ "Sharon J Goldwater." ],
+      "venue" : "Citeseer.",
+      "citeRegEx" : "Goldwater.,? 2007",
+      "shortCiteRegEx" : "Goldwater.",
+      "year" : 2007
+    }, {
+      "title" : "Permutation equivariant models for compositional generalization in language",
+      "author" : [ "Jonathan Gordon", "David Lopez-Paz", "Marco Baroni", "Diane Bouchacourt." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Gordon et al\\.,? 2019",
+      "shortCiteRegEx" : "Gordon et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Learning to transduce with unbounded memory",
+      "author" : [ "Edward Grefenstette", "Karl Moritz Hermann", "Mustafa Suleyman", "Phil Blunsom." ],
+      "venue" : "NIPS.",
+      "citeRegEx" : "Grefenstette et al\\.,? 2015",
+      "shortCiteRegEx" : "Grefenstette et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Pointer-based fusion of bilingual lexicons into neural machine translation",
+      "author" : [ "Jetic Gū", "Hassan S Shavarani", "Anoop Sarkar." ],
+      "venue" : "arXiv preprint arXiv:1909.07907.",
+      "citeRegEx" : "Gū et al\\.,? 2019",
+      "shortCiteRegEx" : "Gū et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Language acquisition: The growth of grammar",
+      "author" : [ "Maria Teresa Guasti." ],
+      "venue" : "MIT press.",
+      "citeRegEx" : "Guasti.,? 2017",
+      "shortCiteRegEx" : "Guasti.",
+      "year" : 2017
+    }, {
+      "title" : "Learning bilingual lexicons from monolingual corpora",
+      "author" : [ "A. Haghighi", "Percy Liang", "Taylor Berg-Kirkpatrick", "D. Klein." ],
+      "venue" : "ACL.",
+      "citeRegEx" : "Haghighi et al\\.,? 2008",
+      "shortCiteRegEx" : "Haghighi et al\\.",
+      "year" : 2008
+    }, {
+      "title" : "Data recombination for neural semantic parsing",
+      "author" : [ "Robin Jia", "Percy Liang." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 12–22.",
+      "citeRegEx" : "Jia and Liang.,? 2016",
+      "shortCiteRegEx" : "Jia and Liang.",
+      "year" : 2016
+    }, {
+      "title" : "Treeadjoining grammars",
+      "author" : [ "Aravind K Joshi", "Yves Schabes." ],
+      "venue" : "Handbook of formal languages, pages 69–123. Springer.",
+      "citeRegEx" : "Joshi and Schabes.,? 1997",
+      "shortCiteRegEx" : "Joshi and Schabes.",
+      "year" : 1997
+    }, {
+      "title" : "COGS: A compositional generalization challenge based on semantic interpretation",
+      "author" : [ "Najoung Kim", "Tal Linzen." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 9087–9105.",
+      "citeRegEx" : "Kim and Linzen.,? 2020",
+      "shortCiteRegEx" : "Kim and Linzen.",
+      "year" : 2020
+    }, {
+      "title" : "Statistical phrase-based translation",
+      "author" : [ "Philipp Koehn", "F. Och", "D. Marcu." ],
+      "venue" : "HLT-NAACL.",
+      "citeRegEx" : "Koehn et al\\.,? 2003",
+      "shortCiteRegEx" : "Koehn et al\\.",
+      "year" : 2003
+    }, {
+      "title" : "Lexical generalization in CCG grammar induction for semantic parsing",
+      "author" : [ "T. Kwiatkowski", "Luke Zettlemoyer", "S. Goldwater", "Mark Steedman." ],
+      "venue" : "EMNLP.",
+      "citeRegEx" : "Kwiatkowski et al\\.,? 2011",
+      "shortCiteRegEx" : "Kwiatkowski et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "Human few-shot learning of compositional instructions",
+      "author" : [ "B. Lake", "Tal Linzen", "M. Baroni." ],
+      "venue" : "CogSci.",
+      "citeRegEx" : "Lake et al\\.,? 2019",
+      "shortCiteRegEx" : "Lake et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Generalization without systematicity: On the compositional skills of sequence-to-sequence recurrent networks",
+      "author" : [ "Brenden Lake", "Marco Baroni." ],
+      "venue" : "International Conference on Machine Learning, pages 2873–2882. PMLR.",
+      "citeRegEx" : "Lake and Baroni.,? 2018",
+      "shortCiteRegEx" : "Lake and Baroni.",
+      "year" : 2018
+    }, {
+      "title" : "Learning semantic correspondences with less supervision",
+      "author" : [ "Percy Liang", "Michael I Jordan", "Dan Klein." ],
+      "venue" : "Proceedings of the Joint Conference of the 47th Annual Meeting of the ACL and the 4th International Joint Conference on Natural Language",
+      "citeRegEx" : "Liang et al\\.,? 2009",
+      "shortCiteRegEx" : "Liang et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Compositional generalization by learning analytical expressions",
+      "author" : [ "Qian Liu", "Shengnan An", "Jian-Guang Lou", "Bei Chen", "Zeqi Lin", "Yan Gao", "Bin Zhou", "Nanning Zheng", "Dongmei Zhang." ],
+      "venue" : "Advances in Neural Information Processing Systems, 33.",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deep learning: A critical appraisal",
+      "author" : [ "Gary Marcus." ],
+      "venue" : "arXiv preprint arXiv:1801.00631.",
+      "citeRegEx" : "Marcus.,? 2018",
+      "shortCiteRegEx" : "Marcus.",
+      "year" : 2018
+    }, {
+      "title" : "Improving lexical choice in neural machine translation",
+      "author" : [ "Toan Q. Nguyen", "David Chiang." ],
+      "venue" : "ArXiv, abs/1710.01329.",
+      "citeRegEx" : "Nguyen and Chiang.,? 2018",
+      "shortCiteRegEx" : "Nguyen and Chiang.",
+      "year" : 2018
+    }, {
+      "title" : "Learning compositional rules via neural program synthesis",
+      "author" : [ "Maxwell Nye", "Armando Solar-Lezama", "Josh Tenenbaum", "Brenden M Lake." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 33, pages 10832–10842. Curran Associates,",
+      "citeRegEx" : "Nye et al\\.,? 2020",
+      "shortCiteRegEx" : "Nye et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BLEU: a method for automatic evaluation of machine translation",
+      "author" : [ "Kishore Papineni", "Salim Roukos", "Todd Ward", "WeiJing Zhu." ],
+      "venue" : "Proceedings of the 40th annual meeting of the Association for Computational Linguistics, pages 311–318.",
+      "citeRegEx" : "Papineni et al\\.,? 2002",
+      "shortCiteRegEx" : "Papineni et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Towards one-shot learning for rare-word translation with external experts",
+      "author" : [ "Ngoc-Quan Pham", "Jan Niehues", "Alex Waibel." ],
+      "venue" : "Proceedings of the 2nd Workshop on Neural Machine Translation and Generation, pages 100–109.",
+      "citeRegEx" : "Pham et al\\.,? 2018",
+      "shortCiteRegEx" : "Pham et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Head-driven phrase structure grammar",
+      "author" : [ "Carl Pollard", "Ivan A Sag." ],
+      "venue" : "University of Chicago Press.",
+      "citeRegEx" : "Pollard and Sag.,? 1994",
+      "shortCiteRegEx" : "Pollard and Sag.",
+      "year" : 1994
+    }, {
+      "title" : "Making a point: Pointer-generator transformers for disjoint vocabularies",
+      "author" : [ "Nikhil Prabhu", "K. Kann." ],
+      "venue" : "AACL.",
+      "citeRegEx" : "Prabhu and Kann.,? 2020",
+      "shortCiteRegEx" : "Prabhu and Kann.",
+      "year" : 2020
+    }, {
+      "title" : "Modeling letter-to-phoneme conversion as a phrase based statistical machine translation problem with minimum error rate training",
+      "author" : [ "Taraka Rama", "Anil Kumar Singh", "Sudheer Kolachina." ],
+      "venue" : "Proceedings of Human Language Technologies:",
+      "citeRegEx" : "Rama et al\\.,? 2009",
+      "shortCiteRegEx" : "Rama et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Compositional generalization in a deep seq2seq model by separating syntax and semantics. arXiv preprint arXiv:1904.09708",
+      "author" : [ "Jake Russin", "Jason Jo", "Randall C O’Reilly", "Yoshua Bengio" ],
+      "venue" : null,
+      "citeRegEx" : "Russin et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Russin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Get to the point: Summarization with pointergenerator networks",
+      "author" : [ "Abigail See", "Peter J Liu", "Christopher D Manning." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics, pages 1073–1083.",
+      "citeRegEx" : "See et al\\.,? 2017",
+      "shortCiteRegEx" : "See et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Compositional neural machine translation by removing the lexicon from syntax",
+      "author" : [ "Tristan Thrush." ],
+      "venue" : "arXiv preprint arXiv:2002.08899.",
+      "citeRegEx" : "Thrush.,? 2020",
+      "shortCiteRegEx" : "Thrush.",
+      "year" : 2020
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Lukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 6000–6010.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 25,
+      "context" : "1, human learners exhibit a preference for systematic and compositional interpretation rules (Guasti 2017, Chapter 4; Lake et al. 2019).",
+      "startOffset" : 93,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 6,
+      "context" : "These inductive biases in turn support behaviors like one-shot learning of new concepts (Carey and Bartlett, 1978).",
+      "startOffset" : 88,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 26,
+      "context" : "and small datasets (Lake and Baroni, 2018), posing a fundamental challenge for NLP tools in the low-data regime.",
+      "startOffset" : 19,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 21,
+      "context" : "While doing so, which training examples did you pay the most attention to? How many times did you find yourself saying means or maps to? Explicit representations of lexical items and their meanings play a key role diverse models of syntax and semantics (Joshi and Schabes, 1997; Pollard and Sag, 1994; Bresnan et al., 2015).",
+      "startOffset" : 253,
+      "endOffset" : 323
+    }, {
+      "referenceID" : 34,
+      "context" : "While doing so, which training examples did you pay the most attention to? How many times did you find yourself saying means or maps to? Explicit representations of lexical items and their meanings play a key role diverse models of syntax and semantics (Joshi and Schabes, 1997; Pollard and Sag, 1994; Bresnan et al., 2015).",
+      "startOffset" : 253,
+      "endOffset" : 323
+    }, {
+      "referenceID" : 4,
+      "context" : "While doing so, which training examples did you pay the most attention to? How many times did you find yourself saying means or maps to? Explicit representations of lexical items and their meanings play a key role diverse models of syntax and semantics (Joshi and Schabes, 1997; Pollard and Sag, 1994; Bresnan et al., 2015).",
+      "startOffset" : 253,
+      "endOffset" : 323
+    }, {
+      "referenceID" : 26,
+      "context" : "But one of the main findings in existing work on generalization in neural models is that they fail to cleanly separate lexical phenomena from syntactic ones (Lake and Baroni, 2018).",
+      "startOffset" : 157,
+      "endOffset" : 180
+    }, {
+      "referenceID" : 32,
+      "context" : "Our approach also generalizes to real-world tests of few-shot learning, improving BLEU scores (Papineni et al., 2002) by 1.",
+      "startOffset" : 94,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 29,
+      "context" : "A great deal of past work has suggested that neural models come equipped with an inductive bias that makes them fundamentally ill-suited to human-like generalization about language data, especially in the low-data regime (e.g. Fodor et al., 1988; Marcus, 2018).",
+      "startOffset" : 221,
+      "endOffset" : 260
+    }, {
+      "referenceID" : 26,
+      "context" : "Systematic generalization in neural sequence models The desired inductive biases noted above are usually grouped together as “systematicity” but in fact involve a variety of phenomena: one-shot learning of new concepts and composition rules (Lake and Baroni, 2018), zero-shot interpretation of novel words from context cues (Gandhi and Lake, 2020), and interpretation of known concepts in novel syntactic configurations (Keysers et al.",
+      "startOffset" : 241,
+      "endOffset" : 264
+    }, {
+      "referenceID" : 12,
+      "context" : "Systematic generalization in neural sequence models The desired inductive biases noted above are usually grouped together as “systematicity” but in fact involve a variety of phenomena: one-shot learning of new concepts and composition rules (Lake and Baroni, 2018), zero-shot interpretation of novel words from context cues (Gandhi and Lake, 2020), and interpretation of known concepts in novel syntactic configurations (Keysers et al.",
+      "startOffset" : 324,
+      "endOffset" : 347
+    }, {
+      "referenceID" : 22,
+      "context" : "Systematic generalization in neural sequence models The desired inductive biases noted above are usually grouped together as “systematicity” but in fact involve a variety of phenomena: one-shot learning of new concepts and composition rules (Lake and Baroni, 2018), zero-shot interpretation of novel words from context cues (Gandhi and Lake, 2020), and interpretation of known concepts in novel syntactic configurations (Keysers et al., 2020; Kim and Linzen, 2020).",
+      "startOffset" : 420,
+      "endOffset" : 464
+    }, {
+      "referenceID" : 31,
+      "context" : "Recent years have seen tremendous amount of modeling work aimed at encouraging these generalizations in neural models, primarily by equipping them with symbolic scaffolding in the form of program synthesis engines (Nye et al., 2020), stack machines (Grefenstette et al.",
+      "startOffset" : 214,
+      "endOffset" : 232
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2020), stack machines (Grefenstette et al., 2015; Liu et al., 2020), or symbolic data transformation rules (Gordon et al.",
+      "startOffset" : 24,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 28,
+      "context" : ", 2020), stack machines (Grefenstette et al., 2015; Liu et al., 2020), or symbolic data transformation rules (Gordon et al.",
+      "startOffset" : 24,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 15,
+      "context" : ", 2020), or symbolic data transformation rules (Gordon et al., 2019; Andreas, 2020).",
+      "startOffset" : 47,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2020), or symbolic data transformation rules (Gordon et al., 2019; Andreas, 2020).",
+      "startOffset" : 47,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 11,
+      "context" : "A parallel line of work has investigated the role of continuous representations in systematic generalization, proposing improved methods for pretraining (Furrer et al., 2020) and procedures for removing irrelevant contextual information from word representations (Arthur et al.",
+      "startOffset" : 153,
+      "endOffset" : 174
+    }, {
+      "referenceID" : 2,
+      "context" : ", 2020) and procedures for removing irrelevant contextual information from word representations (Arthur et al., 2016; Russin et al., 2019; Thrush, 2020).",
+      "startOffset" : 96,
+      "endOffset" : 152
+    }, {
+      "referenceID" : 37,
+      "context" : ", 2020) and procedures for removing irrelevant contextual information from word representations (Arthur et al., 2016; Russin et al., 2019; Thrush, 2020).",
+      "startOffset" : 96,
+      "endOffset" : 152
+    }, {
+      "referenceID" : 39,
+      "context" : ", 2020) and procedures for removing irrelevant contextual information from word representations (Arthur et al., 2016; Russin et al., 2019; Thrush, 2020).",
+      "startOffset" : 96,
+      "endOffset" : 152
+    }, {
+      "referenceID" : 5,
+      "context" : "A pair of representative approaches (Brown et al., 1993; Frank et al., 2007) will be discussed in detail below; other work on lexicon learning for semantics and translation includes Liang et al.",
+      "startOffset" : 36,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 10,
+      "context" : "A pair of representative approaches (Brown et al., 1993; Frank et al., 2007) will be discussed in detail below; other work on lexicon learning for semantics and translation includes Liang et al.",
+      "startOffset" : 36,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 3,
+      "context" : "Neural encoder–decoders Our approach builds on the standard neural encoder–decoder model with attention (Bahdanau et al., 2014).",
+      "startOffset" : 104,
+      "endOffset" : 127
+    }, {
+      "referenceID" : 20,
+      "context" : "Copying A popular extension of the model described above is the copy mechanism, in which output tokens can be copied from the input sequence in addition to being generated directly by the decoder (Jia and Liang, 2016; See et al., 2017).",
+      "startOffset" : 196,
+      "endOffset" : 235
+    }, {
+      "referenceID" : 38,
+      "context" : "Copying A popular extension of the model described above is the copy mechanism, in which output tokens can be copied from the input sequence in addition to being generated directly by the decoder (Jia and Liang, 2016; See et al., 2017).",
+      "startOffset" : 196,
+      "endOffset" : 235
+    }, {
+      "referenceID" : 13,
+      "context" : "All experiments in this paper use LSTM encoders and decoders, but it could be easily integrated with CNNs or transformers (Gehring et al. 2017; Vaswani et al. 2017).",
+      "startOffset" : 122,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 40,
+      "context" : "All experiments in this paper use LSTM encoders and decoders, but it could be easily integrated with CNNs or transformers (Gehring et al. 2017; Vaswani et al. 2017).",
+      "startOffset" : 122,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 24,
+      "context" : "Section 2), lexicon-based initialization was a standard feature of many complex non-neural sequence transduction models, including semantic parsers (Kwiatkowski et al., 2011) and phrase-based machine translation systems (Koehn et al.",
+      "startOffset" : 148,
+      "endOffset" : 174
+    }, {
+      "referenceID" : 23,
+      "context" : ", 2011) and phrase-based machine translation systems (Koehn et al., 2003).",
+      "startOffset" : 53,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 5,
+      "context" : "Statistical alignment In the natural language processing literature, the IBM translation models (Brown et al., 1993) have served as some of the most popular procedures for learning token-level input–output mappings.",
+      "startOffset" : 96,
+      "endOffset" : 116
+    }, {
+      "referenceID" : 24,
+      "context" : "While originally developed for machine translation, they have also been used to initialize semantic lexicons for semantic parsing (Kwiatkowski et al., 2011) and graphemeto-phoneme conversion (Rama et al.",
+      "startOffset" : 130,
+      "endOffset" : 156
+    }, {
+      "referenceID" : 36,
+      "context" : ", 2011) and graphemeto-phoneme conversion (Rama et al., 2009).",
+      "startOffset" : 42,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 7,
+      "context" : "Alignments ai and lexical parameters θ can be jointly estimated using the expectation– maximization algorithm (Dempster et al., 1977).",
+      "startOffset" : 110,
+      "endOffset" : 133
+    }, {
+      "referenceID" : 26,
+      "context" : "Task SCAN (Lake and Baroni, 2018) is a larger collection of tests of systematic generalization that pair synthetic English commands (e.",
+      "startOffset" : 10,
+      "endOffset" : 33
+    } ],
+    "year" : 2021,
+    "abstractText" : "Sequence-to-sequence transduction is the core problem in language processing applications as diverse as semantic parsing, machine translation, and instruction following. The neural network models that provide the dominant solution to these problems are brittle, especially in low-resource settings: they fail to generalize correctly or systematically from small datasets. Past work has shown that many failures of systematic generalization arise from neural models’ inability to disentangle lexical phenomena from syntactic ones. To address this, we augment neural decoders with a lexical translation mechanism that generalizes existing copy mechanisms to incorporate learned, decontextualized, token-level translation rules. We describe how to initialize this mechanism using a variety of lexicon learning algorithms, and show that it improves systematic generalization on a diverse set of sequence modeling tasks drawn from cognitive science, formal semantics, and machine translation.1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

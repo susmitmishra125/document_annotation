@@ -1,0 +1,1083 @@
+{
+  "name" : "2021.acl-long.541.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Verb Knowledge Injection for Multilingual Event Processing",
+    "authors" : [ "Olga Majewska", "Ivan Vulić", "Goran Glavaš", "Edoardo M. Ponti", "Anna Korhonen" ],
+    "emails" : [ "om304@cam.ac.uk", "iv250@cam.ac.uk", "ep490@cam.ac.uk", "alk23@cam.ac.uk", "goran@informatik.uni-mannheim.de" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 6952–6969\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n6952"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Large Transformer-based encoders, pretrained with self-supervised language modeling (LM) objectives, form the backbone of state-of-the-art models for most NLP tasks (Devlin et al., 2019; Yang et al., 2019b; Liu et al., 2019). Recent probes showed that they implicitly extract a non-negligible amount of linguistic knowledge from text corpora in an unsupervised fashion (Hewitt and Manning, 2019; Vulić et al., 2020; Rogers et al., 2020, inter alia).\nIn downstream tasks, however, they often rely on spurious correlations and superficial cues (Niven and Kao, 2019) rather than a deep understanding of language meaning (Bender and Koller, 2020), which is detrimental to both generalisation and interpretability (McCoy et al., 2019).\nIn this work, we focus on a specific facet of linguistic knowledge: reasoning about events.1 Identifying tokens in the text that mention events and classifying the temporal and causal relations among them is crucial to understand the structure of a story or dialogue (Carlson et al., 2002; Miltsakaki et al., 2004) and to ground a text in real-world facts.\nVerbs (with their arguments) are prominently used for expressing events (with their participants). Thus, fine-grained knowledge about verbs, e.g., the syntactic patterns in which they partake and the semantic frames, may help pretrained encoders to achieve a deeper understanding of text and improve their performance in event-oriented downstream tasks. There already exist some expert-curated computational resources that organise verbs into classes based on their syntactic-semantic properties (Jackendoff, 1992; Levin, 1993). In particular, here we consider English VerbNet and FrameNet as rich sources of verb knowledge.\nExpanding a line of research on injecting external linguistic knowledge into pretrained LMs (Peters et al., 2019; Levine et al., 2020; Lauscher et al., 2020b), we integrate verb knowledge into the LMs for the first time. We devise a new method to distil verb knowledge into dedicated adapter modules (Pfeiffer et al., 2020b), which reduce the risk of (catastrophic) forgetting of and allow seamless modular integration with distributional knowledge.\n1For instance, in the sentence “Stately, plump Buck Mulligan came from the stairhead, bearing a bowl of lather (...)”, an event of COMING occurs in the past, with BUCK MULLIGAN as a participant, simultaneously to an event of BEARING with an additional participant, a BOWL.\nWe hypothesise that complementing pretrained LMs with verb knowledge should benefit model performance in downstream tasks that involve event extraction and processing. We first put this hypothesis to the test in English monolingual event identification and classification tasks from the TempEval (UzZaman et al., 2013) and ACE (Doddington et al., 2004) datasets. We report modest but consistent improvements in the former, and significant performance boosts in the latter, thus verifying that verb knowledge is indeed paramount for a deeper understanding of events and their structure.\nMoreover, expert-curated resources are not available for most of the languages spoken worldwide. Therefore, we also investigate the effectiveness of transferring verb knowledge across languages; in particular, from English to Spanish, Arabic and Chinese. The results demonstrate the success of the transfer techniques, and also shed some light on an important linguistic question: to what extent can verb classes (and predicate–argument structures) be considered cross-lingually universal, rather than varying across languages (Hartmann et al., 2013)?\nOverall, our main contributions consist in 1) mitigating the limitations of pretrained encoders regarding event understanding by supplying external verb knowledge; 2) proposing a new method to do so in a modular way through verb adapters; 3) exploring techniques to transfer verb knowledge to resource-poor languages. The performance gains across four diverse languages and several event processing tasks and datasets validate that complementing distributional knowledge with curated verb knowledge is both beneficial and cost-effective."
+    }, {
+      "heading" : "2 Verb Knowledge for Event Processing",
+      "text" : "Figure 1 illustrates our framework for injecting verb knowledge from VerbNet or FrameNet and leveraging it in downstream event processing tasks. First, we inject the external verb knowledge, formulated as the so-called lexical constraints (Mrkšić et al., 2017; Ponti et al., 2019) (in our case – verb pairs, see §2.1), into a (small) additional set of adapter parameters (§2.2) (Houlsby et al., 2019). Second (§2.3), we combine the language knowledge encoded in the original LM parameters and the verb knowledge from verb adapters for event processing tasks. To this end, we either a) fine-tune both sets of parameters (1. pretrained LM; 2. verb adapters) or b) freeze both sets of parameters and insert an additional set of task-specific adapter pa-\nrameters. In both cases, the task-specific training is informed both by the general language knowledge captured in the pretrained LM, and the specialised verb knowledge, captured in the verb adapters."
+    }, {
+      "heading" : "2.1 Sources of Verb Lexical Knowledge",
+      "text" : "Given the inter-connectedness between verbs’ meaning and syntactic behaviour (Levin, 1993; Kipper Schuler, 2005), we assume that refining latent representation spaces with verb knowledge would have a positive effect on event extraction tasks that strongly revolve around verbs. Lexical classes, defined in terms of verbs’ shared semanticsyntactic properties, provide a mapping between the verbs’ senses and the morpho-syntactic realisation of their arguments (Jackendoff, 1992; Levin, 1993). The potential of verb classifications lies in their predictive power: for any given verb, a set of rich semantic-syntactic properties can be inferred based on its class membership. In this work, we explicitly harness this rich linguistic knowledge to aid pretrained LMs in capturing regularities in the properties of verbs and their arguments.\nWe select two major English lexical databases – VerbNet (Kipper Schuler, 2005) and FrameNet (Baker et al., 1998) – as sources of verb knowledge at the semantic-syntactic interface, each representing a different lexical framework.\nVerbNet (VN) (Kipper Schuler, 2005; Kipper et al., 2006), the largest available verb-focused lexicon, organises verbs into classes based on the overlap in their semantic properties and syntactic behaviour; it builds on the premise that a verb’s predicateargument structure informs its meaning (Levin, 1993). Each entry provides a set of thematic roles and selectional preferences for the verbs’ arguments; it also lists the syntactic contexts characteristic for the class members. Its hierarchical classification starts from broader classes and spans several granularity levels where each subclass further refines the semantic-syntactic properties inherited from its parent class.2 The VN class membership is English-specific, but the underlying verb class construction principles are thought to apply cross-lingually (Jackendoff, 1992; Levin, 1993); its translatability has been indicated in previous work (Vulić et al., 2017; Majewska et al., 2018). The current English VN contains 329 main classes.\nFrameNet (FN) (Baker et al., 1998) is more semantically oriented than VN. Grounded in the theory of frame semantics (Fillmore, 1976, 1977, 1982), it organises concepts according to semantic frames, i.e., schematic representations of situations and events, which they evoke, each characterised by a set of typical roles assumed by its participants. The word senses associated with each frame (FN’s lexical units) are similar in terms of their semantic content, as well as their typical argument structures. Currently, English FN covers 1,224 frames and its annotations illustrate the typical syntactic realisations of the frame elements. Frames themselves are, however, semantically defined: this means that they may be shared even across languages with different syntactic properties.3"
+    }, {
+      "heading" : "2.2 Training Verb Adapters",
+      "text" : "Training Task and Data Generation. In order to inject external verb knowledge into pretrained LMs, we devise an intermediary training task: we train\n2For example, within a top-level class ‘free-80’, which includes verbs like liberate, discharge, and exonerate which participate in a NP V NP PP.THEME frame (e.g., It freed him of guilt), there exists a subset of verbs participating in a syntactic frame NP V NP S_ING (‘free-80-1’), within which there exists an even more constrained subset of verbs appearing with prepositional phrases headed specifically by the preposition from (e.g., The scientist purified the water from bacteria).\n3For instance, descriptions of transactions will include the same frame elements Buyer, Seller, Goods, Money in most languages. Indeed, English FN has inspired similar projects in other languages: e.g., Spanish (Subirats and Sato, 2004), Japanese (Ohara, 2012), and Danish (Bick, 2011).\na dedicated VN-/FN-knowledge adapter (hereafter VN-Adapter and FN-Adapter). We frame the task as binary word-pair classification: we predict if two verbs belong to the same VN class or FN frame. We extract training instances from FN and VN independently. This allows for a separate analysis of the impact of verb knowledge from each resource.\nWe generate positive training instances by extracting all unique verb pairings from the set of members of each main VN class/FN frame (e.g., walk–march), resulting in 181,882 instances created from VN and 57,335 from FN. We then generate k = 3 negative examples per positive example by combining controlled and random sampling. In controlled sampling, we follow prior work on semantic specialisation (Wieting et al., 2015; Glavaš and Vulić, 2018b; Lauscher et al., 2020b). For each positive example p = (w1, w2) in the training batch B, we create two negatives p̂1 = (ŵ1, w2) and p̂2 = (w1, ŵ2); ŵ1 is the verb from batch B other than w1 that is closest to w2 in terms of their cosine similarity in an auxiliary static word embedding space Xaux ∈ Rd; conversely, ŵ2 is the verb from B other than w2 closest to w1. We additionally create one negative instance p̂3 = (ŵ1,ŵ2) by randomly sampling ŵ1 and ŵ2 from batch B, not considering w1 and w2. We ensure that the negatives are not present in the global set of all positive verb pairs.\nSimilar to Lauscher et al. (2020b), we tokenise each (positive and negative) training instance into WordPiece tokens, prepended with sequence start token [CLS], and with [SEP] tokens in between the verbs and at the end of the input sequence. We use the representation of the [CLS] token xCLS ∈ Rh (with h as the hidden state size of the Transformer) from the last Transformer layer as the latent representation of the verb pair, and feed it to a simple binary classifier:4 ŷ = softmax(xCLSWcl+bcl), with Wcl ∈ Rh×2 and bcl ∈ R2 as classifier’s trainable parameters. We train by minimising the standard cross-entropy loss (LVERB in Figure 1). Adapter Architecture. Instead of directly finetuning all parameters of the pretrained Transformer, we opt for storing verb knowledge in a separate set of adapter parameters, keeping the verb knowledge\n4We also experimented with sentence-level tasks: we fed (a) pairs of sentence examples from VN/FN in a binary classification setup (e.g., Jackie leads Rose to the store. – Jackie escorts Rose.); and (b) individual sentences in a multi-class classification setup (predicting the correct VN class/FN frame). These variants, however, led to weaker performance.\nseparate from the general language knowledge acquired in pretraining. This (1) allows downstream training to flexibly combine the two sources of knowledge, and (2) bypasses the issues with catastrophic forgetting and interference (Hashimoto et al., 2017; de Masson d'Autume et al., 2019).\nWe adopt the standard efficient adapter architecture of Pfeiffer et al. (2020a,c). In each Transformer layer l, we insert a single adapter (Adapterl) after the feed-forward sub-layer. The adapter itself is a two-layer feed-forward neural network with a residual connection, consisting of a down-projection D ∈ Rh×m, a GeLU activation (Hendrycks and Gimpel, 2016), and an upprojection U ∈ Rm×h, where h is the hidden size of the Transformer model and m is the dimensionality of the adapter: Adapterl(hl, rl) = Ul(GeLU(Dl(hl))) + rl; where rl is the residual connection, output of the Transformer’s feedforward layer, and hl is the Transformer hidden state, output of the subsequent layer normalisation."
+    }, {
+      "heading" : "2.3 Downstream Fine-Tuning for Event Tasks",
+      "text" : "The next step is downstream fine-tuning for event processing tasks. We experiment with (1) tokenlevel event trigger identification and classification and (2) span extraction for event triggers and arguments (a sequence labeling task); see §3. For the former, we mount a classification head – a simple single-layer feed-forward softmax regression classifier – on top of the Transformer augmented with VN-/FN-Adapters. For the latter, we follow the architecture from prior work (M’hamdi et al., 2019; Wang et al., 2019) and add a CRF layer (Lafferty et al., 2001) on top of the sequence of Transformer’s outputs (for subword tokens).\nFor all tasks, we propose and evaluate two different fine-tuning regimes: (1) full fine-tuning, where we update both the original Transformer’s parameters and VN-/FN-Adapters (see 2a in Figure 1); and (2) task-adapter (TA) fine-tuning, where we keep both Transformer’s original parameters and VN/FN-Adapters frozen, while stacking a new trainable task adapter on top of the VN-/FN-Adapter in each Transformer layer (see 2b in Figure 1)."
+    }, {
+      "heading" : "2.4 Cross-Lingual Transfer",
+      "text" : "Creation of curated resources like VN or FN takes years of expert linguistic labour. Consequently, such resources do not exist for a vast majority of languages. Given the inherent cross-lingual nature of verb classes and semantic frames (see\n§2.1), we investigate the potential for verb knowledge transfer from English to target languages, without any manual target-language adjustments. Massively multilingual LMs, such as multilingual BERT (mBERT) (Devlin et al., 2019) or XLMR (Conneau et al., 2020) have become the de facto standard mechanisms for zero-shot (ZS) crosslingual transfer. In our first transfer approach: we fine-tune mBERT first on the English verb knowledge, then on English task data, and then simply make task predictions for the target language input.\nThe second approach, dubbed VTRANS, is inspired by the work on cross-lingual transfer of semantic specialisation for static word embeddings (Glavaś et al., 2019; Ponti et al., 2019; Wang et al., 2020b). In brief (with full details in Appendix C), starting from a set of positive pairs from English VN/FN, VTRANS involves three steps: (1) automatic translation of verbs in each pair into the target language, (2) filtering of the noisy target language pairs by means of a transferred relation prediction model trained on the English examples, and (3) training the verb adapters injected into the pretrained model, now with the translated and filtered target-language verb pairs. For the monolingual target-language FN-/VN-Adapter training, we follow the protocol used for English, see §2.2."
+    }, {
+      "heading" : "3 Experimental Setup",
+      "text" : "Event Processing Tasks and Data. In event processing tasks, systems are tasked with detecting that something happened, identifying what type of occurrence took place, as well as what entities were involved. Verbs typically act as the organisational core of each such event schema, carrying a lot of semantic and structural weight. Therefore, a model’s grasp of verbs’ properties should have a bearing on final task performance. Based on this assumption, we select event extraction and classification as suitable tasks to profile the methods from §2.\nThese tasks and the corresponding data are based on the two prominent frameworks for annotating event expressions: TimeML (Pustejovsky et al., 2003, 2005) and the Automatic Content Extraction\n(ACE) (Doddington et al., 2004). First, we rely on the TimeML-annotated corpus from TempEval tasks (Verhagen et al., 2010; UzZaman et al., 2013), which targets automatic identification of temporal expressions and relations, and events. Second, we use the ACE dataset: it provides annotations for entities, the relations between them, and for events in which they participate in newswire text.5\nTask 1: Trigger Identification and Classification (TempEval). We frame the first event processing task as a token-level classification problem, predicting whether a token triggers an event and assigning it to one of the following event types: OCCURRENCE (e.g., died, attacks), STATE (e.g., share, assigned), REPORTING (e.g., announced, said), IACTION (e.g., agreed, trying), I-STATE (e.g., understands, wants, consider), ASPECTUAL (e.g., ending, began), and PERCEPTION (e.g., watched, spotted).6 We use the TempEval-3 data for English and Spanish (UzZaman et al., 2013), and the TempEval-2 data for Chinese (Verhagen et al., 2010) (see Table 6 in the appendix for exact dataset sizes).\nTask 2: Trigger and Argument Identification and Classification (ACE). In this sequence labeling task, we detect and label event triggers and their arguments, with four individually scored subtasks: (i) trigger identification, where we identify the key word conveying the nature of the event, and (ii) trigger classification, where we classify the trigger word into one of the predefined categories; (iii) argument identification, where we predict whether an entity mention is an argument of the event identified in (i), and (iv) argument classification, where the correct role needs to be assigned to the identified event arguments. We use the ACE data available for English, Chinese, and Arabic.7\nEvent extraction as specified in these two frameworks is a challenging, highly context-sensitive problem, where different words (most often verbs) may trigger the same type of event, and conversely, the same word (verb) can evoke differ-\n5We provide more details about the frameworks and their corresponding annotation schemes in Appendix A.\n6E.g., in the sentence: “The rules can also affect small businesses, which sometimes pay premiums tied to employees’ health status and claims history.”, affect and pay are event triggers of type STATE and OCCURRENCE, respectively.\n7The ACE annotations distinguish 34 trigger types (e.g., Business:Merge-Org, Justice:Trial-Hearing, Conflict:Attack) and 35 argument roles. Following previous work (Hsi et al., 2016), we conflate eight time-related argument roles - e.g., ‘Time-At-End’, ‘Time-Before’, ‘Time-At-Beginning’ - into a single ‘Time’ role in order to alleviate training data sparsity.\nent types of event schemata depending on the context. Adopting these tasks for evaluation thus tests whether leveraging fine-grained curated knowledge of verbs’ semantic-syntactic behaviour can improve pretrained LMs’ reasoning about event-triggering predicates and their arguments.\nModel Configurations. For each task, we compare the performance of the underlying “vanilla” BERT-based model (see §2.3) against its variant with an added VN-Adapter or FN-Adapter8 (see §2.2) in two regimes: (a) full fine-tuning, and (b) task adapter (TA) fine-tuning (see Figure 1). To ensure that any performance gains are not merely due to increased parameter capacity offered by the adapters, we also evaluate a variant where we replace the verb adapter with a randomly initialised adapter of the same size (+Random). Additionally, we examine the impact of increasing the capacity of the trainable task adapter by replacing it with a\n‘Double Task Adapter’ (2TA), i.e., a task adapter with double the number of trainable parameters compared to the base architecture from §2.2. Finally, we compare the VN/FN-Adapter approach with a computationally more expensive alternative method of injecting external verb knowledge, sequential fine-tuning, where the full BERT is first fine-tuned on the FN/VN data (as in 2.2) and then on the task (see Appendix D for details).\nTraining Details: Verb Adapters. We experimented with k ∈ {2, 3, 4} negative examples and the following combinations of controlled (c) and randomly (r) sampled negatives (see §2.2): k = 2 [cc], k = 3 [ccr], k = 4 [ccrr]. In our preliminary experiments we found k = 3 [ccr] to yield bestperforming adapters. The evaluation and analysis presented in §4 are thus based on this setup. Our VN- and FN-Adapters are injected into the BERT Base cased model: the details on adapter training and hyperparameter search are in Appendix B.\nDownstream Task Fine-Tuning. In downstream fine-tuning on TempEval, we train for 10 epochs in batches of size 32, with a learning rate 1e− 4 and maximum input sequence length of T = 128 WordPiece tokens. For ACE, in light of a greater data sparsity,9 we search for optimal hyperparameters\n8We also experimented with inserting both verb adapters simultaneously; however, this resulted in weaker downstream performance than adding each separately, a likely product of the partly redundant, partly conflicting information encoded in these adapters (see §2.1 for comparison of VN and FN).\n9Most event types (≈ 70%) have fewer than 100 labeled instances, and three have fewer than 10 (Liu et al., 2018).\nfor each language and evaluation setup from the following grid: learning rate l ∈ {1e− 5, 1e− 6}, epochs n ∈ {3, 5, 10, 25, 50}, batch b ∈ {8, 16} (maximum input sequence length T = 128).\nTransfer Experiments in zero-shot (ZS) setups are based on mBERT, to which we add the VN- or FNAdapter trained on the English VN/FN data. We train the model on English training data available for each task, and evaluate it on the target-language test set. For the VTRANS approach (§2.4), we use language-specific BERT models available for our target languages, and leverage target-language adapters trained on translated and automatically refined verb pairs. The model, with or without the target-language VN-/FN-Adapter, is trained and evaluated on the training and test data available in the language. We carry out the procedure for three target languages (see Table 1). We use the same negative sampling parameter configuration proven strongest in our English experiments (k = 3 [ccr])."
+    }, {
+      "heading" : "4 Results and Discussion",
+      "text" : "English Event Processing. Table 2 shows the performance on English Task 1 (TempEval) and Task 2 (ACE). First, we note that the computationally more efficient setup with a dedicated task adapter (TA) yields higher absolute scores compared to full fine-tuning (FFT) on TempEval. When the underlying BERT is frozen along with the added FN-/VN-Adapter, the TA is enforced to encode additional task-specific knowledge into its parameters, beyond what is provided in the verb adapter. This yields two strongest results overall from the +FN/VN setups. On ACE, the primacy of TA-based training is overturned in favour of FFT. Encouragingly, boosts provided by verb adapters are visible regardless of the chosen task fine-tuning regime.\nWe notice consistent statistically significant10\nimprovements in the +VN setup, although the performance of the TA-based setups clearly suffers in argument (ARG) tasks due to decreased trainable parameter capacity. Lack of visible improvements from the Random Adapter supports the interpretation that performance gains indeed stem from the added useful ‘non-random’ signal in the verb adapters. In addition, we verify how our principal setup with added adapter modules compares to an alternative established approach, sequential finetuning (+FN/VNseq). In TempEval, we note that\n10We test significance with the Student’s t-test with a significance value set at α = 0.05 for sets of model F1 scores.\nfine-tuning all model parameters on VN/FN data allows retrieving more additional verb knowledge beneficial for task performance than adding smaller pre-trained adapters on top of the underlying model. However, FN/VNseq scores are still inferior to the results achieved in the TA-based +FN/VN setup. In ACE, the FN/VNseq results in trigger tasks are weaker than those achieved through the addition of self-contained knowledge adapters, however, they offer additional boosts in argument tasks.\nMultilingual Event Processing. Table 3 compares the performance of zero-shot (ZS) transfer and monolingual target training (via VTRANS) on TempEval in Spanish and Chinese. For both, the addition of the FN-Adapter in the TA-based setup boosts ZS transfer. The benefits extend to the FFT setup in Chinese, achieving the top score overall.\nIn monolingual evaluation, we observe consistent gains from the added transferred knowledge via VTRANS in Spanish. In Chinese performance boosts come from the transferred VN-style class membership information (+VN). This suggests that even the noisily translated verb pairs carry enough useful signal through to the target language. To tease apart the contribution of the language-specific encoders and transferred verb knowledge, we carry out an additional monolingual evaluation substituting the target-language BERT with mBERT, trained on (noisy) target language verb signal (ESMBERT/ZH-MBERT). Although mBERT scores are lower than monolingual BERTs in absolute terms, the use of the transferred verb knowledge helps reduce the gap between the models, with gains achieved over the baselines in Spanish.11\nIn ACE, the top scores are achieved in the monolingual FFT setting; as with English, keeping the full capacity of BERT parameters unfrozen noticeably helps performance.12 In Arabic, FN knowledge provides performance boosts across the four tasks and with both the zero-shot (ZS) and monolingual (VTRANS) transfer approaches, whereas the addition of the VN adapter boosts scores in ARG tasks. The usefulness of FN knowledge extends to zero-shot transfer in Chinese, and both adapters benefit the ARG tasks in the monolingual (VTRANS)\n11Due to analogous patterns in relative scores of mBERT and monolingual BERTs in monolingual ACE evaluation, we show the VTRANS mBERT results in ACE in Appendix E.\n12This is especially the case in ARG tasks, where the TAbased setup fails to achieve meaningful improvements over zero, even with extended training up to 100 epochs. Due to the computational burden of such long training, the results in this setup are limited to trigger tasks (after 50 epochs).\ntransfer setup. Notably, in zero-shot transfer, we observe that the highest scores are achieved in the task adapter (TA) fine-tuning, where the inclusion of the verb adapters offers additional gains. Overall, however, the argument tasks elude the restricted capacity of the TA-based setup, with very low scores.\nAdditionally, in Appendix E we show the results with sequential fine-tuning. Similarly to our EN results (Table 2), we observe advantages of using the full capacity of BERT parameters to encode verb knowledge in most setups in TempEval, while the comparison to the adapter-based approach is less clear-cut on ACE. In sum, sequential fine-tuning is a strong verb knowledge injection variant; however, it is computationally more expensive and less\nportable. The modular and efficient adapter-based approach therefore presents an attractive alternative, while offering competitive task performance. Crucially, the strong results from the sequential setup further corroborate our core finding that external lexical verb information is indeed beneficial for event processing tasks across the board.\nZero-shot Transfer vs Monolingual Training. The results reveal a considerable gap between the performance of ZS transfer versus monolingual finetuning. The event extraction tasks pose a significant challenge to zero-shot transfer via mBERT; however, mBERT exhibits much more robust performance in the monolingual setup, with available target-language training data for event tasks. In\nthe latter, mBERT trails language-specific BERTs by less than 5 points (Table 3). This is encouraging, given that monolingual pretrained LMs currently exist only for a small set of high-resource languages. For all other languages – should there be language-specific event task data – one can leverage mBERT. Moreover, mBERT’s performance is further improved by the inclusion of transferred verb knowledge via VTRANS: in Spanish, where its typological closeness to English renders direct transfer of semantic-syntactic information viable, the addition of VTRANS-based verb adapters yields significant gains both in the FFT and the TA setup.13 These results confirm the effectiveness of lexical knowledge transfer suggested previously in the work on semantic specialisation of static word vectors (Ponti et al., 2019; Wang et al., 2020b).\nDouble Task Adapter. Promisingly, we see in Table 5 that the relative performance gains from FN/VN adapters are preserved regardless of the added trainable task adapter capacity. As expected, the increased task adapter size helps argument tasks in ACE, where verb adapters produce additional gains. Overall, this suggests that verb adapters indeed encode additional, non-redundant information beyond what is offered by the pretrained model alone, and boost the dedicated task adapter.\nCleanliness of Verb Knowledge. Despite the promising results with the VTRANS approach, there are still fundamental limitations: (1) noisy translation based on cross-lingual semantic similarity may already break the VerbNet class membership alignment; and (2) the language-specificity of verb classes due to which they cannot be directly ported to another language without adjustments.14\nThe fine-grained class divisions and exact class membership in VN may be too English-specific to allow direct automatic translation. On the contrary, semantically-driven FrameNet lends itself better to cross-lingual transfer: we report higher average gains in cross-lingual setups with the FN-Adapter.\nTo quickly verify if the noisy direct transfer curbs the usefulness of injected knowledge, we evaluate the injection of clean verb knowledge from a small lexical resource available in Spanish: we train an ES FN-Adapter on top of ES-BERT on\n13We noted analogous positive effects on performance of the more powerful XLM-R Large model (Appendix E).\n14This is in contrast to the proven cross-lingual portability of synonymy and antonymy relations shown in previous work on semantic specialisation transfer (Mrkšić et al., 2017; Ponti et al., 2019), which rely on semantics alone.\n2,866 verb pairs derived from its FrameNet (Subirats and Sato, 2004). The results (Appendix E) reveal that, despite having 12 times fewer positive examples for training the verb adapter compared to VTRANS, the ‘native’ ES FN-Adapter offers gains between +0.2 and +0.4 points over VTRANS, compensating the limited coverage with gold standard accuracy. This suggests that work on optimising and accelerating resource creation merits future research efforts on a par with modeling work."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "Event Extraction. The cost and complexity of event annotation requires robust transfer solutions capable of making fine-grained predictions in the face of data scarcity. Traditional event extraction methods relied on hand-crafted, language-specific features (Ahn, 2006; Gupta and Ji, 2009; Llorens et al., 2010; Hong et al., 2011; Li et al., 2013; Glavaš and Šnajder, 2015) (e.g., POS tags, entity knowledge), which limited their generalisation ability and effectively prevented language transfer.\nMore recent approaches commonly resorted to word embedding input and neural text encoders such as recurrent nets (Nguyen et al., 2016; Duan et al., 2017; Sha et al., 2018) and convolutional nets (Chen et al., 2015; Nguyen and Grishman, 2015),\nas well as graph neural networks (Nguyen and Grishman, 2018; Yan et al., 2019) and adversarial networks (Hong et al., 2018; Zhang et al., 2019). Most recent empirical advancements in event trigger and argument extraction tasks stem from fine-tuning of LM-pretrained Transformer networks (Yang et al., 2019a; Wang et al., 2019; M’hamdi et al., 2019; Wadden et al., 2019; Liu et al., 2020).\nLimited training data nonetheless remains an obstacle, especially when facing previously unseen event types. The alleviation of such data scarcity issues was attempted through data augmentation – automatic data annotation (Chen et al., 2017; Zheng, 2018; Araki and Mitamura, 2018) and bootstrapping for training data generation (Ferguson et al., 2018; Wang et al., 2019). The recent release of the large English event detection dataset MAVEN (Wang et al., 2020c), with annotations of event triggers only, partially remedies for English data scarcity. MAVEN also demonstrates that even the state-of-the-art Transformer models fail to yield satisfying event detection performance in the general domain. The fact that it is unlikely to expect datasets of similar size for other event extraction tasks and especially for other languages only emphasises the need for external event-related knowledge and transfer learning approaches, such as the ones introduced in this work.\nSemantic Specialisation. Representation spaces induced through self-supervised objectives from large corpora, be it the word embedding spaces (Mikolov et al., 2013; Bojanowski et al., 2017) or those spanned by LM-pretrained Transformers (Devlin et al., 2019; Liu et al., 2019), encode only distributional knowledge. A large body of work focused on semantic specialisation of such distributional spaces by injecting lexico-semantic knowledge from external resources (e.g., WordNet (Fellbaum, 1998), BabelNet (Navigli and Ponzetto, 2010) or ConceptNet (Liu and Singh, 2004)) in the form of lexical constraints (Faruqui et al., 2015; Mrkšić et al., 2017; Glavaš and Vulić, 2018b; Kamath et al., 2019; Vulić et al., 2021).\nJoint specialisation models (Yu and Dredze, 2014; Lauscher et al., 2020b; Levine et al., 2020, inter alia) train the representation space from scratch on the large corpus, but augment the selfsupervised training objective with an additional objective based on external lexical constraints. Lauscher et al. (2020b) add to the Masked LM (MLM) and next sentence prediction (NSP) pre-\ntraining objectives of BERT (Devlin et al., 2019) an objective that predicts pairs of (near-)synonyms, aiming to improve word-level semantic similarity in BERT’s representation space. In a similar vein, Levine et al. (2020) add the objective that predicts WordNet supersenses. While joint specialisation models allow the external knowledge to shape the representation space from the very beginning of the distributional training, this also means that any change in lexical constraints implies a new, computationally expensive pretraining from scratch.\nRetrofitting and post-specialisation methods (Faruqui et al., 2015; Mrkšić et al., 2017; Vulić et al., 2018; Ponti et al., 2018; Glavaš and Vulić, 2019; Lauscher et al., 2020a; Wang et al., 2020a), in contrast, start from a pretrained representation space (word embedding space or a pretrained encoder) and fine-tune it using external lexicosemantic knowledge. Wang et al. (2020a) fine-tune the pre-trained RoBERTa (Liu et al., 2019) with lexical constraints obtained automatically via dependency parsing, whereas Lauscher et al. (2020a) use lexical constraints derived from ConceptNet to inject knowledge into BERT: both adopt adapterbased fine-tuning, storing the external knowledge in a separate set of parameters. Our work adopts a similar adapter-based specialisation approach, however, focusing on event-oriented downstream tasks, and knowledge from VerbNet and FrameNet."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "We investigated the potential of leveraging knowledge about semantic-syntactic behaviour of verbs to improve the capacity of large pretrained models to reason about events in diverse languages. We proposed an auxiliary pretraining task to inject VerbNet- and FrameNet-based lexical verb knowledge into dedicated verb adapter modules. We demonstrated that state-of-the-art pretrained models still benefit from the gold standard linguistic knowledge stored in lexical resources, even those with limited coverage. Crucially, we showed that the benefits of the knowledge from resourcerich languages can be extended to other, resourceleaner languages through translation-based transfer of verb class/frame membership information.\nAcknowledgements. This work is supported by the ERC Consolidator Grant LEXICAL (no 648909) awarded to AK. The work of GG is supported by the Baden-Württemberg Stiftung (Eliteprogramm, AGREE grant)."
+    }, {
+      "heading" : "A Frameworks for Annotating Event Expressions",
+      "text" : "Two prominent frameworks for annotating event expressions are TimeML (Pustejovsky et al., 2003, 2005) and the Automatic Content Extraction (ACE) (Doddington et al., 2004). TimeML was developed as a rich markup language for annotating event and temporal expressions, addressing the problems of identifying event predicates and anchoring them in time, determining their relative ordering and temporal persistence (i.e., how long the consequences of an event last), as well as tackling contextually underspecified temporal expressions (e.g., last month, two days ago). Currently available English corpora annotated based on the TimeML scheme include the TimeBank corpus (Pustejovsky et al., 2003), a human annotated collection of 183 newswire texts (including 7,935 annotated EVENTS, comprising both punctual occurrences and states which extend over time) and the AQUAINT corpus, with 80 newswire documents grouped by their covered stories, which allows tracing progress of events through time (Derczynski, 2017). Both corpora, supplemented with a large, automatically TimeMLannotated training corpus are used in the TempEval3 task (Verhagen and Pustejovsky, 2008; UzZaman et al., 2013), which targets automatic identification of temporal expressions, events, and temporal relations.\nThe ACE dataset provides annotations for entities, the relations between them, and for events in which they participate in newspaper and newswire text. For each event, it identifies its lexical instantiation, i.e., the trigger, and its participants, i.e., the arguments, and the roles they play in the event. For example, an event type “Conflict:Attack” (“It could swell to as much as $500 billion if we go to war in Iraq.”), triggered by the noun “war”, involves two arguments, the “Attacker” (“we”) and the “Place” (“Iraq”), each of which is annotated with an entity label (“GPE:Nation”)."
+    }, {
+      "heading" : "B Adapter Training and Hyperparameter Search",
+      "text" : "Following Pfeiffer et al. (2020a), we train the adapters for 30 epochs using the Adam algorithm (Kingma and Ba, 2015), a learning rate of 1e− 4 and the adapter reduction factor of 16 (Pfeiffer et al., 2020a), i.e., d = 48. Our batch size is 64, comprising 16 positive examples and 3× 16 = 48 negative examples (since k = 3).\nWe experimented with n ∈ {10, 15, 20, 30} training epochs, as well as an early stopping approach using validation loss on a small held-out validation set as the stopping criterion, with a patience argument p ∈ {2, 5}; we found the adapters trained for the full 30 epochs to perform most consistently across tasks.\nThe size of the training batch varies based on the value of k negative examples generated from the starting batch B of positive pairs: e.g., by generating k = 3 negative examples for each of 8 positive examples in the starting batch we end up with a training batch of total size 8+3∗8 = 32. We experimented with starting batches of size B ∈ {8, 16} and found the configuration k = 3, B = 16 to yield the strongest results (reported in this paper).\nC VTRANS: Technical Details\nFirst, we automatically translate the verbs by retrieving their nearest neighbour in the target language from the shared cross-lingual embedding space, aligned using the Relaxed Cross-domain Similarity Local Scaling (RCSLS) model of Joulin et al. (2018). Such translation procedure is liable to error due to an imperfect cross-lingual embedding space as well as polysemy and out-of-context word translation. We dwarf these issues in the second step, where we purify the set of noisily translated target language verb pairs by means of a neural lexico-semantic relation prediction model, the Specialization Tensor Model (Glavaš and Vulić, 2018a), here adjusted for binary classification. We train the STM for the same task as verb adapters during verb knowledge injection (§2.2): to distinguish (positive) verb pairs from the same English VN class/FN frame from those from different VN classes/FN frames. In training, the input to STM are static word embeddings of English verbs taken from a shared cross-lingual word embedding space. We then make predictions in the target language by feeding vectors of target language verbs (from noisily translated verb pairs), taken from the same\ncross-lingual word embedding space, as input for STM. We provide more details on STM training in what follows.\nSTM Training Details. We train the STM using the sets of English positive examples from each lexical resource (Table 1). Negative examples are generated using controlled sampling (see §2.2), using a k = 2 [cc] configuration, ensuring that generated negatives do not constitute positive constraints in the global set. We use the pre-trained 300-dimensional static distributional word vectors computed on Wikipedia data using the FASTTEXT model (Bojanowski et al., 2017), cross-lingually aligned using the RCSLS model of Joulin et al. (2018), to induce the shared cross-lingual embedding space for each source-target language pair. The STM is trained using the Adam optimizer (Kingma and Ba, 2015), a learning rate l = 1e− 4, a batch size of 32 (positive and negative) training examples, for a maximum of 10 iterations. We set the values of other training hyperparameters as in Ponti et al. (2019), i.e., the number of specialisation tensor slices K = 5 and the size of the specialised vectors h = 300."
+    }, {
+      "heading" : "D Sequential Fine-tuning Details",
+      "text" : "In the sequential fine-tuning setup, we first train the full cased variant of the BERT-based model on the VN/FN data. We generate negative examples using the strongest performing configuration of sampling parameters: k = 3 [ccr]. We train the model for 4 epochs using the Adam algorithm (Kingma and Ba, 2015), a learning rate of 2e− 5 with 1000 warmup steps and a batch size of 64. Next, we fine-tune the VN/FN-pretrained model on the two downstream tasks. For Task 1, we train for 10 epochs in batches of 32 and a learning rate of 1e−4 and a maximum input sequence T = 128. In Task 2, we find an optimal hyperparameter configuration for each language-setup combination from the grid: learning rate l ∈ {1e− 5, 1e− 6}, epochs n ∈ {3, 5, 10, 25, 50}, batch size b ∈ {8, 16}, with maximum input sequence length of T = 128."
+    }, {
+      "heading" : "E Additional Results",
+      "text" : "Table 9 presents the results of monolingual evaluation substituting the monolingual target language BERT with the massively multilingual encoder, with or without the FN/VN adapters trained on (noisy) target language verb signal (ARMBERT/ZH-MBERT). Table 10 provides addi-\ntional results for Spanish Task 1 (TempEval) using an alternative multilingual encoder, XLM-R (large) (Conneau et al., 2020), as the underlying model (trained with the following hyperparameters: learning rate l = 2e − 5, batch size b ∈ {16, 32}). Tables 8 and 7 include the results for the sequential fine-tuning setup for Task 1 (TempEval) and Task 2 (ACE), respectively. Table 11 shows the results on Spanish TempEval for different configurations of Spanish BERT with an added Spanish FN-Adapter trained on Spanish FrameNet data."
+    } ],
+    "references" : [ {
+      "title" : "The stages of event extraction",
+      "author" : [ "David Ahn." ],
+      "venue" : "Proceedings of the Workshop on Annotating and Reasoning about Time and Events, pages 1–8, Sydney, Australia. Association for Computational Linguistics.",
+      "citeRegEx" : "Ahn.,? 2006",
+      "shortCiteRegEx" : "Ahn.",
+      "year" : 2006
+    }, {
+      "title" : "Open-domain event detection using distant supervision",
+      "author" : [ "Jun Araki", "Teruko Mitamura." ],
+      "venue" : "Proceedings of the 27th International Conference on Computational Linguistics, pages 878–891, Santa Fe, New Mexico, USA. Association for Computa-",
+      "citeRegEx" : "Araki and Mitamura.,? 2018",
+      "shortCiteRegEx" : "Araki and Mitamura.",
+      "year" : 2018
+    }, {
+      "title" : "Episodic memory in lifelong language learning",
+      "author" : [ "Cyprien de Masson d'Autume", "Sebastian Ruder", "Lingpeng Kong", "Dani Yogatama." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 32, pages 13143–13152, Vancouver, Canada.",
+      "citeRegEx" : "d.Autume et al\\.,? 2019",
+      "shortCiteRegEx" : "d.Autume et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The Berkeley FrameNet project",
+      "author" : [ "Collin F. Baker", "Charles J. Fillmore", "John B. Lowe." ],
+      "venue" : "Proceedings of COLING, pages 86–90, Montreal, Quebec, Canada.",
+      "citeRegEx" : "Baker et al\\.,? 1998",
+      "shortCiteRegEx" : "Baker et al\\.",
+      "year" : 1998
+    }, {
+      "title" : "Climbing towards NLU: On meaning, form, and understanding in the age of data",
+      "author" : [ "Emily M. Bender", "Alexander Koller." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 5185–5198, Online. As-",
+      "citeRegEx" : "Bender and Koller.,? 2020",
+      "shortCiteRegEx" : "Bender and Koller.",
+      "year" : 2020
+    }, {
+      "title" : "A FrameNet for Danish",
+      "author" : [ "Eckhard Bick." ],
+      "venue" : "Proceedings of the 18th Nordic Conference of Computational Linguistics (NODALIDA 2011), pages 34– 41, Riga, Latvia. Northern European Association for Language Technology (NEALT).",
+      "citeRegEx" : "Bick.,? 2011",
+      "shortCiteRegEx" : "Bick.",
+      "year" : 2011
+    }, {
+      "title" : "Enriching word vectors with subword information",
+      "author" : [ "Piotr Bojanowski", "Edouard Grave", "Armand Joulin", "Tomas Mikolov." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 5:135–146.",
+      "citeRegEx" : "Bojanowski et al\\.,? 2017",
+      "shortCiteRegEx" : "Bojanowski et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "RST Discourse Treebank LDC2002T07",
+      "author" : [ "Lynn Carlson", "Daniel Marcu", "Mary Ellen Okurowski." ],
+      "venue" : "Technical report, Philadelphia: Linguistic Data Consortium.",
+      "citeRegEx" : "Carlson et al\\.,? 2002",
+      "shortCiteRegEx" : "Carlson et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Automatically labeled data generation for large scale event extraction",
+      "author" : [ "Yubo Chen", "Shulin Liu", "Xiang Zhang", "Kang Liu", "Jun Zhao." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers),",
+      "citeRegEx" : "Chen et al\\.,? 2017",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Event extraction via dynamic multipooling convolutional neural networks",
+      "author" : [ "Yubo Chen", "Liheng Xu", "Kang Liu", "Daojian Zeng", "Jun Zhao." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th Interna-",
+      "citeRegEx" : "Chen et al\\.,? 2015",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Unsupervised cross-lingual representation learning at scale",
+      "author" : [ "Alexis Conneau", "Kartikay Khandelwal", "Naman Goyal", "Vishrav Chaudhary", "Guillaume Wenzek", "Francisco Guzmán", "Edouard Grave", "Myle Ott", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "In",
+      "citeRegEx" : "Conneau et al\\.,? 2020",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Automatically ordering events and times in text",
+      "author" : [ "Leon R.A. Derczynski." ],
+      "venue" : "Springer, Berlin.",
+      "citeRegEx" : "Derczynski.,? 2017",
+      "shortCiteRegEx" : "Derczynski.",
+      "year" : 2017
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The automatic content extraction (ACE) program – tasks, data, and evaluation",
+      "author" : [ "George Doddington", "Alexis Mitchell", "Mark Przybocki", "Lance Ramshaw", "Stephanie Strassel", "Ralph Weischedel." ],
+      "venue" : "Proceedings of the Fourth International Conference",
+      "citeRegEx" : "Doddington et al\\.,? 2004",
+      "shortCiteRegEx" : "Doddington et al\\.",
+      "year" : 2004
+    }, {
+      "title" : "Exploiting document level information to improve event detection via recurrent neural networks",
+      "author" : [ "Shaoyang Duan", "Ruifang He", "Wenli Zhao." ],
+      "venue" : "Proceedings of the Eighth International Joint Conference on Natural Language Processing (Volume 1:",
+      "citeRegEx" : "Duan et al\\.,? 2017",
+      "shortCiteRegEx" : "Duan et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Retrofitting word vectors to semantic lexicons",
+      "author" : [ "Manaal Faruqui", "Jesse Dodge", "Sujay Kumar Jauhar", "Chris Dyer", "Eduard Hovy", "Noah A. Smith." ],
+      "venue" : "Proceedings of the 2015 Conference of the North American Chapter of the Association for Computa-",
+      "citeRegEx" : "Faruqui et al\\.,? 2015",
+      "shortCiteRegEx" : "Faruqui et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "WordNet: An Electronic Lexical Database",
+      "author" : [ "Christiane Fellbaum", "editor" ],
+      "venue" : null,
+      "citeRegEx" : "Fellbaum and editor.,? \\Q1998\\E",
+      "shortCiteRegEx" : "Fellbaum and editor.",
+      "year" : 1998
+    }, {
+      "title" : "Semi-supervised event extraction with paraphrase clusters",
+      "author" : [ "James Ferguson", "Colin Lockard", "Daniel Weld", "Hannaneh Hajishirzi." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics:",
+      "citeRegEx" : "Ferguson et al\\.,? 2018",
+      "shortCiteRegEx" : "Ferguson et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Frame semantics and the nature of language",
+      "author" : [ "Charles J. Fillmore." ],
+      "venue" : "Annals of the New York Academy of Sciences: Conference on the Origin and Development of Language and Speech, volume 280, pages 20–32, New York, New York.",
+      "citeRegEx" : "Fillmore.,? 1976",
+      "shortCiteRegEx" : "Fillmore.",
+      "year" : 1976
+    }, {
+      "title" : "The need for a frame semantics in linguistics",
+      "author" : [ "Charles J. Fillmore." ],
+      "venue" : "Statistical Methods in Linguistics, pages 5–29. Ed. Hans Karlgren. Scriptor.",
+      "citeRegEx" : "Fillmore.,? 1977",
+      "shortCiteRegEx" : "Fillmore.",
+      "year" : 1977
+    }, {
+      "title" : "Frame semantics",
+      "author" : [ "Charles J. Fillmore." ],
+      "venue" : "Linguistics in the Morning Calm, pages 111–137. Ed. The Linguistic Society of Korea. Hanshin Publishing Co.",
+      "citeRegEx" : "Fillmore.,? 1982",
+      "shortCiteRegEx" : "Fillmore.",
+      "year" : 1982
+    }, {
+      "title" : "Semantic specialization of distributional word vectors",
+      "author" : [ "Goran Glavaś", "Edoardo Maria Ponti", "Ivan Vulić." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Nat-",
+      "citeRegEx" : "Glavaś et al\\.,? 2019",
+      "shortCiteRegEx" : "Glavaś et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Construction and evaluation of event graphs",
+      "author" : [ "Goran Glavaš", "Jan Šnajder." ],
+      "venue" : "Natural Language Engineering, 21(4):607–652.",
+      "citeRegEx" : "Glavaš and Šnajder.,? 2015",
+      "shortCiteRegEx" : "Glavaš and Šnajder.",
+      "year" : 2015
+    }, {
+      "title" : "Discriminating between lexico-semantic relations with the specialization tensor model",
+      "author" : [ "Goran Glavaš", "Ivan Vulić." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human",
+      "citeRegEx" : "Glavaš and Vulić.,? 2018a",
+      "shortCiteRegEx" : "Glavaš and Vulić.",
+      "year" : 2018
+    }, {
+      "title" : "Explicit retrofitting of distributional word vectors",
+      "author" : [ "Goran Glavaš", "Ivan Vulić." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 34–45, Melbourne, Australia. Asso-",
+      "citeRegEx" : "Glavaš and Vulić.,? 2018b",
+      "shortCiteRegEx" : "Glavaš and Vulić.",
+      "year" : 2018
+    }, {
+      "title" : "Generalized tuning of distributional word vectors for monolingual and cross-lingual lexical entailment",
+      "author" : [ "Goran Glavaš", "Ivan Vulić." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 4824–4830, Flo-",
+      "citeRegEx" : "Glavaš and Vulić.,? 2019",
+      "shortCiteRegEx" : "Glavaš and Vulić.",
+      "year" : 2019
+    }, {
+      "title" : "Predicting unknown time arguments based on cross-event propagation",
+      "author" : [ "Prashant Gupta", "Heng Ji." ],
+      "venue" : "Proceedings of the ACL-IJCNLP 2009 Conference Short Papers, pages 369–372, Suntec, Singapore. Association for Computational Linguis-",
+      "citeRegEx" : "Gupta and Ji.,? 2009",
+      "shortCiteRegEx" : "Gupta and Ji.",
+      "year" : 2009
+    }, {
+      "title" : "A joint many-task model: Growing a neural network for multiple NLP tasks",
+      "author" : [ "Kazuma Hashimoto", "Caiming Xiong", "Yoshimasa Tsuruoka", "Richard Socher." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Hashimoto et al\\.,? 2017",
+      "shortCiteRegEx" : "Hashimoto et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Gaussian error linear units (GELUs)",
+      "author" : [ "Dan Hendrycks", "Kevin Gimpel." ],
+      "venue" : "CoRR, abs/1606.08415.",
+      "citeRegEx" : "Hendrycks and Gimpel.,? 2016",
+      "shortCiteRegEx" : "Hendrycks and Gimpel.",
+      "year" : 2016
+    }, {
+      "title" : "A structural probe for finding syntax in word representations",
+      "author" : [ "John Hewitt", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language",
+      "citeRegEx" : "Hewitt and Manning.,? 2019",
+      "shortCiteRegEx" : "Hewitt and Manning.",
+      "year" : 2019
+    }, {
+      "title" : "Using cross-entity inference to improve event extraction",
+      "author" : [ "Yu Hong", "Jianfeng Zhang", "Bin Ma", "Jianmin Yao", "Guodong Zhou", "Qiaoming Zhu." ],
+      "venue" : "Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: Human",
+      "citeRegEx" : "Hong et al\\.,? 2011",
+      "shortCiteRegEx" : "Hong et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "Self-regulation: Employing a generative adversarial network to improve event detection",
+      "author" : [ "Yu Hong", "Wenxuan Zhou", "Jingli Zhang", "Guodong Zhou", "Qiaoming Zhu." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computa-",
+      "citeRegEx" : "Hong et al\\.,? 2018",
+      "shortCiteRegEx" : "Hong et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Parameter-efficient transfer learning for NLP",
+      "author" : [ "Neil Houlsby", "Andrei Giurgiu", "Stanislaw Jastrzebski", "Bruna Morrone", "Quentin De Laroussilhe", "Andrea Gesmundo", "Mona Attariyan", "Sylvain Gelly." ],
+      "venue" : "Proceedings of the 36th International Conference",
+      "citeRegEx" : "Houlsby et al\\.,? 2019",
+      "shortCiteRegEx" : "Houlsby et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Leveraging multilingual training for limited resource event extraction",
+      "author" : [ "Andrew Hsi", "Yiming Yang", "Jaime Carbonell", "Ruochen Xu." ],
+      "venue" : "Proceedings of COLING 2016, the 26th International Conference on Computational Linguistics: Techni-",
+      "citeRegEx" : "Hsi et al\\.,? 2016",
+      "shortCiteRegEx" : "Hsi et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Semantic structures, volume 18",
+      "author" : [ "Ray Jackendoff." ],
+      "venue" : "MIT press.",
+      "citeRegEx" : "Jackendoff.,? 1992",
+      "shortCiteRegEx" : "Jackendoff.",
+      "year" : 1992
+    }, {
+      "title" : "Loss in translation: Learning bilingual word mapping with a retrieval criterion",
+      "author" : [ "Armand Joulin", "Piotr Bojanowski", "Tomas Mikolov", "Hervé Jégou", "Edouard Grave." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Lan-",
+      "citeRegEx" : "Joulin et al\\.,? 2018",
+      "shortCiteRegEx" : "Joulin et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Specializing distributional vectors of all words for lexical entailment",
+      "author" : [ "Aishwarya Kamath", "Jonas Pfeiffer", "Edoardo Maria Ponti", "Goran Glavaš", "Ivan Vulić." ],
+      "venue" : "Proceedings of the 4th Workshop on Representation Learning for NLP (RepL4NLP-",
+      "citeRegEx" : "Kamath et al\\.,? 2019",
+      "shortCiteRegEx" : "Kamath et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P. Kingma", "Jimmy Ba." ],
+      "venue" : "Proceedings of International Conference on Learning Representations (ICLR), San Diego, CA, USA.",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "Extending VerbNet with novel verb classes",
+      "author" : [ "Karin Kipper", "Anna Korhonen", "Neville Ryant", "Martha Palmer." ],
+      "venue" : "Proceedings of the Fifth International Conference on Language Resources and Evaluation (LREC’06), pages 1027–1032, Genoa,",
+      "citeRegEx" : "Kipper et al\\.,? 2006",
+      "shortCiteRegEx" : "Kipper et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "VerbNet: A broadcoverage, comprehensive verb lexicon",
+      "author" : [ "Karin Kipper Schuler." ],
+      "venue" : "Ph.D. thesis, University of Pennsylvania.",
+      "citeRegEx" : "Schuler.,? 2005",
+      "shortCiteRegEx" : "Schuler.",
+      "year" : 2005
+    }, {
+      "title" : "Conditional random fields: Probabilistic models for segmenting and labeling sequence data",
+      "author" : [ "John Lafferty", "Andrew McCallum", "Fernando CN Pereira." ],
+      "venue" : "Proceedings of International Conference on Machine Learning (ICML-2001), pages",
+      "citeRegEx" : "Lafferty et al\\.,? 2001",
+      "shortCiteRegEx" : "Lafferty et al\\.",
+      "year" : 2001
+    }, {
+      "title" : "Common sense or world knowledge? Investigating adapter-based knowledge injection into pretrained transformers",
+      "author" : [ "Anne Lauscher", "Olga Majewska", "Leonardo F.R. Ribeiro", "Iryna Gurevych", "Nikolai Rozanov", "Goran Glavaš." ],
+      "venue" : "Proceed-",
+      "citeRegEx" : "Lauscher et al\\.,? 2020a",
+      "shortCiteRegEx" : "Lauscher et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Specializing unsupervised pretraining models for word-level semantic similarity",
+      "author" : [ "Anne Lauscher", "Ivan Vulić", "Edoardo Maria Ponti", "Anna Korhonen", "Goran Glavaš." ],
+      "venue" : "Proceedings of the 28th International Conference on Computational Linguistics,",
+      "citeRegEx" : "Lauscher et al\\.,? 2020b",
+      "shortCiteRegEx" : "Lauscher et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "English verb classes and alternations: A preliminary investigation",
+      "author" : [ "Beth Levin." ],
+      "venue" : "University of Chicago Press.",
+      "citeRegEx" : "Levin.,? 1993",
+      "shortCiteRegEx" : "Levin.",
+      "year" : 1993
+    }, {
+      "title" : "SenseBERT: Driving some sense into BERT",
+      "author" : [ "Yoav Levine", "Barak Lenz", "Or Dagan", "Ori Ram", "Dan Padnos", "Or Sharir", "Shai Shalev-Shwartz", "Amnon Shashua", "Yoav Shoham." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for",
+      "citeRegEx" : "Levine et al\\.,? 2020",
+      "shortCiteRegEx" : "Levine et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Joint event extraction via structured prediction with global features",
+      "author" : [ "Qi Li", "Heng Ji", "Liang Huang." ],
+      "venue" : "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 73–82, Sofia, Bulgaria.",
+      "citeRegEx" : "Li et al\\.,? 2013",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "ConceptNet – A practical commonsense reasoning tool-kit",
+      "author" : [ "Hugo Liu", "Push Singh." ],
+      "venue" : "BT Technology Journal, 22(4):211–226.",
+      "citeRegEx" : "Liu and Singh.,? 2004",
+      "shortCiteRegEx" : "Liu and Singh.",
+      "year" : 2004
+    }, {
+      "title" : "Event extraction as machine reading comprehension",
+      "author" : [ "Jian Liu", "Yubo Chen", "Kang Liu", "Wei Bi", "Xiaojiang Liu." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1641–1651, Online. Associa-",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Event detection via gated multilingual attention mechanism",
+      "author" : [ "Jian Liu", "Yubo Chen", "Kang Liu", "Jun Zhao." ],
+      "venue" : "Proceedings of the 32nd AAAI Conference on Artificial Intelligence, pages 4865–4872, New Orleans, Louisiana, USA.",
+      "citeRegEx" : "Liu et al\\.,? 2018",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "RoBERTa: A robustly optimized BERT pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "arXiv preprint arXiv:1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "TIPSem (English and Spanish): Evaluating CRFs and semantic roles in TempEval-2",
+      "author" : [ "Hector Llorens", "Estela Saquete", "Borja Navarro." ],
+      "venue" : "Proceedings of the 5th International Workshop on Semantic Evaluation, pages 284–291, Uppsala, Swe-",
+      "citeRegEx" : "Llorens et al\\.,? 2010",
+      "shortCiteRegEx" : "Llorens et al\\.",
+      "year" : 2010
+    }, {
+      "title" : "Investigating the crosslingual translatability of VerbNet-style classification",
+      "author" : [ "Olga Majewska", "Ivan Vulić", "Diana McCarthy", "Yan Huang", "Akira Murakami", "Veronika Laippala", "Anna Korhonen." ],
+      "venue" : "Language resources and evaluation, 52(3):771–799.",
+      "citeRegEx" : "Majewska et al\\.,? 2018",
+      "shortCiteRegEx" : "Majewska et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Right for the wrong reasons: Diagnosing syntactic heuristics in natural language inference",
+      "author" : [ "Tom McCoy", "Ellie Pavlick", "Tal Linzen." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 3428–3448,",
+      "citeRegEx" : "McCoy et al\\.,? 2019",
+      "shortCiteRegEx" : "McCoy et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Contextualized cross-lingual event trigger extraction with minimal resources",
+      "author" : [ "Meryem M’hamdi", "Marjorie Freedman", "Jonathan May" ],
+      "venue" : "In Proceedings of the 23rd Conference on Computational Natural Language Learning (CoNLL),",
+      "citeRegEx" : "M.hamdi et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "M.hamdi et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Distributed representations of words and phrases and their compositionality",
+      "author" : [ "Tomas Mikolov", "Ilya Sutskever", "Kai Chen", "Greg S Corrado", "Jeff Dean." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 26, pages 3111–3119, Lake Tahoe,",
+      "citeRegEx" : "Mikolov et al\\.,? 2013",
+      "shortCiteRegEx" : "Mikolov et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "The Penn Discourse Treebank",
+      "author" : [ "Eleni Miltsakaki", "Rashmi Prasad", "Aravind Joshi", "Bonnie Webber." ],
+      "venue" : "Proceedings of the Fourth International Conference on Language Resources and Evaluation (LREC’04), pages 2237–2240, Lisbon, Portugal. Eu-",
+      "citeRegEx" : "Miltsakaki et al\\.,? 2004",
+      "shortCiteRegEx" : "Miltsakaki et al\\.",
+      "year" : 2004
+    }, {
+      "title" : "Semantic specialization of distributional word vector spaces using monolingual and cross-lingual constraints",
+      "author" : [ "Nikola Mrkšić", "Ivan Vulić", "Diarmuid Ó Séaghdha", "Ira Leviant", "Roi Reichart", "Milica Gašić", "Anna Korhonen", "Steve Young." ],
+      "venue" : "Transactions",
+      "citeRegEx" : "Mrkšić et al\\.,? 2017",
+      "shortCiteRegEx" : "Mrkšić et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "BabelNet: Building a very large multilingual semantic network",
+      "author" : [ "Roberto Navigli", "Simone Paolo Ponzetto." ],
+      "venue" : "Proceedings of the 48th Annual Meeting of the Association for Computational Linguistics, pages 216–225, Uppsala, Sweden. Association for",
+      "citeRegEx" : "Navigli and Ponzetto.,? 2010",
+      "shortCiteRegEx" : "Navigli and Ponzetto.",
+      "year" : 2010
+    }, {
+      "title" : "Joint event extraction via recurrent neural networks",
+      "author" : [ "Thien Huu Nguyen", "Kyunghyun Cho", "Ralph Grishman." ],
+      "venue" : "Proceedings of the 2016 Conference of the North American Chapter of the Association for Computational Linguistics: Human",
+      "citeRegEx" : "Nguyen et al\\.,? 2016",
+      "shortCiteRegEx" : "Nguyen et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Event detection and domain adaptation with convolutional neural networks",
+      "author" : [ "Thien Huu Nguyen", "Ralph Grishman." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference",
+      "citeRegEx" : "Nguyen and Grishman.,? 2015",
+      "shortCiteRegEx" : "Nguyen and Grishman.",
+      "year" : 2015
+    }, {
+      "title" : "Graph convolutional networks with argument-aware pooling for event detection",
+      "author" : [ "Thien Huu Nguyen", "Ralph Grishman." ],
+      "venue" : "Proceedings of the 32nd AAAI Conference on Artificial Intelligence, volume 18, pages 5900–5907, New Orleans, Louisiana,",
+      "citeRegEx" : "Nguyen and Grishman.,? 2018",
+      "shortCiteRegEx" : "Nguyen and Grishman.",
+      "year" : 2018
+    }, {
+      "title" : "Probing neural network comprehension of natural language arguments",
+      "author" : [ "Timothy Niven", "Hung-Yu Kao." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 4658–4664, Florence, Italy. Association",
+      "citeRegEx" : "Niven and Kao.,? 2019",
+      "shortCiteRegEx" : "Niven and Kao.",
+      "year" : 2019
+    }, {
+      "title" : "Semantic annotations in Japanese FrameNet: Comparing frames in Japanese and English",
+      "author" : [ "Kyoko Ohara." ],
+      "venue" : "Proceedings of the Eighth International Conference on Language Resources and Evaluation (LREC’12), pages 1559–1562, Istanbul, Turkey. Eu-",
+      "citeRegEx" : "Ohara.,? 2012",
+      "shortCiteRegEx" : "Ohara.",
+      "year" : 2012
+    }, {
+      "title" : "Knowledge enhanced contextual word representations",
+      "author" : [ "Matthew E. Peters", "Mark Neumann", "Robert L. Logan IV", "Roy Schwartz", "Vidur Joshi", "Sameer Singh", "Noah A. Smith." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natu-",
+      "citeRegEx" : "Peters et al\\.,? 2019",
+      "shortCiteRegEx" : "Peters et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "AdapterFusion: Non-destructive task composition for transfer learning",
+      "author" : [ "Jonas Pfeiffer", "Aishwarya Kamath", "Andreas Rücklé", "Kyunghyun Cho", "Iryna Gurevych." ],
+      "venue" : "arXiv preprint arXiv:2005.00247.",
+      "citeRegEx" : "Pfeiffer et al\\.,? 2020a",
+      "shortCiteRegEx" : "Pfeiffer et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "AdapterHub: A framework for adapting transformers",
+      "author" : [ "Jonas Pfeiffer", "Andreas Rücklé", "Clifton Poth", "Aishwarya Kamath", "Ivan Vulić", "Sebastian Ruder", "Kyunghyun Cho", "Iryna Gurevych." ],
+      "venue" : "Proceedings of the 2020 Conference on Em-",
+      "citeRegEx" : "Pfeiffer et al\\.,? 2020b",
+      "shortCiteRegEx" : "Pfeiffer et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "MAD-X: An Adapter-Based Framework for Multi-Task Cross-Lingual Transfer",
+      "author" : [ "Jonas Pfeiffer", "Ivan Vulić", "Iryna Gurevych", "Sebastian Ruder." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP),",
+      "citeRegEx" : "Pfeiffer et al\\.,? 2020c",
+      "shortCiteRegEx" : "Pfeiffer et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Adversarial propagation and zero-shot cross-lingual transfer of word vector specialization",
+      "author" : [ "Edoardo Maria Ponti", "Ivan Vulić", "Goran Glavaš", "Nikola Mrkšić", "Anna Korhonen." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural",
+      "citeRegEx" : "Ponti et al\\.,? 2018",
+      "shortCiteRegEx" : "Ponti et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Cross-lingual semantic specialization via lexical relation induction",
+      "author" : [ "Edoardo Maria Ponti", "Ivan Vulić", "Goran Glavaš", "Roi Reichart", "Anna Korhonen." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Ponti et al\\.,? 2019",
+      "shortCiteRegEx" : "Ponti et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "TimeML: Robust specification of event and temporal expressions in text",
+      "author" : [ "James Pustejovsky", "José M. Castano", "Robert Ingria", "Roser Sauri", "Robert J. Gaizauskas", "Andrea Setzer", "Graham Katz", "Dragomir R. Radev." ],
+      "venue" : "New directions in question",
+      "citeRegEx" : "Pustejovsky et al\\.,? 2003",
+      "shortCiteRegEx" : "Pustejovsky et al\\.",
+      "year" : 2003
+    }, {
+      "title" : "The specification language TimeML",
+      "author" : [ "James Pustejovsky", "Robert Ingria", "Roser Sauri", "José M. Castaño", "Jessica Littman", "Robert J. Gaizauskas", "Andrea Setzer", "Graham Katz", "Inderjeet Mani." ],
+      "venue" : "The Language of Time: A reader, pages 545–557. Citeseer.",
+      "citeRegEx" : "Pustejovsky et al\\.,? 2005",
+      "shortCiteRegEx" : "Pustejovsky et al\\.",
+      "year" : 2005
+    }, {
+      "title" : "A primer in BERTology: what we know about how BERT works",
+      "author" : [ "Anna Rogers", "Olga Kovaleva", "Anna Rumshisky." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 8:842–866.",
+      "citeRegEx" : "Rogers et al\\.,? 2020",
+      "shortCiteRegEx" : "Rogers et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Jointly extracting event triggers and arguments by dependency-bridge RNN and tensor-based argument interaction",
+      "author" : [ "Lei Sha", "Feng Qian", "Baobao Chang", "Zhifang Sui." ],
+      "venue" : "Proceedings of the 32nd AAAI Conference on Artificial Intelligence, pages",
+      "citeRegEx" : "Sha et al\\.,? 2018",
+      "shortCiteRegEx" : "Sha et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Spanish FrameNet and FrameSQL",
+      "author" : [ "Carlos Subirats", "Hiroaki Sato." ],
+      "venue" : "4th International Conference on Language Resources and Evaluation. Workshop on Building Lexical Resources from Semantically Annotated Corpora, Lisbon, Portugal.",
+      "citeRegEx" : "Subirats and Sato.,? 2004",
+      "shortCiteRegEx" : "Subirats and Sato.",
+      "year" : 2004
+    }, {
+      "title" : "SemEval-2013 task 1: TempEval-3: Evaluating time expressions, events, and temporal relations",
+      "author" : [ "Naushad UzZaman", "Hector Llorens", "Leon Derczynski", "James Allen", "Marc Verhagen", "James Pustejovsky." ],
+      "venue" : "Second Joint Conference on Lexical",
+      "citeRegEx" : "UzZaman et al\\.,? 2013",
+      "shortCiteRegEx" : "UzZaman et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Temporal processing with the TARSQI toolkit",
+      "author" : [ "Marc Verhagen", "James Pustejovsky." ],
+      "venue" : "Coling 2008: Companion volume: Demonstrations, pages 189–192, Manchester, UK. Coling 2008 Organizing Committee.",
+      "citeRegEx" : "Verhagen and Pustejovsky.,? 2008",
+      "shortCiteRegEx" : "Verhagen and Pustejovsky.",
+      "year" : 2008
+    }, {
+      "title" : "SemEval-2010 task 13: TempEval-2",
+      "author" : [ "Marc Verhagen", "Roser Saurí", "Tommaso Caselli", "James Pustejovsky." ],
+      "venue" : "Proceedings of the 5th International Workshop on Semantic Evaluation, pages 57– 62, Uppsala, Sweden. Association for Computa-",
+      "citeRegEx" : "Verhagen et al\\.,? 2010",
+      "shortCiteRegEx" : "Verhagen et al\\.",
+      "year" : 2010
+    }, {
+      "title" : "Post-specialisation: Retrofitting vectors of words unseen in lexical resources",
+      "author" : [ "Ivan Vulić", "Goran Glavaš", "Nikola Mrkšić", "Anna Korhonen." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational",
+      "citeRegEx" : "Vulić et al\\.,? 2018",
+      "shortCiteRegEx" : "Vulić et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Cross-lingual induction and transfer of verb classes based on word vector space specialisation",
+      "author" : [ "Ivan Vulić", "Nikola Mrkšić", "Anna Korhonen." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 2546–",
+      "citeRegEx" : "Vulić et al\\.,? 2017",
+      "shortCiteRegEx" : "Vulić et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "LexFit: Lexical fine-tuning of pretrained language models",
+      "author" : [ "Ivan Vulić", "Edoardo Maria Ponti", "Anna Korhonen", "Goran Glavaš." ],
+      "venue" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics, Online. Association for Compu-",
+      "citeRegEx" : "Vulić et al\\.,? 2021",
+      "shortCiteRegEx" : "Vulić et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Probing pretrained language models for lexical semantics",
+      "author" : [ "Ivan Vulić", "Edoardo Maria Ponti", "Robert Litschko", "Goran Glavaš", "Anna Korhonen." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP),",
+      "citeRegEx" : "Vulić et al\\.,? 2020",
+      "shortCiteRegEx" : "Vulić et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Entity, relation, and event extraction with contextualized span representations",
+      "author" : [ "David Wadden", "Ulme Wennberg", "Yi Luan", "Hannaneh Hajishirzi." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Wadden et al\\.,? 2019",
+      "shortCiteRegEx" : "Wadden et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "2020a. K-Adapter: Infusing knowledge into pre-trained models with adapters",
+      "author" : [ "Ruize Wang", "Duyu Tang", "Nan Duan", "Zhongyu Wei", "Xuanjing Huang", "Cuihong Cao", "Daxin Jiang", "Ming Zhou" ],
+      "venue" : "arXiv preprint arXiv:2002.01808",
+      "citeRegEx" : "Wang et al\\.,? \\Q2002\\E",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "SHIKEBLCU at SemEval-2020 task 2: An external knowledge-enhanced matrix for multilingual and cross-lingual lexical entailment",
+      "author" : [ "Shike Wang", "Yuchen Fan", "Xiangying Luo", "Dong Yu." ],
+      "venue" : "Proceedings of the Fourteenth Workshop on Semantic",
+      "citeRegEx" : "Wang et al\\.,? 2020b",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Adversarial training for weakly supervised event detection",
+      "author" : [ "Xiaozhi Wang", "Xu Han", "Zhiyuan Liu", "Maosong Sun", "Peng Li." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Hu-",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "MAVEN: A Massive General Domain Event Detection Dataset",
+      "author" : [ "Xiaozhi Wang", "Ziqi Wang", "Xu Han", "Wangyi Jiang", "Rong Han", "Zhiyuan Liu", "Juanzi Li", "Peng Li", "Yankai Lin", "Jie Zhou." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods",
+      "citeRegEx" : "Wang et al\\.,? 2020c",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "From paraphrase database to compositional paraphrase model and back",
+      "author" : [ "John Wieting", "Mohit Bansal", "Kevin Gimpel", "Karen Livescu." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 3:345–358.",
+      "citeRegEx" : "Wieting et al\\.,? 2015",
+      "shortCiteRegEx" : "Wieting et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Event detection with multi-order graph convolution and aggregated attention",
+      "author" : [ "Haoran Yan", "Xiaolong Jin", "Xiangbin Meng", "Jiafeng Guo", "Xueqi Cheng." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing",
+      "citeRegEx" : "Yan et al\\.,? 2019",
+      "shortCiteRegEx" : "Yan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Exploring pre-trained language models for event extraction and generation",
+      "author" : [ "Sen Yang", "Dawei Feng", "Linbo Qiao", "Zhigang Kan", "Dongsheng Li." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages",
+      "citeRegEx" : "Yang et al\\.,? 2019a",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "XLNet: Generalized autoregressive pretraining for language understanding",
+      "author" : [ "Zhilin Yang", "Zihang Dai", "Yiming Yang", "Jaime Carbonell", "Russ R Salakhutdinov", "Quoc V Le." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 5753–",
+      "citeRegEx" : "Yang et al\\.,? 2019b",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Improving lexical embeddings with semantic knowledge",
+      "author" : [ "Mo Yu", "Mark Dredze." ],
+      "venue" : "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers), pages 545–550, Baltimore, Maryland. Associ-",
+      "citeRegEx" : "Yu and Dredze.,? 2014",
+      "shortCiteRegEx" : "Yu and Dredze.",
+      "year" : 2014
+    }, {
+      "title" : "Joint entity and event extraction with generative adversarial imitation learning",
+      "author" : [ "Tongtao Zhang", "Heng Ji", "Avirup Sil." ],
+      "venue" : "Data Intelligence, 1(2):99– 120.",
+      "citeRegEx" : "Zhang et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A corpus-based multidimensional analysis of linguistic features of truth and deception",
+      "author" : [ "Fanghua Zheng." ],
+      "venue" : "Proceedings of the 32nd Pacific Asia Conference on Language, Information and Computation, pages 841–848, Hong Kong. Association for",
+      "citeRegEx" : "Zheng.,? 2018",
+      "shortCiteRegEx" : "Zheng.",
+      "year" : 2018
+    }, {
+      "title" : "2019), i.e., the number of specialisation tensor slices K = 5 and the size of the specialised vectors h = 300",
+      "author" : [ "Ponti" ],
+      "venue" : "D Sequential Fine-tuning Details",
+      "citeRegEx" : "Ponti,? \\Q2019\\E",
+      "shortCiteRegEx" : "Ponti",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 12,
+      "context" : "tives, form the backbone of state-of-the-art models for most NLP tasks (Devlin et al., 2019; Yang et al., 2019b; Liu et al., 2019).",
+      "startOffset" : 71,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 89,
+      "context" : "tives, form the backbone of state-of-the-art models for most NLP tasks (Devlin et al., 2019; Yang et al., 2019b; Liu et al., 2019).",
+      "startOffset" : 71,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 49,
+      "context" : "tives, form the backbone of state-of-the-art models for most NLP tasks (Devlin et al., 2019; Yang et al., 2019b; Liu et al., 2019).",
+      "startOffset" : 71,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 61,
+      "context" : "In downstream tasks, however, they often rely on spurious correlations and superficial cues (Niven and Kao, 2019) rather than a deep understanding of language meaning (Bender and Koller, 2020), which is detrimental to both generalisation and in-",
+      "startOffset" : 92,
+      "endOffset" : 113
+    }, {
+      "referenceID" : 4,
+      "context" : "In downstream tasks, however, they often rely on spurious correlations and superficial cues (Niven and Kao, 2019) rather than a deep understanding of language meaning (Bender and Koller, 2020), which is detrimental to both generalisation and in-",
+      "startOffset" : 167,
+      "endOffset" : 192
+    }, {
+      "referenceID" : 7,
+      "context" : "classifying the temporal and causal relations among them is crucial to understand the structure of a story or dialogue (Carlson et al., 2002; Miltsakaki et al., 2004) and to ground a text in real-world facts.",
+      "startOffset" : 119,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 55,
+      "context" : "classifying the temporal and causal relations among them is crucial to understand the structure of a story or dialogue (Carlson et al., 2002; Miltsakaki et al., 2004) and to ground a text in real-world facts.",
+      "startOffset" : 119,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 34,
+      "context" : "classes based on their syntactic-semantic properties (Jackendoff, 1992; Levin, 1993).",
+      "startOffset" : 53,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 43,
+      "context" : "classes based on their syntactic-semantic properties (Jackendoff, 1992; Levin, 1993).",
+      "startOffset" : 53,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 63,
+      "context" : "Expanding a line of research on injecting external linguistic knowledge into pretrained LMs (Peters et al., 2019; Levine et al., 2020; Lauscher et al., 2020b), we integrate verb knowledge into the LMs for the first time.",
+      "startOffset" : 92,
+      "endOffset" : 158
+    }, {
+      "referenceID" : 44,
+      "context" : "Expanding a line of research on injecting external linguistic knowledge into pretrained LMs (Peters et al., 2019; Levine et al., 2020; Lauscher et al., 2020b), we integrate verb knowledge into the LMs for the first time.",
+      "startOffset" : 92,
+      "endOffset" : 158
+    }, {
+      "referenceID" : 42,
+      "context" : "Expanding a line of research on injecting external linguistic knowledge into pretrained LMs (Peters et al., 2019; Levine et al., 2020; Lauscher et al., 2020b), we integrate verb knowledge into the LMs for the first time.",
+      "startOffset" : 92,
+      "endOffset" : 158
+    }, {
+      "referenceID" : 65,
+      "context" : "distil verb knowledge into dedicated adapter modules (Pfeiffer et al., 2020b), which reduce the risk of (catastrophic) forgetting of and allow seamless modular integration with distributional knowledge.",
+      "startOffset" : 53,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 56,
+      "context" : "First, we inject the external verb knowledge, formulated as the so-called lexical constraints (Mrkšić et al., 2017; Ponti et al., 2019) (in our case – verb pairs, see §2.",
+      "startOffset" : 94,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 68,
+      "context" : "First, we inject the external verb knowledge, formulated as the so-called lexical constraints (Mrkšić et al., 2017; Ponti et al., 2019) (in our case – verb pairs, see §2.",
+      "startOffset" : 94,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 43,
+      "context" : "Given the inter-connectedness between verbs’ meaning and syntactic behaviour (Levin, 1993; Kipper Schuler, 2005), we assume that refining latent representation spaces with verb knowledge would have a positive effect on event extraction",
+      "startOffset" : 77,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 3,
+      "context" : "We select two major English lexical databases – VerbNet (Kipper Schuler, 2005) and FrameNet (Baker et al., 1998) – as sources of verb knowledge",
+      "startOffset" : 92,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 34,
+      "context" : "2 The VN class membership is English-specific, but the underlying verb class construction principles are thought to apply cross-lingually (Jackendoff, 1992; Levin, 1993); its",
+      "startOffset" : 138,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 43,
+      "context" : "2 The VN class membership is English-specific, but the underlying verb class construction principles are thought to apply cross-lingually (Jackendoff, 1992; Levin, 1993); its",
+      "startOffset" : 138,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 78,
+      "context" : "translatability has been indicated in previous work (Vulić et al., 2017; Majewska et al., 2018).",
+      "startOffset" : 52,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 51,
+      "context" : "translatability has been indicated in previous work (Vulić et al., 2017; Majewska et al., 2018).",
+      "startOffset" : 52,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 3,
+      "context" : "FrameNet (FN) (Baker et al., 1998) is more semantically oriented than VN.",
+      "startOffset" : 14,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 73,
+      "context" : ", Spanish (Subirats and Sato, 2004), Japanese (Ohara, 2012), and Danish (Bick, 2011).",
+      "startOffset" : 10,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 62,
+      "context" : ", Spanish (Subirats and Sato, 2004), Japanese (Ohara, 2012), and Danish (Bick, 2011).",
+      "startOffset" : 46,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 5,
+      "context" : ", Spanish (Subirats and Sato, 2004), Japanese (Ohara, 2012), and Danish (Bick, 2011).",
+      "startOffset" : 72,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 86,
+      "context" : "In controlled sampling, we follow prior work on semantic specialisation (Wieting et al., 2015; Glavaš and Vulić, 2018b; Lauscher et al., 2020b).",
+      "startOffset" : 72,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 24,
+      "context" : "In controlled sampling, we follow prior work on semantic specialisation (Wieting et al., 2015; Glavaš and Vulić, 2018b; Lauscher et al., 2020b).",
+      "startOffset" : 72,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 42,
+      "context" : "In controlled sampling, we follow prior work on semantic specialisation (Wieting et al., 2015; Glavaš and Vulić, 2018b; Lauscher et al., 2020b).",
+      "startOffset" : 72,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 27,
+      "context" : "This (1) allows downstream training to flexibly combine the two sources of knowledge, and (2) bypasses the issues with catastrophic forgetting and interference (Hashimoto et al., 2017; de Masson d'Autume et al., 2019).",
+      "startOffset" : 160,
+      "endOffset" : 217
+    }, {
+      "referenceID" : 28,
+      "context" : "The adapter itself is a two-layer feed-forward neural network with a residual connection, consisting of a down-projection D ∈ Rh×m, a GeLU activation (Hendrycks and Gimpel, 2016), and an upprojection U ∈ Rm×h, where h is the hidden size of the Transformer model and m is the dimensionality of the adapter: Adapterl(hl, rl) = Ul(GeLU(Dl(hl))) + rl; where rl is the residual connection, output of the Transformer’s feedforward layer, and hl is the Transformer hidden state, output of the subsequent layer normalisation.",
+      "startOffset" : 150,
+      "endOffset" : 178
+    }, {
+      "referenceID" : 40,
+      "context" : ", 2019) and add a CRF layer (Lafferty et al., 2001) on top of the sequence of Transformer’s outputs (for subword tokens).",
+      "startOffset" : 28,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 12,
+      "context" : "Massively multilingual LMs, such as multilingual BERT (mBERT) (Devlin et al., 2019) or XLM-",
+      "startOffset" : 62,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 10,
+      "context" : "R (Conneau et al., 2020) have become the de facto standard mechanisms for zero-shot (ZS) crosslingual transfer.",
+      "startOffset" : 2,
+      "endOffset" : 24
+    }, {
+      "referenceID" : 21,
+      "context" : "mantic specialisation for static word embeddings (Glavaś et al., 2019; Ponti et al., 2019; Wang et al., 2020b).",
+      "startOffset" : 49,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 68,
+      "context" : "mantic specialisation for static word embeddings (Glavaś et al., 2019; Ponti et al., 2019; Wang et al., 2020b).",
+      "startOffset" : 49,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 83,
+      "context" : "mantic specialisation for static word embeddings (Glavaś et al., 2019; Ponti et al., 2019; Wang et al., 2020b).",
+      "startOffset" : 49,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 76,
+      "context" : "on the TimeML-annotated corpus from TempEval tasks (Verhagen et al., 2010; UzZaman et al., 2013), which targets automatic identification of temporal expressions and relations, and events.",
+      "startOffset" : 51,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 74,
+      "context" : "on the TimeML-annotated corpus from TempEval tasks (Verhagen et al., 2010; UzZaman et al., 2013), which targets automatic identification of temporal expressions and relations, and events.",
+      "startOffset" : 51,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 74,
+      "context" : "6 We use the TempEval-3 data for English and Spanish (UzZaman et al., 2013), and the TempEval-2 data for Chinese (Verhagen et al.",
+      "startOffset" : 53,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 76,
+      "context" : ", 2013), and the TempEval-2 data for Chinese (Verhagen et al., 2010) (see Table 6 in the appendix for exact dataset sizes).",
+      "startOffset" : 45,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 33,
+      "context" : "Following previous work (Hsi et al., 2016), we conflate eight time-related argument roles - e.",
+      "startOffset" : 24,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 48,
+      "context" : "(9)Most event types (≈ 70%) have fewer than 100 labeled instances, and three have fewer than 10 (Liu et al., 2018).",
+      "startOffset" : 96,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 68,
+      "context" : "13 These results confirm the effectiveness of lexical knowledge transfer suggested previously in the work on semantic specialisation of static word vectors (Ponti et al., 2019; Wang et al., 2020b).",
+      "startOffset" : 156,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 83,
+      "context" : "13 These results confirm the effectiveness of lexical knowledge transfer suggested previously in the work on semantic specialisation of static word vectors (Ponti et al., 2019; Wang et al., 2020b).",
+      "startOffset" : 156,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 56,
+      "context" : "(14)This is in contrast to the proven cross-lingual portability of synonymy and antonymy relations shown in previous work on semantic specialisation transfer (Mrkšić et al., 2017; Ponti et al., 2019), which rely on semantics alone.",
+      "startOffset" : 158,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 68,
+      "context" : "(14)This is in contrast to the proven cross-lingual portability of synonymy and antonymy relations shown in previous work on semantic specialisation transfer (Mrkšić et al., 2017; Ponti et al., 2019), which rely on semantics alone.",
+      "startOffset" : 158,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 73,
+      "context" : "2,866 verb pairs derived from its FrameNet (Subirats and Sato, 2004).",
+      "startOffset" : 43,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 0,
+      "context" : "Traditional event extraction methods relied on hand-crafted, language-specific features (Ahn, 2006; Gupta and Ji, 2009; Llorens et al., 2010; Hong et al., 2011; Li et al., 2013; Glavaš and Šnajder, 2015) (e.",
+      "startOffset" : 88,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 26,
+      "context" : "Traditional event extraction methods relied on hand-crafted, language-specific features (Ahn, 2006; Gupta and Ji, 2009; Llorens et al., 2010; Hong et al., 2011; Li et al., 2013; Glavaš and Šnajder, 2015) (e.",
+      "startOffset" : 88,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 50,
+      "context" : "Traditional event extraction methods relied on hand-crafted, language-specific features (Ahn, 2006; Gupta and Ji, 2009; Llorens et al., 2010; Hong et al., 2011; Li et al., 2013; Glavaš and Šnajder, 2015) (e.",
+      "startOffset" : 88,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 30,
+      "context" : "Traditional event extraction methods relied on hand-crafted, language-specific features (Ahn, 2006; Gupta and Ji, 2009; Llorens et al., 2010; Hong et al., 2011; Li et al., 2013; Glavaš and Šnajder, 2015) (e.",
+      "startOffset" : 88,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 45,
+      "context" : "Traditional event extraction methods relied on hand-crafted, language-specific features (Ahn, 2006; Gupta and Ji, 2009; Llorens et al., 2010; Hong et al., 2011; Li et al., 2013; Glavaš and Šnajder, 2015) (e.",
+      "startOffset" : 88,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 22,
+      "context" : "Traditional event extraction methods relied on hand-crafted, language-specific features (Ahn, 2006; Gupta and Ji, 2009; Llorens et al., 2010; Hong et al., 2011; Li et al., 2013; Glavaš and Šnajder, 2015) (e.",
+      "startOffset" : 88,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 8,
+      "context" : "The alleviation of such data scarcity issues was attempted through data augmentation – automatic data annotation (Chen et al., 2017; Zheng, 2018; Araki and Mitamura, 2018) and bootstrap-",
+      "startOffset" : 113,
+      "endOffset" : 171
+    }, {
+      "referenceID" : 92,
+      "context" : "The alleviation of such data scarcity issues was attempted through data augmentation – automatic data annotation (Chen et al., 2017; Zheng, 2018; Araki and Mitamura, 2018) and bootstrap-",
+      "startOffset" : 113,
+      "endOffset" : 171
+    }, {
+      "referenceID" : 1,
+      "context" : "The alleviation of such data scarcity issues was attempted through data augmentation – automatic data annotation (Chen et al., 2017; Zheng, 2018; Araki and Mitamura, 2018) and bootstrap-",
+      "startOffset" : 113,
+      "endOffset" : 171
+    }, {
+      "referenceID" : 17,
+      "context" : "ping for training data generation (Ferguson et al., 2018; Wang et al., 2019).",
+      "startOffset" : 34,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 84,
+      "context" : "ping for training data generation (Ferguson et al., 2018; Wang et al., 2019).",
+      "startOffset" : 34,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 85,
+      "context" : "The recent release of the large English event detection dataset MAVEN (Wang et al., 2020c), with annotations of event triggers only, partially remedies for English data",
+      "startOffset" : 70,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 54,
+      "context" : "(Mikolov et al., 2013; Bojanowski et al., 2017) or those spanned by LM-pretrained Transformers (Devlin et al.",
+      "startOffset" : 0,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 6,
+      "context" : "(Mikolov et al., 2013; Bojanowski et al., 2017) or those spanned by LM-pretrained Transformers (Devlin et al.",
+      "startOffset" : 0,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2017) or those spanned by LM-pretrained Transformers (Devlin et al., 2019; Liu et al., 2019), encode only distributional knowledge.",
+      "startOffset" : 55,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 49,
+      "context" : ", 2017) or those spanned by LM-pretrained Transformers (Devlin et al., 2019; Liu et al., 2019), encode only distributional knowledge.",
+      "startOffset" : 55,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 57,
+      "context" : ", WordNet (Fellbaum, 1998), BabelNet (Navigli and Ponzetto, 2010) or ConceptNet (Liu and Singh, 2004)) in the form of lexical constraints (Faruqui et al.",
+      "startOffset" : 37,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 46,
+      "context" : ", WordNet (Fellbaum, 1998), BabelNet (Navigli and Ponzetto, 2010) or ConceptNet (Liu and Singh, 2004)) in the form of lexical constraints (Faruqui et al.",
+      "startOffset" : 80,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 12,
+      "context" : "(2020b) add to the Masked LM (MLM) and next sentence prediction (NSP) pretraining objectives of BERT (Devlin et al., 2019)",
+      "startOffset" : 101,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 15,
+      "context" : "Retrofitting and post-specialisation methods (Faruqui et al., 2015; Mrkšić et al., 2017; Vulić et al., 2018; Ponti et al., 2018; Glavaš and Vulić, 2019; Lauscher et al., 2020a; Wang et al., 2020a),",
+      "startOffset" : 45,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 56,
+      "context" : "Retrofitting and post-specialisation methods (Faruqui et al., 2015; Mrkšić et al., 2017; Vulić et al., 2018; Ponti et al., 2018; Glavaš and Vulić, 2019; Lauscher et al., 2020a; Wang et al., 2020a),",
+      "startOffset" : 45,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 77,
+      "context" : "Retrofitting and post-specialisation methods (Faruqui et al., 2015; Mrkšić et al., 2017; Vulić et al., 2018; Ponti et al., 2018; Glavaš and Vulić, 2019; Lauscher et al., 2020a; Wang et al., 2020a),",
+      "startOffset" : 45,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 67,
+      "context" : "Retrofitting and post-specialisation methods (Faruqui et al., 2015; Mrkšić et al., 2017; Vulić et al., 2018; Ponti et al., 2018; Glavaš and Vulić, 2019; Lauscher et al., 2020a; Wang et al., 2020a),",
+      "startOffset" : 45,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 25,
+      "context" : "Retrofitting and post-specialisation methods (Faruqui et al., 2015; Mrkšić et al., 2017; Vulić et al., 2018; Ponti et al., 2018; Glavaš and Vulić, 2019; Lauscher et al., 2020a; Wang et al., 2020a),",
+      "startOffset" : 45,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 41,
+      "context" : "Retrofitting and post-specialisation methods (Faruqui et al., 2015; Mrkšić et al., 2017; Vulić et al., 2018; Ponti et al., 2018; Glavaš and Vulić, 2019; Lauscher et al., 2020a; Wang et al., 2020a),",
+      "startOffset" : 45,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 49,
+      "context" : "(2020a) fine-tune the pre-trained RoBERTa (Liu et al., 2019) with",
+      "startOffset" : 42,
+      "endOffset" : 60
+    } ],
+    "year" : 2021,
+    "abstractText" : "Linguistic probing of pretrained Transformerbased language models (LMs) revealed that they encode a range of syntactic and semantic properties of a language. However, they are still prone to fall back on superficial cues and simple heuristics to solve downstream tasks, rather than leverage deeper linguistic information. In this paper, we target a specific facet of linguistic knowledge, the interplay between verb meaning and argument structure. We investigate whether injecting explicit information on verbs’ semantic-syntactic behaviour improves the performance of pretrained LMs in event extraction tasks, where accurate verb processing is paramount. Concretely, we impart the verb knowledge from curated lexical resources into dedicated adapter modules (verb adapters), allowing it to complement, in downstream tasks, the language knowledge obtained during LM-pretraining. We first demonstrate that injecting verb knowledge leads to performance gains in English event extraction. We then explore the utility of verb adapters for event extraction in other languages: we investigate 1) zero-shot language transfer with multilingual Transformers and 2) transfer via (noisy automatic) translation of English verb-based lexical knowledge. Our results show that the benefits of verb knowledge injection indeed extend to other languages, even when relying on noisily translated lexical knowledge.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

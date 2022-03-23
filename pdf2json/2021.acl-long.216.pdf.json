@@ -1,0 +1,647 @@
+{
+  "name" : "2021.acl-long.216.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Locate and Label: A Two-stage Identifier for Nested Named Entity Recognition",
+    "authors" : [ "Yongliang Shen", "Xinyin Ma", "Zeqi Tan", "Shuai Zhang", "Wen Wang", "Weiming Lu" ],
+    "emails" : [ "luwm}@zju.edu.cn" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 2782–2794\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n2782"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Named entity recognition (NER) is a fundamental task in natural language processing, focusing on identifying the spans of text that refer to entities. NER is widely used in downstream tasks, such as entity linking (Ganea and Hofmann, 2017; Le and Titov, 2018) and relation extraction (Li and Ji, 2014; Miwa and Bansal, 2016).\nPrevious works usually treat NER as a sequence labeling task, assigning a single tag to each to-\n∗ Corresponding author\nken in a sentence. Such models lack the ability to identify nested named entities. Various approaches for nested NER have been proposed in recent years. Some works revised sequence models to support nested entities using different strategies (Alex et al., 2007; Ju et al., 2018; Straková et al., 2019; Wang et al., 2020a) and some works adopt the hyper-graph to capture all possible entity mentions in a sentence (Lu and Roth, 2015; Katiyar and Cardie, 2018). We focus on the span-based methods (Sohrab and Miwa, 2018; Zheng et al., 2019; Tan et al., 2020), which treat named entity recognition as a classification task on a span with the innate ability to recognize nested named entities. For example, Sohrab and Miwa (2018) exhausts all possible spans in a text sequence and then predicts their categories. However, these methods suffer from some serious weaknesses. First, due to numerous low-quality candidate spans, these methods require high computational costs. Then, it is hard to identify long entities because the length of the span enumerated during training is not infinite. Next, boundary information is not fully utilized, while it is important for the model to locate entities.\nAlthough some methods (Zheng et al., 2019; Tan et al., 2020) have used a sequence labeling model to predict boundaries, yet without dynamic adjustment, the boundary information is not fully utilized. Finally, the spans which partially match with entities are not effectively utilized. These methods simply treat the partially matched spans as negative examples, which can introduce noise into the model.\nDifferent from the above studies, we observed that NER and object detection tasks in computer vision have a high degree of consistency. They both need to locate regions of interest (ROIs) in the context (image/text) and then assign corresponding categories to them. Furthermore, both flat NER and nested NER have corresponding structures in the object detection task, as shown in Figure 1. For the flat structure, there is no overlap between entities or between objects. While for nested structures, finegrained entities are nested inside coarse-grained entities, and small objects are nested inside large objects correspondingly. In computer vision, the two-stage object detectors (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018) are the most popular object detection algorithm. They divide the detection task into two stages, first generating candidate regions, and then classifying and fine-tuning the positions of the candidate regions.\nInspired by these, we propose a two-stage entity identifier and treat NER as a joint task of boundary regression and span classification to address the weaknesses mentioned above. In the first stage, we design a span proposal module, which contains two components: a filter and a regressor. The filter divides the seed spans into contextual spans and span proposals, and filters out the former to reduce the candidate spans. The regressor locates entities by adjusting the boundaries of span proposals to improve the quality of candidate spans. Then in the second stage, we use an entity classifier to label entity categories for the number-reduced and quality-improved span proposals. During training, to better utilize the spans that partially match with the entities, we construct soft examples by weighting the loss of the model based on the IoU. In addition, we apply the soft non-maximum suppression (Soft-NMS) (Bodla et al., 2017) algorithm to entity decoding for dropping the false positives.\nOur main contributions are as follow:\n• Inspired by the two-stage detector popular\nin object detection, we propose a novel twostage identifier for NER of locating entities first and labeling them later. We treat NER as a joint task of boundary regression and span classification.\n• We make effective use of boundary information. Taking the identification of entity boundaries a step further, our model can adjust the boundaries to accurately locate entities. And when training the boundary regressor, in addition to the boundary-level SmoothL1 loss, we also use a span-level loss, which measures the overlap between two spans.\n• During training, instead of simply treating the partially matched spans as negative examples, we construct soft examples based on the IoU. This not only alleviates the imbalance between positive and negative examples, but also effectively utilizes the spans which partially match with the ground-truth entities.\n• Experiments show that our model achieves state-of-the-art performance consistently on the KBP17, ACE04 and ACE05 datasets, and outperforms several competing baseline models on F1-score by +3.08% on KBP17, +0.71% on ACE04 and +1.27% on ACE05."
+    }, {
+      "heading" : "2 Model",
+      "text" : "Figure 2 illustrates an overview of the model structure. We first obtain the word representation through the encoder and generate seed spans. Among these seed spans, some with higher overlap with the entities are the proposal spans, and others with lower overlap are the contextual spans. In the span proposal module, we use a filter to keep the proposal spans and drop the contextual spans. Meanwhile, a regressor regresses the boundary of each span to locate the left and right boundaries of entities. Next, we adjust the boundaries of the span proposals based on the output of the regressor, and then feed them into the entity classifier module. Finally, the entity decoder decodes the entities using the Soft-NMS algorithm. We will cover our model in the following sections."
+    }, {
+      "heading" : "2.1 Token Representation",
+      "text" : "Consider the i-th word in a sentence with n words, we represent it by concatenating its word embedding xwi , contextualized word embedding x lm i , part-\nof-speech(POS) embedding xposi and characterlevel embedding xchari together. The characterlevel embedding is generated by a BiLSTM module with the same setting as (Ju et al., 2018). For the contextualized word embedding, we follow (Yu et al., 2020) to obtain the context-dependent embedding for a target token with one surrounding sentence on each side. Then, the concatenation of them is fed into another BiLSTM to obtain the hidden state as the final word representation hi ∈ Rd."
+    }, {
+      "heading" : "2.2 Seed Span Generation",
+      "text" : "Seed spans are subsequences sampled from a sequence of words. By filtering, adjusting boundaries, and classifying on them, we can extract entities from the sentence. Under the constraint of a prespecified set of lengths, where the maximum does not exceed L, we enumerate all possible start and end positions to generate the seed spans. We denote the set of seed spans as B = {b0, . . . , bK}, where bi = (sti, edi) denotes i-th seed span, K denotes the number of the generated seed spans, and sti, edi denote the start and end positions of the span respectively.\nFor training the filter and the regressor, we need to assign a corresponding category and regression target to each seed span. Specifically, we pair each seed span in B and the ground-truth entity with which the span has the largest IoU. The IoU measure the overlap between spans, defined as IoU(A,B) = A∩BA∪B , where A and B are two spans. Then we divide them into positive and negative spans based on the IoU between the pair. The spans\nwhose IoU with the paired ground truth is above the threshold α1 are classified as positive examples, and those less than threshold α1 are classified as negative examples. For the positive span, we assign it the same category ŷ with the paired ground truth and compute the boundary offset t̂ between them. For the negative span, we only assign a NONE label. We downsample the negative examples such that the ratio of positive to negative is 1:5."
+    }, {
+      "heading" : "2.3 Span Proposal Module",
+      "text" : "The quality of the generated seed spans is variable. If we directly input them into the entity classifier, it will lead to a lot of computational waste. High-quality spans have higher overlap with entities, while low-quality spans have lower overlap. We denote them as span proposals and contextual spans, respectively. Our Span Proposal module consists of two components: Span Proposal Filter and Boundary Regressor. The former is used to drop the contextual spans and keep the span proposals, while the latter is used to adjust the boundaries of the span proposals to locate entities.\nSpan Proposal Filter For the seed span bi(sti, edi), we concatenate the maximum pooled span representation hpi with the inner boundary word representations (hsti , hedi) to obtain the span representation hfilteri . Based on it we calculate the probability pfilteri that the span bi belongs to the span proposals, computed as follows:\nhpi = MaxPooling(hsti , hsti+1, . . . , hedi) (1)\nhfilteri = [h p i ;hsti ;hedi ] (2)\npfilteri = Sigmoid ( MLP ( hfilteri )) (3)\nwhere [; ] denotes the concatenate operation, MLP consists of two linear layers and a GELU (Hendrycks and Gimpel, 2016) activation function.\nBoundary Regressor Although the span proposal has a high overlap with the entity, it cannot hit the entity exactly. We design another boundary regression branch where a regressor locates entities by adjusting the left and right boundaries of the span proposals. The boundaries regression requires not only the information of span itself but also the outer boundary words. Thus we concatenate the maximum pooled span representation hpi with the outer boundary word representations (hsti−1, hedi+1) to obtain the span representation hregi . Then we calculate the offsets ti of left and right boundaries:\nhregi = [h p i ;hsti−1;hedi+1] (4)\nti =W2 ·GELU(W1hregi + b1) + b2 (5)\nwhere W1 ∈ R3d×d, W2 ∈ Rd×2, b1 ∈ Rd and b2 ∈ R2 are learnable parameters."
+    }, {
+      "heading" : "2.4 Entity Classifier Module",
+      "text" : "With the boundary offsets ti predicted by the boundary regressor, we adjust the boundaries of span proposals. The adjusted start postion s̃ti and end position ẽdi of bi are calculated as follow:\ns̃ti = max(0, sti + ⌊ tli + 1\n2\n⌋ ) (6)\nẽdi = min(L− 1, edi + ⌊ tri + 1\n2\n⌋ ) (7)\nwhere tli and t r i denote the left and right offsets, respectively. As in the filter above, we concatenate the maximum pooled span representation h̃pi with the inner boundary word representations (hs̃ti , hẽdi). Then we perform entity classification:\nh̃pi = MaxPooling(hs̃ti , hs̃ti+1, . . . , hẽdi) (8)\nhclsi = [h̃ p i ;hs̃ti ;hẽdi ] (9)\npi = Softmax ( MLP ( hclsi ) )) (10)\nwhere MLP consists of two linear layers and a GELU activation function, as in the filter above.\nFor training the entity classifier, we need to reassign the categories based on the IoU between the new adjusted span proposal and paired ground-truth entity. Specifically, if the IoU between a span and its corresponding entity is higher than the threshold α2, we assign the span the same category with the entity, otherwise we assign it a NONE category and treat the span as a negative example."
+    }, {
+      "heading" : "2.5 Training Objective",
+      "text" : "The spans that partially match with the entities are very important, but previous span-based approaches simply treat them as negative examples. Such practice not only fails to take advantage of these spans but also introduces noise into the model. We treat partially matched spans as soft examples by weighting its loss based on its IoU with the corresponding ground truth. For the i-th span bi, the weight wi is calculated as follows:\n{ IoU(bi, ei)\nη, IoU(bi, ei) ≥ α (1− IoU(bi, ei))η , IoU(bi, ei) < α (11)\nwhere α ∈ {α1, α2} denotes the IoU threshold used in the first or the second stage and ei denotes corresponding ground-truth entity of bi. η is a focusing parameter that can smoothly adjust the rate at which partially matched examples are down-weighted. We can find that if we set η = 0, the above formula degenerates to a hard one. Also, if a span does not overlap with any entity or match exactly with some entity, the loss weight wi = 1.\nThen, we calculate the losses for the span proposal filter, boundary regressor and entity classifier respectively. For the span proposal filter, we use focal loss (Lin et al., 2017) to solve the imbalance problem: Lfilter = − ∑ i wiIŷ 6=0(1− pfilteri ) γ log(pfilteri )\n+ wiIŷ=0(pfilteri ) γ log(1− pfilteri )\n(12) where wi is the weight of i-th example calculated at Equation 11 and γ denotes focusing parameter of focal loss. For the boundary regressor, the loss consists of two components, the smooth L1 loss at\nthe boundary level and the overlap loss at the span level, calculated as follows:\nLreg ( t̂, t ) = Lf1 + Lolp (13)\nLf1 ( t̂, t ) = ∑ i ∑ j∈{l,r} smoothL1 ( t̂ji , t j i ) (14)\nLolp = ∑ i ( 1− min (di)−max (ei) max (di)−min (ei) ) (15)\nwhere di = { ẽdi, êdi } , ei = { s̃ti, ŝti } . ŝti, êdi,\nt̂li and t̂ r i denote the ground-truth left boundary, right boundary, left offset and right offset, respectively. For the entity classifier, we simply use the cross-entropy loss:\nLcls = ∑ i wiCELoss(ŷ, pi) (16)\nwhere wi is the weight of i-th example calculated at Equation 11. We train the filter, regressor and classifier jointly, thus the total loss is computed as:\nL = λ1Lfilter + λ2Lreg + λ3Lcls (17)\nwhere λ1, λ2 and λ3 are the weights of filter, regressor and classifier losses respectively."
+    }, {
+      "heading" : "2.6 Entity Decoding",
+      "text" : "In the model prediction phase, after the above steps, we get the classification probability and boundary offset regression results for each span proposal. Based on them, we need to extract all entities in the sentence (i.e., find the exact start and end positions of the entities as well as their corresponding categories). We assign label yi = argmax(pi) to span si and use scorei = max(pi) as the confidence of span si belonging to the yi category.\nNow for each span proposal, our model has predicted the exact start and end positions, the entity class and the corresponding score, denoted as si = (li, ri, yi, scorei). Given the score threshold δ and the set of span proposals S = {s1, . . . , sN}, where N denotes as the number of span proposals, we use the Soft-NMS (Bodla et al., 2017) algorithm to filter the false positives. As shown in Algorithm 1, we traverse the span proposals by the order of their score (the traversal term is denoted as si) and\nthen adjust the scores of other span proposals sj to f(si, sj), which is defined as:\n{ scorej ∗ u, IoU(si, sj) ≥ k scorej , IoU(si, sj) < k\n(18)\nwhere u ∈ (0, 1) denotes the decay coefficient of the score and k denotes is the IoU threshold. Then we keep all span proposals with a score > δ as the final extracted entities.\nAlgorithm 1: Soft-NMS Algorithm Input: S = {si, . . . , sN}, δ, where\nsi = (li, ri, yi, scorei) Output: O\n1 O ← {}; 2 Sort(S) by the score of each element in\ndescend order; 3 for si in S do 4 O ← O ∪ {si} ; 5 for sj in S [i : N ] do 6 S ← S − {sj}; 7 sj ← (lj , rj , yj , f(si, sj)); 8 Insert (S, k, sj) where k denotes\nthe insertion position of sj in S ordered by score;\n9 end 10 end"
+    }, {
+      "heading" : "3 Experiment Settings",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Datasets",
+      "text" : "To provide empirical evidence for effectiveness of the proposed model, we conduct our experiments on four nested NER datasets: ACE04 1, ACE05 2, KBP173 and GENIA 4. Please refer to Appendix A.1 for statistical information about the datasets.\nACE 2004 and ACE 2005 (Doddington et al., 2004; Christopher Walker and Maeda, 2006) are two nested datasets, each of them contains 7 entity categories. We follow the same setup as previous work Katiyar and Cardie (2018); Lin et al. (2019) split them into train, dev and test sets by 8:1:1.\n1 https://catalog.ldc.upenn.edu/LDC2005T09 2 https://catalog.ldc.upenn.edu/LDC2006T06 3 https://catalog.ldc.upenn.edu/LDC2019T02 4 http://www.geniaproject.org/genia-corpus\nKBP17 (Ji et al., 2017) has 5 entity categories, including GPE, ORG, PER, LOC, and FAC. We follow Lin et al. (2019) to split all documents into 866/20/167 documents for train/dev/test set.\nGENIA (Ohta et al., 2002) is a biology nested named entity dataset and contains five entity types, including DNA, RNA, protein, cell line, and cell type categories. Following Yu et al. (2020), we use 90%/10% train/test split."
+    }, {
+      "heading" : "3.2 Evaluation Metrics",
+      "text" : "We use strict evaluation metrics that an entity is confirmed correct when the entity boundary and the entity label are correct simultaneously. We employ precision, recall and F1-score to evaluate the performance."
+    }, {
+      "heading" : "3.3 Parameter Settings",
+      "text" : "In most experiments, we use GloVE (Pennington et al., 2014) and BERT (Devlin et al., 2019) in our encoder. For the GENIA dataset, we replace GloVE with BioWordvec (Chiu et al., 2016), BERT with BioBERT (Lee et al., 2019). The dimensions for xwi , x lm i , x pos i , x char i and hi are 100, 1024, 50, 50 and 1024, respectively. For all datasets, we train our model for 35 epochs and use the Adam Optimizer with a linear warmup-decay learning rate schedule, a dropout before the filter, regressor and entity classifier with a rate of 0.5. See Appendix A for more detailed parameter settings and baseline models we compared 5."
+    }, {
+      "heading" : "4 Results and Comparisons",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Overall Evaluation",
+      "text" : "Table 1 illustrates the performance of the proposed model as well as baselines on ACE04, ACE05, GENIA and KBP17. Our model outperforms the stateof-the-art models consistently on three nested NER datasets. Specifically, the F1-scores of our model advance previous models by +3.08%, +0.71%, +1.27% on KBP17, ACE04 and ACE05 respectively. And on GENIA, we achieve comparable performance. We analyze the performance on entities of different lengths on ACE04, as shown in Table 2. We observe that the model works well on the entities whose lengths are not enumerated during training. For example, although entities of length 6 are not enumerated, while those of length\n5 Our code is available at https://github.com/ tricktreat/locate-and-label.\n5 and 7 are enumerated, our model can achieve a comparable F1-score for entities of length 6. In particular, the entities whose lengths exceed the maximum length (15) enumerated during training, are still well recognized. This verifies that our model has the ability to identify length-uncovered entities and long entities by boundary regression. We also evaluated our model on two flat NER datasets, as shown in Appendix B."
+    }, {
+      "heading" : "4.2 Ablation Study",
+      "text" : "We choose the ACE04 and KBP17 datasets to conduct several ablation experiments to elucidate the main components of our proposed model. To illustrate the performance of the model on entities of different lengths, we divide the entities into three groups according to their lengths. The re-\nsults are shown in Table 3. Firstly, we observe that the boundary regressor is very effective for the identification of long entities. Lack of the boundary regressor leads to a decrease in F1-score for long entities (L ≥ 10) on ACE04 by 36.73% and KBP17 by 30.54%. Then, compared with the w/o filter setting, the F1-scores of our full model on the two datasets improved by 0.52% and 0.75%, respectively. In addition, experimental results also demonstrate that the soft examples we constructed are effective. This allows the model to take full advantage of the information of partially matched spans in training, improving the F1-score by 0.87% on ACE04 and 0.16% on KBP17. However, SoftNMS play a limited role and improve the model performance only a little. We believe that text is sparse data compared to images and the number of false positives predicted by our model is quite small, so the Soft-NMS can hardly perform the role of a filter."
+    }, {
+      "heading" : "4.3 Time Complexity",
+      "text" : "Theoretically, the number of possible spans of a sentence of length N is N(N+1)2 . Previous spanbased methods need to classify almost all spans into corresponding categories, which leads to the high computational cost with O(cN2) time complexity\nwhere c is the number of categories. The words in a sentence can be divided into two categories: contextual words and entity words. Traditional approaches waste a lot of computation on the spans composed of contextual words. However, our approach retains only the span proposals containing entity words by the filter, and the time complexity is O(N2). Although in the worst case the model keeps all seed spans, generating N(N+1)2 span proposals, we observe that we generate approximately three times as many span proposals as the entities in practice. Assuming that the number of entities in the sentence is k, the total time complexity of our model is O(N2 + ck) where k << N2."
+    }, {
+      "heading" : "5 Case Study",
+      "text" : "Examples of model predictions are shown in Table 4. The first line illustrates that our model can recognize entities with multi-level nested structures. We can see that the three nested entities from inside to outside are united nations secretary general kofi annan, united nations secretary general and united nations, all of which can be accurately recognized by our model. The second line illustrates that our model can recognize long entities well, although trained without seed spans of the same length as it. The long entity Aceh, which is rich in oil and gas and has a population of about 4.1 million people, with a length of 20, exceeds the maximum length of generated seed spans, but can still be correctly located and classified. However, our model has difficulties in resolving ambiguous entity references. As shown in the third line, our model incorrectly classifies the reference phrase both sides, which refers to ORG, into the PER category."
+    }, {
+      "heading" : "6 Related Work",
+      "text" : ""
+    }, {
+      "heading" : "6.1 Nested Named Entity Recognition",
+      "text" : "NER is usually modeled as a sequence labeling task, and a sequence model (e.g., LSTM-CRF (Huang et al., 2015)) is employed to output the sequence of labels with maximum probability. However, traditional sequence labeling models cannot handle nested structures because they can only assign one label to each token. In recent years, several approaches have been proposed to solve the nested named entity recognition task, mainly including tagging-based (Alex et al., 2007; Wang et al., 2020a), hypergraph-based (Muis and Lu, 2017; Katiyar and Cardie, 2018), and span-based\n(Sohrab and Miwa, 2018; Zheng et al., 2019) approaches. The tagging based nested NER model transforms the nested NER task into a special sequential tagging task by designing a suitable tagging schema. Layered-CRF (Alex et al., 2007) dynamically stacks flat NER layers to identify entities from inner to outer. Pyramid (Wang et al., 2020a) designs a pyramid structured tagging framework that uses CNN networks to identify entities from the bottom up. The hypergraph-based model constructs the hypergraph by the structure of nested NER and decodes the nested entities on the hypergraph. Lu and Roth (2015) is the first to propose the use of Mention Hypergraphs to solve the overlapping mentions recognition problem. Katiyar and Cardie (2018) proposed hypergraph representation for the nested NER task and learned the hypergraph structure in a greedy way by LSTM networks. The span-based nested NER model first extracts the subsequences (spans) in a sequence and then classifies these spans. Exhaustive Model (Sohrab and Miwa, 2018) exhausts all possible spans in a text sequence and then predicts their classes. Zheng et al. (2019); Tan et al. (2020) took a sequence labeling model to identify entity boundaries and then predicted the categories of boundary-relevant regions. Different from the above methods, some works adopt the methods from other tasks. For example, Yu et al. (2020) reformulated NER as a structured predic-\ntion task and adopted a biaffine model for nested and flat NER. While Li et al. (2020b) treated NER as a reading comprehension task, and constructed type-specific queries to extract entities from the context."
+    }, {
+      "heading" : "6.2 Object Detection",
+      "text" : "Object detection is a computer vision technique that can localize and identify objects in an image. With this identification and localization, object detection can determine the exact location of objects while assigning them categories. Neural-based object detection algorithms are divided into two main categories: one-stage and two-stage approach. The one-stage object detector densely proposes anchor boxes by covering the possible positions, scales, and aspect ratios, and then predicts the categories and accurate positions based on them in a singleshot way, such as OverFeat (Sermanet et al., 2013), YOLO (Redmon et al., 2016) and SSD (Liu et al., 2016). The two-stage object detector can be seen as an extension of the dense detector and has been the most dominant object detection algorithm for many years (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018). It first obtains sparse proposal boxes containing objects from a dense set of region candidates, and then adjusts the position and predicts a category for each proposal."
+    }, {
+      "heading" : "7 Conclusion",
+      "text" : "In this paper, we treat NER as a joint task of boundary regression and span classification and propose a two-stage entity identifier. First we generate span proposals through a filter and regressor, then classify them into the corresponding categories. Our proposed model can make full use of the boundary information of entities and reduce the computational cost. Moreover, by constructing soft samples during training, our model can exploit the spans that partially match with the entities. Experiments illustrate that our method achieves state-of-the-art performance on several nested NER datasets. For future work, we will combine named entity recognition and object detection tasks, and try to use a unified framework to address joint identification on multimodal data."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "This work is supported by the Key Research and Development Program of Zhejiang Province, China(No. 2021C01013), the National Key Research and Development Project of China (No. 2018AAA0101900), the Chinese Knowledge Center of Engineering Science and Technology (CKCEST) and MOE Engineering Research Center of Digital Library."
+    }, {
+      "heading" : "A Experiments on Nested NER",
+      "text" : "A.1 Statistics of Nested Datasets In Table 5, We report the number of sentences, the number of sentences containing nested entities, the average sentence length, the total number of entities, the number of nested entities and the nesting ratio on the ACE04, ACE05, GENIA and KBP17 datasets.\nA.2 Baseline Methods We use the following models as baselines for nested NER:\n• Biaffine (Yu et al., 2020) reformulates NER as a structured prediction task and adopts a dependency parsing approach for NER.\n• Pyramid (Wang et al., 2020a) consists of a stack of inter-connected layers. Each layer predicts whether a text region of certain length is a complete entity mention.\n• BiFlaG (Yu et al., 2020) designs a bipartite flat-graph network with two interacting subgraph modules for outermost entities and inner entities, respectively.\n• HIT (Wang et al., 2020b) leverages the headtail pair and token interaction to express the nested entities.\n• ARN (Lin et al., 2019) designs a sequence-tonuggets architecture by modeling and levraging the head-driven phrase structures of entity mentions.\n• Seq2seq (Straková et al., 2019) views the nested NER as a sequence-to-sequence problem.\n• KBP17-Best (Ji et al., 2017) gives an overview of the Entity Discovery task and reports previous best results for the task of nested NER.\nWe didn’t compare our model with BERT-MRC (Li et al., 2020b), because it uses additional external resources to construct the questions, which essentially introduces descriptive information about the categories.\nA.3 Detailed Parameter Settings In our experiments, the detailed parameter settings for the model are shown in Table 6.\nA.4 Analysis of Boundary Offset Regression\nWe analyzed the distribution of the boundary offsets predicted by the model on the ACE04 dataset, as shown in Figure 3. We can find that the numbers of offsets by 0, 1, 2, 3 and ≥ 4 are 2162, 2440, 888, 368 and 202, respectively. Most of the offsets are 1, indicating that most of the seed spans require slight boundary adjustments to accurately locate the entities. There are also many offsets of 0. This is because many entities in the dataset are short and the seed spans can cover them, and their boundaries do not need to be adjusted."
+    }, {
+      "heading" : "B Experiments on Flat NER",
+      "text" : "B.1 Datasets\nWe use two flat NER datasets to evaluate our model:\nCoNLL03 English is an English dataset (Tjong Kim Sang and De Meulder, 2003) with four types of flat entities: Location, Organization, Person and Miscellaneous. Following Lin et al. (2019), we train our model on the concatenation of the train and dev set.\nWeibo Chinese is a Chinese dataset (Peng and Dredze, 2015) sampled from Weibo with four types of flat entities, including Person, Organization, Location and Geo-political. And we evaluate our model using the same setting with Li et al. (2020a).\nB.2 Baselines\nFor English flat NER, we use several taggers as baseline models, including ELMO-Tagger (Peters et al., 2018), BERT-Tagger (Peters et al., 2018), which using ELMO, BERT as encoder respectively. And for Chinese flat NER, we use Glyce (Meng\net al., 2019), FLAT (Li et al., 2020a) and SLKNER (Hu and Wei, 2020) as baseline models. They incoprate glyph information, phrase embeddings and second-order lexicon knowledge for Chinese NER respectively.\nB.3 Results We evaluated our model on the flat NER dataset, as shown in Table 7. Our model outperforms the baseline models on Weibo Chinese, improving the F1-score by 0.61%. On CoNLL03, our model also achieves comparable results, with less than 1% performance drop compared to the (Yu et al., 2020)."
+    } ],
+    "references" : [ {
+      "title" : "Recognising nested named entities in biomedical text",
+      "author" : [ "Beatrice Alex", "Barry Haddow", "Claire Grover." ],
+      "venue" : "Biological, translational, and clinical language processing, pages 65–72, Prague, Czech Republic. Association for Computational Linguistics.",
+      "citeRegEx" : "Alex et al\\.,? 2007",
+      "shortCiteRegEx" : "Alex et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "Soft-nms — improving object detection with one line of code",
+      "author" : [ "N. Bodla", "B. Singh", "R. Chellappa", "L.S. Davis." ],
+      "venue" : "2017 IEEE International Conference on Computer Vision (ICCV), pages 5562– 5570.",
+      "citeRegEx" : "Bodla et al\\.,? 2017",
+      "shortCiteRegEx" : "Bodla et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Cascade r-cnn: Delving into high quality object detection",
+      "author" : [ "Z. Cai", "N. Vasconcelos." ],
+      "venue" : "2018 IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 6154–6162.",
+      "citeRegEx" : "Cai and Vasconcelos.,? 2018",
+      "shortCiteRegEx" : "Cai and Vasconcelos.",
+      "year" : 2018
+    }, {
+      "title" : "How to train good word embeddings for biomedical NLP",
+      "author" : [ "Billy Chiu", "Gamal Crichton", "Anna Korhonen", "Sampo Pyysalo." ],
+      "venue" : "Proceedings of the 15th Workshop on Biomedical Natural Language Processing, pages 166–174, Berlin, Germany. Asso-",
+      "citeRegEx" : "Chiu et al\\.,? 2016",
+      "shortCiteRegEx" : "Chiu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Rfcn: Object detection via region-based fully convolutional networks",
+      "author" : [ "Jifeng Dai", "Yi Li", "Kaiming He", "Jian Sun." ],
+      "venue" : "Proceedings of the 30th International Conference on Neural Information Processing Systems, NIPS’16, page 379–387, Red Hook, NY,",
+      "citeRegEx" : "Dai et al\\.,? 2016",
+      "shortCiteRegEx" : "Dai et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The automatic content extraction (ACE) program – tasks, data, and evaluation",
+      "author" : [ "George Doddington", "Alexis Mitchell", "Mark Przybocki", "Lance Ramshaw", "Stephanie Strassel", "Ralph Weischedel." ],
+      "venue" : "Proceedings of the Fourth International Conference",
+      "citeRegEx" : "Doddington et al\\.,? 2004",
+      "shortCiteRegEx" : "Doddington et al\\.",
+      "year" : 2004
+    }, {
+      "title" : "Deep joint entity disambiguation with local neural attention",
+      "author" : [ "Octavian-Eugen Ganea", "Thomas Hofmann." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 2619–2629, Copenhagen, Denmark. Associa-",
+      "citeRegEx" : "Ganea and Hofmann.,? 2017",
+      "shortCiteRegEx" : "Ganea and Hofmann.",
+      "year" : 2017
+    }, {
+      "title" : "Fast r-cnn",
+      "author" : [ "Ross Girshick." ],
+      "venue" : "Proceedings of the 2015 IEEE International Conference on Computer Vision (ICCV), ICCV ’15, page 1440–1448, USA. IEEE Computer Society.",
+      "citeRegEx" : "Girshick.,? 2015",
+      "shortCiteRegEx" : "Girshick.",
+      "year" : 2015
+    }, {
+      "title" : "Rich feature hierarchies for accurate object detection and semantic segmentation",
+      "author" : [ "Ross Girshick", "Jeff Donahue", "Trevor Darrell", "Jitendra Malik." ],
+      "venue" : "Proceedings of the 2014 IEEE Conference on Computer Vision and Pattern Recognition, CVPR ’14,",
+      "citeRegEx" : "Girshick et al\\.,? 2014",
+      "shortCiteRegEx" : "Girshick et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Mask r-cnn",
+      "author" : [ "K. He", "G. Gkioxari", "P. Dollár", "R. Girshick." ],
+      "venue" : "2017 IEEE International Conference on Computer Vision (ICCV), pages 2980–2988.",
+      "citeRegEx" : "He et al\\.,? 2017",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Bridging nonlinearities and stochastic regularizers with gaussian error linear units",
+      "author" : [ "Dan Hendrycks", "Kevin Gimpel." ],
+      "venue" : "CoRR, abs/1606.08415.",
+      "citeRegEx" : "Hendrycks and Gimpel.,? 2016",
+      "shortCiteRegEx" : "Hendrycks and Gimpel.",
+      "year" : 2016
+    }, {
+      "title" : "Slk-ner: Exploiting second-order lexicon knowledge for chinese ner",
+      "author" : [ "Dou Hu", "Lingwei Wei." ],
+      "venue" : "The 32nd International Conference on Software & Knowledge Engineering.",
+      "citeRegEx" : "Hu and Wei.,? 2020",
+      "shortCiteRegEx" : "Hu and Wei.",
+      "year" : 2020
+    }, {
+      "title" : "Bidirectional lstm-crf models for sequence tagging",
+      "author" : [ "Zhiheng Huang", "Wei Xu", "Kai Yu." ],
+      "venue" : "arXiv preprint arXiv:1508.01991.",
+      "citeRegEx" : "Huang et al\\.,? 2015",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Overview of TAC-KBP2017 13 languages entity discovery and linking",
+      "author" : [ "Heng Ji", "Xiaoman Pan", "Boliang Zhang", "Joel Nothman", "James Mayfield", "Paul McNamee", "Cash Costello." ],
+      "venue" : "Proceedings of the 2017 Text Analysis Conference, TAC",
+      "citeRegEx" : "Ji et al\\.,? 2017",
+      "shortCiteRegEx" : "Ji et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "A neural layered model for nested named entity recognition",
+      "author" : [ "Meizhi Ju", "Makoto Miwa", "Sophia Ananiadou." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Lan-",
+      "citeRegEx" : "Ju et al\\.,? 2018",
+      "shortCiteRegEx" : "Ju et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Nested named entity recognition revisited",
+      "author" : [ "Arzoo Katiyar", "Claire Cardie." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long Pa-",
+      "citeRegEx" : "Katiyar and Cardie.,? 2018",
+      "shortCiteRegEx" : "Katiyar and Cardie.",
+      "year" : 2018
+    }, {
+      "title" : "Improving entity linking by modeling latent relations between mentions",
+      "author" : [ "Phong Le", "Ivan Titov." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1595–1604, Melbourne, Aus-",
+      "citeRegEx" : "Le and Titov.,? 2018",
+      "shortCiteRegEx" : "Le and Titov.",
+      "year" : 2018
+    }, {
+      "title" : "BioBERT: a pre-trained biomedical language representation model for biomedical text mining",
+      "author" : [ "Jinhyuk Lee", "Wonjin Yoon", "Sungdong Kim", "Donghyeon Kim", "Sunkyu Kim", "Chan Ho So", "Jaewoo Kang." ],
+      "venue" : "Bioinformatics.",
+      "citeRegEx" : "Lee et al\\.,? 2019",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Incremental joint extraction of entity mentions and relations",
+      "author" : [ "Qi Li", "Heng Ji." ],
+      "venue" : "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 402–412, Baltimore, Maryland. Association",
+      "citeRegEx" : "Li and Ji.,? 2014",
+      "shortCiteRegEx" : "Li and Ji.",
+      "year" : 2014
+    }, {
+      "title" : "FLAT: Chinese NER using flatlattice transformer",
+      "author" : [ "Xiaonan Li", "Hang Yan", "Xipeng Qiu", "Xuanjing Huang." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 6836–6842, Online. Association",
+      "citeRegEx" : "Li et al\\.,? 2020a",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A unified MRC framework for named entity recognition",
+      "author" : [ "Xiaoya Li", "Jingrong Feng", "Yuxian Meng", "Qinghong Han", "Fei Wu", "Jiwei Li." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 5849–",
+      "citeRegEx" : "Li et al\\.,? 2020b",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Sequence-to-nuggets: Nested entity mention detection via anchor-region networks",
+      "author" : [ "Hongyu Lin", "Yaojie Lu", "Xianpei Han", "Le Sun." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 5182–5192,",
+      "citeRegEx" : "Lin et al\\.,? 2019",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Focal loss for dense object detection",
+      "author" : [ "T. Lin", "P. Goyal", "R. Girshick", "K. He", "P. Dollár." ],
+      "venue" : "2017 IEEE International Conference on Computer Vision (ICCV), pages 2999–3007.",
+      "citeRegEx" : "Lin et al\\.,? 2017",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Ssd: Single shot multibox detector",
+      "author" : [ "Wei Liu", "Dragomir Anguelov", "Dumitru Erhan", "Christian Szegedy", "Scott Reed", "Cheng-Yang Fu", "Alexander C Berg." ],
+      "venue" : "European conference on computer vision, pages 21–37. Springer.",
+      "citeRegEx" : "Liu et al\\.,? 2016",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Joint mention extraction and classification with mention hypergraphs",
+      "author" : [ "Wei Lu", "Dan Roth." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 857–867, Lisbon, Portugal. Association for Compu-",
+      "citeRegEx" : "Lu and Roth.,? 2015",
+      "shortCiteRegEx" : "Lu and Roth.",
+      "year" : 2015
+    }, {
+      "title" : "Bipartite flat-graph network for nested named entity recognition",
+      "author" : [ "Ying Luo", "Hai Zhao." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 6408– 6418, Online. Association for Computational Lin-",
+      "citeRegEx" : "Luo and Zhao.,? 2020",
+      "shortCiteRegEx" : "Luo and Zhao.",
+      "year" : 2020
+    }, {
+      "title" : "Glyce: Glyph-vectors for chinese character representations",
+      "author" : [ "Yuxian Meng", "Wei Wu", "Fei Wang", "Xiaoya Li", "Ping Nie", "Fan Yin", "Muyu Li", "Qinghong Han", "Xiaofei Sun", "Jiwei Li." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 32, pages",
+      "citeRegEx" : "Meng et al\\.,? 2019",
+      "shortCiteRegEx" : "Meng et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "End-to-end relation extraction using LSTMs on sequences and tree structures",
+      "author" : [ "Makoto Miwa", "Mohit Bansal." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1105–1116, Berlin,",
+      "citeRegEx" : "Miwa and Bansal.,? 2016",
+      "shortCiteRegEx" : "Miwa and Bansal.",
+      "year" : 2016
+    }, {
+      "title" : "Labeling gaps between words: Recognizing overlapping mentions with mention separators",
+      "author" : [ "Aldrian Obaja Muis", "Wei Lu." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 2608–2618, Copenhagen,",
+      "citeRegEx" : "Muis and Lu.,? 2017",
+      "shortCiteRegEx" : "Muis and Lu.",
+      "year" : 2017
+    }, {
+      "title" : "The genia corpus: An annotated research abstract corpus in molecular biology domain",
+      "author" : [ "Tomoko Ohta", "Yuka Tateisi", "Jin-Dong Kim." ],
+      "venue" : "Proceedings of the Second International Conference on Human Language Technology Research, HLT ’02, page",
+      "citeRegEx" : "Ohta et al\\.,? 2002",
+      "shortCiteRegEx" : "Ohta et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Named entity recognition for Chinese social media with jointly trained embeddings",
+      "author" : [ "Nanyun Peng", "Mark Dredze." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 548–554, Lisbon, Portugal.",
+      "citeRegEx" : "Peng and Dredze.,? 2015",
+      "shortCiteRegEx" : "Peng and Dredze.",
+      "year" : 2015
+    }, {
+      "title" : "GloVe: Global vectors for word representation",
+      "author" : [ "Jeffrey Pennington", "Richard Socher", "Christopher Manning." ],
+      "venue" : "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1532–1543, Doha,",
+      "citeRegEx" : "Pennington et al\\.,? 2014",
+      "shortCiteRegEx" : "Pennington et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Deep contextualized word representations",
+      "author" : [ "Matthew Peters", "Mark Neumann", "Mohit Iyyer", "Matt Gardner", "Christopher Clark", "Kenton Lee", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Associ-",
+      "citeRegEx" : "Peters et al\\.,? 2018",
+      "shortCiteRegEx" : "Peters et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "You only look once: Unified, real-time object detection",
+      "author" : [ "J. Redmon", "S. Divvala", "R. Girshick", "A. Farhadi." ],
+      "venue" : "2016 IEEE Conference on Computer Vision and Pattern Recognition (CVPR), pages 779– 788.",
+      "citeRegEx" : "Redmon et al\\.,? 2016",
+      "shortCiteRegEx" : "Redmon et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Faster r-cnn: Towards real-time object detection with region proposal networks",
+      "author" : [ "Shaoqing Ren", "Kaiming He", "Ross Girshick", "Jian Sun." ],
+      "venue" : "IEEE Trans. Pattern Anal. Mach. Intell., 39(6):1137–1149.",
+      "citeRegEx" : "Ren et al\\.,? 2017",
+      "shortCiteRegEx" : "Ren et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Overfeat: Integrated recognition, localization and detection using convolutional networks",
+      "author" : [ "Pierre Sermanet", "David Eigen", "Xiang Zhang", "Michaël Mathieu", "Rob Fergus", "Yann LeCun." ],
+      "venue" : "2nd International Conference on Learning Representations.",
+      "citeRegEx" : "Sermanet et al\\.,? 2013",
+      "shortCiteRegEx" : "Sermanet et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Nested named entity recognition via second-best sequence learning and decoding",
+      "author" : [ "Takashi Shibuya", "Eduard Hovy." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 8:605–620.",
+      "citeRegEx" : "Shibuya and Hovy.,? 2020",
+      "shortCiteRegEx" : "Shibuya and Hovy.",
+      "year" : 2020
+    }, {
+      "title" : "Deep exhaustive model for nested named entity recognition",
+      "author" : [ "Mohammad Golam Sohrab", "Makoto Miwa." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 2843–2849, Brussels, Belgium. Associa-",
+      "citeRegEx" : "Sohrab and Miwa.,? 2018",
+      "shortCiteRegEx" : "Sohrab and Miwa.",
+      "year" : 2018
+    }, {
+      "title" : "Neural architectures for nested NER through linearization",
+      "author" : [ "Jana Straková", "Milan Straka", "Jan Hajic." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 5326–5331, Florence, Italy. Association for",
+      "citeRegEx" : "Straková et al\\.,? 2019",
+      "shortCiteRegEx" : "Straková et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Boundary enhanced neural span classification for nested named entity recognition",
+      "author" : [ "Chuanqi Tan", "Wei Qiu", "Mosha Chen", "Rui Wang", "Fei Huang." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, 34(05):9016–9023.",
+      "citeRegEx" : "Tan et al\\.,? 2020",
+      "shortCiteRegEx" : "Tan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Introduction to the CoNLL-2003 shared task: Language-independent named entity recognition",
+      "author" : [ "Erik F. Tjong Kim Sang", "Fien De Meulder." ],
+      "venue" : "Proceedings of the Seventh Conference on Natural Language Learning at HLT-NAACL 2003, pages",
+      "citeRegEx" : "Sang and Meulder.,? 2003",
+      "shortCiteRegEx" : "Sang and Meulder.",
+      "year" : 2003
+    }, {
+      "title" : "Pyramid: A layered model for nested named entity recognition",
+      "author" : [ "Jue Wang", "Lidan Shou", "Ke Chen", "Gang Chen." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 5918–5928, Online. Association",
+      "citeRegEx" : "Wang et al\\.,? 2020a",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "HIT: Nested named entity recognition via head-tail pair and token interaction",
+      "author" : [ "Yu Wang", "Yun Li", "Hanghang Tong", "Ziye Zhu." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages",
+      "citeRegEx" : "Wang et al\\.,? 2020b",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Named entity recognition as dependency parsing",
+      "author" : [ "Juntao Yu", "Bernd Bohnet", "Massimo Poesio." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 6470– 6476, Online. Association for Computational Lin-",
+      "citeRegEx" : "Yu et al\\.,? 2020",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A boundary-aware neural model for nested named entity recognition",
+      "author" : [ "Changmeng Zheng", "Yi Cai", "Jingyun Xu", "Ho-fung Leung", "Guandong Xu." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Zheng et al\\.,? 2019",
+      "shortCiteRegEx" : "Zheng et al\\.",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 7,
+      "context" : "NER is widely used in downstream tasks, such as entity linking (Ganea and Hofmann, 2017; Le and Titov, 2018) and relation extraction (Li and Ji, 2014; Miwa and Bansal, 2016).",
+      "startOffset" : 63,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 17,
+      "context" : "NER is widely used in downstream tasks, such as entity linking (Ganea and Hofmann, 2017; Le and Titov, 2018) and relation extraction (Li and Ji, 2014; Miwa and Bansal, 2016).",
+      "startOffset" : 63,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 19,
+      "context" : "NER is widely used in downstream tasks, such as entity linking (Ganea and Hofmann, 2017; Le and Titov, 2018) and relation extraction (Li and Ji, 2014; Miwa and Bansal, 2016).",
+      "startOffset" : 133,
+      "endOffset" : 173
+    }, {
+      "referenceID" : 28,
+      "context" : "NER is widely used in downstream tasks, such as entity linking (Ganea and Hofmann, 2017; Le and Titov, 2018) and relation extraction (Li and Ji, 2014; Miwa and Bansal, 2016).",
+      "startOffset" : 133,
+      "endOffset" : 173
+    }, {
+      "referenceID" : 0,
+      "context" : "Some works revised sequence models to support nested entities using different strategies (Alex et al., 2007; Ju et al., 2018; Straková et al., 2019; Wang et al., 2020a) and some works adopt the hyper-graph to capture all possible entity mentions in a sentence (Lu and Roth, 2015; Katiyar and Cardie, 2018).",
+      "startOffset" : 89,
+      "endOffset" : 168
+    }, {
+      "referenceID" : 15,
+      "context" : "Some works revised sequence models to support nested entities using different strategies (Alex et al., 2007; Ju et al., 2018; Straková et al., 2019; Wang et al., 2020a) and some works adopt the hyper-graph to capture all possible entity mentions in a sentence (Lu and Roth, 2015; Katiyar and Cardie, 2018).",
+      "startOffset" : 89,
+      "endOffset" : 168
+    }, {
+      "referenceID" : 39,
+      "context" : "Some works revised sequence models to support nested entities using different strategies (Alex et al., 2007; Ju et al., 2018; Straková et al., 2019; Wang et al., 2020a) and some works adopt the hyper-graph to capture all possible entity mentions in a sentence (Lu and Roth, 2015; Katiyar and Cardie, 2018).",
+      "startOffset" : 89,
+      "endOffset" : 168
+    }, {
+      "referenceID" : 42,
+      "context" : "Some works revised sequence models to support nested entities using different strategies (Alex et al., 2007; Ju et al., 2018; Straková et al., 2019; Wang et al., 2020a) and some works adopt the hyper-graph to capture all possible entity mentions in a sentence (Lu and Roth, 2015; Katiyar and Cardie, 2018).",
+      "startOffset" : 89,
+      "endOffset" : 168
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2020a) and some works adopt the hyper-graph to capture all possible entity mentions in a sentence (Lu and Roth, 2015; Katiyar and Cardie, 2018).",
+      "startOffset" : 100,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2020a) and some works adopt the hyper-graph to capture all possible entity mentions in a sentence (Lu and Roth, 2015; Katiyar and Cardie, 2018).",
+      "startOffset" : 100,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 38,
+      "context" : "We focus on the span-based methods (Sohrab and Miwa, 2018; Zheng et al., 2019; Tan et al., 2020), which treat named entity recognition as a classification task on a span with the innate ability to recognize nested named entities.",
+      "startOffset" : 35,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 45,
+      "context" : "We focus on the span-based methods (Sohrab and Miwa, 2018; Zheng et al., 2019; Tan et al., 2020), which treat named entity recognition as a classification task on a span with the innate ability to recognize nested named entities.",
+      "startOffset" : 35,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 40,
+      "context" : "We focus on the span-based methods (Sohrab and Miwa, 2018; Zheng et al., 2019; Tan et al., 2020), which treat named entity recognition as a classification task on a span with the innate ability to recognize nested named entities.",
+      "startOffset" : 35,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 45,
+      "context" : "2783 Although some methods (Zheng et al., 2019; Tan et al., 2020) have used a sequence labeling model to predict boundaries, yet without dynamic adjustment, the boundary information is not fully utilized.",
+      "startOffset" : 27,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 40,
+      "context" : "2783 Although some methods (Zheng et al., 2019; Tan et al., 2020) have used a sequence labeling model to predict boundaries, yet without dynamic adjustment, the boundary information is not fully utilized.",
+      "startOffset" : 27,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 9,
+      "context" : "In computer vision, the two-stage object detectors (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018) are the most popular object detection algorithm.",
+      "startOffset" : 51,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 8,
+      "context" : "In computer vision, the two-stage object detectors (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018) are the most popular object detection algorithm.",
+      "startOffset" : 51,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 35,
+      "context" : "In computer vision, the two-stage object detectors (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018) are the most popular object detection algorithm.",
+      "startOffset" : 51,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 4,
+      "context" : "In computer vision, the two-stage object detectors (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018) are the most popular object detection algorithm.",
+      "startOffset" : 51,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 10,
+      "context" : "In computer vision, the two-stage object detectors (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018) are the most popular object detection algorithm.",
+      "startOffset" : 51,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 2,
+      "context" : "In computer vision, the two-stage object detectors (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018) are the most popular object detection algorithm.",
+      "startOffset" : 51,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 1,
+      "context" : "In addition, we apply the soft non-maximum suppression (Soft-NMS) (Bodla et al., 2017) algorithm to entity decoding for dropping the false positives.",
+      "startOffset" : 66,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 15,
+      "context" : "The characterlevel embedding is generated by a BiLSTM module with the same setting as (Ju et al., 2018).",
+      "startOffset" : 86,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 44,
+      "context" : "For the contextualized word embedding, we follow (Yu et al., 2020) to obtain the context-dependent embedding for a target token with one surrounding sentence on each side.",
+      "startOffset" : 49,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 11,
+      "context" : "where [; ] denotes the concatenate operation, MLP consists of two linear layers and a GELU (Hendrycks and Gimpel, 2016) activation function.",
+      "startOffset" : 91,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 23,
+      "context" : "For the span proposal filter, we use focal loss (Lin et al., 2017) to solve the imbalance problem:",
+      "startOffset" : 48,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 1,
+      "context" : ", sN}, where N denotes as the number of span proposals, we use the Soft-NMS (Bodla et al., 2017) algorithm to filter the false positives.",
+      "startOffset" : 76,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 6,
+      "context" : "ACE 2004 and ACE 2005 (Doddington et al., 2004; Christopher Walker and Maeda, 2006) are two nested datasets, each of them contains 7 entity categories.",
+      "startOffset" : 22,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 14,
+      "context" : "2787 KBP17 (Ji et al., 2017) has 5 entity categories, including GPE, ORG, PER, LOC, and FAC.",
+      "startOffset" : 11,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 30,
+      "context" : "GENIA (Ohta et al., 2002) is a biology nested named entity dataset and contains five entity types, including DNA, RNA, protein, cell line, and cell type categories.",
+      "startOffset" : 6,
+      "endOffset" : 25
+    }, {
+      "referenceID" : 32,
+      "context" : "In most experiments, we use GloVE (Pennington et al., 2014) and BERT (Devlin et al.",
+      "startOffset" : 34,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 3,
+      "context" : "For the GENIA dataset, we replace GloVE with BioWordvec (Chiu et al., 2016), BERT with BioBERT (Lee et al.",
+      "startOffset" : 56,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 13,
+      "context" : ", LSTM-CRF (Huang et al., 2015)) is employed to output the sequence of labels with maximum probability.",
+      "startOffset" : 11,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 0,
+      "context" : "In recent years, several approaches have been proposed to solve the nested named entity recognition task, mainly including tagging-based (Alex et al., 2007; Wang et al., 2020a), hypergraph-based (Muis and Lu, 2017; Katiyar and Cardie, 2018), and span-based",
+      "startOffset" : 137,
+      "endOffset" : 176
+    }, {
+      "referenceID" : 42,
+      "context" : "In recent years, several approaches have been proposed to solve the nested named entity recognition task, mainly including tagging-based (Alex et al., 2007; Wang et al., 2020a), hypergraph-based (Muis and Lu, 2017; Katiyar and Cardie, 2018), and span-based",
+      "startOffset" : 137,
+      "endOffset" : 176
+    }, {
+      "referenceID" : 29,
+      "context" : ", 2020a), hypergraph-based (Muis and Lu, 2017; Katiyar and Cardie, 2018), and span-based",
+      "startOffset" : 27,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2020a), hypergraph-based (Muis and Lu, 2017; Katiyar and Cardie, 2018), and span-based",
+      "startOffset" : 27,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 0,
+      "context" : "Layered-CRF (Alex et al., 2007) dynamically stacks flat NER layers to identify entities from inner to outer.",
+      "startOffset" : 12,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 42,
+      "context" : "Pyramid (Wang et al., 2020a) designs a pyramid structured tagging framework that uses CNN networks to identify entities from the bottom up.",
+      "startOffset" : 8,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 38,
+      "context" : "Exhaustive Model (Sohrab and Miwa, 2018) exhausts all possible spans in a text sequence and then predicts their classes.",
+      "startOffset" : 17,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 36,
+      "context" : "The one-stage object detector densely proposes anchor boxes by covering the possible positions, scales, and aspect ratios, and then predicts the categories and accurate positions based on them in a singleshot way, such as OverFeat (Sermanet et al., 2013), YOLO (Redmon et al.",
+      "startOffset" : 231,
+      "endOffset" : 254
+    }, {
+      "referenceID" : 9,
+      "context" : "The two-stage object detector can be seen as an extension of the dense detector and has been the most dominant object detection algorithm for many years (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018).",
+      "startOffset" : 153,
+      "endOffset" : 272
+    }, {
+      "referenceID" : 8,
+      "context" : "The two-stage object detector can be seen as an extension of the dense detector and has been the most dominant object detection algorithm for many years (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018).",
+      "startOffset" : 153,
+      "endOffset" : 272
+    }, {
+      "referenceID" : 35,
+      "context" : "The two-stage object detector can be seen as an extension of the dense detector and has been the most dominant object detection algorithm for many years (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018).",
+      "startOffset" : 153,
+      "endOffset" : 272
+    }, {
+      "referenceID" : 4,
+      "context" : "The two-stage object detector can be seen as an extension of the dense detector and has been the most dominant object detection algorithm for many years (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018).",
+      "startOffset" : 153,
+      "endOffset" : 272
+    }, {
+      "referenceID" : 10,
+      "context" : "The two-stage object detector can be seen as an extension of the dense detector and has been the most dominant object detection algorithm for many years (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018).",
+      "startOffset" : 153,
+      "endOffset" : 272
+    }, {
+      "referenceID" : 2,
+      "context" : "The two-stage object detector can be seen as an extension of the dense detector and has been the most dominant object detection algorithm for many years (Girshick et al., 2014; Girshick, 2015; Ren et al., 2017; Dai et al., 2016; He et al., 2017; Cai and Vasconcelos, 2018).",
+      "startOffset" : 153,
+      "endOffset" : 272
+    } ],
+    "year" : 2021,
+    "abstractText" : "Named entity recognition (NER) is a wellstudied task in natural language processing. Traditional NER research only deals with flat entities and ignores nested entities. The span-based methods treat entity recognition as a span classification task. Although these methods have the innate ability to handle nested NER, they suffer from high computational cost, ignorance of boundary information, under-utilization of the spans that partially match with entities, and difficulties in long entity recognition. To tackle these issues, we propose a two-stage entity identifier. First we generate span proposals by filtering and boundary regression on the seed spans to locate the entities, and then label the boundaryadjusted span proposals with the corresponding categories. Our method effectively utilizes the boundary information of entities and partially matched spans during training. Through boundary regression, entities of any length can be covered theoretically, which improves the ability to recognize long entities. In addition, many low-quality seed spans are filtered out in the first stage, which reduces the time complexity of inference. Experiments on nested NER datasets demonstrate that our proposed method outperforms previous state-of-the-art models.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

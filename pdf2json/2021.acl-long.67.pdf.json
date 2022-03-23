@@ -1,0 +1,586 @@
+{
+  "name" : "2021.acl-long.67.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Bilingual Lexicon Induction via Unsupervised Bitext Construction and Word Alignment",
+    "authors" : [ "Haoyue Shi", "Luke Zettlemoyer", "Sida I. Wang" ],
+    "emails" : [ "freda@ttic.edu", "lsz@fb.com", "sida@fb.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 813–826\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n813"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Bilingual lexicons map words in one language to their translations in another, and can be automatically induced by learning linear projections to align monolingual word embedding spaces (Artetxe et al., 2016; Smith et al., 2017; Lample et al., 2018, inter alia). Although very successful in practice, the linear nature of these methods encodes unrealistic simplifying assumptions (e.g. all translations of a word have similar embeddings). In this paper, we show it is possible to produce much higher quality lexicons without these restrictions by introducing new methods that combine (1) unsupervised bitext mining and (2) unsupervised word alignment.\n∗Work done during internship at Facebook AI Research. 1Code is publicly available at https://github.com/\nfacebookresearch/bitext-lexind.\nWe show that simply pipelining recent algorithms for unsupervised bitext mining (Tran et al., 2020) and unsupervised word alignment (Sabet et al., 2020) significantly improves bilingual lexicon induction (BLI) quality, and that further gains are possible by learning to filter the resulting lexical entries. Improving on a recent method for doing BLI via unsupervised machine translation (Artetxe et al., 2019), we show that unsupervised mining produces better bitext for lexicon induction than translation, especially for less frequent words.\nThese core contributions are established by systematic experiments in the class of bitext construction and alignment methods (Figure 1). Our full induction algorithm filters the lexicon found via the initial unsupervised pipeline. The filtering can be either fully unsupervised or weakly-supervised: for the former, we filter using simple heuristics and global statistics; for the latter, we train a multi-layer perceptron (MLP) to predict the probability of a word pair being in the lexicon, where the features are global statistics of word alignments.\nIn addition to BLI, our method can also be directly adapted to improve word alignment and reach competitive or better alignment accuracy than the state of the art on all investigated language pairs. We find that improved alignment in sentence representations (Tran et al., 2020) leads to better contextual word alignments using local similarity (Sabet et al., 2020).\nOur final BLI approach outperforms the previous state of the art on the BUCC 2020 shared task (Rapp et al., 2020) by 14 F1 points averaged over 12 language pairs. Manual analysis shows that most of our false positives are due to the incompleteness of the reference and that our lexicon is comparable to the reference lexicon and the output of a supervised system. Because both of our key building blocks make use of the pretrainined contextual representations from mBART (Liu et al.,\n2020) and CRISS (Tran et al., 2020), we can also interpret these results as clear evidence that lexicon induction benefits from contextualized reasoning at the token level, in strong contrast to nearly all existing methods that learn linear projections on word types."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "Bilingual lexicon induction (BLI). The task of BLI aims to induce a bilingual lexicon (i.e., word translation) from comparable monolingual corpora (e.g., Wikipedia in different languages). Following Mikolov et al. (2013), most methods train a linear projection to align two monolingual embedding spaces. For supervised BLI, a seed lexicon is used to learn the projection matrix (Artetxe et al., 2016; Smith et al., 2017; Joulin et al., 2018). For unsupervised BLI, the projection matrix is typically found by an iterative procedure such as adversarial learning (Lample et al., 2018; Zhang et al., 2017), or iterative refinement initialized by a statistical heuristics (Hoshen and Wolf, 2018; Artetxe et al., 2018). Artetxe et al. (2019) show strong gains over previous works by word aligning bitext generated with unsupervised machine translation. We show that retrieval-based bitext mining and contextual word alignment achieves even better performance.\nWord alignment. Word alignment is a fundamental problem in statistical machine translation, of which the goal is to align words that are translations of each in within parallel sentences (Brown et al., 1993). Most methods assume parallel sentences for training data (Och and Ney, 2003; Dyer et al., 2013; Peter et al., 2017, inter alia). In contrast, Sabet et al. (2020) propose SimAlign, which does not train on parallel sentences but instead aligns words that have the most similar pre-\ntrained multilingual representations (Devlin et al., 2019; Conneau et al., 2019). SimAlign achieves competitive or superior performance than conventional alignment methods despite not using parallel sentences, and provides one of the baseline components for our work. We also present a simple yet effective method to improve performance over SimAlign (Section 5).\nBitext mining/parallel corpus mining. Bitext mining has been a long studied task (Resnik, 1999; Shi et al., 2006; Abdul-Rauf and Schwenk, 2009, inter alia). Most methods train neural multilingual encoders on bitext, which are then used with efficent nearest neighbor search to expand the training set (Espana-Bonet et al., 2017; Schwenk, 2018; Guo et al., 2018; Artetxe and Schwenk, 2019a, inter alia). Recent work has also shown that unsupervised mining is possible (Tran et al., 2020; Keung et al., 2020). We use CRISS (Tran et al., 2020)2 as one of our component models."
+    }, {
+      "heading" : "3 Baseline Components",
+      "text" : "We build on unsupervised methods for word alignment and bitext construction, as reviewed below."
+    }, {
+      "heading" : "3.1 Unsupervised Word Alignment",
+      "text" : "SimAlign (Sabet et al., 2020) is an unsupervised word aligner based on the similarity of contextualized token embeddings. Given a pair of parallel sentences, SimAlign computes embeddings using pretrained multilingual language models such as mBERT and XLM-R, and forms a matrix whose entries are the cosine similarities between every source token vector and every target token vector.\n2https://github.com/pytorch/fairseq/ tree/master/examples/criss\nBased on the similarity matrix, the argmax algorithm aligns the positions that are the simultaneous column-wise and row-wise maxima. To increase recall, Sabet et al. (2020) also propose itermax, which applies argmax iteratively while excluding previously aligned positions."
+    }, {
+      "heading" : "3.2 Unsupervised Bitext Construction",
+      "text" : "We consider two methods for bitext construction: unsupervised machine translation (generation; Artetxe et al., 2019, Section 3.2) and bitext retrieval (retrieval; Tran et al., 2020, Section 3.2).\nGeneration Artetxe et al. (2019) train an unsupervised machine translation model with monolingual corpora, generate bitext with the obtained model, and further use the generated bitext to induce bilingual lexicons. We replace their statistical unsupervised translation model with CRISS, a recent high quality unsupervised machine translation model which is expected to produce much higher quality bitext (i.e., translations). For each sentence in the two monolingual corpora, we generate a translation to the other language using beam search or nucleus sampling (Holtzman et al., 2020).\nRetrieval Tran et al. (2020) show that the CRISS encoder module provides as a high-quality sentence encoder for cross-lingual retrieval: they take the average across the contextualized embeddings of tokens as sentence representation, perform nearest neighbor search with FAISS (Johnson et al., 2019),3 and mine bitext using the margin-based max-score method (Artetxe and Schwenk, 2019a).4\nThe score between sentence representations s and t is defined by\nscore(s, t) (1)\n= cos (s, t)∑\nt′∈NNk(t) cos(s,t′) 2k + ∑ s′∈NNk(s) cos(s′,t) 2k ,\nwhere NNk(·) denotes the set of k nearest neighbors of a vector in the corresponding space. In this work, we keep the top 20% of the sentence pairs with scores larger than 1 as the constructed bitext."
+    }, {
+      "heading" : "4 Proposed Framework for BLI",
+      "text" : "Our framework for bilingual lexicon induction takes separate monolingual corpora and the pretrained CRISS model as input, and outputs a list of\n3https://github.com/facebookresearch/ faiss\n4We used max-score (Artetxe and Schwenk, 2019a) as it strongly outperforms the other methods they proposed.\nbilingual word pairs as the induced lexicon. The framework consists of two parts: (i) an unsupervised bitext construction module which generates or retrieves bitext from separate monolingual corpora without explicit supervision (Section 3.2), and (ii) a lexicon induction module which induces bilingual lexicon from the constructed bitext based on the statistics of cross-lingual word alignment. For the lexicon induction module, we compare two approaches: fully unsupervised induction (Section 4.1) which does not use any extra supervision, and weakly supervised induction (Section 4.2) that uses a seed lexicon as input."
+    }, {
+      "heading" : "4.1 Fully Unsupervised Induction",
+      "text" : "We align the constructed bitext with CRISS-based SimAlign, and propose to use smoothed matched ratio for a pair of bilingual word type 〈s, t〉\nρ(s, t) = mat(s, t)\ncoc(s, t) + λ\nas the metric to induce lexicon, where mat(s, t) and coc(s, t) denote the one-to-one matching count (e.g., guten-good; Figure 1) and co-occurrence count of 〈s, t〉 appearing in a sentence pair respectively, and λ is a non-negative smoothing term.5\nDuring inference, we predict the target word t with the highest ρ(s, t) for each source word s. Like most previous work (Artetxe et al., 2016; Smith et al., 2017; Lample et al., 2018, inter alia), this method translates each source word to exactly one target word."
+    }, {
+      "heading" : "4.2 Weakly Supervised Induction",
+      "text" : "We also propose a weakly supervised method, which assumes access to a seed lexicon. This lexicon is used to train a classifier to further filter the potential lexical entries.\nFor a pair of word type 〈s, t〉, our classifier uses the following global features:\n• Count of alignment: we consider both one-toone alignment (Section 4.1) and many-to-one alignment (e.g., danke-you and danke-thank; Figure 1) of s and t separately as two features, since the task of lexicon induction is arguably biased toward one-to-one alignment.\n• Count of co-occurrence used in Section 4.1. 5We use λ = 20. This reduces the effect of noisy alignment: the most extreme case is that both mat(s, t) and coc(s, t) are 1, but it is probably not desirable despite the high matched ratio of 1.\n• The count of s in the source language and t in the target language.6\n• Non-contextualized word similarity: we feed the word type itself into CRISS, use the average pooling of the output subword embeddings, and consider both cosine similarity and dot-product similarity as features.\nFor a counting feature c, we take log (c+ θc), where θ consists of learnable parameters. There are 7 features in total, which is denoted by x〈s,t〉 ∈ R7.\nWe compute the probability of a pair of words 〈s, t〉 being in the induced lexicon PΘ(s, t)7 by a ReLU activated multi-layer perceptron (MLP):\nĥ〈s,t〉 = ReLU ( W1x〈s,t〉 + b1 ) PΘ(s, t) = σ ( w2 · ĥ〈s,t〉 + b2 ) ,\nwhere σ(·) denotes the sigmoid function, and Θ = {W1,b1,w2, b2} denotes the learnable parameters of the model.\nRecall that we are able to access a seed lexicon, which consists of pairs of word translations. In the training stage, we seek to maximize the log likelihood:\nΘ∗ = arg max Θ ∑ 〈s,t〉∈D+ logPΘ(s, t)\n+ ∑\n〈s′,t′〉∈D−\nlog ( 1− PΘ(s′, t′) ) ,\nwhere D+ and D− denotes the positive training set (i.e., the seed lexicon) and the negative training set respectively. We construct the negative training set by extracting all bilingual word pairs that cooccurred but are not in the seed word pairs.\nWe tune two hyperparameters δ and n to maximize the F1 score on the seed lexicon and use them for inference, where δ denotes the prediction threshold and n denotes the maximum number of translations for each source word, following Laville et al. (2020) who estimate these hyperparameters based on heuristics. The inference algorithm is summarized in Algorithm 1."
+    }, {
+      "heading" : "5 Extension to Word Alignment",
+      "text" : "The idea of using an MLP to induce lexicon with weak supervision (Section 4.2) can be directly extended to word alignment. Let B = {〈Si, Ti〉}Ni=1\n6SimAlign sometimes mistakenly align rare words to punctuation, and such features can help exclude such pairs.\n7Not to be confused with joint probability.\nAlgorithm 1: Inference algorithm for weakly-supervised lexicon induction.\nInput: Thresholds δ, n, Model parameters Θ, source words S Output: Induced lexicon L L ← ∅ for s ∈ S do\n(〈s, t1〉, . . . , 〈s, tk〉)← bilingual word pairs sorted by the descending order of PΘ(s, ti) k′ = max{j | PΘ(s, tj) ≥ δ, j ∈ [k]} m = min(n, k′) L ← L ∪ {〈s, t1〉, . . . , 〈s, tm〉}\nend\ndenote the constructed bitext in Section 3.2, where N denotes the number of sentence pairs, and Si and Ti denote a pair of sentences in the source and target language respectively. In a pair of bitext 〈S, T 〉, S = 〈s1, . . . , s`s〉 and T = 〈t1, . . . , t`s〉 denote sentences consist of word tokens si or ti.\nFor a pair of bitext, SimAlign with a specified inference algorithm produces word alignment A = {〈ai, bi〉}i, denoting that the word tokens sai and tbi are aligned. Sabet et al. (2020) has proposed different algorithms to induce alignment from the same similarity matrix, and the best method varies across language pairs. In this work, we consider the relatively conservative (i.e., having higher precision) argmax and the higher recall itermax algorithm (Sabet et al., 2020), and denote the alignments by Aargmax and Aitermax respectively.\nWe substitute the non-contextualized word similarity feature (Section 4.2) with contextualized word similarity where the corresponding word embedding is computed by averaging the final-layer contextualized subword embeddings of CRISS. The cosine similarities and dot-products of these embeddings are included as features.\nInstead of the binary classification in Section 4.2, we do ternary classification for word alignments. For a pair of word tokens 〈si, tj〉, the gold label y〈si,tj〉 is defined as\n1[〈i, j〉 ∈ Aargmax] + 1[〈i, j〉 ∈ Aitermax].\nIntuitively, the labels 0 and 2 represents confident alignment or non-alignment by both methods, while the label 1 models the potential alignment.\nThe MLP takes the features x〈si,tj〉 ∈ R7 of the word token pair, and compute the probability of\neach label y by ĥ = ReLU ( W1x〈si,tj〉 + b1 ) g = W2 · ĥ + b2 PΦ(y | si, tj ,S, T ) = exp (gy)∑ y′ exp ( gy′ ) ,\nwhere Φ = {W1W2,b1,b2}. On the training stage, we maximize the log-likelihood of groundtruth labels:\nΦ∗ = arg max Φ∑\n〈S,T 〉∈B ∑ si∈S ∑ tj∈T logPΦ(y〈si,tj〉 | si, tj ,S, T ).\nOn the inference stage, we keep all word token pairs 〈si, tj〉 that have\nEP [y] := ∑ y y · P (y | si, tj ,S, T ) > 1\nas the prediction."
+    }, {
+      "heading" : "6 Experimental Setup and Baselines",
+      "text" : "Throughout our experiments, we use a two-layer perceptron with the hidden size of 8 for both lexicon induction and word alignment. We optimize all of our models using Adam (Kingma and Ba, 2015) with the initial learning rate 5 × 10−4. For our bitext construction methods, we retrieve the best matching sentence or translate the sentences in the source language Wikipedia; for baseline models, we use their default settings.\nFor evaluation, we use the BUCC 2020 BLI shared task dataset (Rapp et al., 2020) and metric (F1). Like most recent work, this evaluation is based on MUSE (Lample et al., 2018).8 We primarily report the BUCC evaluation because it considers recall in addition to precision. However, because most recent work only evaluates on precision, we include those evaluations in Appendix D.\nWe compare the following baselines:\nBUCC. Best results from the BUCC 2020 (Rapp et al., 2020) for each language pairs, we take the maximum F1 score between the best closed-track results (Severini et al., 2020; Laville et al., 2020) and open-track ones (Severini et al., 2020). Our method would be considered open track since the pretrained models used a much larger data set (Common Crawl 25) than the BUCC 2020 closedtrack (Wikipedia or Wacky; Baroni et al., 2009).\n8https://github.com/facebookresearch/ MUSE\nVECMAP. Popular and robust method for aligning monolingual word embeddings via a linear projection and extracting lexicons. Here, we use the standard implementation9 with FastText vectors (Bojanowski et al., 2017)10 trained on the union of Wikipedia and Common Crawl corpus for each language.11 We include both supervised and unsupervised versions.\nWM. WikiMatrix (Schwenk et al., 2019)12 is a dataset of mined bitext. The mining method LASER (Artetxe and Schwenk, 2019b) is trained on real bitext and then used to mine more bitext from the Wikipedia corpora to get the WikiMatrix dataset. We test our lexicon induction method with WikiMatrix bitext as the input and compare to our methods that do not use bitext supervision."
+    }, {
+      "heading" : "7 BLI Results and Analysis",
+      "text" : ""
+    }, {
+      "heading" : "7.1 Main Results",
+      "text" : "We evaluate bidirectional translations from beam search (GEN; Section 3.2), bidirectional translations from nucleus sampling (GEN-N; Holtzman et al., 2020),13 and retrieval (RTV; Section 3.2). In addition, it is natural to concatenate the global statistical features (Section 4.2) from both GEN and RTV and we refer to this approach by GEN-RTV.\nOur main results are presented in Table 1. All of our models (GEN, GEN-N, RTV, GEN-RTV) outperform the previous state of the art (BUCC) by a significant margin on all language pairs. Surprisingly, RTV and GEN-RTV even outperform WikiMatrix by average F1 score, indicating that we do not need bitext supervision to obtain high-quality lexicons."
+    }, {
+      "heading" : "7.2 Automatic Analysis",
+      "text" : "Bitext quality. Since RTV achieves surprisingly high performance, we are interested in how much the quality of bitext affects the lexicon induction performance. We divide all retrieved bitexts with score (Eq. 1) larger than 1 equally into five sections with respect to the score, and compare the lexicon\n9https://github.com/artetxem/VecMap 10https://github.com/facebookresearch/ fastText 11https://github.com/facebookresearch/ fastText/blob/master/docs/crawl-vectors. md; that is, our VECMAP baselines have the same data availability with our main results.\n12https://github.com/facebookresearch/ LASER/tree/master/tasks/WikiMatrix\n13We sample from the smallest word set whose cumulative probability mass exceeds 0.5 for next words.\ninduction performance (Table 2). In the table, RTV1 refers to the bitext of the highest quality and RTV5 refers to the ones of the lowest quality, in terms of the margin score (Eq 1).14 We also add a random pseudo bitext baseline (Random), where all the bitext are randomly sampled from each language pair, as well as using all retrieved sentence pairs that have scores larger than 1 (RTV-ALL).\nIn general, the lexicon induction performance of RTV correlates well with the quality of bitext. Even using the bitext of the lowest quality (RTV-5), it is still able to induce reasonably good bilingual lexicon, outperforming the best numbers reported by BUCC 2020 participants (Table 1) on average. However, RTV achieves poor performance with random bitext (Table 2), indicating that it is only robust to a reasonable level of noise. While this is a lowerbound on bitext quality, even random bitext does not lead to 0 F1 since the model may align any\n14See Appendix C for examples from each tier.\nco-occurrences of correct word pairs even when they appear in unrelated sentences.\nWord alignment quality. We compare the lexicon induction performance using the same set of constructed bitext (RTV) and different word aligners (Table 3). According to Sabet et al. (2020), SimAlign outperforms fast align in terms of word alignment. We observe that such a trend translates to resulting lexicon induction performance well: a significantly better word aligner can usually lead to a better induced lexicon.\nBitext quantity. We investigate how the BLI performance changes when the quantity of bitext changes (Figure 2). We use CRISS with nucleus sampling (GEN-N) to create different amount of bitext of the same quality. We find that with only 1% of the bitext (160K sentence pairs on average) used by GEN-N, our weakly-supervised framework outperforms the previous state of the art (BUCC;"
+    }, {
+      "heading" : "1 5 10 20 50 100 300",
+      "text" : "Table 1). The model reaches its best performance using 20% of the bitext (3.2M sentence pairs on average) and then drops slightly with even more bitext. This is likely because more bitext introduces more candidates word pairs.\nDependence on word frequency of GEN vs. RTV. We observe that retrieval-based bitext construction (RTV) works significantly better than generationbased ones (GEN and GEN-N), in terms of lexicon induction performance (Table 1). To further investigate the source of such difference, we compare the performance of the RTV and GEN as a function of source word frequency or target word frequency, where the word frequency are computed from the lower-cased Wikipedia corpus. In Figure 3, we plot the F1 of RTV and GEN when the most frequent k% of words are considered. When all words are considered RTV outperform GEN for\n11 of 12 language pairs except de-fr. In 6 of 12 language pairs, GEN does better than RTV for high frequency source words. As more lower frequency words are included, GEN eventually does worse than RTV. This helps explain why the combined model GEN-RTV is even better since GEN can have an edge in high frequency words over RTV. The trend that F1(RTV)− F1(GEN) increases as more lower frequency words are included seems true for all language pairs (Appendix A).\nOn average and for the majority of language pairs, both methods do better on low-frequency source words than high-frequency ones (Figure 3a), which is consistent with the findings by BUCC 2020 participants (Rapp et al., 2020).\nVECMAP. While BLI through bitext construction and word alignment clearly achieves superior performance than that through vector rotation (Table 1), we further show that the gap is larger on low-frequency words (Figure 3)."
+    }, {
+      "heading" : "7.3 Ground-truth Analysis",
+      "text" : "Following the advice of Kementchedjhieva et al. (2019) that some care is needed due to the incompleteness and biases of the evaluation, we perform manual analysis of selected results. For Chinese–English translations, we uniformly sample 20 wrong lexicon entries according to the evaluation for both GEN-RTV and weakly-supervised VECMAP. Our judgments of these samples are shown in Table 4. For GEN-RTV, 18/20 of these sampled errors are actually acceptable translations, whereas for VECMAP, only 11/20 are acceptable. This indicates that the improvement in quality may be partly limited by the incompleteness of the reference lexicon and the ground truth performance of our method might be even better. The same analysis for English–Chinese is in Appendix B.\nFurthermore, we randomly sample 200 source words from the MUSE zh-en test set, and compare the quality between MUSE translation and those predicted by GEN-RTV. This comparison is MUSE-favored since only MUSE source words are included. Concretely, we take the union of word pairs, construct the new ground-truth by manual judgments (i.e., removing unacceptable pairs), and evaluate the F1 score against the constructed ground-truth (Table 5). The overall gap of 3 F1 means that a higher quality benchmark is necessary to resolve further improvements over GEN-RTV. The word pairs and judgments are included in the supplementary material (Section F)."
+    }, {
+      "heading" : "8 Word Alignment Results",
+      "text" : "We evaluate different word alignment methods (Table 6) on existing word alignment datasets,15\n15http://www-i6.informatik.rwth-aachen. de/goldAlignment (de-en); https://web.eecs.\nfollowing Sabet et al. (2020). We investigate four language pairs: German–English (de-en), English–French (en-fr), English–Hindi (en-hi) and Romanian–English (ro-en). We find that the CRISS-based SimAlign already achieves competitive performance with the state-of-the-art method (Garg et al., 2019) which requires real bitext for training. By ensembling the argmax and itermax CRISS-based SimAlign results (Section 5), we set the new state of the art of word alignment without using any bitext supervision.\nHowever, by substituting the CRISS-based SimAlign in the BLI pipeline with our aligner, we obtain an average F1 score of 73.0 for GENRTV, which does not improve over the result of 73.3 achieved by CRISS-based SimAlign (Table 1), indicating that further effort is required to take the advantage of the improved word aligner."
+    }, {
+      "heading" : "9 Discussion",
+      "text" : "We present a direct and effective framework for BLI with unsupervised bitext mining and word alignment, which sets a new state of the art on the task. From the perspective of pretrained multilingual models (Conneau et al., 2019; Liu et al., 2020; Tran et al., 2020, inter alia), our work shows that they have successfully captured information about word translation that can be extracted using similarity based alignment and refinement. Although BLI is only about word types, it strongly benefits from contextualized reasoning at the token level.\numich.edu/˜mihalcea/wpt (en-fr and ro-en); https: //web.eecs.umich.edu/˜mihalcea/wpt05 (enhi)"
+    }, {
+      "heading" : "Acknowledgment",
+      "text" : "We thank Chau Tran for help with pretrained CRISS models, as well as Mikel Artetxe, Kevin Gimpel, Karen Livescu, Jiayuan Mao and anonymous reviewers for their valuable feedback on this work."
+    }, {
+      "heading" : "A Language-Specific Analysis",
+      "text" : "While Figure 3 shows the average trend of F1 scores with respect to the portion of source words or target words kept, we present such plots for each language pair in Figure 4 and 5. The trend of each separate method is inconsistent, which is consistent to the findings by BUCC 2020 participants (Rapp et al., 2020). However, the conclusion that RTV gains more from low-frequency words still holds for most language pairs."
+    }, {
+      "heading" : "B Acceptability Judgments for en→ zh",
+      "text" : "We present error analysis for the induced lexicon for English to Chinese translations (Table 7) using the same method as Table 4. In this direction, many of the unacceptable cases are copying English words as their Chinese translations, which is also observed by Rapp et al. (2020). This is due to an idiosyncrasy of the evaluation data where many English words are considered acceptable Chinese translations of the same words."
+    }, {
+      "heading" : "C Examples for Bitext in Different Sections",
+      "text" : "We show examples of mined bitext with different quality (Table 8), where the mined bitexts are di-\nvided into 5 sections with respect to the similaritybased margin score (Eq 1). The Chinese sentences are automatically converted to traditional Chinese alphabets using chinese converter,16 to keep consistent with the MUSE dataset. Based on our knowledge about these languages, we see that the RTV-1 mostly consists of correct translations. While the other sections of bitext are of less quality, sentences within a pair are highly related or can be even partially aligned; therefore our bitext mining and alignment framework can still extract high-quality lexicon from such imperfect bitext."
+    }, {
+      "heading" : "D Results: P@1 on the MUSE Dataset",
+      "text" : "Precision@1 (P@1) is a widely applied metric to evaluate bilingual lexicon induction (Smith et al., 2017; Lample et al., 2018; Artetxe et al., 2019, inter alia), therefore we compare our models with existing approaches in terms of P@1 as well (Table 9). Our fully unsupervised method with retrieval-based bitext outperforms the previous state of the art (Artetxe et al., 2019) by 4.1 average P@1, and achieve competitive or superior performance on all investigated language pairs."
+    }, {
+      "heading" : "E Error analysis",
+      "text" : "To understand the remaining errors, we randomly sampled 400 word pairs from the induced lexicon and compare them to ground truth as and Google Translate via =googletranslate(A1, \"zh\", \"en\"). All error cases are included in Table 10. In overall precision, our induced lexicon is comparable to the output of Google translate API where there are 17 errors for GEN-RTV 14 errors for Google and 4 common errors.\n16https://pypi.org/project/ chinese-converter/"
+    } ],
+    "references" : [ {
+      "title" : "On the use of comparable corpora to improve SMT performance",
+      "author" : [ "Sadaf Abdul-Rauf", "Holger Schwenk." ],
+      "venue" : "Proc. of EACL.",
+      "citeRegEx" : "Abdul.Rauf and Schwenk.,? 2009",
+      "shortCiteRegEx" : "Abdul.Rauf and Schwenk.",
+      "year" : 2009
+    }, {
+      "title" : "Learning principled bilingual mappings of word embeddings while preserving monolingual invariance",
+      "author" : [ "Mikel Artetxe", "Gorka Labaka", "Eneko Agirre." ],
+      "venue" : "Proc. of EMNLP.",
+      "citeRegEx" : "Artetxe et al\\.,? 2016",
+      "shortCiteRegEx" : "Artetxe et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "A robust self-learning method for fully unsupervised cross-lingual mappings of word embeddings",
+      "author" : [ "Mikel Artetxe", "Gorka Labaka", "Eneko Agirre." ],
+      "venue" : "Proc. of ACL.",
+      "citeRegEx" : "Artetxe et al\\.,? 2018",
+      "shortCiteRegEx" : "Artetxe et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Bilingual lexicon induction through unsupervised machine translation",
+      "author" : [ "Mikel Artetxe", "Gorka Labaka", "Eneko Agirre." ],
+      "venue" : "Proc. of ACL.",
+      "citeRegEx" : "Artetxe et al\\.,? 2019",
+      "shortCiteRegEx" : "Artetxe et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Marginbased parallel corpus mining with multilingual sentence embeddings",
+      "author" : [ "Mikel Artetxe", "Holger Schwenk." ],
+      "venue" : "Proc. of ACL.",
+      "citeRegEx" : "Artetxe and Schwenk.,? 2019a",
+      "shortCiteRegEx" : "Artetxe and Schwenk.",
+      "year" : 2019
+    }, {
+      "title" : "Massively multilingual sentence embeddings for zeroshot cross-lingual transfer and beyond",
+      "author" : [ "Mikel Artetxe", "Holger Schwenk." ],
+      "venue" : "TACL, 7:597–610.",
+      "citeRegEx" : "Artetxe and Schwenk.,? 2019b",
+      "shortCiteRegEx" : "Artetxe and Schwenk.",
+      "year" : 2019
+    }, {
+      "title" : "The wacky wide web: a collection of very large linguistically processed webcrawled corpora",
+      "author" : [ "Marco Baroni", "Silvia Bernardini", "Adriano Ferraresi", "Eros Zanchetta." ],
+      "venue" : "Language resources and evaluation, 43(3):209–226.",
+      "citeRegEx" : "Baroni et al\\.,? 2009",
+      "shortCiteRegEx" : "Baroni et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Enriching word vectors with subword information",
+      "author" : [ "Piotr Bojanowski", "Edouard Grave", "Armand Joulin", "Tomas Mikolov." ],
+      "venue" : "TACL, 5:135–146.",
+      "citeRegEx" : "Bojanowski et al\\.,? 2017",
+      "shortCiteRegEx" : "Bojanowski et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "The mathematics of statistical machine translation: Parameter estimation",
+      "author" : [ "Peter F. Brown", "Stephen A. Della Pietra", "Vincent J. Della Pietra", "Robert L. Mercer." ],
+      "venue" : "Computational Linguistics, 19(2):263– 311.",
+      "citeRegEx" : "Brown et al\\.,? 1993",
+      "shortCiteRegEx" : "Brown et al\\.",
+      "year" : 1993
+    }, {
+      "title" : "Unsupervised cross-lingual representation learning at scale",
+      "author" : [ "Alexis Conneau", "Kartikay Khandelwal", "Naman Goyal", "Vishrav Chaudhary", "Guillaume Wenzek", "Francisco Guzmán", "Edouard Grave", "Myle Ott", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "arXiv",
+      "citeRegEx" : "Conneau et al\\.,? 2019",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proc. of NAACL-HLT.",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Improving zero-shot learning by mitigating the hubness problem",
+      "author" : [ "Georgiana Dinu", "Angeliki Lazaridou", "Marco Baroni." ],
+      "venue" : "Proc. of ICLR.",
+      "citeRegEx" : "Dinu et al\\.,? 2015",
+      "shortCiteRegEx" : "Dinu et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "A simple, fast, and effective reparameterization of IBM model 2",
+      "author" : [ "Chris Dyer", "Victor Chahuneau", "Noah A. Smith." ],
+      "venue" : "Proc. of NAACL-HLT.",
+      "citeRegEx" : "Dyer et al\\.,? 2013",
+      "shortCiteRegEx" : "Dyer et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "An empirical analysis of nmt-derived interlingual embeddings and their use in parallel sentence identification",
+      "author" : [ "Cristina Espana-Bonet", "Adám Csaba Varga", "Alberto Barrón-Cedeno", "Josef van Genabith." ],
+      "venue" : "IEEE Journal of Selected Topics in Signal",
+      "citeRegEx" : "Espana.Bonet et al\\.,? 2017",
+      "shortCiteRegEx" : "Espana.Bonet et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Jointly learning to align and translate with transformer models",
+      "author" : [ "Sarthak Garg", "Stephan Peitz", "Udhyakumar Nallasamy", "Matthias Paulik." ],
+      "venue" : "Proc. of EMNLP.",
+      "citeRegEx" : "Garg et al\\.,? 2019",
+      "shortCiteRegEx" : "Garg et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Effective parallel corpus mining using bilingual sentence embeddings",
+      "author" : [ "Mandy Guo", "Qinlan Shen", "Yinfei Yang", "Heming Ge", "Daniel Cer", "Gustavo Hernandez Abrego", "Keith Stevens", "Noah Constant", "Yun-Hsuan Sung", "Brian Strope", "Ray Kurzweil" ],
+      "venue" : null,
+      "citeRegEx" : "Guo et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "The curious case of neural text degeneration",
+      "author" : [ "Ari Holtzman", "Jan Buys", "Li Du", "Maxwell Forbes", "Yejin Choi." ],
+      "venue" : "Proc. of ICLR.",
+      "citeRegEx" : "Holtzman et al\\.,? 2020",
+      "shortCiteRegEx" : "Holtzman et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Non-adversarial unsupervised word translation",
+      "author" : [ "Yedid Hoshen", "Lior Wolf." ],
+      "venue" : "Proc. of EMNLP.",
+      "citeRegEx" : "Hoshen and Wolf.,? 2018",
+      "shortCiteRegEx" : "Hoshen and Wolf.",
+      "year" : 2018
+    }, {
+      "title" : "Billion-scale similarity search with gpus",
+      "author" : [ "Jeff Johnson", "Matthijs Douze", "Hervé Jégou." ],
+      "venue" : "IEEE Trans. on Big Data.",
+      "citeRegEx" : "Johnson et al\\.,? 2019",
+      "shortCiteRegEx" : "Johnson et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Loss in translation: Learning bilingual word mapping with a retrieval criterion",
+      "author" : [ "Armand Joulin", "Piotr Bojanowski", "Tomas Mikolov", "Herve Jegou", "Edouard Grave." ],
+      "venue" : "Proc. of EMNLP.",
+      "citeRegEx" : "Joulin et al\\.,? 2018",
+      "shortCiteRegEx" : "Joulin et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Lost in evaluation: Misleading benchmarks for bilingual dictionary induction",
+      "author" : [ "Yova Kementchedjhieva", "Mareike Hartmann", "Anders Søgaard." ],
+      "venue" : "Proc. of EMNLP.",
+      "citeRegEx" : "Kementchedjhieva et al\\.,? 2019",
+      "shortCiteRegEx" : "Kementchedjhieva et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unsupervised bitext mining and translation via self-trained contextual embeddings",
+      "author" : [ "Phillip Keung", "Julian Salazar", "Yichao Lu", "Noah A. Smith." ],
+      "venue" : "TACL, 8:828–841.",
+      "citeRegEx" : "Keung et al\\.,? 2020",
+      "shortCiteRegEx" : "Keung et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P. Kingma", "Jimmy Ba." ],
+      "venue" : "Proc. of ICLR.",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "Word translation without parallel data",
+      "author" : [ "Guillaume Lample", "Alexis Conneau", "Marc’Aurelio Ranzato", "Ludovic Denoyer", "Hervé Jégou" ],
+      "venue" : "In Proc. of ICLR",
+      "citeRegEx" : "Lample et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Lample et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "TALN/LS2N participation at the BUCC shared task: Bilingual dictionary induction from comparable corpora",
+      "author" : [ "Martin Laville", "Amir Hazem", "Emmanuel Morin." ],
+      "venue" : "Proc. of Workshop on Building and Using Comparable Corpora.",
+      "citeRegEx" : "Laville et al\\.,? 2020",
+      "shortCiteRegEx" : "Laville et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Multilingual denoising pre-training for neural machine translation",
+      "author" : [ "Yinhan Liu", "Jiatao Gu", "Naman Goyal", "Xian Li", "Sergey Edunov", "Marjan Ghazvininejad", "Mike Lewis", "Luke Zettlemoyer." ],
+      "venue" : "arXiv preprint arXiv:2001.08210.",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Exploiting similarities among languages for machine translation",
+      "author" : [ "Tomas Mikolov", "Quoc V. Le", "Ilya Sutskever" ],
+      "venue" : null,
+      "citeRegEx" : "Mikolov et al\\.,? \\Q2013\\E",
+      "shortCiteRegEx" : "Mikolov et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "A systematic comparison of various statistical alignment models",
+      "author" : [ "Franz Josef Och", "Hermann Ney." ],
+      "venue" : "Computational Linguistics, 29(1):19–51.",
+      "citeRegEx" : "Och and Ney.,? 2003",
+      "shortCiteRegEx" : "Och and Ney.",
+      "year" : 2003
+    }, {
+      "title" : "Generating alignments using target foresight in attention-based neural machine translation",
+      "author" : [ "Jan-Thorsten Peter", "Arne Nix", "Hermann Ney." ],
+      "venue" : "The Prague Bulletin of Mathematical Linguistics, 108(1):27–36.",
+      "citeRegEx" : "Peter et al\\.,? 2017",
+      "shortCiteRegEx" : "Peter et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Overview of the fourth BUCC shared task: Bilingual dictionary induction from comparable corpora",
+      "author" : [ "Reinhard Rapp", "Pierre Zweigenbaum", "Serge Sharoff." ],
+      "venue" : "Proc. of Workshop on Building and Using Comparable Corpora.",
+      "citeRegEx" : "Rapp et al\\.,? 2020",
+      "shortCiteRegEx" : "Rapp et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Mining the web for bilingual text",
+      "author" : [ "Philip Resnik." ],
+      "venue" : "Proc. of ACL.",
+      "citeRegEx" : "Resnik.,? 1999",
+      "shortCiteRegEx" : "Resnik.",
+      "year" : 1999
+    }, {
+      "title" : "SimAlign: High quality word alignments without parallel training data using static and contextualized embeddings",
+      "author" : [ "Masoud Jalili Sabet", "Philipp Dufter", "Hinrich Schutze." ],
+      "venue" : "Findings of EMNLP.",
+      "citeRegEx" : "Sabet et al\\.,? 2020",
+      "shortCiteRegEx" : "Sabet et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Filtering and mining parallel data in a joint multilingual space",
+      "author" : [ "Holger Schwenk." ],
+      "venue" : "Proc. of ACL.",
+      "citeRegEx" : "Schwenk.,? 2018",
+      "shortCiteRegEx" : "Schwenk.",
+      "year" : 2018
+    }, {
+      "title" : "Wikimatrix: Mining 135M parallel sentences in 1620 language pairs from Wikipedia",
+      "author" : [ "Holger Schwenk", "Vishrav Chaudhary", "Shuo Sun", "Hongyu Gong", "Francisco Guzmán." ],
+      "venue" : "arXiv preprint arXiv:1907.05791.",
+      "citeRegEx" : "Schwenk et al\\.,? 2019",
+      "shortCiteRegEx" : "Schwenk et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "LMU bilingual dictionary induction system with word surface similarity scores for BUCC 2020",
+      "author" : [ "Silvia Severini", "Viktor Hangya", "Alexander Fraser", "Hinrich Schütze." ],
+      "venue" : "Proc. of Workshop on Building and Using Comparable Corpora.",
+      "citeRegEx" : "Severini et al\\.,? 2020",
+      "shortCiteRegEx" : "Severini et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A DOM tree alignment model for mining parallel data from the web",
+      "author" : [ "Lei Shi", "Cheng Niu", "Ming Zhou", "Jianfeng Gao." ],
+      "venue" : "Proc. of ACL.",
+      "citeRegEx" : "Shi et al\\.,? 2006",
+      "shortCiteRegEx" : "Shi et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "Offline bilingual word vectors, orthogonal transformations and the inverted softmax",
+      "author" : [ "Samuel L Smith", "David HP Turban", "Steven Hamblin", "Nils Y Hammerla." ],
+      "venue" : "Proc. of ICLR.",
+      "citeRegEx" : "Smith et al\\.,? 2017",
+      "shortCiteRegEx" : "Smith et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Cross-lingual retrieval for iterative self-supervised training",
+      "author" : [ "Chau Tran", "Yuqing Tang", "Xian Li", "Jiatao Gu." ],
+      "venue" : "Proc. of NeurIPS.",
+      "citeRegEx" : "Tran et al\\.,? 2020",
+      "shortCiteRegEx" : "Tran et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Adding interpretable attention to neural translation models improves word alignment",
+      "author" : [ "Thomas Zenkel", "Joern Wuebker", "John DeNero." ],
+      "venue" : "arXiv preprint arXiv:1901.11359.",
+      "citeRegEx" : "Zenkel et al\\.,? 2019",
+      "shortCiteRegEx" : "Zenkel et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Adversarial training for unsupervised bilingual lexicon induction",
+      "author" : [ "Meng Zhang", "Yang Liu", "Huanbo Luan", "Maosong Sun." ],
+      "venue" : "Proc. of ACL.",
+      "citeRegEx" : "Zhang et al\\.,? 2017",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Chinese translations (Table 7) using the same method as Table 4. In this direction, many of the unacceptable cases are copying English words",
+      "author" : [ "Rapp" ],
+      "venue" : null,
+      "citeRegEx" : "Rapp,? \\Q2020\\E",
+      "shortCiteRegEx" : "Rapp",
+      "year" : 2020
+    }, {
+      "title" : "lexicon inducer and previous methods on the standard MUSE test set (Lample et al., 2018), where the best number in each column is bolded. The first section consists of vector rotation–based methods, while Artetxe et al. (2019) conduct unsupervised machine translation and word alignment to induce bilingual lexicons. All methods are tested in the fully unsupervised setting",
+      "author" : [ "Artetxe" ],
+      "venue" : null,
+      "citeRegEx" : "81",
+      "shortCiteRegEx" : "81",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 37,
+      "context" : "We show that simply pipelining recent algorithms for unsupervised bitext mining (Tran et al., 2020) and unsupervised word alignment (Sabet et al.",
+      "startOffset" : 80,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 31,
+      "context" : ", 2020) and unsupervised word alignment (Sabet et al., 2020) significantly improves bilingual lexicon induction (BLI) quality, and that further gains are possible by learning to filter the resulting lexical entries.",
+      "startOffset" : 40,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 3,
+      "context" : "Improving on a recent method for doing BLI via unsupervised machine translation (Artetxe et al., 2019), we show that unsupervised mining produces better bitext for lexicon induction than translation, especially for less frequent words.",
+      "startOffset" : 80,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 37,
+      "context" : "We find that improved alignment in sentence representations (Tran et al., 2020) leads to better contextual word alignments using local similarity (Sabet et al.",
+      "startOffset" : 60,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 31,
+      "context" : ", 2020) leads to better contextual word alignments using local similarity (Sabet et al., 2020).",
+      "startOffset" : 74,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 29,
+      "context" : "Our final BLI approach outperforms the previous state of the art on the BUCC 2020 shared task (Rapp et al., 2020) by 14 F1 points averaged over 12 language pairs.",
+      "startOffset" : 94,
+      "endOffset" : 113
+    }, {
+      "referenceID" : 37,
+      "context" : "2020) and CRISS (Tran et al., 2020), we can also interpret these results as clear evidence that lexicon induction benefits from contextualized reasoning at the token level, in strong contrast to nearly all existing methods that learn linear projections on word types.",
+      "startOffset" : 16,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 1,
+      "context" : "For supervised BLI, a seed lexicon is used to learn the projection matrix (Artetxe et al., 2016; Smith et al., 2017; Joulin et al., 2018).",
+      "startOffset" : 74,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 36,
+      "context" : "For supervised BLI, a seed lexicon is used to learn the projection matrix (Artetxe et al., 2016; Smith et al., 2017; Joulin et al., 2018).",
+      "startOffset" : 74,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 19,
+      "context" : "For supervised BLI, a seed lexicon is used to learn the projection matrix (Artetxe et al., 2016; Smith et al., 2017; Joulin et al., 2018).",
+      "startOffset" : 74,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 23,
+      "context" : "For unsupervised BLI, the projection matrix is typically found by an iterative procedure such as adversarial learning (Lample et al., 2018; Zhang et al., 2017), or iterative refinement initialized by a statistical heuristics (Hoshen and Wolf, 2018; Artetxe et al.",
+      "startOffset" : 118,
+      "endOffset" : 159
+    }, {
+      "referenceID" : 39,
+      "context" : "For unsupervised BLI, the projection matrix is typically found by an iterative procedure such as adversarial learning (Lample et al., 2018; Zhang et al., 2017), or iterative refinement initialized by a statistical heuristics (Hoshen and Wolf, 2018; Artetxe et al.",
+      "startOffset" : 118,
+      "endOffset" : 159
+    }, {
+      "referenceID" : 17,
+      "context" : ", 2017), or iterative refinement initialized by a statistical heuristics (Hoshen and Wolf, 2018; Artetxe et al., 2018).",
+      "startOffset" : 73,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 2,
+      "context" : ", 2017), or iterative refinement initialized by a statistical heuristics (Hoshen and Wolf, 2018; Artetxe et al., 2018).",
+      "startOffset" : 73,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 8,
+      "context" : "Word alignment is a fundamental problem in statistical machine translation, of which the goal is to align words that are translations of each in within parallel sentences (Brown et al., 1993).",
+      "startOffset" : 171,
+      "endOffset" : 191
+    }, {
+      "referenceID" : 10,
+      "context" : "(2020) propose SimAlign, which does not train on parallel sentences but instead aligns words that have the most similar pretrained multilingual representations (Devlin et al., 2019; Conneau et al., 2019).",
+      "startOffset" : 160,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 9,
+      "context" : "(2020) propose SimAlign, which does not train on parallel sentences but instead aligns words that have the most similar pretrained multilingual representations (Devlin et al., 2019; Conneau et al., 2019).",
+      "startOffset" : 160,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 37,
+      "context" : "Recent work has also shown that unsupervised mining is possible (Tran et al., 2020; Keung et al., 2020).",
+      "startOffset" : 64,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 21,
+      "context" : "Recent work has also shown that unsupervised mining is possible (Tran et al., 2020; Keung et al., 2020).",
+      "startOffset" : 64,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 37,
+      "context" : "We use CRISS (Tran et al., 2020)2 as one of our component models.",
+      "startOffset" : 13,
+      "endOffset" : 32
+    }, {
+      "referenceID" : 31,
+      "context" : "SimAlign (Sabet et al., 2020) is an unsupervised word aligner based on the similarity of contextualized token embeddings.",
+      "startOffset" : 9,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 16,
+      "context" : "For each sentence in the two monolingual corpora, we generate a translation to the other language using beam search or nucleus sampling (Holtzman et al., 2020).",
+      "startOffset" : 136,
+      "endOffset" : 159
+    }, {
+      "referenceID" : 18,
+      "context" : "(2020) show that the CRISS encoder module provides as a high-quality sentence encoder for cross-lingual retrieval: they take the average across the contextualized embeddings of tokens as sentence representation, perform nearest neighbor search with FAISS (Johnson et al., 2019),3 and mine bitext using the margin-based max-score method (Artetxe and Schwenk, 2019a).",
+      "startOffset" : 255,
+      "endOffset" : 277
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2019),3 and mine bitext using the margin-based max-score method (Artetxe and Schwenk, 2019a).",
+      "startOffset" : 66,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 4,
+      "context" : "com/facebookresearch/ faiss (4)We used max-score (Artetxe and Schwenk, 2019a) as it strongly outperforms the other methods they proposed.",
+      "startOffset" : 49,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 31,
+      "context" : ", having higher precision) argmax and the higher recall itermax algorithm (Sabet et al., 2020), and denote the alignments by Aargmax and Aitermax respectively.",
+      "startOffset" : 74,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 22,
+      "context" : "We optimize all of our models using Adam (Kingma and Ba, 2015) with the initial learning rate 5 × 10−4.",
+      "startOffset" : 41,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 29,
+      "context" : "For evaluation, we use the BUCC 2020 BLI shared task dataset (Rapp et al., 2020) and metric (F1).",
+      "startOffset" : 61,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 23,
+      "context" : "Like most recent work, this evaluation is based on MUSE (Lample et al., 2018).",
+      "startOffset" : 56,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 29,
+      "context" : "Best results from the BUCC 2020 (Rapp et al., 2020) for each language pairs, we take the maximum F1 score between the best closed-track results (Severini et al.",
+      "startOffset" : 32,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 34,
+      "context" : ", 2020) for each language pairs, we take the maximum F1 score between the best closed-track results (Severini et al., 2020; Laville et al., 2020) and open-track ones (Severini et al.",
+      "startOffset" : 100,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 24,
+      "context" : ", 2020) for each language pairs, we take the maximum F1 score between the best closed-track results (Severini et al., 2020; Laville et al., 2020) and open-track ones (Severini et al.",
+      "startOffset" : 100,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 6,
+      "context" : "Our method would be considered open track since the pretrained models used a much larger data set (Common Crawl 25) than the BUCC 2020 closedtrack (Wikipedia or Wacky; Baroni et al., 2009).",
+      "startOffset" : 147,
+      "endOffset" : 188
+    }, {
+      "referenceID" : 7,
+      "context" : "Here, we use the standard implementation9 with FastText vectors (Bojanowski et al., 2017)10 trained on the union of Wikipedia and Common Crawl corpus for each language.",
+      "startOffset" : 64,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 33,
+      "context" : "WikiMatrix (Schwenk et al., 2019)12 is a dataset of mined bitext.",
+      "startOffset" : 11,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 5,
+      "context" : "The mining method LASER (Artetxe and Schwenk, 2019b) is trained on real bitext and then used to mine more bitext from the Wikipedia corpora to get the WikiMatrix dataset.",
+      "startOffset" : 24,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 16,
+      "context" : "2), bidirectional translations from nucleus sampling (GEN-N; Holtzman et al., 2020),13 and retrieval (RTV; Section 3.",
+      "startOffset" : 53,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 29,
+      "context" : "Table 1: F1 scores (×100) on the BUCC 2020 test set (Rapp et al., 2020).",
+      "startOffset" : 52,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 29,
+      "context" : "Table 2: F1 scores (×100) on the test set of the BUCC 2020 shared task (Rapp et al., 2020).",
+      "startOffset" : 71,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 29,
+      "context" : "On average and for the majority of language pairs, both methods do better on low-frequency source words than high-frequency ones (Figure 3a), which is consistent with the findings by BUCC 2020 participants (Rapp et al., 2020).",
+      "startOffset" : 206,
+      "endOffset" : 225
+    }, {
+      "referenceID" : 14,
+      "context" : "We find that the CRISS-based SimAlign already achieves competitive performance with the state-of-the-art method (Garg et al., 2019) which requires real bitext for training.",
+      "startOffset" : 112,
+      "endOffset" : 131
+    } ],
+    "year" : 0,
+    "abstractText" : "Bilingual lexicons map words in one language to their translations in another, and are typically induced by learning linear projections to align monolingual word embedding spaces. In this paper, we show it is possible to produce much higher quality lexicons with methods that combine (1) unsupervised bitext mining and (2) unsupervised word alignment. Directly applying a pipeline that uses recent algorithms for both subproblems significantly improves induced lexicon quality and further gains are possible by learning to filter the resulting lexical entries, with both unsupervised and semisupervised schemes. Our final model outperforms the state of the art on the BUCC 2020 shared task by 14 F1 points averaged over 12 language pairs, while also providing a more interpretable approach that allows for rich reasoning of word meaning in context. Further analysis of our output and the standard reference lexicons suggests they are of comparable quality, and new benchmarks may be needed to measure further progress on this task.1",
+    "creator" : null
+  }
+}

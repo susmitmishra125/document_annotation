@@ -1,0 +1,979 @@
+{
+  "name" : "2021.acl-long.422.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Counterfactual Inference for Text Classification Debiasing",
+    "authors" : [ "Chen Qian", "Fuli Feng", "Lijie Wen", "Chunping Ma", "Pengjun Xie" ],
+    "emails" : [ "qc16@mails.tsinghua.edu.cn", "fulifeng93@gmail.com", "wenlj@tsinghua.edu.cn", "chunping.mcp@alibaba-inc.com", "chengchen.xpjg@taobao.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 5434–5445\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n5434"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Text classification, mapping text documents to a set of predefined categories, is a fundamental and important technique serving for many applications such as sentiment analysis (Qian et al., 2020b),\n∗This work was partly done during Chen Qian’s internship at Alibaba DAMO academy. Fuli Feng and Lijie Wen are the co-corresponding authors.\n1The code is available at https://github.com/ qianc62/Corsair.\npartisanship recognition (Kiesel et al., 2019) and spam detection (Castillo et al., 2007). Machine learning models have become the default choice of solving text classification, owing to their ability to recognize the textual patterns from the labeled documents (Kim, 2014; Howard and Ruder, 2018). Nevertheless, they are at the risk of inadvertently capturing and even amplifying the unintended dataset biases (Zhao et al., 2017; Zhang et al., 2020; Feder et al., 2020; Blodgett et al., 2020), which can be at document-level (i.e., label bias) and word-level (i.e., keyword bias).\nThe label bias issue occurs in the scenarios where a portion of the categories possesses a majority of training examples than others. For example, the label distribution of a binary sentiment analysis dataset could be 95%:5% (Dixon et al., 2018). Many previous studies found that the models trained on such data are potentially at the risk of simply predicting the majority answers (Dixon et al., 2018; Zhang et al., 2020). The keyword bias issue occurs in the situation where trained models exhibit excessive correlations between certain words and categories, e.g., some sentimentirrelevant words – “black” or “islam” – are always connected to negative category. As such, models always lean to unfairly predict any document containing those keywords to a specific category according to the biased statistical information instead of intrinsic textual semantics (Waseem and Hovy, 2016; Liu and Avci, 2019). The serious disadvantages limit models’ generalization, especially in the scenarios where the training data is differently-distributed with the testing data (Niu et al., 2021; Goyal et al., 2017).\nTo resolve the issues, an effective solution is to perform data-level manipulations (e.g., resampling (Qian et al., 2020b)), which effectively transforms a training set to a relatively balanced one before training. Another line of debiasing work typically\ndesigns model-level balancing mechanisms (e.g., reweighting (Zhang et al., 2020)), aiming to adaptively decrease the influence of majority categories while increasing the minority during training. The core of the two types of solutions is to explicitly or implicitly recover unbiased distributions and prevent models from capturing the unintended biases. Unfortunately, the data-level strategy typically suffers from the extra manual cost of data collection, selection and annotation (Zhang et al., 2020), requires much longer training time and normally enlarges the gap between training and testing data distributions. The model-level strategy typically needs elaborate selection or definition of balancing strategies and needs relearning from scratch once certain balancing mechanisms (e.g., an unbiased training objective) are redesigned.\nMust machine learning models perform debiasing before or during training? Think about the difference in the decision making processes between machines and humans. Machine learning systems are forced to imitate the behavior from observations via maximizing the prior probability, from which the decision is directly drawn during inference. By contrast, we humans, although born and raised in a biased nature, have the ability of counterfactual inference to make unbiased decisions with biased observations (Niu et al., 2021). To illustrate, we briefly compare the traditional factual inference and the counterfactual inference in text classification: • Factual Inference: What will the prediction be if seeing an input document? • Counterfactual Inference: What will the prediction be if seeing the main content of an input document only and had not seen the confounding dataset biases? The counterfactual inference essentially gifts humans the imagination ability (i.e., had not done) to make decisions with a collaboration of the main content and the confounding biases (Tang et al., 2020), as well as to introspect whether our decision is deceived (Niu et al., 2021), i.e., counterfactual inference leads to debiased prediction.\nInspired by this, we propose a novel modelagnostic paradigm (CORSAIR), which adopts factual learning before mitigating the negative influence of the dataset biases in inference (i.e., after training), without the need of employing data manipulations or designing balancing mechanisms. Concretely, in training, CORSAIR directly trains\na base model on an original training set, allowing the unintended dataset biases “poison” the model. To “rescue” the testing documents from the poisonous model, in testing, for each factual input document, CORSAIR imagines its two types of counterfactual counterparts to produce two counterfactual outputs as the distilled label bias and keyword bias. Lastly, CORSAIR performs a bias removal operation to produce a counterfactual prediction that corresponds to a debiased decision. To verify, we perform extensive experiments on multiple public benchmark datasets. The results demonstrate our proposed framework’s effectiveness, generalizability and fairness, proving that CORSAIR, when employed on four different types of base models, is significantly helpful to mitigate the two types of dataset biases."
+    }, {
+      "heading" : "2 Methodology",
+      "text" : "Problem Formalization Let X and Y denote the input (text document) and output (category) spaces, respectively. Given a labeled training set Dtrain = {(xi, yi) ∈ X × Y} (i.e., the observed data), the goal is to learn a text classifier M on Dtrain, which serves as a mapping function f(·) : X 7→ Y to accurately classify testing examples in Dtest = {x̂|x̂ ∈ X}.\nConsidering that the dataset biases would not be completely eliminated via data manipulations, employing data manipulations (e.g., resampling) or designing balancing mechanisms (e.g., reweighting) may be not a directly-reasonable solution. Inspired by the success of counterfactual inference in mitigating biases in computer vision (Niu et al., 2021; Wang et al., 2020; Tang et al., 2020; Yang et al., 2020; Goyal et al., 2017), we propose a counterfactual-inference-based text-classification debiasing framework (CORSAIR), which is able to make unbiased decisions with biased observations. The core idea of CORSAIR is to train a “poisonous” text classifier regardless the dataset biases and post-adjust the biased predictions according to the causes of the biases in inference. It’s worth mentioning that our proposed CORSAIR can be applied to almost any parameterized base model, including traditional one-stage classifiers (e.g., TEXTCNN (Kim, 2014), RCNN (Lai et al., 2015) and LECO (Qian et al., 2020b)) and currently prevalent two-stage classifiers2 (e.g., ULM-\n2For brevity, two-stage classifiers refer to two-stage language models with an additional prediction layer.\nFIT (Howard and Ruder, 2018), BERT (Devlin et al., 2019) and RoBERTa (Liu et al., 2019)). For brevity, we will elaborate CORSAIR by taking RoBERTa (a robustly optimized BERT-shape language model) as the example base model, and binary sentiment analysis as the example application. The high-level architecture of CORSAIR is illustrated in Figure 1, which consists of three main components: biased learning, bias distillation and bias removal."
+    }, {
+      "heading" : "2.1 Biased Learning",
+      "text" : "In the learning phase (i.e., training), CORSAIR first trains the base model RoBERTa to learn a mapping relation based on training data. Similar to traditional training, CORSAIR uses feedforward to predict batch examples and backward to update those learnable parameters in an end-to-end fashion. In practice, we adopt the standard cross entropy as the training objective (i.e., loss function):\nL(θ) = − 1 n n∑ i=1 ∑ y∈Y πi,y lnπi,y\nπi = softmax(f(xi))\n(1)\nwhere θ denotes the learnable parameters of the base model f(·), n is the number of batch examples, πi is the ground-truth label distribution (over Y) and πi is the predicted probability distribution (over Y) for a given training example xi."
+    }, {
+      "heading" : "2.2 Bias Distillation",
+      "text" : "In the inference phase (i.e., testing), traditional debiasing methods making predictions for each testing document via the conventional feedforward\noperation on the trained base model to obtain the probability distribution over Y (i.e., factual prediction) for a most possible answer. However, in addition to the textual contents of the document, the prediction is also affected by unintended confounders (Pearl and Mackenzie, 2018) which may produce the label bias and keyword bias. Aiming to obtain unbiased prediction, the key is to debias during inference by blocking the spread of the biases from learning to inference. To achieve that, inspired by the counterfactual studies in causal reasoning (Niu et al., 2021; Tang et al., 2020), we design an effective strategy based on causal intervention (Pearl, 2013; Pearl and Mackenzie, 2018) to distill the potentially-harmful biases captured by the trained model (Niu et al., 2021; Tang et al., 2020), and then mitigate them via bias removal."
+    }, {
+      "heading" : "2.2.1 Causal Graph",
+      "text" : "Aiming to conduct proper causal intervention, we first formulate the causal graph (Pearl, 2013; Pearl and Mackenzie, 2018; Tang et al., 2020) for the text classification models (see the left-bottom part of Figure 1), which sheds light on how the document contents and dataset biases affecting the prediction. Formally, a causal graph is a directed acyclic graph G = (N , E), indicating how a set of variables N causally interact with each other through the causal links E . It provides a sketch of the causal relations behind the data and how variables obtain their values (Tang et al., 2020), e.g., (X,M)→Y . In this causal graph, X , Y and M denote a text document’s embedding, its corresponding prediction and the trained model which\ninevitably captures unintended confounders existing in training data, respectively."
+    }, {
+      "heading" : "2.2.2 Label Bias Distillation",
+      "text" : "According to the causal graph, we diagnose how the dataset biases existing in training data misleads inference. Concretely, by using Bayes rule (Wang et al., 2020), we can view the inference as:\nf(x) = P (Y |X) = ∑ c P (Y |X, c)P (c|X) (2)\nwhere c could be any confounder captured by the model trained on a biased training set (e.g., the overwhelming majority of training documents fall in POSITIVE). Under such circumstances, once the training documents corresponding to the POSITIVE category are dominating than NEGATIVE, the trained model tends to build strong spurious connections between testing documents and POSITIVE, achieving high accuracy even without knowing testing documents’ main contents. As such, the model is inadvertently contaminated by the spurious causal correlation: X←M→Y , a.k.a. a back-door path in causal theory (Pearl and Mackenzie, 2018; Pearl, 2013). To decouple the spurious causal correlation, the back-door adjustment (Pearl and Mackenzie, 2018; Pearl, 2013; Pearl et al., 2016) predicts an actively intervened answer via the do(·) operation:\nP (Y |do(X)) = P (Y |X = x̂) = f(x̂) (3)\nwhere x̂ could be any counterfactual embedding as long as it is no longer dependent onM to detach the connection between X and M . As illustrated in the fully-blindfolded counterfactual world in Figure 1, the causal intervention operation wipes out all the in-coming links of a cause variable X , which encourages the model M to inference without seeing any testing document, i.e., RoBERTa should be fully blind in order to detaching the connection between M and X . To achieve that, we use x̂ to denote the imagined fully-blindfolded counterfactual document where all words in the test document x are consistently masked (to create a counterfactual embedding), and f(x̂) as the corresponding counterfactual output via feedforward through the trained model. Since the model cannot see any word in the factual input x after fully blindfolding, f(x̂) actually reflects the pure influence from the trained base modelM . Furthermore, f(x̂) refers to the output (e.g., a probability distribution or a logit vector) where no textual\ninformation is given. Thus, the fully-blindfolded counterfactual output:\nP (Y |do(X)) = f(x̂) = f(〈w1, w2, · · · , wn〉) ∀wi ∈ x̂, wi ← [MASK] (4)\nnaturally reflects as the label bias captured by M , where [MASK] is a special token to mask a single word. Due to x̂ is fully-blindfolded and independent with trained modelM , in implementation, we follow Wang et al. (2020) to use the average document feature on the whole training set as its embedding of the counterfactual document."
+    }, {
+      "heading" : "2.2.3 Keyword Bias Distillation",
+      "text" : "Inspired by the factual inference where all textual information in test documents are exposed to the base model and the fully-blindfolded case where all textual information in each test document are not exposed, we make the first attempt to utilize a partially-blindfolded counterfactual document where some words in the test document x are masked to distill the keyword bias from the trained base model.\nSpecifically, we deliberately expose some words which may potentially cause spurious correlations (e.g., the spurious “black”-to-NEGATIVE mapping) to the trained model to exhibit their potentially negative influence. Some evil words may serve as unintended confounders (Tang et al., 2020), splitting a document into two pieces: main content and relatively-unimportant context. In the following, we use x̃ to denote another counterfactual document where the main-content words in a test document x are masked while other context words are not, and f(x̃) as the corresponding counterfactual output. To achieve that, an effective masking strategy is to use discriminative text summarization methods to extract the main content of the document, before masking content words (important classification clues) and exposing others as potentially harmful biasing factors. Since the model is forced to see only the non-masked context words in x, f(x̃) actually reflects the influence from both the potentially harmful contexts and the trained model. Thus, the partially-blindfolded counterfactual output:\nf(x̃) = f(〈w1, w2, · · · , wn〉)\n∀wi ∈ x̃, { wi ← [MASK] if wi ∈ xcontent wi ← wi if wi ∈ xcontext\n(5)\nnaturally reflects as the keyword bias captured by M for a specific text document x, where xcontent and xcontext denote the main content and the con-\ntext of x, respectively. Inspired by a recent counterfactual word-embedding study of Feder et al. (2020), to realize discriminative text summarization, we use Jieba3 tool, whose TextRank-based interface can effectively extract the words that may influence the semantics of a sentence as content, leaving potentially discriminative/unfair keywords (e.g., stop words, a part of adjectives, and semantically-unimportant particles) as contexts. Empirically, the average ratio of contents to contexts produced by Jieba on all datasets is approximately 62.03%:37.97%."
+    }, {
+      "heading" : "2.3 Bias Removal",
+      "text" : "Our final goal is to use the direct effect from X to Y for debiased prediction, removing (\\) the label bias and the keyword bias existing in training data (i.e., blocking the spread of the biases from training data to inference): f(x)\\f(x̂)\\f(x̃). The debiased prediction via bias removal can be formalized via the conceptually simple and empirically powerful element-wise subtraction operation: c(x) = f(x)\\f(x̂)\\f(x̃) = f(x)− λ̂f(x̂)− λ̃f(x̃) (6) where f(x) and c(x) correspond to the traditional factual prediction and our counterfactual prediction, respectively; f(x̂) and f(x̃) correspond to the label bias and the keyword bias distilled from the trained base model, respectively; λ̂ and λ̃ are two independent parameters balancing the two types of biases.\nNote that the two distilled biases could be probability distributions over all categories or logit vectors (i.e., without normalization), and they typically do not contribute completely equally to the final classification. As such, in Equation 6, directly subtracting without adaptive parameters (i.e., λ̂=λ̃=12 ) would cause that mitigating a certain bias too much or too less for a specific testing set. Therefore, we propose the elastic scaling mechanism to search two adaptive parameters (scaling factors) – λ̂∗ and λ̃∗ – on the validation set to amplify or penalize the two biases, which would dynamically adapt to different datasets according to the extent to which two biases in training set “poison” the validation set. In practice, elastic scaling can be implemented using grid beam search (Hokamp and Liu, 2017) in a scoped twodimensional space:\nλ̂∗, λ̃∗ = argmax λ̂,λ̃ ψ(Ddev, c(x; λ̂, λ̃)) λ̂, λ̃ ∈ [a, b] (7)\n3https://github.com/fxsjy/jieba\nwhereψ is a metric function (e.g., recall, precision and F1-score) to evaluate the performance on the validation set Ddev=(Xdev, Ydev); a and b are the boundaries of the search range. The two factors are at dataset-level and thus searched only once for each validation set, and would be used in inference for all testing documents."
+    }, {
+      "heading" : "3 Evaluation",
+      "text" : "Baselines We choose four types of representative text classifiers as the base models of our proposed framework, covering classical, data-manipulation-based, model-balancing-based, as well as large-scale and two-stage methods. TEXTCNN (Kim, 2014) is a classical classifier that uses convolutional neural networks (CNN) with scale-variant convolution filters to capture local textual features, which may potentially capture spurious correlations between certain keywords and categories. LECO (Qian et al., 2020b) utilizes the combination of the implicit encoding of deep linguistic information and the explicit encoding of morphological features, which would also capture the keyword bias inadvertently. Besides, it uses a sentence-level over-sampling mechanism (He and Garcia, 2009) to mitigate the label bias, and we further enhance it via a powerful word-level augmentation technique (EDA) (Wei and Zou, 2019) to mitigate the keyword bias, denoted as LECOEDA. WEIGHT (Zhang et al., 2020) is a most recent debiasing text classifier that uses a specially-designed reweighting technique under an unbiased objective for fair (i.e., nondiscrimination) learning, which is proven effective to mitigate the unfairness or discrimination issue caused by unintended dataset biases. RoBERTa (Liu et al., 2019) is an improved version of BERT, whose effective modifications allow RoBERTa to generalize better and match or exceed the performance of many post-BERT methods, serving as a very strong baseline in recent work (Gururangan et al., 2020).\nDatasets We use multiple English benchmark datasets (used mainly in academic community): HyperPartisan (Kiesel et al., 2019), Twitter (Huang et al., 2017), ARC (Jurgens et al., 2018), SCIERC (Luan et al., 2018), ChemProt (Kringelum et al., 2016), Economy (Huang and Paul, 2018), News (Lang, 1995), Parties (Huang and Paul, 2018), YelpHotel (Zhang et al., 2014); and also randomly collect real-world query-\ncategory pairs (used in industrial community) from two famous Chinese e-commerce platforms: Taobao4 and Suning5. For brevity, we will use the first three letters to denote each dataset (e.g., HYP for HyperPartisan). The statistics of the datasets are summarized in Table 1.\nMetric We use the widely-used macro-F1 metric, which is the balanced harmonic mean of precision and recall. Furthermore, macro-F1 is more suitable than micro-F1 to reflect the extent of the dataset biases, especially for the highly-skewed cases, since macro-F1 is strongly influenced by the performance in each category (i.e., categorysensitive) but micro-F1 easily gives equal weight over all documents (i.e., category-agnostic) (Kim et al., 2019).\nImplementation Details The search range in Equation 7 is set as [−2.0, 2.0]. Each training is run for 10 epochs with the Adam optimizer (Kingma and Ba, 2015), a mini-batch size of 16, a learning rate of 2e−5, and a dropout rate of 0.1. We implement CORSAIR via Python 3.7.3 and Pytorch 1.0.1. All of our experiments are run on a machine equipped with seven standard NVIDIA TITAN-RTX GPUs."
+    }, {
+      "heading" : "3.1 Overall Performance",
+      "text" : "We report the average results over five different initiations in Table 2. We can observe that CORSAIR consistently improves the four types of representative baselines on almost all datasets with a significance level, regardless of the languages, domains, volumes and applications of the datasets, which validates the effectiveness and the generalizability of the proposed framework. Furthermore, since CORSAIR performs debiasing between the\n4https://www.taobao.com 5https://www.suning.com\ntraditional factual predictions and two counterfactual outputs to produce counterfactual predictions, the comparison between each baseline and its CORSAIR-equipped counterparts highlights the importance of the counterfactual inference, which is largely ignored by most of previous text classification methods. Particularly, CORSAIR can even benefit the data-manipulation-based method (i.e., LECOEDA) and the model-balancing-based method (i.e., WEIGHT) consistently, which in turn verifies our initial intuition that the dataset biases would not be completely eliminated via data manipulations merely, and further illuminates our key insight – preserving biases in models before debiasing in inference.\nWe can also notice that CORSAIR sometimes hurts performance (e.g., RoBERTa+CORSAIR on HYP and ARC); we conjecture the phenomenon comes from the small-scale data, making the giant model RoBERTa overfits and thus “fail” to distill two potential biases that are identically distributed with the ideal distributions of factual biases. Moreover, finetuning a RoBERTa model on large-datasets (e.g., SUN) would take about 36 hours, nearly 50 times that of training a WEIGHT model (about 44 minutes); we thus suggest to use lightweight base models in practice with considering systems’ robustness and efficiency. Besides, the proposed framework works only in inference and can thus be employed on the previous alreadytrained models. Therefore, by leveraging counterfactual inference, our approach can serve as a powerful, “data-manipulation-free” and “modelbalancing-free” weapon to enhance different types of text classification methods."
+    }, {
+      "heading" : "3.2 Bias Analysis",
+      "text" : "According to Sweeney and Najafian (2020), the more imbalanced/skewed a prediction produced by a trained model is, the more unfair opportunities it gives over predefined categories, the more unfairly-discriminative the trained model is. We thus follow previous work (Xiang and Ding, 2020; Sweeney and Najafian, 2020) to use the metric – imbalance divergence – to evaluate whether a prediction (normally a probability distribution) P is imbalanced/skewed/unfair:\nD(P,U) =JS(P ||U) (8)\nwhereD(·) is defined as the distance of P and the uniform distribution U (with |P | elements). Concretely, we use the JS divergence as the distance\nmetric since it is symmetric (i.e., JS(P ||U) = JS(U ||P )) and strictly scoped (in [0.0, 1.0]) compared with the KL divergence. Based on this, to evaluate the label bias and the keyword bias of a trained model M , we average its relative label imbalance (RLI) over the predicted distributions of all the testing documents, and the relative keyword imbalance (RKI) over all the testing documents containing whichever context word, respectively:\nRLI(M) = 1 |D| ∑ x∈D D(P (x), U)\nRKI(M,V) = 1|V| ∑ w∈V D(P ({x|w ∈ x ∧ x ∈ D}), U)\n(9)\nwhere a prediction P (x) could be a factual prediction f(x) or a counterfactual one c(x); V denotes the vocabulary of context words. The two metrics implicitly capture the distance between all predictions and the fair uniform distribution U .\nTable 3 shows the average results of the bias analysis investigation over five different initiations. The results show that our framework re-\nduces the imbalance metrics (lower is better) when employed on non-data-balanced baselines significantly and consistently, indicating it is indeed helpful to mitigate the two dataset bias issues. We all know that data-balanced LECOEDA perfectly mitigates the label bias issue via data balancing, thus achieving the lowest RLI. Due to the powerful debiasing operations via strictly balancing data, it serves as the skyline of RLI. This finding is similar to previous evidence of Morik et al. (2020). Moreover, we can also see that LECOEDA reduces the RKI, validating that data manipulation methodology is indeed helpful to debias the keyword bias issue but fails to eliminate it completely; our framework can further reduce RKI (1.73↓). Note that WEIGHT exhibits a more severe keyword bias than label bias (34.85 vs. 08.88). The key reason is that WEIGHT explicitly balances each category according to a theoretically fair objective but ignores the consideration of label distributions conditioned on finergrained words. Moreover, RoBERTa exhibits the\nmost imbalanced prediction against all baselines and across small- and large-scale datasets (e.g., ARC and TAO), indicating that its answers excessively distribute on certain categories due to the overfitting phenomenon rooted from its largescale parameters (about 110M). Luckily, by being equipped with our framework, the RoBERTa case remarkably reduces the imbalance issue caused by dataset biases (9.50↓ and 4.41↓).\nAnother finding is that the keyword bias issue typically is more severe than the label bias, meaning that trained models typically utilize the wordlevel information to inference, which could catch angel keywords as good clues but also inevitably utilize evil keywords that are potential biases. Additionally, the keyword bias issue, compared with label bias, is much harder to be completely eliminated via data manipulations, which imposes a caution for relevant studies to keep a watchful eye on the detrimental causal correlations."
+    }, {
+      "heading" : "3.3 Ablation Study",
+      "text" : "We conduct ablation studies on CORSAIR to empirically examine the contribution of its main mechanisms/components, including the label bias removal operation (\\LBR), the keyword bias removal operation (\\KBR) and the elastic scaling mechanism (\\ES).\nThe average results of the ablation study are shown in Table 4. We can see that removing the proposed CORSAIR causes serious performance degradation, dropping F1-score by 7.55 points for the WEIGHT case. Additionally, it also provides evidence that using the counterfactual framework for text classification can explicitly mitigate two types of dataset biases to generalize better on unseen examples. Moreover, we observe that mitigating the two types of biases are consistently helpful for classification tasks. The key reason is that the distilled label bias provides a global (i.e., document-agnostic) offset and the distilled keyword bias provides a local (i.e., documentspecific) one to “move” in the predicted space, which makes the trained models “blind” to see potentially harmful biases existing in observed data so as to focus only on the main content of each document to inference. Meanwhile, elastic scaling effectively finds two dynamic scaling factors to amplify or shrink two biases, making the biases be mitigated properly and adaptively."
+    }, {
+      "heading" : "3.4 Further Investigation on Counterfactual Learning",
+      "text" : "Recall that our proposed framework first trains a base model on a training set directly (factual learning) so as to preserve dataset biases in the trained model, and in the inference phase, given a factual input document, CORSAIR imagines two types of counterfactual documents aiming to produce two counterfactual outputs as the distilled label bias and keyword bias for bias removal. That is, the framework deliberately causes the discrepancy between learning and inference, leading to an operational gap between the two phases. In this section, we investigate more deeply to explore what will happen if the operational gap is bridged. • Factual Learning. Learn with L(θ; f(xi), yi) as objective, i.e., to minimize the loss between factual predictions and ground-truth labels. Then, inference via counterfactual predictions. • Counterfactual Learning. Learn with L(θ; c(xi), yi) as objective, i.e., to minimize the loss between counterfactual predictions and ground-truth labels. Then, inference directly.\nThe average results of TEXTCNN on ECO (|Y|=2) and CHE (|Y|=13) are reported in Figure 2. We observe that these configurations converge at different F1 scores as the number of epochs increases gradually. As for each dataset, the configuration of a factual model with counterfactual inference (i.e., CORSAIR) achieves the best performance with even a relatively more rapid convergence. More interestingly, in the early phases of model training (e.g., epoch=0), CORSAIR usually provides a higher starting point than traditional factual inference. We conjecture that the superiority may come from the use of average embedding which usually produces a stable distribution similarly distributed with ideal biases, making a base model happen to “see” the label bias once the initiation operation is done. This phenomenon is empirically held, especially for smallscale classification tasks.\nSurprisingly, counterfactual learning converges at the factual learning case. This finding consistently holds on all other baselines across datasets, which means that the so-called counterfactual learning actually degrades to a factual inference. This indicates that if a training model explicitly mitigates two types of dataset biases in an end-toend fashion, i.e., without the operational gap, it actually loses the function to perform debiased inference. The important reason is that under such circumstance, the potential biases actually “spread” throughout the whole model architecture, instead of the mere part before bias removal is operated, which makes bias removal only look like debiasing but is just a factual feedforward operation that is unable to capture, distill and even mitigate biases. Therefore, the counterfactual inference works only when the operational gap between learning and inferencing exists. This beneficial gap instead makes the biases spread only throughout the part before the bias removal module, and thus enables them to be distilled via counterfactual inference."
+    }, {
+      "heading" : "4 Related Work",
+      "text" : "Text classification is a backbone component in many downstream tasks or applications (Broder et al., 2007; Chen et al., 2019; Sun et al., 2019; Qian et al., 2020a,c). Earlier text classification methods focus on manual feature engineering (Aggarwal and Zhai, 2012; Cavnar and Trenkle, 1994; Post and Bergsma, 2013). The key factor of text classification lies in the quality of text representation (Mikolov et al., 2013b,a; Pennington et al., 2014; Canuto et al., 2019; Yan, 2009; Qian et al., 2021). Benefiting from high-quality word\nvectors, some subsequent studies explored different types of downstream text classification models, including support vector machine (Joachims, 1999), maximum entropy model (Nigamy and McCallum, 1999), naive Bayes (Pang et al., 2002), word clustering (Baker and McCallum, 1998) and neural networks (Kim, 2014; Zhou et al., 2016; Howard and Ruder, 2018; Devlin et al., 2019; Liu et al., 2019).\nTo solve the dataset bias issue, a straightforward solution is to perform data-level manipulations to prevent models from capturing the unintended dataset biases in model training, including data balance (Dixon et al., 2018; Geng et al., 2007; Chen et al., 2017; Sun et al., 2018; Rayhan et al., 2017; Nguyen et al., 2011) (a.k.a. resampling) and data augmentation (Wei and Zou, 2019; Qian et al., 2020b). Another common paradigm for text classification is typically to design model-level balancing mechanisms, including unbiased embedding (Bolukbasi et al., 2016; Kaneko and Bollegala, 2019), threshold correction (Kang et al., 2020; Provost, 2000; Calders and Verwer, 2010) and instance weighting (Zhang et al., 2020; Zhao et al., 2017; Jiang and Zhai, 2007)."
+    }, {
+      "heading" : "5 Conclusion",
+      "text" : "We have designed a counterfactual framework for text classification debiasing. Extensive experiments demonstrated the framework’s good effectiveness, generalizability and fairness. Future work will design a joint-learning technique to dynamically decide each document’s main content. We hope the paradigm can illuminate a promising technical direction of causal inference in natural language processing."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "We thank the anonymous reviewers for their encouraging feedbacks. The work was supported by the National Key Research and Development Program of China (No. 2019YFB1704003), the National Nature Science Foundation of China (No. 71690231), Tsinghua BNRist, Alibaba DAMO academy, NExT++ Research Center and Beijing Key Laboratory of Industrial Bigdata System and Application."
+    } ],
+    "references" : [ {
+      "title" : "A Survey of Text Classification Algorithms",
+      "author" : [ "Charu C. Aggarwal", "ChengXiang Zhai." ],
+      "venue" : "Mining Text Data, pages 163–222.",
+      "citeRegEx" : "Aggarwal and Zhai.,? 2012",
+      "shortCiteRegEx" : "Aggarwal and Zhai.",
+      "year" : 2012
+    }, {
+      "title" : "Distributional Clustering of Words for Text Classification",
+      "author" : [ "L. Douglas Baker", "Andrew Kachites McCallum." ],
+      "venue" : "the ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR), pages 96–103.",
+      "citeRegEx" : "Baker and McCallum.,? 1998",
+      "shortCiteRegEx" : "Baker and McCallum.",
+      "year" : 1998
+    }, {
+      "title" : "Language (Technology) is Power: A Critical Survey of Bias in NLP",
+      "author" : [ "Su Lin Blodgett", "Solon Barocas", "Hal Daumé III", "Hanna Wallach." ],
+      "venue" : "the Annual Meeting of the Association for Computational Linguistics (ACL), pages 5454–5476.",
+      "citeRegEx" : "Blodgett et al\\.,? 2020",
+      "shortCiteRegEx" : "Blodgett et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Man is to Computer Programmer as Woman is to Homemaker? Debiasing Word Embeddings",
+      "author" : [ "Tolga Bolukbasi", "Kai-Wei Chang", "James Zou", "Venkatesh Saligrama", "Adam Kalai." ],
+      "venue" : "the Conference on Neural Information Processing Systems",
+      "citeRegEx" : "Bolukbasi et al\\.,? 2016",
+      "shortCiteRegEx" : "Bolukbasi et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Robust Classification of Rare Queries Using Web Knowledge",
+      "author" : [ "Andrei Broder", "Marcus Fontoura", "Evgeniy Gabrilovich" ],
+      "venue" : "In the ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR),",
+      "citeRegEx" : "Broder et al\\.,? \\Q2007\\E",
+      "shortCiteRegEx" : "Broder et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "Three Naive Bayes Approaches for Discrimination-free Classification",
+      "author" : [ "Toon Calders", "Sicco Verwer." ],
+      "venue" : "Data Mining and Knowledge Discovery, pages 277–292.",
+      "citeRegEx" : "Calders and Verwer.,? 2010",
+      "shortCiteRegEx" : "Calders and Verwer.",
+      "year" : 2010
+    }, {
+      "title" : "SimilarityBased Synthetic Document Representations for Meta-Feature Generation in Text Classification",
+      "author" : [ "Sergio Canuto", "Thiago Salles" ],
+      "venue" : "In the ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR),",
+      "citeRegEx" : "Canuto and Salles,? \\Q2019\\E",
+      "shortCiteRegEx" : "Canuto and Salles",
+      "year" : 2019
+    }, {
+      "title" : "Know Your Neighbors: Web Spam Detection using the Web Topology",
+      "author" : [ "Carlos Castillo", "Debora Donato", "Aristides Gionis", "Vanessa Graham Murdock", "Fabrizio Silvestri." ],
+      "venue" : "the ACM SIGIR Conference on Research and Development in Information",
+      "citeRegEx" : "Castillo et al\\.,? 2007",
+      "shortCiteRegEx" : "Castillo et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "N-grambased Text Categorization",
+      "author" : [ "William B Cavnar", "John M Trenkle." ],
+      "venue" : "Annual Symposium on Document Analysis and Information Retrieval (SDAIR).",
+      "citeRegEx" : "Cavnar and Trenkle.,? 1994",
+      "shortCiteRegEx" : "Cavnar and Trenkle.",
+      "year" : 1994
+    }, {
+      "title" : "A Noise-Filtered Under-Sampling Scheme for Imbalanced Classification",
+      "author" : [ "XiaoShuang Chen", "SiSi Li", "MengChu Zhou." ],
+      "venue" : "IEEE Transactions on Cybernetics, pages 4263–4274.",
+      "citeRegEx" : "Chen et al\\.,? 2017",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Emoji-Powered Representation Learning for CrossLingual Sentiment Classification",
+      "author" : [ "Zhenpeng Chen", "Sheng Shen", "Ziniu Hu" ],
+      "venue" : "In the World Wide Web Conference (WWW),",
+      "citeRegEx" : "Chen et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee" ],
+      "venue" : "In the North American Chapter of the Association for Computational Linguistics (NAACL),",
+      "citeRegEx" : "Devlin et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Measuring and Mitigating Unintended Bias in Text Classification",
+      "author" : [ "Lucas Dixon", "John Li", "Jeffrey Sorensen", "Nithum Thain", "Lucy Vasserman." ],
+      "venue" : "the AAAI/ACM Conference on AI, Ethics, and Society (AIES), pages 67–73.",
+      "citeRegEx" : "Dixon et al\\.,? 2018",
+      "shortCiteRegEx" : "Dixon et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "CausaLM: Causal Model Explanation Through Counterfactual Language Models",
+      "author" : [ "Amir Feder", "Nadav Oved", "Uri Shalit", "Roi Reichart." ],
+      "venue" : "arXiv:2005.13407.",
+      "citeRegEx" : "Feder et al\\.,? 2020",
+      "shortCiteRegEx" : "Feder et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Boosting the Performance of Web Spam Detection with Ensemble Under-Sampling Classification",
+      "author" : [ "Guang-Gang Geng", "Chun-Heng Wang", "Qiu-Dan Li", "Lei Xu", "Xiao-Bo Jin." ],
+      "venue" : "the Conference on Fuzzy Systems and Knowledge Discovery",
+      "citeRegEx" : "Geng et al\\.,? 2007",
+      "shortCiteRegEx" : "Geng et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "Making the V in VQA Matter: Elevating the Role of Image Understanding in Visual Question Answering",
+      "author" : [ "Yash Goyal", "Tejas Khot", "Douglas Summers-Stay", "Dhruv Batra", "Devi Parikh." ],
+      "venue" : "the Conference on Computer Vision and Pattern Recog-",
+      "citeRegEx" : "Goyal et al\\.,? 2017",
+      "shortCiteRegEx" : "Goyal et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Don’t Stop Pretraining: Adapt Language Models to Domains and Tasks",
+      "author" : [ "Suchin Gururangan", "Ana Marasovic", "Swabha Swayamdipta", "Kyle Lo", "Iz Beltagy", "Doug Downey", "Noah A. Smith." ],
+      "venue" : "the Annual Meeting of the Association for Compu-",
+      "citeRegEx" : "Gururangan et al\\.,? 2020",
+      "shortCiteRegEx" : "Gururangan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Learning from Imbalanced Data",
+      "author" : [ "Haibo He", "Edwardo A. Garcia." ],
+      "venue" : "IEEE Transactions on Knowledge and Data Engineering (TKDE), pages 1263–1284.",
+      "citeRegEx" : "He and Garcia.,? 2009",
+      "shortCiteRegEx" : "He and Garcia.",
+      "year" : 2009
+    }, {
+      "title" : "Lexically Constrained Decoding for Sequence Generation Using Grid Beam Search",
+      "author" : [ "Chris Hokamp", "Qun Liu." ],
+      "venue" : "the Annual Meeting of the Association for Computational Linguistics (ACL), pages 1535–1546.",
+      "citeRegEx" : "Hokamp and Liu.,? 2017",
+      "shortCiteRegEx" : "Hokamp and Liu.",
+      "year" : 2017
+    }, {
+      "title" : "Universal Language Model Fine-tuning for Text Classification",
+      "author" : [ "Jeremy Howard", "Sebastian Ruder." ],
+      "venue" : "the Annual Meeting of the Association for Computational Linguistics (ACL), pages 328–339.",
+      "citeRegEx" : "Howard and Ruder.,? 2018",
+      "shortCiteRegEx" : "Howard and Ruder.",
+      "year" : 2018
+    }, {
+      "title" : "Examining Temporality in Document Classification",
+      "author" : [ "Xiaolei Huang", "Michael J. Paul." ],
+      "venue" : "the Annual Meeting of the Association for Computational Linguistics (ACL), pages 694–699.",
+      "citeRegEx" : "Huang and Paul.,? 2018",
+      "shortCiteRegEx" : "Huang and Paul.",
+      "year" : 2018
+    }, {
+      "title" : "Examining Patterns of Influenza Vaccination in Social Media",
+      "author" : [ "Xiaolei Huang", "Michael C. Smith", "Michael J. Paul", "Dmytro Ryzhkov", "Sandra C. Quinn", "David A. Broniatowski", "Mark Dredze." ],
+      "venue" : "the AAAI Conference on Artificial Intelligence",
+      "citeRegEx" : "Huang et al\\.,? 2017",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Instance Weighting for Domain Adaptation in NLP",
+      "author" : [ "Jing Jiang", "ChengXiang Zhai." ],
+      "venue" : "the Annual Meeting of the Association for Computational Linguistics (ACL), pages 264–271.",
+      "citeRegEx" : "Jiang and Zhai.,? 2007",
+      "shortCiteRegEx" : "Jiang and Zhai.",
+      "year" : 2007
+    }, {
+      "title" : "Transductive Inference for Text Classification using Support Vector Machines",
+      "author" : [ "Thorsten Joachims." ],
+      "venue" : "the International Conference on Machine Learning (ICML), pages 200–209.",
+      "citeRegEx" : "Joachims.,? 1999",
+      "shortCiteRegEx" : "Joachims.",
+      "year" : 1999
+    }, {
+      "title" : "Measuring the Evolution of a Scientific Field through Citation Frames",
+      "author" : [ "David Jurgens", "Srijan Kumar", "Raine Hoover", "Dan McFarland", "Dan Jurafsky." ],
+      "venue" : "Transactions of the Association for Computational Linguistics (TACL), pages 391–406.",
+      "citeRegEx" : "Jurgens et al\\.,? 2018",
+      "shortCiteRegEx" : "Jurgens et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Gender-preserving Debiasing for Pre-trained Word Embeddings",
+      "author" : [ "Masahiro Kaneko", "Danushka Bollegala." ],
+      "venue" : "the Annual Meeting of the Association for Computational Linguistics (ACL), pages 1641–1650.",
+      "citeRegEx" : "Kaneko and Bollegala.,? 2019",
+      "shortCiteRegEx" : "Kaneko and Bollegala.",
+      "year" : 2019
+    }, {
+      "title" : "Decoupling Representation and Classifier for Long-tailed Recognition",
+      "author" : [ "Bingyi Kang", "Saining Xie", "Marcus Rohrbach", "Zhicheng Yan", "Albert Gordo", "Jiashi Feng." ],
+      "venue" : "the International Conference on Learning Representations (ICLR).",
+      "citeRegEx" : "Kang et al\\.,? 2020",
+      "shortCiteRegEx" : "Kang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "SemEval2019 Task 4: Hyperpartisan News Detection",
+      "author" : [ "Johannes Kiesel", "Maria Mestre", "Rishabh Shukla", "Emmanuel Vincent", "Payam Adineh", "David Corney", "Benno Stein", "Martin Potthast." ],
+      "venue" : "the International Workshop on Semantic Evaluation,",
+      "citeRegEx" : "Kiesel et al\\.,? 2019",
+      "shortCiteRegEx" : "Kiesel et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "From Small-scale to Large-scale Text Classification",
+      "author" : [ "Kang-Min Kim", "Yeachan Kim", "Jungho Lee" ],
+      "venue" : "In the World Wide Web Conference (WWW),",
+      "citeRegEx" : "Kim et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Convolutional Neural Networks for Sentence Classification",
+      "author" : [ "Yoon Kim." ],
+      "venue" : "the Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1746–1751.",
+      "citeRegEx" : "Kim.,? 2014",
+      "shortCiteRegEx" : "Kim.",
+      "year" : 2014
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P. Kingma", "Jimmy Lei Ba." ],
+      "venue" : "arXiv:1412.6980.",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "ChemProt-3.0: A Global Chemical Biology Diseases Mapping",
+      "author" : [ "Jens Kringelum", "Sonny Kim Kjaerulff", "Soren Brunak", "Ole Lund", "Tudor I Oprea", "Olivier Taboureau" ],
+      "venue" : "In Database (Oxford)",
+      "citeRegEx" : "Kringelum et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Kringelum et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Recurrent Convolutional Neural Networks for Text Classification",
+      "author" : [ "Siwei Lai", "Liheng Xu", "Kang Liu", "Jun Zhao." ],
+      "venue" : "the AAAI Conference on Artificial Intelligence (AAAI), pages 2267–2273.",
+      "citeRegEx" : "Lai et al\\.,? 2015",
+      "shortCiteRegEx" : "Lai et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Newsweeder: Learning to Filter Netnews",
+      "author" : [ "Ken Lang." ],
+      "venue" : "the International Conference on Machine Learning (ICML), pages 331–339.",
+      "citeRegEx" : "Lang.,? 1995",
+      "shortCiteRegEx" : "Lang.",
+      "year" : 1995
+    }, {
+      "title" : "Incorporating Priors with Feature Attribution on Text Classification",
+      "author" : [ "Frederick Liu", "Besim Avci." ],
+      "venue" : "the Annual Meeting of the Association",
+      "citeRegEx" : "Liu and Avci.,? 2019",
+      "shortCiteRegEx" : "Liu and Avci.",
+      "year" : 2019
+    }, {
+      "title" : "RoBERTa: A Robustly Optimized BERT Pretraining Approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "arXiv:1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Multi-Task Identification of Entities and Relations and and Coreference for Scientific Knowledge Graph Construction",
+      "author" : [ "Yi Luan", "Luheng He", "Mari Ostendorf", "Hannaneh Hajishirzi." ],
+      "venue" : "the Conference on Empirical Methods in Natural Language",
+      "citeRegEx" : "Luan et al\\.,? 2018",
+      "shortCiteRegEx" : "Luan et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Efficient Estimation of Word Representations in Vector Space",
+      "author" : [ "Tomas Mikolov", "Kai Chen", "Greg Corrado", "Jeffrey Dean." ],
+      "venue" : "arXiv:1301.3781.",
+      "citeRegEx" : "Mikolov et al\\.,? 2013a",
+      "shortCiteRegEx" : "Mikolov et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Distributed Representations of Words and Phrases and their Compositionality",
+      "author" : [ "Tomas Mikolov", "Ilya Sutskever", "Kai Chen" ],
+      "venue" : "In the Conference on Neural Information Processing Systems (NeurIPS),",
+      "citeRegEx" : "Mikolov et al\\.,? \\Q2013\\E",
+      "shortCiteRegEx" : "Mikolov et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Controlling Fairness and Bias in Dynamic Learning-to-Rank",
+      "author" : [ "Marco Morik", "Ashudeep Singh", "Jessica Hong", "Thorsten Joachims." ],
+      "venue" : "the ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR), pages 429–438.",
+      "citeRegEx" : "Morik et al\\.,? 2020",
+      "shortCiteRegEx" : "Morik et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Borderline Over-Sampling for Imbalanced Data Classification",
+      "author" : [ "Hien M. Nguyen", "Eric W. Cooper", "Katsuari Kamei." ],
+      "venue" : "the International Journal of Knowledge Engineering and Soft Data Paradigms (IJKESDP), pages 4–21.",
+      "citeRegEx" : "Nguyen et al\\.,? 2011",
+      "shortCiteRegEx" : "Nguyen et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "Using Maximum Entropy for Text Classification",
+      "author" : [ "Kamal Nigamy", "Andrew McCallum." ],
+      "venue" : "the International Joint Conference on Artificial Intelligence (IJCAI), pages 61–67.",
+      "citeRegEx" : "Nigamy and McCallum.,? 1999",
+      "shortCiteRegEx" : "Nigamy and McCallum.",
+      "year" : 1999
+    }, {
+      "title" : "Counterfactual VQA: A Cause-Effect Look at Language Bias",
+      "author" : [ "Yulei Niu", "Kaihua Tang", "Hanwang Zhang", "Zhiwu Lu", "Xian-Sheng Hua", "Ji-Rong Wen." ],
+      "venue" : "the Conference on Computer Vision and Pattern Recognition (CVPR).",
+      "citeRegEx" : "Niu et al\\.,? 2021",
+      "shortCiteRegEx" : "Niu et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Thumbs Up: Sentiment Classification using Machine Llearning Techniques",
+      "author" : [ "Bo Pang", "Lillian Lee", "Shivakumar Vaithyanathan." ],
+      "venue" : "the Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 79–86.",
+      "citeRegEx" : "Pang et al\\.,? 2002",
+      "shortCiteRegEx" : "Pang et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Direct and Indirect Effects",
+      "author" : [ "Judea Pearl." ],
+      "venue" : "arXiv:1301.2300.",
+      "citeRegEx" : "Pearl.,? 2013",
+      "shortCiteRegEx" : "Pearl.",
+      "year" : 2013
+    }, {
+      "title" : "Causal Inference in Statistics: A Primer",
+      "author" : [ "Judea Pearl", "Madelyn Glymour", "Nicholas P Jewell." ],
+      "venue" : "John Wiley and Sons.",
+      "citeRegEx" : "Pearl et al\\.,? 2016",
+      "shortCiteRegEx" : "Pearl et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "The Book of Why: The New Science of Cause and Effect",
+      "author" : [ "Judea Pearl", "Dana Mackenzie." ],
+      "venue" : "Basic Books.",
+      "citeRegEx" : "Pearl and Mackenzie.,? 2018",
+      "shortCiteRegEx" : "Pearl and Mackenzie.",
+      "year" : 2018
+    }, {
+      "title" : "Glove: Global Vectors for Word Representation",
+      "author" : [ "Jeffrey Pennington", "Richard Socher", "Christopher D. Manning." ],
+      "venue" : "the Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1532–1543.",
+      "citeRegEx" : "Pennington et al\\.,? 2014",
+      "shortCiteRegEx" : "Pennington et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Explicit and Implicit Syntactic Features for Text Classification",
+      "author" : [ "Matt Post", "Shane Bergsma." ],
+      "venue" : "the Annual Meeting of the Association for Computational Linguistics (ACL), pages 866–872.",
+      "citeRegEx" : "Post and Bergsma.,? 2013",
+      "shortCiteRegEx" : "Post and Bergsma.",
+      "year" : 2013
+    }, {
+      "title" : "Machine Learning from Imbalanced Data Sets 101",
+      "author" : [ "Foster Provost." ],
+      "venue" : "the AAAI Conference on Artificial Intelligence (AAAI), pages 1–3.",
+      "citeRegEx" : "Provost.,? 2000",
+      "shortCiteRegEx" : "Provost.",
+      "year" : 2000
+    }, {
+      "title" : "Solving Sequential Text Classification as BoardGame Playing",
+      "author" : [ "Chen Qian", "Fuli Feng", "Lijie Wen", "Zhenpeng Chen", "Li Lin", "Yanan Zheng", "Tat-Seng Chua." ],
+      "venue" : "the AAAI Conference on Artificial Intelligence (AAAI), pages 8640–8648.",
+      "citeRegEx" : "Qian et al\\.,? 2020a",
+      "shortCiteRegEx" : "Qian et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Conceptualized and Contextualized Gaussian Embedding",
+      "author" : [ "Chen Qian", "Fuli Feng", "Lijie Wen", "Tat-Seng Chua." ],
+      "venue" : "the AAAI Conference on Artificial Intelligence (AAAI).",
+      "citeRegEx" : "Qian et al\\.,? 2021",
+      "shortCiteRegEx" : "Qian et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Enhancing Text Classification via Discovering Additional Semantic Clues from Logograms",
+      "author" : [ "Chen Qian", "Fuli Feng", "Lijie Wen", "Li Lin", "Tat-Seng Chua." ],
+      "venue" : "the ACM SIGIR Conference on Research and Development in Information Retrieval",
+      "citeRegEx" : "Qian et al\\.,? 2020b",
+      "shortCiteRegEx" : "Qian et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "An approach for process model extraction by multigrained text classification",
+      "author" : [ "Chen Qian", "Lijie Wen", "Akhil Kumar", "Leilei Lin", "Li Lin", "Zan Zong", "Shuang Li", "Jianmin Wang." ],
+      "venue" : "Proceedings of The 32nd International Conference on Advanced Infor-",
+      "citeRegEx" : "Qian et al\\.,? 2020c",
+      "shortCiteRegEx" : "Qian et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "CUSBoost: Cluster-Based Under-Sampling with Boosting for Imbalanced Classification",
+      "author" : [ "Farshid Rayhan", "Sajid Ahmed", "Asif Mahbub", "Rafsan Jani", "Swakkhar Shatabda", "Dewan Md. Farid." ],
+      "venue" : "the International Conference on Computational Systems",
+      "citeRegEx" : "Rayhan et al\\.,? 2017",
+      "shortCiteRegEx" : "Rayhan et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Evolutionary Under-Sampling based Bagging Ensemble Method for Imbalanced Data Classification",
+      "author" : [ "Bo Sun", "Haiyan Chen", "Jiandong Wang", "Hua Xie." ],
+      "venue" : "Frontiers of Computer Science, pages 331– 350.",
+      "citeRegEx" : "Sun et al\\.,? 2018",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Applying Uncertainty Theory into the Restaurant Recommender System based on Sentiment Analysis of Online Chinese Reviews",
+      "author" : [ "Lihua Sun", "Junpeng Guo", "Yanlin Zhu." ],
+      "venue" : "the World Wide Web Conference (WWW), pages 83–100.",
+      "citeRegEx" : "Sun et al\\.,? 2019",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A Transparent Framework for Evaluating Unintended Demographic Bias in Word Embeddings",
+      "author" : [ "Chris Sweeney", "Maryam Najafian." ],
+      "venue" : "the Annual Meeting of the Association for Computational Linguistics (ACL), pages 1662–1667.",
+      "citeRegEx" : "Sweeney and Najafian.,? 2020",
+      "shortCiteRegEx" : "Sweeney and Najafian.",
+      "year" : 2020
+    }, {
+      "title" : "Unbiased Scene Graph Generation from Biased Training",
+      "author" : [ "Kaihua Tang", "Yulei Niu", "Jianqiang Huang", "Jiaxin Shi", "Hanwang Zhang." ],
+      "venue" : "the Conference on Computer Vision and Pattern Recognition (CVPR), pages 3716–3725.",
+      "citeRegEx" : "Tang et al\\.,? 2020",
+      "shortCiteRegEx" : "Tang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Visual Commonsense R-CNN",
+      "author" : [ "Tan Wang", "Jianqiang Huang", "Hanwang Zhang", "Qianru Sun." ],
+      "venue" : "the Conference on Computer Vision and Pattern Recognition (CVPR), pages 10760–10770.",
+      "citeRegEx" : "Wang et al\\.,? 2020",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Hateful Symbols or Hateful People? Predictive Features for Hate Speech Detection on Twitter",
+      "author" : [ "Zeerak Waseem", "Dirk Hovy." ],
+      "venue" : "the North American Chapter of the Association for Computational Linguistics (NAACL), pages 88–93.",
+      "citeRegEx" : "Waseem and Hovy.,? 2016",
+      "shortCiteRegEx" : "Waseem and Hovy.",
+      "year" : 2016
+    }, {
+      "title" : "EDA: Easy Data Augmentation Techniques for Boosting Performance on Text Classification Tasks",
+      "author" : [ "Jason Wei", "Kai Zou." ],
+      "venue" : "the Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 6382–6388.",
+      "citeRegEx" : "Wei and Zou.,? 2019",
+      "shortCiteRegEx" : "Wei and Zou.",
+      "year" : 2019
+    }, {
+      "title" : "Learning From Multiple Experts: Self-paced Knowledge Distillation for Long-tailed Classification",
+      "author" : [ "Liuyu Xiang", "Guiguang Ding." ],
+      "venue" : "the European Conference on Computer Vision (ECCV).",
+      "citeRegEx" : "Xiang and Ding.,? 2020",
+      "shortCiteRegEx" : "Xiang and Ding.",
+      "year" : 2020
+    }, {
+      "title" : "Text Representation",
+      "author" : [ "Jun Yan." ],
+      "venue" : "Encyclopedia of Database Systems.",
+      "citeRegEx" : "Yan.,? 2009",
+      "shortCiteRegEx" : "Yan.",
+      "year" : 2009
+    }, {
+      "title" : "Deconfounded Image Captioning: A Causal Retrospect",
+      "author" : [ "Xu Yang", "Hanwang Zhang", "Jianfei Cai." ],
+      "venue" : "arXiv:2003.03923.",
+      "citeRegEx" : "Yang et al\\.,? 2020",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Demographics Should Not Be the Reason of Toxicity: Mitigating Discrimination in Text Classifications with Instance Weighting",
+      "author" : [ "Guanhua Zhang", "Bing Bai", "Junqi Zhang", "Kun Bai", "Conghui Zhu", "Tiejun Zhao." ],
+      "venue" : "the Annual Meeting of the Association",
+      "citeRegEx" : "Zhang et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Explicit Factor Models for Explainable Recommendation based on Phrase-level Sentiment Analysis",
+      "author" : [ "Yongfeng Zhang", "Guokun Lai" ],
+      "venue" : "In the ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR),",
+      "citeRegEx" : "Zhang and Lai,? \\Q2014\\E",
+      "shortCiteRegEx" : "Zhang and Lai",
+      "year" : 2014
+    }, {
+      "title" : "Men Also Like Shopping: Reducing Gender Bias Amplification using Corpus-level Constraints",
+      "author" : [ "Jieyu Zhao", "Tianlu Wang", "Mark Yatskar", "Vicente Ordonez", "Kai-Wei Chang." ],
+      "venue" : "the Conference on Empirical Methods in Natural Language Processing",
+      "citeRegEx" : "Zhao et al\\.,? 2017",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "AttentionBased Bidirectional Long Short-Term Memory Networks for Relation Classification",
+      "author" : [ "Peng Zhou", "Wei Shi", "Jun Tian" ],
+      "venue" : "In the Annual Meeting of the Association for Computational Linguistics (ACL),",
+      "citeRegEx" : "Zhou et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2016
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 52,
+      "context" : "Text classification, mapping text documents to a set of predefined categories, is a fundamental and important technique serving for many applications such as sentiment analysis (Qian et al., 2020b),",
+      "startOffset" : 177,
+      "endOffset" : 197
+    }, {
+      "referenceID" : 27,
+      "context" : "partisanship recognition (Kiesel et al., 2019) and spam detection (Castillo et al.",
+      "startOffset" : 25,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 67,
+      "context" : "Nevertheless, they are at the risk of inadvertently capturing and even amplifying the unintended dataset biases (Zhao et al., 2017; Zhang et al., 2020; Feder et al., 2020; Blodgett et al., 2020), which can be at document-level (i.",
+      "startOffset" : 112,
+      "endOffset" : 194
+    }, {
+      "referenceID" : 65,
+      "context" : "Nevertheless, they are at the risk of inadvertently capturing and even amplifying the unintended dataset biases (Zhao et al., 2017; Zhang et al., 2020; Feder et al., 2020; Blodgett et al., 2020), which can be at document-level (i.",
+      "startOffset" : 112,
+      "endOffset" : 194
+    }, {
+      "referenceID" : 13,
+      "context" : "Nevertheless, they are at the risk of inadvertently capturing and even amplifying the unintended dataset biases (Zhao et al., 2017; Zhang et al., 2020; Feder et al., 2020; Blodgett et al., 2020), which can be at document-level (i.",
+      "startOffset" : 112,
+      "endOffset" : 194
+    }, {
+      "referenceID" : 2,
+      "context" : "Nevertheless, they are at the risk of inadvertently capturing and even amplifying the unintended dataset biases (Zhao et al., 2017; Zhang et al., 2020; Feder et al., 2020; Blodgett et al., 2020), which can be at document-level (i.",
+      "startOffset" : 112,
+      "endOffset" : 194
+    }, {
+      "referenceID" : 12,
+      "context" : "Many previous studies found that the models trained on such data are potentially at the risk of simply predicting the majority answers (Dixon et al., 2018; Zhang et al., 2020).",
+      "startOffset" : 135,
+      "endOffset" : 175
+    }, {
+      "referenceID" : 65,
+      "context" : "Many previous studies found that the models trained on such data are potentially at the risk of simply predicting the majority answers (Dixon et al., 2018; Zhang et al., 2020).",
+      "startOffset" : 135,
+      "endOffset" : 175
+    }, {
+      "referenceID" : 60,
+      "context" : "As such, models always lean to unfairly predict any document containing those keywords to a specific category according to the biased statistical information instead of intrinsic textual semantics (Waseem and Hovy, 2016; Liu and Avci, 2019).",
+      "startOffset" : 197,
+      "endOffset" : 240
+    }, {
+      "referenceID" : 34,
+      "context" : "As such, models always lean to unfairly predict any document containing those keywords to a specific category according to the biased statistical information instead of intrinsic textual semantics (Waseem and Hovy, 2016; Liu and Avci, 2019).",
+      "startOffset" : 197,
+      "endOffset" : 240
+    }, {
+      "referenceID" : 42,
+      "context" : "The serious disadvantages limit models’ generalization, especially in the scenarios where the training data is differently-distributed with the testing data (Niu et al., 2021; Goyal et al., 2017).",
+      "startOffset" : 157,
+      "endOffset" : 195
+    }, {
+      "referenceID" : 15,
+      "context" : "The serious disadvantages limit models’ generalization, especially in the scenarios where the training data is differently-distributed with the testing data (Niu et al., 2021; Goyal et al., 2017).",
+      "startOffset" : 157,
+      "endOffset" : 195
+    }, {
+      "referenceID" : 52,
+      "context" : ", resampling (Qian et al., 2020b)), which effectively transforms a training set to a relatively balanced one before training.",
+      "startOffset" : 13,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 65,
+      "context" : ", reweighting (Zhang et al., 2020)), aiming to adaptively decrease the influence of majority categories while increasing the minority during training.",
+      "startOffset" : 14,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 65,
+      "context" : "Unfortunately, the data-level strategy typically suffers from the extra manual cost of data collection, selection and annotation (Zhang et al., 2020), requires much longer training time and normally enlarges the gap between training and testing data distributions.",
+      "startOffset" : 129,
+      "endOffset" : 149
+    }, {
+      "referenceID" : 42,
+      "context" : "By contrast, we humans, although born and raised in a biased nature, have the ability of counterfactual inference to make unbiased decisions with biased observations (Niu et al., 2021).",
+      "startOffset" : 166,
+      "endOffset" : 184
+    }, {
+      "referenceID" : 58,
+      "context" : ", had not done) to make decisions with a collaboration of the main content and the confounding biases (Tang et al., 2020), as well as to introspect whether our decision is deceived (Niu et al.",
+      "startOffset" : 102,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 42,
+      "context" : ", 2020), as well as to introspect whether our decision is deceived (Niu et al., 2021), i.",
+      "startOffset" : 67,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 42,
+      "context" : "Inspired by the success of counterfactual inference in mitigating biases in computer vision (Niu et al., 2021; Wang et al., 2020; Tang et al., 2020; Yang et al., 2020; Goyal et al., 2017), we propose a counterfactual-inference-based text-classification debiasing framework (CORSAIR), which is able to make unbiased decisions with biased observations.",
+      "startOffset" : 92,
+      "endOffset" : 187
+    }, {
+      "referenceID" : 59,
+      "context" : "Inspired by the success of counterfactual inference in mitigating biases in computer vision (Niu et al., 2021; Wang et al., 2020; Tang et al., 2020; Yang et al., 2020; Goyal et al., 2017), we propose a counterfactual-inference-based text-classification debiasing framework (CORSAIR), which is able to make unbiased decisions with biased observations.",
+      "startOffset" : 92,
+      "endOffset" : 187
+    }, {
+      "referenceID" : 58,
+      "context" : "Inspired by the success of counterfactual inference in mitigating biases in computer vision (Niu et al., 2021; Wang et al., 2020; Tang et al., 2020; Yang et al., 2020; Goyal et al., 2017), we propose a counterfactual-inference-based text-classification debiasing framework (CORSAIR), which is able to make unbiased decisions with biased observations.",
+      "startOffset" : 92,
+      "endOffset" : 187
+    }, {
+      "referenceID" : 64,
+      "context" : "Inspired by the success of counterfactual inference in mitigating biases in computer vision (Niu et al., 2021; Wang et al., 2020; Tang et al., 2020; Yang et al., 2020; Goyal et al., 2017), we propose a counterfactual-inference-based text-classification debiasing framework (CORSAIR), which is able to make unbiased decisions with biased observations.",
+      "startOffset" : 92,
+      "endOffset" : 187
+    }, {
+      "referenceID" : 15,
+      "context" : "Inspired by the success of counterfactual inference in mitigating biases in computer vision (Niu et al., 2021; Wang et al., 2020; Tang et al., 2020; Yang et al., 2020; Goyal et al., 2017), we propose a counterfactual-inference-based text-classification debiasing framework (CORSAIR), which is able to make unbiased decisions with biased observations.",
+      "startOffset" : 92,
+      "endOffset" : 187
+    }, {
+      "referenceID" : 32,
+      "context" : ", TEXTCNN (Kim, 2014), RCNN (Lai et al., 2015) and LECO (Qian et al.",
+      "startOffset" : 28,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 52,
+      "context" : ", 2015) and LECO (Qian et al., 2020b)) and currently prevalent two-stage classifiers2 (e.",
+      "startOffset" : 17,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 11,
+      "context" : "FIT (Howard and Ruder, 2018), BERT (Devlin et al., 2019) and RoBERTa (Liu et al.",
+      "startOffset" : 35,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 46,
+      "context" : "founders (Pearl and Mackenzie, 2018) which may produce the label bias and keyword bias.",
+      "startOffset" : 9,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 42,
+      "context" : "inspired by the counterfactual studies in causal reasoning (Niu et al., 2021; Tang et al., 2020), we design an effective strategy based on causal intervention (Pearl, 2013; Pearl and Mackenzie, 2018) to distill the potentially-harmful biases captured",
+      "startOffset" : 59,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 58,
+      "context" : "inspired by the counterfactual studies in causal reasoning (Niu et al., 2021; Tang et al., 2020), we design an effective strategy based on causal intervention (Pearl, 2013; Pearl and Mackenzie, 2018) to distill the potentially-harmful biases captured",
+      "startOffset" : 59,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 44,
+      "context" : ", 2020), we design an effective strategy based on causal intervention (Pearl, 2013; Pearl and Mackenzie, 2018) to distill the potentially-harmful biases captured",
+      "startOffset" : 70,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 46,
+      "context" : ", 2020), we design an effective strategy based on causal intervention (Pearl, 2013; Pearl and Mackenzie, 2018) to distill the potentially-harmful biases captured",
+      "startOffset" : 70,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 42,
+      "context" : "by the trained model (Niu et al., 2021; Tang et al., 2020), and then mitigate them via bias removal.",
+      "startOffset" : 21,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 58,
+      "context" : "by the trained model (Niu et al., 2021; Tang et al., 2020), and then mitigate them via bias removal.",
+      "startOffset" : 21,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 44,
+      "context" : "Aiming to conduct proper causal intervention, we first formulate the causal graph (Pearl, 2013; Pearl and Mackenzie, 2018; Tang et al., 2020) for the text classification models (see the left-bottom part of Figure 1), which sheds light on how the document contents and dataset biases affecting the prediction.",
+      "startOffset" : 82,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 46,
+      "context" : "Aiming to conduct proper causal intervention, we first formulate the causal graph (Pearl, 2013; Pearl and Mackenzie, 2018; Tang et al., 2020) for the text classification models (see the left-bottom part of Figure 1), which sheds light on how the document contents and dataset biases affecting the prediction.",
+      "startOffset" : 82,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 58,
+      "context" : "Aiming to conduct proper causal intervention, we first formulate the causal graph (Pearl, 2013; Pearl and Mackenzie, 2018; Tang et al., 2020) for the text classification models (see the left-bottom part of Figure 1), which sheds light on how the document contents and dataset biases affecting the prediction.",
+      "startOffset" : 82,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 58,
+      "context" : "It provides a sketch of the causal relations behind the data and how variables obtain their values (Tang et al., 2020), e.",
+      "startOffset" : 99,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 59,
+      "context" : "Concretely, by using Bayes rule (Wang et al., 2020), we can view the inference as:",
+      "startOffset" : 32,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 46,
+      "context" : "a back-door path in causal theory (Pearl and Mackenzie, 2018; Pearl, 2013).",
+      "startOffset" : 34,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 44,
+      "context" : "a back-door path in causal theory (Pearl and Mackenzie, 2018; Pearl, 2013).",
+      "startOffset" : 34,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 46,
+      "context" : "To decouple the spurious causal correlation, the back-door adjustment (Pearl and Mackenzie, 2018; Pearl, 2013; Pearl et al., 2016) predicts an actively intervened answer via the do(·) operation:",
+      "startOffset" : 70,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 44,
+      "context" : "To decouple the spurious causal correlation, the back-door adjustment (Pearl and Mackenzie, 2018; Pearl, 2013; Pearl et al., 2016) predicts an actively intervened answer via the do(·) operation:",
+      "startOffset" : 70,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 45,
+      "context" : "To decouple the spurious causal correlation, the back-door adjustment (Pearl and Mackenzie, 2018; Pearl, 2013; Pearl et al., 2016) predicts an actively intervened answer via the do(·) operation:",
+      "startOffset" : 70,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 58,
+      "context" : "Some evil words may serve as unintended confounders (Tang et al., 2020), splitting a document into two pieces: main",
+      "startOffset" : 52,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 18,
+      "context" : "In practice, elastic scaling can be implemented using grid beam search (Hokamp and Liu, 2017) in a scoped twodimensional space:",
+      "startOffset" : 71,
+      "endOffset" : 93
+    }, {
+      "referenceID" : 17,
+      "context" : "mechanism (He and Garcia, 2009) to mitigate the label bias, and we further enhance it via a powerful word-level augmentation technique (EDA) (Wei and Zou, 2019) to mitigate the keyword bias, denoted as LECOEDA.",
+      "startOffset" : 10,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 61,
+      "context" : "mechanism (He and Garcia, 2009) to mitigate the label bias, and we further enhance it via a powerful word-level augmentation technique (EDA) (Wei and Zou, 2019) to mitigate the keyword bias, denoted as LECOEDA.",
+      "startOffset" : 141,
+      "endOffset" : 160
+    }, {
+      "referenceID" : 35,
+      "context" : "RoBERTa (Liu et al., 2019) is an improved version of BERT, whose effective modifications allow RoBERTa to generalize better and match or exceed the performance of many post-BERT methods, serving as a very strong baseline in recent work (Gururangan et al.",
+      "startOffset" : 8,
+      "endOffset" : 26
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2019) is an improved version of BERT, whose effective modifications allow RoBERTa to generalize better and match or exceed the performance of many post-BERT methods, serving as a very strong baseline in recent work (Gururangan et al., 2020).",
+      "startOffset" : 217,
+      "endOffset" : 242
+    }, {
+      "referenceID" : 27,
+      "context" : "Datasets We use multiple English benchmark datasets (used mainly in academic community): HyperPartisan (Kiesel et al., 2019), Twitter (Huang et al.",
+      "startOffset" : 103,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2019), Twitter (Huang et al., 2017), ARC (Jurgens et al.",
+      "startOffset" : 17,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 36,
+      "context" : ", 2018), SCIERC (Luan et al., 2018), ChemProt (Kringelum et al.",
+      "startOffset" : 16,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 31,
+      "context" : ", 2018), ChemProt (Kringelum et al., 2016), Economy (Huang and Paul, 2018), News (Lang, 1995), Parties (Huang and Paul, 2018), YelpHotel (Zhang et al.",
+      "startOffset" : 18,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2016), Economy (Huang and Paul, 2018), News (Lang, 1995), Parties (Huang and Paul, 2018), YelpHotel (Zhang et al.",
+      "startOffset" : 17,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 33,
+      "context" : ", 2016), Economy (Huang and Paul, 2018), News (Lang, 1995), Parties (Huang and Paul, 2018), YelpHotel (Zhang et al.",
+      "startOffset" : 46,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2016), Economy (Huang and Paul, 2018), News (Lang, 1995), Parties (Huang and Paul, 2018), YelpHotel (Zhang et al.",
+      "startOffset" : 68,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 30,
+      "context" : "Each training is run for 10 epochs with the Adam optimizer (Kingma and Ba, 2015), a mini-batch size of 16, a learning rate of 2e−5, and a dropout rate of 0.",
+      "startOffset" : 59,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 62,
+      "context" : "We thus follow previous work (Xiang and Ding, 2020; Sweeney and Najafian, 2020) to use the metric – imbalance divergence – to evaluate whether a prediction (normally a probability distribution) P is imbalanced/skewed/unfair:",
+      "startOffset" : 29,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 57,
+      "context" : "We thus follow previous work (Xiang and Ding, 2020; Sweeney and Najafian, 2020) to use the metric – imbalance divergence – to evaluate whether a prediction (normally a probability distribution) P is imbalanced/skewed/unfair:",
+      "startOffset" : 29,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 0,
+      "context" : "Earlier text classification methods focus on manual feature engineering (Aggarwal and Zhai, 2012; Cavnar and Trenkle, 1994; Post and Bergsma, 2013).",
+      "startOffset" : 72,
+      "endOffset" : 147
+    }, {
+      "referenceID" : 8,
+      "context" : "Earlier text classification methods focus on manual feature engineering (Aggarwal and Zhai, 2012; Cavnar and Trenkle, 1994; Post and Bergsma, 2013).",
+      "startOffset" : 72,
+      "endOffset" : 147
+    }, {
+      "referenceID" : 48,
+      "context" : "Earlier text classification methods focus on manual feature engineering (Aggarwal and Zhai, 2012; Cavnar and Trenkle, 1994; Post and Bergsma, 2013).",
+      "startOffset" : 72,
+      "endOffset" : 147
+    }, {
+      "referenceID" : 47,
+      "context" : "The key factor of text classification lies in the quality of text representation (Mikolov et al., 2013b,a; Pennington et al., 2014; Canuto et al., 2019; Yan, 2009; Qian et al., 2021).",
+      "startOffset" : 81,
+      "endOffset" : 182
+    }, {
+      "referenceID" : 63,
+      "context" : "The key factor of text classification lies in the quality of text representation (Mikolov et al., 2013b,a; Pennington et al., 2014; Canuto et al., 2019; Yan, 2009; Qian et al., 2021).",
+      "startOffset" : 81,
+      "endOffset" : 182
+    }, {
+      "referenceID" : 51,
+      "context" : "The key factor of text classification lies in the quality of text representation (Mikolov et al., 2013b,a; Pennington et al., 2014; Canuto et al., 2019; Yan, 2009; Qian et al., 2021).",
+      "startOffset" : 81,
+      "endOffset" : 182
+    }, {
+      "referenceID" : 23,
+      "context" : "Benefiting from high-quality word vectors, some subsequent studies explored different types of downstream text classification models, including support vector machine (Joachims, 1999), maximum entropy model (Nigamy and McCallum, 1999), naive Bayes (Pang et al.",
+      "startOffset" : 167,
+      "endOffset" : 183
+    }, {
+      "referenceID" : 41,
+      "context" : "Benefiting from high-quality word vectors, some subsequent studies explored different types of downstream text classification models, including support vector machine (Joachims, 1999), maximum entropy model (Nigamy and McCallum, 1999), naive Bayes (Pang et al.",
+      "startOffset" : 207,
+      "endOffset" : 234
+    }, {
+      "referenceID" : 43,
+      "context" : "Benefiting from high-quality word vectors, some subsequent studies explored different types of downstream text classification models, including support vector machine (Joachims, 1999), maximum entropy model (Nigamy and McCallum, 1999), naive Bayes (Pang et al., 2002), word clustering (Baker and McCallum, 1998) and neural networks (Kim, 2014; Zhou et al.",
+      "startOffset" : 248,
+      "endOffset" : 267
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2002), word clustering (Baker and McCallum, 1998) and neural networks (Kim, 2014; Zhou et al.",
+      "startOffset" : 25,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 29,
+      "context" : ", 2002), word clustering (Baker and McCallum, 1998) and neural networks (Kim, 2014; Zhou et al., 2016; Howard and Ruder, 2018; Devlin et al., 2019; Liu et al., 2019).",
+      "startOffset" : 72,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 68,
+      "context" : ", 2002), word clustering (Baker and McCallum, 1998) and neural networks (Kim, 2014; Zhou et al., 2016; Howard and Ruder, 2018; Devlin et al., 2019; Liu et al., 2019).",
+      "startOffset" : 72,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 19,
+      "context" : ", 2002), word clustering (Baker and McCallum, 1998) and neural networks (Kim, 2014; Zhou et al., 2016; Howard and Ruder, 2018; Devlin et al., 2019; Liu et al., 2019).",
+      "startOffset" : 72,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 11,
+      "context" : ", 2002), word clustering (Baker and McCallum, 1998) and neural networks (Kim, 2014; Zhou et al., 2016; Howard and Ruder, 2018; Devlin et al., 2019; Liu et al., 2019).",
+      "startOffset" : 72,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 35,
+      "context" : ", 2002), word clustering (Baker and McCallum, 1998) and neural networks (Kim, 2014; Zhou et al., 2016; Howard and Ruder, 2018; Devlin et al., 2019; Liu et al., 2019).",
+      "startOffset" : 72,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 12,
+      "context" : "To solve the dataset bias issue, a straightforward solution is to perform data-level manipulations to prevent models from capturing the unintended dataset biases in model training, including data balance (Dixon et al., 2018; Geng et al., 2007; Chen et al., 2017; Sun et al., 2018; Rayhan et al., 2017; Nguyen et al., 2011) (a.",
+      "startOffset" : 204,
+      "endOffset" : 322
+    }, {
+      "referenceID" : 14,
+      "context" : "To solve the dataset bias issue, a straightforward solution is to perform data-level manipulations to prevent models from capturing the unintended dataset biases in model training, including data balance (Dixon et al., 2018; Geng et al., 2007; Chen et al., 2017; Sun et al., 2018; Rayhan et al., 2017; Nguyen et al., 2011) (a.",
+      "startOffset" : 204,
+      "endOffset" : 322
+    }, {
+      "referenceID" : 9,
+      "context" : "To solve the dataset bias issue, a straightforward solution is to perform data-level manipulations to prevent models from capturing the unintended dataset biases in model training, including data balance (Dixon et al., 2018; Geng et al., 2007; Chen et al., 2017; Sun et al., 2018; Rayhan et al., 2017; Nguyen et al., 2011) (a.",
+      "startOffset" : 204,
+      "endOffset" : 322
+    }, {
+      "referenceID" : 55,
+      "context" : "To solve the dataset bias issue, a straightforward solution is to perform data-level manipulations to prevent models from capturing the unintended dataset biases in model training, including data balance (Dixon et al., 2018; Geng et al., 2007; Chen et al., 2017; Sun et al., 2018; Rayhan et al., 2017; Nguyen et al., 2011) (a.",
+      "startOffset" : 204,
+      "endOffset" : 322
+    }, {
+      "referenceID" : 54,
+      "context" : "To solve the dataset bias issue, a straightforward solution is to perform data-level manipulations to prevent models from capturing the unintended dataset biases in model training, including data balance (Dixon et al., 2018; Geng et al., 2007; Chen et al., 2017; Sun et al., 2018; Rayhan et al., 2017; Nguyen et al., 2011) (a.",
+      "startOffset" : 204,
+      "endOffset" : 322
+    }, {
+      "referenceID" : 40,
+      "context" : "To solve the dataset bias issue, a straightforward solution is to perform data-level manipulations to prevent models from capturing the unintended dataset biases in model training, including data balance (Dixon et al., 2018; Geng et al., 2007; Chen et al., 2017; Sun et al., 2018; Rayhan et al., 2017; Nguyen et al., 2011) (a.",
+      "startOffset" : 204,
+      "endOffset" : 322
+    }, {
+      "referenceID" : 26,
+      "context" : "legala, 2019), threshold correction (Kang et al., 2020; Provost, 2000; Calders and Verwer, 2010) and instance weighting (Zhang et al.",
+      "startOffset" : 36,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 49,
+      "context" : "legala, 2019), threshold correction (Kang et al., 2020; Provost, 2000; Calders and Verwer, 2010) and instance weighting (Zhang et al.",
+      "startOffset" : 36,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 5,
+      "context" : "legala, 2019), threshold correction (Kang et al., 2020; Provost, 2000; Calders and Verwer, 2010) and instance weighting (Zhang et al.",
+      "startOffset" : 36,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 65,
+      "context" : ", 2020; Provost, 2000; Calders and Verwer, 2010) and instance weighting (Zhang et al., 2020; Zhao et al., 2017; Jiang and Zhai, 2007).",
+      "startOffset" : 72,
+      "endOffset" : 133
+    }, {
+      "referenceID" : 67,
+      "context" : ", 2020; Provost, 2000; Calders and Verwer, 2010) and instance weighting (Zhang et al., 2020; Zhao et al., 2017; Jiang and Zhai, 2007).",
+      "startOffset" : 72,
+      "endOffset" : 133
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2020; Provost, 2000; Calders and Verwer, 2010) and instance weighting (Zhang et al., 2020; Zhao et al., 2017; Jiang and Zhai, 2007).",
+      "startOffset" : 72,
+      "endOffset" : 133
+    } ],
+    "year" : 2021,
+    "abstractText" : "Today’s text classifiers inevitably suffer from unintended dataset biases, especially the document-level label bias and word-level keyword bias, which may hurt models’ generalization. Many previous studies employed datalevel manipulations or model-level balancing mechanisms to recover unbiased distributions and thus prevent models from capturing the two types of biases. Unfortunately, they either suffer from the extra cost of data collection/selection/annotation or need an elaborate design of balancing strategies. Different from traditional factual inference in which debiasing occurs before or during training, counterfactual inference mitigates the influence brought by unintended confounders after training, which can make unbiased decisions with biased observations. Inspired by this, we propose a model-agnostic text classification debiasing framework – CORSAIR, which can effectively avoid employing data manipulations or designing balancing mechanisms. Concretely, CORSAIR first trains a base model on a training set directly, allowing the dataset biases “poison” the trained model. In inference, given a factual input document, CORSAIR imagines its two counterfactual counterparts to distill and mitigate the two biases captured by the poisonous model. Extensive experiments demonstrate CORSAIR’s effectiveness, generalizability and fairness. 1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

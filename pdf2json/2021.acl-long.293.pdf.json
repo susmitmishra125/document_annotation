@@ -1,0 +1,495 @@
+{
+  "name" : "2021.acl-long.293.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "TextSETTR: Few-Shot Text Style Extraction and Tunable Targeted Restyling",
+    "authors" : [ "Parker Rileya", "Noah Constant", "Mandy Guo", "Girish Kumarc", "David Uthus", "Zarana Parekh" ],
+    "emails" : [ "priley3@cs.rochester.edu,", "nconstant@google.com", "xyguo@google.com." ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 3786–3800\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n3786"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "There has been a recent surge of interest in text style transfer, with the aim of training models able to modify specific attributes of input text (e.g., sentiment or formality) while preserving the remaining content. For example, a sentiment transfer model might transform the input “best book ever!” into “worst book ever!”, while a formality transfer model might change the same input into “This is the best book I have ever read.” In these contexts, we define “style” as the attributes intended to be changed,\n∗ Work done while at Google Research. Please direct correspondence to priley3@cs.rochester.edu, nconstant@google.com and xyguo@google.com.\nwhile “content” consists of the attributes intended to be preserved.1\nWork in this area falls into three categories. Supervised approaches like Jhamtani et al. (2017) transfer between pre-selected styles, and rely on parallel training data to learn the desired input/output correspondence. This method is limited by the availability of parallel corpora. So-called “unsupervised” approaches like Li et al. (2018) and Lample et al. (2019) remove the need for parallel data, but still require that all training examples have style labels, and are limited to transfer between a pre-specified set of styles. Few-shot approaches like that of Xu et al. (2020) remove the need for any training labels, instead using a small number of labeled examples during inference. While the most challenging, this offers the potential for transferring between arbitrary styles at inference time and has significant value, as curated datasets are not available for many style attributes.\nIn this work, we explore the hypothesis that large pretrained text-to-text models like T5 (Raffel et al., 2020) already contain a strong representation of textual style, which can be extracted and used to condition the decoder of a style transfer model through a relatively lightweight fine-tuning procedure. To isolate style information in the absence of labels, we rely on the observation that style is a “slow-moving” feature, which tends to be consistent over large spans of text. Specifically, given two adjacent sentences from an unlabeled corpus, we train our model to extract a “style vector” from the first and use that vector to perform denoising and other reconstruction tasks on the second. This technique extends the approach of Lample et al. (2019) to the few-shot setting, and is loosely reminiscent of the work of Akama et al. (2018), who found\n1Krishna et al. (2020) use a different definition of style, under which certain transfers such as sentiment would instead be examples of attribute transfer.\nlarge context windows useful for encoding style information in word embeddings. Our approach also allows us to reformulate the style transfer operation as a directional operation in style vector space using the difference between target and source style vectors; we call this “targeted restyling”. When combined with a novel “tunable inference” technique for controlling token add/delete rates, this gives our final model: Text Style Extraction and Tunable Targeted Restyling (TextSETTR).\nOur main contributions are to: (1) present a new, flexible approach to few-shot style transfer, (2) use sentence adjacency as a means for inducing text style representations, (3) reframe style transfer as “targeted restyling” directional operations in style space, (4) introduce “tunable inference” for finergrained control of transfers, (5) show the effectiveness of “noisy” back-translation training, and (6) illustrate few-shot generalization to a range of style attributes including dialect, emotiveness, formality, politeness, and sentiment."
+    }, {
+      "heading" : "2 Method",
+      "text" : "Figure 1 illustrates our proposed TextSETTR architecture. At a high level, our approach follows Lample et al. (2019), who train a denoising autoencoder conditioned on a fixed-width style vector. The key difference in our case is that the true style is unknown at training time. To overcome this, we jointly train a “style extractor” component to induce a useful style representation (that can aid in reconstruction) from text in the nearby context. We describe this in more detail below."
+    }, {
+      "heading" : "2.1 Model Architecture",
+      "text" : "We conduct our experiments using a modified version of the Text-to-Text Transfer Transformer (T5) (Raffel et al., 2020). Like T5, our model includes a transformer-based encoder and decoder. As in T5 pretraining, the input to the encoder is a corrupted version of the target, resulting in a reconstruction task. Our goal is to design a type of corruption that results in this training task resembling style transfer, despite the lack of labeled training data.\nOur core addition to T5 is the style extractor. This component’s architecture is based on that of the encoder, and its input is an uncorrupted sentence in the same style as the target; relying on our assumption that style is a slow-moving feature, we use the sentence preceding the target (the “context”) for this. This encourages extracting a\nstyle representation that is useful for repairing the corrupted input. We note that this can result in a representation that encodes slow-moving attributes in general, which may include some features that do not fit an intuitive definition of textual style (such as topic).\nThe only architectural difference between the encoder and style extractor is that we mean-pool the style extractor’s hidden state sequence into a single fixed-width “style vector”; in our experiments, the dimensionality of this vector and the encoder hidden states is 1024. To incorporate the style vector into the rest of the model, we simply add it to each of the final encoder hidden states.\nWe initialize the weights of our model with those of a pretrained T5 model. We initialize both the style extractor and encoder from the pretrained encoder, but the weights are not tied during training."
+    }, {
+      "heading" : "2.2 Corruption Strategies",
+      "text" : "We experiment with combinations of three different reconstruction tasks, each contributing a loss term. All three share the same overall structure, where a sentence si in the dataset is corrupted by some function f to produce s̃i = f(si). The crossentropy loss is calculated using the uncorrupted sentence si as the target, the corrupted sentence s̃i as the input, and the uncorrupted preceding sentence si−1 as the context. The three choices of f are Noise (N), Back-Translation (BT), and Noisy Back-Translation (NBT), described below.\nNoise (N) This function corrupts the input by (i) dropping, (ii) replacing, and/or (iii) shuffling tokens, in that order. For each example we sample a separate noise probability p for each sub-type of noise from a uniform distribution in the range 20–60%; doing so should widen the model’s range of possible style transfers at test time.\nFor drop noise, we drop each token in si with probability p. For replace noise, let sik be the kth token within si. For each si, a random other example sj is chosen, and then each token sik is replaced by sjk with probability p. If sj has fewer than k tokens, then the replacement does not occur. For shuffle noise, each token in si is chosen with probability p, and then all chosen tokens are randomly shuffled to the position of another chosen token, leaving non-chosen tokens in place.\nThe use of drop and shuffle noise results in a loss term similar to the denoising loss used by Lample et al. (2019). Their motivation for this loss was\nto encourage language modeling. As we fine-tune an already-strong T5 language model in our experiments, our motivation is rather to introduce a conditional element to the language model, in the form of the extracted style vector input.\nBack-Translation (BT) This corruption function, used by Lample et al. (2019), runs the current version of the model in inference mode to transfer si into a different style, giving the corrupted s̃i. In prior work using labels, specifying a different target style was straightforward. In our case, because we do not have access to labels, we simply sample a random sentence sj to use as the context. To increase diversity of the generated examples, we decode with sampling instead of greedy decoding.\nBecause s̃i is produced by a strong language model, BT should result in examples where both the input and output are coherent sentences, matching our inference setting. By contrast, Noise corruption does not resemble test-time inputs.\nNoisy Back-Translation (NBT) This novel corruption function is a composition of the previous two. Noise is first applied to si as described above, and the result is used as the input (with randomlysampled sj as the context) to the model in inference mode to produce s̃i via sampling, as in BT.\nOnce the model has learned to undo random noise, NBT should produce training examples where some of the tokens are preserved from si while others were generated by the model itself under the influence of the “incorrect” context sj . This is similar to BT, but we hypothesize that it may be better suited to style transfer. BT was origi-\nnally used for machine translation (Sennrich et al., 2016), a setting where most or all input tokens need to change. In contrast, style transfer within a single language usually requires only changing a subset of tokens; the training examples resulting from NBT should have this property. We believe that this will encourage the model to identify which tokens in the input do not match the target style indicated by si−1 and change them, which is exactly what we want a style transfer model to do.\nFinal Loss The final loss term used for training is the sum of the above loss terms, each calculated from the same input si. However, not every model we experiment with includes all three losses."
+    }, {
+      "heading" : "2.3 Inference Procedure",
+      "text" : "Tunable Add/Delete Rates In preliminary experiments, we observed a recurring problem that the model would often change either far too little (failing to achieve the target style), or far too much (failing to preserve the input content). To address this problem, we introduce a “tunable inference” mechanism to constrain how much content should be added and deleted at inference time.\nFor every input/output pair during training, we calculate the proportions of tokens that were added and deleted. The “add rate” is the proportion of output tokens absent from the input, and the “delete rate” is the proportion of input tokens absent from the output.2 We provide these rates to the decoder as ranges covering but not necessarily centered\n2This calculation ignores word order. As one example, if a token appears three times in the input and five times in the output, two of the five occurrences are counted as “added”.\non the true rates.3 This approach provides more flexibility at inference time, so we can enforce tight or loose constraints on each rate.\nTargeted Restyling While previous work on style transfer has largely assumed a fixed set of discrete styles, we expect our model’s learned style representations to capture a rich summary of the sentence covering many attributes without specifying them beforehand. For example, a given style vector might encode that a sentence is informal, humorous, in British English, and so on.\nIn this framework, transferring a single attribute (e.g., informal→ formal) is not as simple as just providing a vanilla “formal” style target, as this would ignore all the other attributes that defined the original input. Rather, we must operate in style space to construct a new target style that is simultaneously formal, humorous, British, and so on.\nConcretely, at inference time, we assume access to a small set of “exemplar” sentences (between 1 and 100) for both the source value (e.g., informal) and target value (e.g., formal) of the attribute being modified. We infer style vectors for each exemplar using the style extractor, and take the mean of each class, giving vectors vsrc and vtrg. Assuming the exemplar pools are relatively diverse, this averaging should “wash out” most untargeted attributes.\nTo transfer an input sentence x, we apply a targeted restyling in the appropriate direction. After extracting the original style from the input itself, vx, we compute the target output style by moving in the direction of the delta between the source and target attributes values, as in (1), producing the style vector used for decoding. In practice, we find that the delta scale λ is an important hyperparameter to tune. Generally values in the range [1.0, 10.0] work well, with the best values depending on the attribute and the exemplars in question.\nvx + λ× ( vtrg − vsrc ) (1)"
+    }, {
+      "heading" : "3 Experiments on Sentiment Transfer",
+      "text" : "To evaluate our approach and better understand the effects of our various design choices, we test on few-shot sentiment transfer, using the Amazon reviews dataset of Li et al. (2018). However, as their training split doesn’t indicate which sentences\n3Specifically, we sample each range width uniformly from [0,1], and uniformly sample the “alignment” of the true rate within the range. The final ranges are clipped to [0,1], and a vector containing the upper and lower bound of each range is prepended to the encoder hidden state sequence.\nwere adjacent in the original reviews, we make use of a different source of raw review text.\nTraining Procedure Our unlabeled training data comes from the 233.1M Amazon reviews provided by Ni et al. (2019). Ignoring the star ratings completely, we extract adjacent lines from multi-line reviews to use as the context and input for our training procedure, giving 23.6M examples. We also preprocess all text to match the format of the Li et al. (2018) data, as detailed in Appendix A.4. Initializing our model from pretrained T5 (t5.1.1.large), we fine-tune on these examples, optimizing the joint reconstruction loss from Section 2. Our default TextSETTR configuration is selected based on preliminary experiments (on development data) varying the set of reconstruction tasks and inference procedures. The model uses an equally weighted combination of the Noise (N) and Noisy Back-Translation (NBT) tasks. For both tasks, we use drop and replace noise, but no shuffle noise. We fine-tune for 10k steps, with a batch size of 65,536 tokens, and a fixed learning rate of 1e-3.\nEvaluation Procedure Following prior work, we use automatic metrics to assess attribute control (sentiment) and content preservation on the data from Li et al. (2018). To estimate the sentiment of the output, we fine-tune a BERT-Large classifier (Devlin et al., 2019) on the train split, scoring 87.8% accuracy on the dev split. For content preservation, we follow Sudhakar et al. (2019) and Xu et al. (2020) and calculate self-BLEU between the output and input, using SacreBLEU (Post, 2018).4,5 Following Xu et al. (2018), we report “G-score” (the geometric mean of accuracy and content) as a summary of overall model quality.\nTo perform transfers, we follow the procedure from Section 2.3. For our default setup, we sample 100 positive and 100 negative exemplars from the Li et al. (2018) train split. Unless otherwise specified, we use greedy decoding, a delta scale of λ=8, and add/delete tuning ranges of 20–40%.\nCore Results Figure 2 shows our core results. Our default TextSETTR configuration (N+NBT training, tuning ranges 20–40%) achieves 73.7% classifier-judged accuracy at swapping sentiment, while still staying somewhat close to the original\n4Version string: BLEU+case.mixed+numrefs.1+ smooth.exp+tok.13a+version.1.4.13\n5Some prior work reports instead BLEU scores between outputs and human-generated transfers from Li et al. (2018); we found this to be highly correlated with self-BLEU but report it in Appendix A.3 for completeness.\ninput text (self-BLEU 34.7). Due to our tunable inference technique, we can also trade off accuracy for content preservation by adjusting the add/delete rates, as seen in the points along the green line. Notably, TextSETTR outperforms the few-shot CP-G and CP-B models of Xu et al. (2020). More remarkably, TextSETTR outperforms several approaches that rely on training labels: CrossAligned (Shen et al., 2017) and Delete&Retrieve (Li et al., 2018). However there is still a small gap between our fewshot approach and the best labeled model, B-GST (Sudhakar et al., 2019).\nIn Table 1, we compare with Lample et al. (2019) on the evaluation setting including pos→pos and neg→neg transfers. This setting doesn’t match our inference procedure, which assumes that the input and output styles differ. Nevertheless, TextSETTR comes close to the performance of Lample et al. (2019), despite not benefiting from training labels.\nAs automatic metrics can diverge from human judgment (Sudhakar et al., 2019), we also conduct human evaluations of the three strongest models from Figure 2. We sample 200 examples per transfer direction from the Li et al. (2018) test set, and ask three annotators to evaluate each input/output\npair on three metrics: sentiment transfer (how well the model changed the sentiment), content preservation, and fluency, on scales of 1–5. The results in Table 2 confirm that TextSETTR achieves similar quality to models that benefit from training labels. Further details are presented in Appendix A.5."
+    }, {
+      "heading" : "3.1 Ablations",
+      "text" : "Modifying Inference Procedure To better understand the value of our proposed “targeted restyling” mechanism, we consider an alternative inference procedure where we ignore the style of the input and simply use the average target exemplar style vtrg as the style vector. We expect that since our learned style space covers multiple attributes, this will result in setting the target attribute (e.g. sentiment) while simultaneously overwriting all other style attributes (e.g. formality) using the average style of the target exemplars. This is borne out in our “overwrite style” ablation, which performs significantly worse than our baseline: accuracy drops from 54.0% to 25.3% with no gain in self-BLEU.\nTo assess the value of tunable add/delete rates, we also train a model (−tunable) without this feature. While the automatic metrics are slightly above the TextSETTR line, we observe several advan-\ntages to the tunable model. For one, we observe it significantly reduces the variance in self-BLEU across different inputs. For example, focusing on the case of overly high self-BLEU, we find that without tunable inference, 14.6% of dev eval outputs are identical to their inputs, whereas with tunable inference, this goes to 0.9%. Additionally, through qualitative analysis in Section 4, we find that tunable inference allows more flexibility for controlling different types of transfer.\nAdjusting Data Sizes While our unlabeled training data set consists of 23.6M examples, our model only sees 5.1M of these over its 10k steps of training. Yet this is still nearly 10× more data than the 0.6M examples in the Li et al. (2018) training set used by previous approaches. For a more direct comparison, we experiment with a “small train set”, sampling 0.6M examples from our training set. Remarkably, the results in Figure 2 are nearly identical to our baseline, supporting our hypothesis that a fairly lightweight adaptation is sufficient to allow T5 to extract and transfer textual style.\nTo test the limits of our model’s generalization, we reduce the set of exemplars to four manually selected examples of each class. In this setting, we also find reducing delta scale to λ=4 is beneficial. The results, shown as “manual exemplars” in Figure 2, are still competitive, indicating that our approach generalizes well to this very-few-shot inference setting. In the other direction, we find that increasing the number of sampled exemplars from 100 to 1000 only provides small additional gains.\nModifying Training Task Lample et al. (2019) showed promising results by combining noise (N) with back-translation (BT). However we find this combination unstable.6 When training for 10k steps, our N and N+BT models nearly always copy their input. Training for 50k steps recovers reasonable performance, but the metrics still fall below the TextSETTR line, using our novel NBT task. We also experiment with using NBT in isolation, but this again underperforms our baseline. We expect that the denoising task helps to ensure the NBT inputs (themselves the outputs of denoising) consist of realistic well-formed text. Finally, while Lample\n6For all experiments in the paper, we use 0.0 for the add/delete rates during the forward pass of back-translation. However we later found that using random add/delete rates in back-translation can improve performance in the N+BT setting. On sentiment transfer, this improved our N+BT ablation to self-BLEU 42.4, accuracy 71.4%, G-score 55.0.\net al. (2019) use drop and shuffle noise, we find that only drop and replace are valuable."
+    }, {
+      "heading" : "3.2 Embedding Visualization",
+      "text" : "To demonstrate that our learned style extractor encodes multiple aspects of textual style, we compute style vectors for 12,000 lines of text from three review categories (Fashion, Software, Pantry) from the Ni et al. (2019) Amazon data. Within each category, we sample 2,000 positives (4 or 5 star) and 2,000 negatives (1 or 2 star), filtering examples where our BERT classifier disagrees with the label. Figure 3 (bottom) plots a 2D UMAP dimensionality reduction (McInnes et al., 2018) of the vectors, and shows clear separations among sentiments and product categories. The top row runs UMAP with the same settings, but over style vectors from our model before training, where the style extractor is initialized from pretrained T5. The contrast is a clear indication that our training procedure is helping to learn a representation space where sentiment and topic values are well separated.\nTo confirm that the observed separation isn’t an artifact of dimensionality reduction, we compute the average distance between style vectors (a) within a class, and (b) across classes. We measure “separation” as the relative increase in mean distance between these two conditions. For product category, we find TextSETTR training improves separation from 1.7% to 8.1%. For sentiment, TextSETTR training improves separation from 0.9% to 4.7%."
+    }, {
+      "heading" : "4 One Model for All Styles",
+      "text" : "An advantage of few-shot style transfer is that, in theory, a single model can perform transfer along any “dimension” of style given only a few exemplars, without the need for additional training. In this section, we investigate the degree to which our approach achieves this goal in practice. For this purpose, we train a single general-purpose TextSETTR model, with the same configuration as our model from Section 3, except fine-tuned for 200k steps on English Common Crawl data (the same “C4” data that T5 pretrained on) instead of Amazon reviews.\nQualitative Evaluation Given that our architecture limits the style representation to 1024 dimensions, one may ask how the unsupervised model will make use of this capacity, and which style attributes will be encoded in the learned space. Encouragingly, we find that our model trained on un-\nlabeled Common Crawl data is capable of transferring along many independent axes of style. Table 3 shows selected successful examples of our Common Crawl model transferring emotiveness, dialect, politeness, formality and sentiment. The same model is used in each case, with no additional training. At inference time, a tiny set of exemplars (1–5 examples of each class) is the only labeled data used to compute the style vector delta; these exemplars are presented in Appendix A.2.\nAcross each type of transfer, we see evidence of generalization beyond the specifics of the chosen exemplars. In making text more emotive, the model uses amazing and blown away, despite these terms not occurring in the exemplars. In making text more polite, the model inserts novel hedges like perhaps and I could be wrong. In transferring between American and British styles, the model generalizes to unseen vocabulary items (elevator↔ lift) and draws sound analogies (senators↔MPs). We do note though that the latter case illustrates that the model is willing to change the semantic content of the input in cases where it would otherwise be outof-place in the target style. Future work includes investigating ways to control this in settings where such behavior is not desired.\nQuantitative Evaluation To assess the quality of our general-purpose TextSETTR model, we benchmark the same model on three distinct transfer tasks in Table 4.7 The sentiment transfer task follows the evaluation procedure from Section 3. While our generic model underperforms our model trained on Amazon reviews, it still outperforms other few-shot methods. For author transfer, we use the Shakespeare-to-modern task of Jhamtani et al. (2017). Here, TextSETTR outperforms the previous best model of He et al. (2020) that leveraged 36,790 labeled examples during training. For personality transfer, we use the task of Li et al. (2020), which requires transferring between three personalities: angry, happy, malicious. We compare8 TextSETTR, which sees no labels in training and only 100 of each class in inference, with CARA (Li et al., 2020), which trained on 2,604 labels.\n7For each task, we set our tuning ranges to 20–40% and compute target styles using 100 exemplars of each class taken from the train set. We use λ values of sentiment:8, author:16, personality:8. To measure accuracy, we fine-tune BERT-Large classifiers over the training data, reaching validation accuracies of sentiment:87.8%, author:89.7%, personality:81.9%.\n8Note, as Li et al. (2020) use a different classifier to assess accuracy, those numbers may not be directly comparable."
+    }, {
+      "heading" : "4.1 Dialect-Sensitive Completion",
+      "text" : "In addition to performing style and attribute transfer, we find that our system can also be used as a style-aware language model capable of completing prompts in a specified style. Examples of completions in American and British English are given in Table 5. In each case, the input is of the form “My favorite X: ”. Despite the fact that TextSETTR is not trained specifically for completions, we can use the add/delete rates to encourage the model to insert a few additional tokens, while leaving the original prompt largely unchanged.9\nThe completions demonstrate knowledge of stereotypical American and British culture. It is remarkable that the model is able to generalize to “deeper” cultural differences such as music and drink preferences, given only the shallow vocabulary differences (e.g., neighbor vs. neighbour) presented in the limited set of exemplars in Table 9.\nIt is also worth highlighting that, thanks to our directional transfer procedure, these completions are not merely “typical American” or “typical British” such as we would expect from a conditional language model trained on each sub-domain of text. Rather, since our inference procedure pushes the style away from one domain and towards the other, the resulting completions are distinctive representations of each dialect. As one example, we expect\n9We note that in transferring American to British, the model prefers to change the prompt from favorite to favourite.\n“quinoa” would not only be a common American favorite, but also an uncommon British favorite.\nAdditional examples of using our model for tasks other than pure style transfer are presented in Appendix A.1."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "As mentioned at the outset, recent work on text style transfer falls into three classes: supervised, “unsupervised”, and few-shot. Supervised style transfer has seen limited research due to the difficulty of obtaining parallel data. Examples include Jhamtani et al. (2017) and Carlson et al. (2018).\nUnsupervised Approaches The bulk of research has focused on “unsupervised” approaches, which rely on labeled but non-parallel data. Typically, labels are assumed to be available for both source and target styles (Shen et al. 2017, Li et al. 2018, Niu et al. 2018, and many others). Zhao et al. (2018) explore the case where only the target style is labeled. The use of labels at training time can aid modeling, but limits the applicability of these methods, as labeled datasets are not readily available for many attributes of interest.\nOur work differs from the above by removing the need for training labels, and offering a single model that can target an unrestricted set of style attributes. Despite these differences, our work shares some similarities with past work. For example, our encoder-decoder architecture and corruption methods are similar to Lample et al. (2019), and we leverage a strong pretrained language model, as in Sudhakar et al. (2019) and Wu et al. (2019).\nFew-Shot Approaches A few-shot approach has recently been explored by Xu et al. (2020). The authors train a variational auto-encoder on unlabeled text, where a “manipulable” portion of the latent representation is constrained to fall on a k-dimensional simplex. To perform transfer,\nthey identify empirically the basis vector that most strongly corresponds to the target attribute, and manipulate its magnitude. Compared to our approach, a key difference is that the number of latent factors must be chosen ahead of time, which limits the number of attributes that may be controlled. Additionally, there is no guarantee that a single basis of the learned simplex will correspond to a target attribute such as dialect or politeness.\nControlled Generation A separate strand of research explores “controlled generation” methods for supplementing generative language models to allow control of specific attributes of the output text. As with style transfer, this can be achieved either through labeled training examples, as in CTRL (Keskar et al., 2019) and PPLM (Dathathri et al., 2020), or a few-shot approach, as in CoCon (Chan et al., 2020). These models differ from style transfer models in that they aim to generate plausible continuations following a prompt, as opposed to transferring attributes of a fully-formed input while preserving as much content as possible. It is not clear if controlled generation models could be used to perform style transfer, and they have not to our knowledge been evaluated in this context."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "We have presented a unique approach to few-shot text style transfer that is competitive with systems trained with labels (an easier setting), while allowing control of how much of the input is changed. We demonstrate that this approach can produce a single system capable of transferring many different styles while requiring only a handful of exemplars at inference time."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We thank Llion Jones, Rami Al-Rfou, and Daniel Gildea for helpful discussion and comments on an earlier draft."
+    }, {
+      "heading" : "A Appendix",
+      "text" : "A.1 Beyond Style Transfer In this section, we provide additional examples illustrating the abilities of our TextSETTR model trained on Common Crawl data, beyond typical style transfer.\nExamples of shortening are given in Table 6, with inputs taken from the first five sentences of the Wikipedia article “Artificial neural network”. As shortening may require minor rephrases, we set our tuning ranges to add:0–5%, delete:40–90%. Since our intention is to leave the style unchanged (apart from length), we extract the target style directly from the input text, with no delta added. The model is largely successful at identifying and removing “superfluous” content, and finding ways of rephrasing to shorten while preserving meaning.\nExamples of random augmentations are given in Table 7. In each case, we transfer the input sentence “What’ll the weather be tomorrow?” to a slightly different style. Specifically, for each transfer, we extract this sentence’s style vector and apply a small amount of noise, with each component of the noise vector sampled from a Gaussian N (0, 0.08). Note that apart from the noise in the style vector, the transfer process is deterministic, as we use greedy decoding.\nThe cells of Table 7 apply different tuning ranges, conditioning the model to change a little or a lot. Within each cell, we repeatedly sample the noised style, and present the first five unique outputs. The results indicate that many random changes in style are largely meaning preserving, especially when a small change is requested. With larger add/delete rates, the outputs are still closely related in meaning, despite low lexical overlap.\nA.2 Settings used for Qualitative Analysis For each of the transfer types (e.g., formal ↔ informal) in Table 3, we specify the intended target styles through a tiny set of exemplars. These exemplars are provided in Tables 8–12. Additionally, for each transfer type, we select a delta scale λ and add/delete rates. These settings are selected through initial experiments, and are held fixed across all examples of transfer shown.\nA.3 Human Reference BLEU Li et al. (2018) provide human reference transfers for their Amazon test data, and report BLEU scores of model outputs against these targets. In principle,\nwe believe this metric is less informative than selfBLEU, as style transfer is a relatively open-ended task, and successful transfers may differ significantly from the single human reference. However, for completeness, we report “reference BLEU” of our models and those of prior work in Figure 4. We observe BLEU and self-BLEU are highly correlated, and the “Accuracy vs. BLEU” plot conveys the same relationships we saw in Figure 2. As before, all BLEU scores are calculated using SacreBLEU (Post, 2018).\nA.4 Amazon Reviews Preprocessing We use the code in Figure 5 to process raw Amazon reviews from the Ni et al. (2019) dataset and extract pairs of adjacent lines, preprocessed to have a similar format to Li et al. (2018) dataset. We split reviews on newlines, and clip lines to 100 characters, always ending with a period. This gives results similar to Li et al. (2018), where one line may contain multiple sentences, and may consists of a “half-sentence” ending with “e.g.” or a similar non-sentence-final period. Additionally, we apply various tokenization and normalization operations to roughly match the observed Li et al. (2018) text.\nA.5 Human Evaluation Setup For the human evaluations of our models, we employed 3 in-house annotators. The annotators were paid hourly wages that are competitive for their locale and have standard rights as contractors. They spoke native English.\nFor the evaluation task, the annotators were shown both the original and transformed pieces of text. They were then asked to evaluate for three metrics: fluency, meaning preservation, and sentiment change.\nFor fluency, they were asked, “For the new text, how do you rate the fluency, i.e., the quality and readability of the text, with 1 being not fluent at all and 5 being very fluent.” For meaning preservation, they were asked, “Comparing the new text against the original text, and ignoring the change of style, how well does the new text preserve as much of the original meaning, with 1 being all meaning is lost and 5 being preserving as much as possible given the sentiment change?” And for sentiment change, they were asked, “Comparing the new text against the original text, how well did the sentiment of the new text become more positive, with 1 being not more positive and 5 being a lot more positive?”\nimport re from html.parser import HTMLParser\nhtml_parser = HTMLParser()\ndef preprocess(line): \"\"\"Simulate Li et al. preprocessing of one review line.\"\"\" # Lowercase. line = line.lower() # Replace apostrophes, parens and quotes with spaces. line = re.sub(\"[’()\\\"]\", \" \", line) # Replace dollar values ==> $ line = re.sub(\"\\$[\\d.]*\", \"$\", line) # Replace percent values ==> % line = re.sub(\"[\\d.]*%\", \"%\", line) # Replace single digits ==> num_num line = re.sub(\" \\d[ ,]\", \" num_num \", line) # Replace multi-digits and codes ==> num_extend line = re.sub(\" \\d[ˆ ]*\", \" num_extend\", line) # Remove remaining numbers, including decimals. line = re.sub(\"\\d[\\d.]*\", \"\", line) # Add spaces around certain punctuation marks. line = re.sub(\"([.,?!:])\", r\" \\1 \", line) # Remove double spaces after periods before words. return re.sub(r\"\\. ([a-z])\", r\". \\1\", line)\ndef acceptable_line(line): \"\"\"Check if text looks like an acceptable line from Li et al.\"\"\" if not line or len(line) < 30 or len(line) >= 100: return False\n# Avoid lines with any char absent from Li et al. train. if re.search(’[ˆ !$%+,.:;>?@\\ˆ_‘a-z{|}]’, line): return False return True\ndef clip_to_last_period(line): return line[:len(line) - line[::-1].index(’.’)]\ndef adjacent_lines(review): \"\"\"Extract a list of adjacent line pairs from review text.\"\"\" review = html_parser.unescape(review) review = review.replace(’\\\\\"’, ’\"’) # Simulate Li et al. splitting and filtering. if ’\\n’ not in review: return"
+    } ],
+    "references" : [ {
+      "title" : "Unsupervised learning of style-sensitive word vectors",
+      "author" : [ "Reina Akama", "Kento Watanabe", "Sho Yokoi", "Sosuke Kobayashi", "Kentaro Inui." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Pa-",
+      "citeRegEx" : "Akama et al\\.,? 2018",
+      "shortCiteRegEx" : "Akama et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Evaluating prose style transfer with the bible",
+      "author" : [ "Keith Carlson", "Allen Riddell", "Daniel Rockmore." ],
+      "venue" : "Royal Society Open Science, 5(10):171920.",
+      "citeRegEx" : "Carlson et al\\.,? 2018",
+      "shortCiteRegEx" : "Carlson et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "CoCon: A self-supervised approach for controlled text generation",
+      "author" : [ "Alvin Chan", "Yew-Soon Ong", "Bill Pung", "Aston Zhang", "Jie Fu." ],
+      "venue" : "CoRR, abs/2006.03535.",
+      "citeRegEx" : "Chan et al\\.,? 2020",
+      "shortCiteRegEx" : "Chan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Plug and play language models: A simple approach to controlled text generation",
+      "author" : [ "Sumanth Dathathri", "Andrea Madotto", "Janice Lan", "Jane Hung", "Eric Frank", "Piero Molino", "Jason Yosinski", "Rosanne Liu." ],
+      "venue" : "International Conference on Learning Represen-",
+      "citeRegEx" : "Dathathri et al\\.,? 2020",
+      "shortCiteRegEx" : "Dathathri et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A probabilistic formulation of unsupervised text style transfer",
+      "author" : [ "Junxian He", "Xinyi Wang", "Graham Neubig", "Taylor Berg-Kirkpatrick." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "He et al\\.,? 2020",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Shakespearizing modern language using copy-enriched sequence to sequence models",
+      "author" : [ "Harsh Jhamtani", "Varun Gangal", "Eduard Hovy", "Eric Nyberg." ],
+      "venue" : "Proceedings of the Workshop on Stylistic Variation, pages 10–19, Copenhagen, Denmark. Associa-",
+      "citeRegEx" : "Jhamtani et al\\.,? 2017",
+      "shortCiteRegEx" : "Jhamtani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "CTRL: A conditional transformer language model for controllable generation",
+      "author" : [ "Nitish Shirish Keskar", "Bryan McCann", "Lav R. Varshney", "Caiming Xiong", "Richard Socher." ],
+      "venue" : "CoRR, abs/1909.05858.",
+      "citeRegEx" : "Keskar et al\\.,? 2019",
+      "shortCiteRegEx" : "Keskar et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Reformulating unsupervised style transfer as paraphrase generation",
+      "author" : [ "Kalpesh Krishna", "John Wieting", "Mohit Iyyer." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 737–762, Online. Asso-",
+      "citeRegEx" : "Krishna et al\\.,? 2020",
+      "shortCiteRegEx" : "Krishna et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Multiple-attribute text rewriting",
+      "author" : [ "Guillaume Lample", "Sandeep Subramanian", "Eric Smith", "Ludovic Denoyer", "Marc’Aurelio Ranzato", "YLan Boureau" ],
+      "venue" : "In International Conference on Learning Representations",
+      "citeRegEx" : "Lample et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Lample et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Delete, retrieve, generate: a simple approach to sentiment and style transfer",
+      "author" : [ "Juncen Li", "Robin Jia", "He He", "Percy Liang." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human",
+      "citeRegEx" : "Li et al\\.,? 2018",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Complementary auxiliary classifiers for labelconditional text generation",
+      "author" : [ "Yuan Li", "Chunyuan Li", "Yizhe Zhang", "Xiujun Li", "Guoqing Zheng", "Lawrence Carin", "Jianfeng Gao." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, vol-",
+      "citeRegEx" : "Li et al\\.,? 2020",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "UMAP: Uniform manifold approximation and projection",
+      "author" : [ "Leland McInnes", "John Healy", "Nathaniel Saul", "Lukas Großberger." ],
+      "venue" : "Journal of Open Source Software, 3(29):861.",
+      "citeRegEx" : "McInnes et al\\.,? 2018",
+      "shortCiteRegEx" : "McInnes et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Justifying recommendations using distantly-labeled reviews and fine-grained aspects",
+      "author" : [ "Jianmo Ni", "Jiacheng Li", "Julian McAuley." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th Interna-",
+      "citeRegEx" : "Ni et al\\.,? 2019",
+      "shortCiteRegEx" : "Ni et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Multi-task neural models for translating between styles within and across languages",
+      "author" : [ "Xing Niu", "Sudha Rao", "Marine Carpuat." ],
+      "venue" : "Proceedings of the 27th International Conference on Computational Linguistics, pages 1008–1021, Santa Fe, New",
+      "citeRegEx" : "Niu et al\\.,? 2018",
+      "shortCiteRegEx" : "Niu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A call for clarity in reporting BLEU scores",
+      "author" : [ "Matt Post." ],
+      "venue" : "Proceedings of the Third Conference on Machine Translation: Research Papers, pages 186– 191, Belgium, Brussels. Association for Computational Linguistics.",
+      "citeRegEx" : "Post.,? 2018",
+      "shortCiteRegEx" : "Post.",
+      "year" : 2018
+    }, {
+      "title" : "Exploring the limits of transfer learning with a unified text-totext transformer",
+      "author" : [ "Colin Raffel", "Noam Shazeer", "Adam Roberts", "Katherine Lee", "Sharan Narang", "Michael Matena", "Yanqi Zhou", "Wei Li", "Peter J. Liu." ],
+      "venue" : "Journal of Machine Learning Re-",
+      "citeRegEx" : "Raffel et al\\.,? 2020",
+      "shortCiteRegEx" : "Raffel et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Improving neural machine translation models with monolingual data",
+      "author" : [ "Rico Sennrich", "Barry Haddow", "Alexandra Birch." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages",
+      "citeRegEx" : "Sennrich et al\\.,? 2016",
+      "shortCiteRegEx" : "Sennrich et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Style transfer from non-parallel text by cross-alignment",
+      "author" : [ "Tianxiao Shen", "Tao Lei", "Regina Barzilay", "Tommi Jaakkola." ],
+      "venue" : "I. Guyon, U. V. Luxburg, S. Bengio, H. Wallach, R. Fergus, S. Vishwanathan,",
+      "citeRegEx" : "Shen et al\\.,? 2017",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Transforming” delete, retrieve, generate approach for controlled text style transfer",
+      "author" : [ "Akhilesh Sudhakar", "Bhargav Upadhyay", "Arjun Maheswaran." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Sudhakar et al\\.,? 2019",
+      "shortCiteRegEx" : "Sudhakar et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Mask and infill: Applying masked language model for sentiment transfer",
+      "author" : [ "Xing Wu", "Tao Zhang", "Liangjun Zang", "Jizhong Han", "Songlin Hu." ],
+      "venue" : "Proceedings of the Twenty-Eighth International Joint Conference on Artificial Intelligence, IJCAI-",
+      "citeRegEx" : "Wu et al\\.,? 2019",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unpaired sentiment-to-sentiment translation: A cycled reinforcement learning approach",
+      "author" : [ "Jingjing Xu", "Xu Sun", "Qi Zeng", "Xiaodong Zhang", "Xuancheng Ren", "Houfeng Wang", "Wenjie Li." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association",
+      "citeRegEx" : "Xu et al\\.,? 2018",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "On variational learning of controllable representations for text without supervision",
+      "author" : [ "Peng Xu", "Jackie Chi Kit Cheung", "Yanshuai Cao." ],
+      "venue" : "Proceedings of the 37th International Conference on Machine Learning, volume 119 of Proceedings of",
+      "citeRegEx" : "Xu et al\\.,? 2020",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Language style transfer from sentences with arbitrary unknown styles",
+      "author" : [ "Yanpeng Zhao", "Wei Bi", "Deng Cai", "Xiaojiang Liu", "Kewei Tu", "Shuming Shi." ],
+      "venue" : "CoRR, abs/1808.04071.",
+      "citeRegEx" : "Zhao et al\\.,? 2018",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "2018) dataset. We split reviews on newlines, and clip lines to 100 characters, always ending with a period",
+      "author" : [ "Li" ],
+      "venue" : "This gives results similar to Li et al",
+      "citeRegEx" : "Li,? \\Q2018\\E",
+      "shortCiteRegEx" : "Li",
+      "year" : 2018
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 16,
+      "context" : "We adapt T5 (Raffel et al., 2020), a strong pretrained text-to-text model, to extract a style vector from text and use it to condition the decoder to perform style transfer.",
+      "startOffset" : 12,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 6,
+      "context" : "Supervised approaches like Jhamtani et al. (2017) transfer between pre-selected styles, and rely on parallel training data to learn the desired input/output correspondence.",
+      "startOffset" : 27,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 6,
+      "context" : "Supervised approaches like Jhamtani et al. (2017) transfer between pre-selected styles, and rely on parallel training data to learn the desired input/output correspondence. This method is limited by the availability of parallel corpora. So-called “unsupervised” approaches like Li et al. (2018) and Lample et al.",
+      "startOffset" : 27,
+      "endOffset" : 295
+    }, {
+      "referenceID" : 6,
+      "context" : "Supervised approaches like Jhamtani et al. (2017) transfer between pre-selected styles, and rely on parallel training data to learn the desired input/output correspondence. This method is limited by the availability of parallel corpora. So-called “unsupervised” approaches like Li et al. (2018) and Lample et al. (2019) remove the need for parallel data, but still require that all training examples have style labels, and are limited to transfer between a pre-specified set of styles.",
+      "startOffset" : 27,
+      "endOffset" : 320
+    }, {
+      "referenceID" : 6,
+      "context" : "Supervised approaches like Jhamtani et al. (2017) transfer between pre-selected styles, and rely on parallel training data to learn the desired input/output correspondence. This method is limited by the availability of parallel corpora. So-called “unsupervised” approaches like Li et al. (2018) and Lample et al. (2019) remove the need for parallel data, but still require that all training examples have style labels, and are limited to transfer between a pre-specified set of styles. Few-shot approaches like that of Xu et al. (2020) remove the need for any training labels, instead using a small number of labeled examples during inference.",
+      "startOffset" : 27,
+      "endOffset" : 536
+    }, {
+      "referenceID" : 16,
+      "context" : "In this work, we explore the hypothesis that large pretrained text-to-text models like T5 (Raffel et al., 2020) already contain a strong representation of textual style, which can be extracted and used to condition the decoder of a style transfer model through a relatively lightweight fine-tuning procedure.",
+      "startOffset" : 90,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 8,
+      "context" : "This technique extends the approach of Lample et al. (2019) to the few-shot setting, and is loosely reminiscent of the work of Akama et al.",
+      "startOffset" : 39,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 0,
+      "context" : "(2019) to the few-shot setting, and is loosely reminiscent of the work of Akama et al. (2018), who found",
+      "startOffset" : 74,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 8,
+      "context" : "Krishna et al. (2020) use a different definition of style, under which certain transfers such as sentiment would instead be examples of attribute transfer.",
+      "startOffset" : 0,
+      "endOffset" : 22
+    }, {
+      "referenceID" : 9,
+      "context" : "At a high level, our approach follows Lample et al. (2019), who train a denoising autoencoder conditioned on a fixed-width style vector.",
+      "startOffset" : 38,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 16,
+      "context" : "We conduct our experiments using a modified version of the Text-to-Text Transfer Transformer (T5) (Raffel et al., 2020).",
+      "startOffset" : 98,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 9,
+      "context" : "The use of drop and shuffle noise results in a loss term similar to the denoising loss used by Lample et al. (2019). Their motivation for this loss was",
+      "startOffset" : 95,
+      "endOffset" : 116
+    }, {
+      "referenceID" : 9,
+      "context" : "Back-Translation (BT) This corruption function, used by Lample et al. (2019), runs the current version of the model in inference mode to transfer si into a different style, giving the corrupted s̃i.",
+      "startOffset" : 56,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 17,
+      "context" : "BT was originally used for machine translation (Sennrich et al., 2016), a setting where most or all input tokens need to change.",
+      "startOffset" : 47,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 10,
+      "context" : "To evaluate our approach and better understand the effects of our various design choices, we test on few-shot sentiment transfer, using the Amazon reviews dataset of Li et al. (2018). However, as their training split doesn’t indicate which sentences",
+      "startOffset" : 166,
+      "endOffset" : 183
+    }, {
+      "referenceID" : 11,
+      "context" : "1M Amazon reviews provided by Ni et al. (2019). Ignoring the star ratings completely, we extract adjacent lines from multi-line reviews to use as the context and input for our training procedure, giving 23.",
+      "startOffset" : 30,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 10,
+      "context" : "We also preprocess all text to match the format of the Li et al. (2018) data, as detailed in Appendix A.",
+      "startOffset" : 55,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 4,
+      "context" : "To estimate the sentiment of the output, we fine-tune a BERT-Large classifier (Devlin et al., 2019) on the train split, scoring 87.",
+      "startOffset" : 78,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 15,
+      "context" : "(2020) and calculate self-BLEU between the output and input, using SacreBLEU (Post, 2018).",
+      "startOffset" : 77,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 9,
+      "context" : "Evaluation Procedure Following prior work, we use automatic metrics to assess attribute control (sentiment) and content preservation on the data from Li et al. (2018). To estimate the sentiment of the output, we fine-tune a BERT-Large classifier (Devlin et al.",
+      "startOffset" : 150,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 4,
+      "context" : "To estimate the sentiment of the output, we fine-tune a BERT-Large classifier (Devlin et al., 2019) on the train split, scoring 87.8% accuracy on the dev split. For content preservation, we follow Sudhakar et al. (2019) and Xu et al.",
+      "startOffset" : 79,
+      "endOffset" : 220
+    }, {
+      "referenceID" : 4,
+      "context" : "To estimate the sentiment of the output, we fine-tune a BERT-Large classifier (Devlin et al., 2019) on the train split, scoring 87.8% accuracy on the dev split. For content preservation, we follow Sudhakar et al. (2019) and Xu et al. (2020) and calculate self-BLEU between the output and input, using SacreBLEU (Post, 2018).",
+      "startOffset" : 79,
+      "endOffset" : 241
+    }, {
+      "referenceID" : 4,
+      "context" : "To estimate the sentiment of the output, we fine-tune a BERT-Large classifier (Devlin et al., 2019) on the train split, scoring 87.8% accuracy on the dev split. For content preservation, we follow Sudhakar et al. (2019) and Xu et al. (2020) and calculate self-BLEU between the output and input, using SacreBLEU (Post, 2018).4,5 Following Xu et al. (2018), we report “G-score” (the geometric mean of accuracy and content) as a summary of overall model quality.",
+      "startOffset" : 79,
+      "endOffset" : 355
+    }, {
+      "referenceID" : 10,
+      "context" : "For our default setup, we sample 100 positive and 100 negative exemplars from the Li et al. (2018) train split.",
+      "startOffset" : 82,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 10,
+      "context" : "13 (5)Some prior work reports instead BLEU scores between outputs and human-generated transfers from Li et al. (2018); we found this to be highly correlated with self-BLEU but report it in Appendix A.",
+      "startOffset" : 101,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 9,
+      "context" : "Table 1: Comparison with Lample et al. (2019) on the setting that includes pos→pos and neg→neg transfers.",
+      "startOffset" : 25,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 18,
+      "context" : "More remarkably, TextSETTR outperforms several approaches that rely on training labels: CrossAligned (Shen et al., 2017) and Delete&Retrieve (Li et al.",
+      "startOffset" : 101,
+      "endOffset" : 120
+    }, {
+      "referenceID" : 19,
+      "context" : "However there is still a small gap between our fewshot approach and the best labeled model, B-GST (Sudhakar et al., 2019).",
+      "startOffset" : 98,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 17,
+      "context" : "Notably, TextSETTR outperforms the few-shot CP-G and CP-B models of Xu et al. (2020). More remarkably, TextSETTR outperforms several approaches that rely on training labels: CrossAligned (Shen et al.",
+      "startOffset" : 68,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 9,
+      "context" : "In Table 1, we compare with Lample et al. (2019) on the evaluation setting including pos→pos and neg→neg transfers.",
+      "startOffset" : 28,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 9,
+      "context" : "In Table 1, we compare with Lample et al. (2019) on the evaluation setting including pos→pos and neg→neg transfers. This setting doesn’t match our inference procedure, which assumes that the input and output styles differ. Nevertheless, TextSETTR comes close to the performance of Lample et al. (2019), despite not benefiting from training labels.",
+      "startOffset" : 28,
+      "endOffset" : 302
+    }, {
+      "referenceID" : 19,
+      "context" : "As automatic metrics can diverge from human judgment (Sudhakar et al., 2019), we also conduct human evaluations of the three strongest models from Figure 2.",
+      "startOffset" : 53,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 10,
+      "context" : "We sample 200 examples per transfer direction from the Li et al. (2018) test set, and ask three annotators to evaluate each input/output Model Sentiment Preservation Fluency",
+      "startOffset" : 55,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 10,
+      "context" : "6M examples in the Li et al. (2018) training set used by previous approaches.",
+      "startOffset" : 19,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 9,
+      "context" : "Modifying Training Task Lample et al. (2019) showed promising results by combining noise (N) with back-translation (BT).",
+      "startOffset" : 24,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 12,
+      "context" : "Figure 3 (bottom) plots a 2D UMAP dimensionality reduction (McInnes et al., 2018) of the vectors, and shows clear separations among sentiments and product categories.",
+      "startOffset" : 59,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 12,
+      "context" : "To demonstrate that our learned style extractor encodes multiple aspects of textual style, we compute style vectors for 12,000 lines of text from three review categories (Fashion, Software, Pantry) from the Ni et al. (2019) Amazon data.",
+      "startOffset" : 207,
+      "endOffset" : 224
+    }, {
+      "referenceID" : 11,
+      "context" : "We compare8 TextSETTR, which sees no labels in training and only 100 of each class in inference, with CARA (Li et al., 2020), which trained on 2,604 labels.",
+      "startOffset" : 107,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 5,
+      "context" : "For author transfer, we use the Shakespeare-to-modern task of Jhamtani et al. (2017). Here, TextSETTR outperforms the previous best model of He et al.",
+      "startOffset" : 62,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 5,
+      "context" : "Here, TextSETTR outperforms the previous best model of He et al. (2020) that leveraged 36,790 labeled examples during training.",
+      "startOffset" : 55,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 5,
+      "context" : "Here, TextSETTR outperforms the previous best model of He et al. (2020) that leveraged 36,790 labeled examples during training. For personality transfer, we use the task of Li et al. (2020), which requires transferring between three personalities: angry, happy, malicious.",
+      "startOffset" : 55,
+      "endOffset" : 190
+    }, {
+      "referenceID" : 10,
+      "context" : "(8)Note, as Li et al. (2020) use a different classifier to assess accuracy, those numbers may not be directly comparable.",
+      "startOffset" : 12,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 10,
+      "context" : "Personality transfer results are from Li et al. (2020), while all others are recalculated from scratch.",
+      "startOffset" : 38,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 5,
+      "context" : "Examples include Jhamtani et al. (2017) and Carlson et al.",
+      "startOffset" : 17,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 10,
+      "context" : "2017, Li et al. 2018, Niu et al. 2018, and many others). Zhao et al. (2018) explore the case where only the target style is labeled.",
+      "startOffset" : 6,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 9,
+      "context" : "For example, our encoder-decoder architecture and corruption methods are similar to Lample et al. (2019), and we leverage a strong pretrained language model, as in Sudhakar et al.",
+      "startOffset" : 84,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 9,
+      "context" : "For example, our encoder-decoder architecture and corruption methods are similar to Lample et al. (2019), and we leverage a strong pretrained language model, as in Sudhakar et al. (2019) and Wu et al.",
+      "startOffset" : 84,
+      "endOffset" : 187
+    }, {
+      "referenceID" : 9,
+      "context" : "For example, our encoder-decoder architecture and corruption methods are similar to Lample et al. (2019), and we leverage a strong pretrained language model, as in Sudhakar et al. (2019) and Wu et al. (2019).",
+      "startOffset" : 84,
+      "endOffset" : 208
+    }, {
+      "referenceID" : 7,
+      "context" : "As with style transfer, this can be achieved either through labeled training examples, as in CTRL (Keskar et al., 2019) and PPLM (Dathathri et al.",
+      "startOffset" : 98,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 3,
+      "context" : ", 2019) and PPLM (Dathathri et al., 2020), or a few-shot approach, as in CoCon (Chan et al.",
+      "startOffset" : 17,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 2,
+      "context" : ", 2020), or a few-shot approach, as in CoCon (Chan et al., 2020).",
+      "startOffset" : 45,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 18,
+      "context" : "Few-Shot Approaches A few-shot approach has recently been explored by Xu et al. (2020). The authors train a variational auto-encoder on unlabeled text, where a “manipulable” portion of the latent representation is constrained to fall on a k-dimensional simplex.",
+      "startOffset" : 70,
+      "endOffset" : 87
+    } ],
+    "year" : 2021,
+    "abstractText" : "We present a novel approach to the problem of text style transfer. Unlike previous approaches requiring style-labeled training data, our method makes use of readily-available unlabeled text by relying on the implicit connection in style between adjacent sentences, and uses labeled data only at inference time. We adapt T5 (Raffel et al., 2020), a strong pretrained text-to-text model, to extract a style vector from text and use it to condition the decoder to perform style transfer. As our labelfree training results in a style vector space encoding many facets of style, we recast transfers as “targeted restyling” vector operations that adjust specific attributes of the input while preserving others. We demonstrate that training on unlabeled Amazon reviews data results in a model that is competitive on sentiment transfer, even compared to models trained fully on labeled data. Furthermore, applying our novel method to a diverse corpus of unlabeled web text results in a single model capable of transferring along multiple dimensions of style (dialect, emotiveness, formality, politeness, sentiment) despite no additional training and using only a handful of exemplars at inference time.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

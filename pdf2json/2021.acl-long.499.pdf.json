@@ -1,0 +1,568 @@
+{
+  "name" : "2021.acl-long.499.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Long Text Generation by Modeling Sentence-Level and Discourse-Level Coherence",
+    "authors" : [ "Jian Guan", "Xiaoxi Mao", "Changjie Fan", "Zitao Liu", "Wenbiao Ding", "Minlie Huang" ],
+    "emails" : [ "j-guan19@mails.tsinghua.edu.cn,", "maoxiaoxi@corp.netease.com,", "fanchangjie@corp.netease.com,", "zitao.jerry.liu@gmail.com,", "dingwenbiao@100tal.com,", "aihuang@tsinghua.edu.cn" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 6379–6393\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n6379"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "The ability to generate coherent long texts plays an important role in many natural language generation (NLG) applications, particularly for openended language generation tasks such as story generation, namely generating a reasonable story from a prompt or a leading context. While existing generation models (Fan et al., 2018; Radford et al., 2019) can generate texts with good intra-sentence coherence, it is still difficult to plan a coherent plot throughout the text, even when using the powerful pretrained models, as illustrated in Figure 1.\nPretrained generation models have shown stateof-the-art performance on various NLG tasks such as summarization and translation (Radford et al., 2019; Lewis et al., 2020). However, such tasks\n∗Corresponding author\nprovide sufficient source information in the input for generating desired texts, while open-ended generation tasks require expanding reasonable plots from very limited input information (Guan et al., 2020). As exemplified in Figure 1, we observe severe issues of incoherence when applying BART for story generation. Although BART performs reasonably well at generating some concepts related to the context (e.g., “basketball”, “player”), they are used incoherently in the generated texts, which is manifested in repetitive plots (e.g., the sentences B and C), unrelated events (e.g., “played baseball\nbetter”) and conflicting logic (e.g., “not good at basketball” but “in the basketball team”). These issues are also commonly observed in other NLG models (Holtzman et al., 2020; Guan and Huang, 2020). We argue that existing models are rarely trained beyond the token-level co-occurrence, and therefore they can easily generate related concepts but do not arrange them reasonably. In contrast, human writers always first fully understand the semantics (e.g., some key events such as “try out”, “not make the cut”) and the discourse relations (e.g., temporal orders) among the already written sentences before deciding the following content. In this way, the writers can write coherent stories even with few related concepts, as shown in Figure 1. Therefore, it is important for subsequent generation to capture high-level features in the context.\nIn this paper, we propose HINT, a generation model equipped with HIgh-level representations for loNg Text generation. Typical generative models usually train a left-to-right decoder by next word prediction based on the attention to all the prefix words. In order to encourage the model to capture high-level features, we extend the decoder to represent the prefix information at sentence level and discourse level, respectively, with special tokens which are inserted at the end of each sentence. To effectively learn the representations, we propose two pretraining objectives including: (a) semantic similarity prediction, which requires predicting the inter-sentence similarity using the sentencelevel representation, with the powerful sentence understanding model SentenceBERT (Reimers and Gurevych, 2019) as the teacher model; and (b) sentence order discrimination, which requires distinguishing between the normal and shuffled sentence orders using the discourse-level representation. The objectives are designed to help the decoder capture the semantics and discourse structure of the prefix, which can benefit modeling the longrange coherence when generating long texts. We summarize our contributions in two folds:\nI. We propose a generation model named HINT for long text generation. HINT derives high-level representations for each decoded sentence to model the long-range coherence. We adopt two pretraining objectives called similarity prediction and order discrimination to learn the representations at sentence level and discourse level, respectively.\nII. We conduct extensive experiments on commonsense story and fiction generation tasks. Results\nshow that HINT can learn meaningful high-level representations and generate more coherent long texts than baselines.1"
+    }, {
+      "heading" : "2 Related Works",
+      "text" : "Long Text Generation Recent studies tackle the incoherence problem in long text generation from the following perspectives. Li et al. (2015) adopted a hierarchical RNN-based decoder to learn the sentence representation but without any external supervision. Shao et al. (2017) proposed a self-attention mechanism to attend on the prefix by appending it to the RNN-based encoder, which is a similar idea with the vanilla Transformer (Vaswani et al., 2017). However, the token-level self-attention mechanism still struggles to model high-level dependency in the context. Recent works proposed several multi-step generation models (Fan et al., 2018; Yao et al., 2019; Shao et al., 2019; Tan et al., 2020; Goldfarb-Tarrant et al., 2020), which first plan high-level sketches and then generate texts from the sketches. However, the lack of exposure to degenerate sketches may impair the generation performance since the models are only trained on sketches constructed from golden truth texts (Tan et al., 2020). Another line is to incorporate external knowledge into generation especially for commonsense story generation (Guan et al., 2020; Xu et al., 2020). However, the methods may not be always effective for other types of generation tasks. Guan et al. (2020) also required the decoder to distinguish true texts from negative samples to alleviate potential issues such as repetition. But the classification objective does not provide explicit guidance for generation at each step. Therefore, the coherence of language generation is still an open problem.\nHigh-Level Language Representation Significant advances have been witnessed in many NLP tasks with pretrained contextualized representation (Peters et al., 2018; Devlin et al., 2019). However, most models were limited on token-level representation learning, which is not enough for capturing the hierarchical structure of natural language texts (Ribeiro et al., 2020). Several works have tried to learn high-level representation. SkipThought vectors (Kiros et al., 2015) learned to encode a sentence by reconstructing its neighboring sentences. HLSTM (Yang et al., 2016) considered a\n1The codes are available at https://github.com/ thu-coai/HINT\nhierarchical LSTM-based encoder to learn the contextualized sentence representation by downstream classification. HIBERT (Zhang et al., 2019) incorporated the hierarchical architecture to BERT (Devlin et al., 2019) and learned sentence representation by recovering masked sentences. SentenceBERT (Reimers and Gurevych, 2019) derived sentence representation by fine-tuning BERT for natural language inference. CONPONO (Iter et al., 2020) and SLM (Lee et al., 2020) further trained BERT to understand relations among sentences at discourse level by distance prediction and sentence unshuffling, respectively. However, all these models focused on enhancing the representation of encoders for language understanding, while improving decoders by high-level representation for long text generation is yet to be well investigated."
+    }, {
+      "heading" : "3 Methodology",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Task Definition and Model Overview",
+      "text" : "Our task can be defined as follows: given an input X = (x1, x2, · · · , xm) (e.g., a beginning or a prompt), the model should generate a multisentence text Y = (y1, y2, · · · , yn) with a coherent plot (each xi or yi is a token). To tackle the problem, the conventional generation models such as BART commonly employ a bidirectional encoder and a left-to-right decoder to minimize the negative\nlog-likelihood LLM of human-written texts:\nLLM = − n∑\nt=1\nlogP (yt|y<t, X), (1)\nP (yt|y<t, X) = softmax(HtW + b), (2) Ht = Decoder(y<t, {Si}mi=1), (3)\n{Si}mi=1 = Encoder(X), (4)\nwhere Ht is the decoder’s hidden state at the t-th position computed from the context (i.e., the prefix y<t and the input X), and Si is the contextualized representation of xi acquired from the encoder, W and b are trainable parameters.\nHowever, as aforementioned, the models often generate incoherent texts due to the decoder’s inability to capture high-level features of the prefix sentences. Therefore, we extend the decoder with high-level representations to gather the prefix information. Specifically, we split the human-written texts into sequential sentences and add special tokens at the end of each sentence, which will be used to aggregate their respective semantics and their discourse relations with one another during decoding. To this end, we devise two pretraining tasks besides the standard language modeling objective, including similarity prediction and order discrimination to learn the sentence-level and discourse-level representations, respectively, as Figure 2 shows. Although we only consider sentence as segments in this work, our method can be easily extended to other syntactic levels such as phrases or paragraphs."
+    }, {
+      "heading" : "3.2 Sentence-Level Representation",
+      "text" : "Assume that the target text Y consists of K sentences, denoted from Y1 to YK (e.g., AB and CD in Figure 2). We insert a special sentence token, 〈sen〉, at the end of every sentence in Y , which is designed to aggregate the semantics of each sentence. Let Hsk (1 6 k 6 K) denote the decoder’s hidden state at the position where the k-th sentence token is the golden truth for next token prediction. We expect Hsk to be a meaningful sentence representation for Yk, which means semantically similar sentences have close representations in the vector space. Since sentence representation has been well studied for language understanding with many powerful models such as SentenceBERT (Reimers and Gurevych, 2019), we propose to directly transfer their semantic knowledge for our sentence representation learning. Specifically, we require the HINT decoder to predict the similarity of any two sentences Yi and Yj only using the corresponding sentence representations Hsi and H s j , with the SentenceBERT similarity as the golden truth2. We do not directly learn the SentenceBERT representation for each sentence but the similarity score to avoid the discrepancy between different model bias. Furthermore, to alleviate the innate bias of SentenceBERT, we do not enforce HINT to exactly fit the golden similarity. Instead, it would be enough that the difference between the predicted score and the golden similarity is less than a margin ∆ ∈ [0, 1]. Formally, the loss function LSen for the similarity prediction task can be derived as follows:\nLSen = 1\nK2 K∑ i=1 K∑ j=1 max(|pij − tij |,∆), (5)\npij = sigmoid(sij + sji), (6)\nsij = (Hsi ) TW sHsj , (7)\nwhere tij is the golden similarity, pij is the predicted similarity score, sij is an intermediate variable to guarantee pij is symmetric with respect to i and j, W s is a trainable parameter to transform the representation space of HINT to that of SentenceBERT. The task explicitly exerts external supervision to learn the sentence-level representation, enhancing the ability of the HINT decoder to fully understand the semantics of prefix sentences.\n2The SentenceBERT similarity is computed as the cosine distance of two sentence embeddings which are derived by applying mean-pooling on the output vectors of SentenceBERT. And we normalize the results to [0, 1] range by linear scaling."
+    }, {
+      "heading" : "3.3 Discourse-Level Representation",
+      "text" : "In analogy to the sentence-level representation learning, we also insert a special discourse token, 〈dis〉, after every sentence and the corresponding sentence token to gather the discourse information between different sentences. Let Hdk (1 6 k 6 K) denote the decoder’s hidden state at the position where the k-th discourse token is the golden truth to be predicted. Hdk should be a meaningful representation which can be used to derive discourse relations with others (e.g., the k-th sentence precedes another one in terms of the temporal order). Previous work has shown that reconstructing the correct order from shuffled sentences helps understand the discourse relations (Lee et al., 2020). However, the unshuffling task is not directly applicable for NLG since the decoder should learn to dynamically model the discourse structure in the decoding process rather than wait until finishing decoding the whole text. Therefore, we propose to learn the discourse-level representation in a pair-wise manner by discriminating whether the order of two sentences is correct. Formally, we minimize the cross-entropy loss LDis as follows:\nLDis = 2\nK(K − 1) K∑ i=1 K∑ j>i lij , (8)\nlij = −oij logqij − (1− oij)log(1− qij) (9) qij = sigmoid ( (Hdi ) TW dHdj ) , (10)\nwhere oij is the golden label (1 if Yi should precede Yj , 0 otherwise), qij is the predicted discrimination score, and W d is a trainable parameter. Compared with the sentence-level representation Hsk which aggregates the semantics of a single sentence, the discourse-level representation Hdk focuses more on the relationship with other sentences, thereby improving HINT’s ability to capture the high-level features in both content and order."
+    }, {
+      "heading" : "3.4 Pretraining and Fine-tuning",
+      "text" : "To learn the high-level representations more effectively, we propose to augment the training corpus by automatically constructing negative samples from the human-written texts for pretraining. Specifically, for the order discrimination task, we randomly shuffle the sentences in human-written texts as negative samples. And for the similarity prediction task, besides the negative samples with shuffled sentences, we also randomly repeat a sentence, or substitute a sentence with another from\nother texts as negative samples. We expect the negative samples to help enhance the generalization ability of HINT during fine-tuning or inference. In summary, the overall loss function LPre for pretraining is computed as follows:\nLPre = LLM + λ1LDis + λ2LSen, (11)\nwhere we optimize the language modeling objective LLM only on the human-written texts, LDis on the human-written texts and the negative samples with shuffled sentences, and LSen on all the humanwritten texts and the negative samples. λ1 and λ2 are adjustable scale factors. By pretraining with the proposed two objectives, the decoder can better capture the semantics and discourse structures in the context. And during fine-tuning, we train HINT only with the language modeling objective."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Implementation and Pretraining Dataset",
+      "text" : "Since our approach can adapt to all the generation models with auto-regressive decoders (e.g., GPT-2 (Radford et al., 2019), UniLM (Dong et al., 2019), etc.), we use BART as the base framework of HINT, which has been shown to have strong performance for long text generation (GoldfarbTarrant et al., 2020). And we also provide the performance of GPT-2 widely used in the literature. Due to the limited computational resources, we follow BARTBASE’s hyper-parameters and utilize the public pretrained checkpoint to initialize HINT. The batch size is set to 10 and the maximum sequence length is set to 512 for both the encoder and the decoder. The margin ∆ in Equation 5 is set to 0.1 and we present the results with other settings of ∆ in the appendix. Both the scale factors λ1 and λ2 in Equation 11 are set to 0.1.\nWe adopt BookCorpus (Zhu et al., 2015) as our pretraining dataset and split each text to sentences using NLTK (Bird and Loper, 2004). We create the training texts by taking a sentence as the input and the following ten sentences as the target output. Besides, we construct the same number of negative samples with the human-written texts. And it is evenly possible for a negative sample to be repeated, substituted or shuffled. We pretrain HINT on BookCorpus for 0.1M steps."
+    }, {
+      "heading" : "4.2 Fine-tuning Setting",
+      "text" : "We evaluate HINT on ROCStories (ROC for short) (Mostafazadeh et al., 2016) and Writing-\nPrompts (WP for short) (Fan et al., 2018). ROC contains 98,162 five-sentence commonsense stories. We follow Guan et al. (2020) to delexicalize stories in ROC by masking all the names with special placeholders to achieve better generalization. WP originally contains 303,358 stories paired with writing prompts, which are usually unconstrained on writing topics. Considering that using too many examples for fine-tuning may weaken the influence of post-training, we randomly selected stories from the original validation set and test set of WP for the subsequent experiments. We regard the first sentence and the prompt as the input to generate a text for ROC and WP, respectively. And we only retain the first ten sentences (split using NLTK) of the texts in WP for fine-tuning. We present more details in Table 1. The batch size is set to 10/4 for ROC/WP, respectively. And other hyperparameters are the same as the pretraining phase."
+    }, {
+      "heading" : "4.3 Baselines",
+      "text" : "We compared HINT with the following baselines: Seq2Seq: It generates a text conditioned upon the input. For better performance, We implement the baseline by training BART from scratch on the downstream datasets without pretraining. Plan&Write: It first plans a keyword sequence conditioned upon the input; and then generates a text based on the keywords (Yao et al., 2019). We implement the model based on the codes provided by the original paper. GPT-2 and BART: They are fine-tuned on the downstream datasets with the language modeling objective. BART-Post: It is first post-trained on the pretraining dataset with the original pretraining objectives of BART (text infilling and sentence permutation) for the same number of steps with HINT; and then fine-tuned on the downstream datasets with the language modeling objective. BART-MTL: The model is trained by fine-tuning BART on the downstream datasets with multi-task learning (MTL), including the language model-\ning objective and an auxiliary multi-label classification objective (Guan et al., 2020), which requires distinguishing human-written texts from auto-constructed negative samples.\nFurthermore, we conduct ablation tests by removing the proposed components respectively to investigate the influence of each component. Besides, we also demonstrate the adaption of our approach to general language generation models by directly fine-tuning BART and HINT on downstream datasets with the proposed two objectives as auxiliary tasks. For fair comparison, we set all the pretrained models to the base version. And we also insert the sentence token and discourse token into each training text for all the baselines.\nWe generate texts using nucleus sampling (Holtzman et al., 2020) with p=0.9 and a softmax temperature of 0.7 (Goodfellow et al., 2016) to balance the trade-off between diversity and fluency. And we set the probability of generating 〈dis〉 to 1 if the last token is 〈sen〉 to ensure that HINT can obtain the high-level representations for each sentence. And during evaluation, we remove the special tokens in the generated texts. We apply these settings to all the baselines."
+    }, {
+      "heading" : "4.4 Automatic Evaluation",
+      "text" : "Evaluation Metrics We adopt the following automatic metrics to evaluate the performance on the test sets: (1) Perplexity (PPL): Smaller perplexity scores indicate better fluency in general. We do not count the probability values at the positions where the sentence or discourse token is the golden truth. (2) BLEU (B-n): We use n = 1, 2 to evaluate n-gram overlap between generated texts and human-written texts (Papineni et al., 2002). (3) Lexical Repetition (LR-n): The metric computes the percentage of those texts which repeat a 4-gram at least n times in all the generated texts (Shao et al., 2019). We set n = 2 for ROC and n = 5 for WP. (4) Semantic Repetition (SR-n): The metric first computes the average top-n SentenceBERT similarity between any two sentences in each generated text, and then averages the results as the final score. We set n = 1 for ROC and n = 10 for WP. (5) Distinct-4 (D-4) (Li et al., 2016): We adopt distinct-4, the ratio of distinct 4-grams to all the generated 4-grams, to measure the generation diversity. (6) Context Relatedness: It is a learnable automatic metric (Guan and Huang, 2020). First, we train a classifier with RoBERTaBASE (Liu et al.,\n2019) to distinguish human-written texts and negative samples constructed by substituting words, phrases and sentences of human-written texts randomly. Then, we use the average classifier score of all the generated texts to measure the context relatedness. (7) Sentence Orders: In analogy to relatedness measurement, we train another classifier to distinguish human-written texts and negative samples where sentences are randomly shuffled. We use the average classifier score to measure sentence orders. We train the last two metrics based on the training sets of the downstream datasets.\nResults on ROC We show the results on ROC in Table 2. We do not provide the perplexity scores of Plan&Write and GPT-2 since they do not tokenize texts with the same vocabulary as used in BART. HINT outperforms all the baselines in terms of perplexity, indicating the better ability to model the texts in the test set. And HINT can generate more word overlaps with reference texts as shown by better BLEU scores. It is accordant with the previous observation (Xu et al., 2020) that Plan&Write has less lexical repetition than pretraining models possibly because small models are better at learning short term statistics (e.g., n-gram) but not long term dependencies. However, HINT improves the situation compared with GPT-2 and BART, and has less semantic repetition than all the baselines, indicating the better ability of HINT to capture semantic features. Besides, our approach does no harm to the generation diversity. HINT also outperforms baseline models in generating related events and arranging a proper order, as shown by the higher relatedness and order scores. Furthermore, finetuning with the proposed objectives as auxiliary tasks can further reduce the lexical and semantic repetition, and improve the relatedness and order scores for both BART and HINT, suggesting the general benefit of modeling the long-range coherence at sentence level and discourse level.\nBesides, the ablation test shows that the sentencelevel and discourse-level representations are relatively more important to enhance the ability to generate texts with related events and reasonable orders, respectively. And both of them contribute to reducing semantic redundancy. When post-training only with the language modeling objective, almost all the metrics drops substantially, indicating the importance to model high-level coherence.\nFurthermore, we also notice that some models achieve even higher relatedness score than the\ngolden texts. We summarize the possible reasons as follows: (a) It is still difficult for the learned classifier to judge implicit relatedness in some golden texts, which may require a strong reasoning ability. (b) There exist some noisy texts with poor relatedness in the golden texts. And (c) the systems tend to generate a limited set of texts (as demonstrated by much lower distinct-4 than golden texts) with generic plots (Guan et al., 2020), which may get high relatedness scores easily. However, we believe the learnable metric is still meaningful to compare different models with similar diversity regarding the context relatedness.\nResults on WP We present the results on WP in Table 3. We use a larger n to compute the lexical/semantic repetition since we find that all the models tend to repeat similar texts easily when generating texts with hundreds of words. And we do not provide the relatedness and order scores because it is difficult to train satisfactory classifiers to distinguish human-written texts from negative samples well. Table 3 shows that HINT outperforms baselines except for lexical repetition, which is accordant with the results on ROC. Therefore, the high-level representations are effective for generating long texts with different lengths and domains."
+    }, {
+      "heading" : "4.5 Manual Evaluation",
+      "text" : "For manual evaluation, we conduct pair-wise comparisons with two strong baseline models (BART and BART-Post), and three ablated models of HINT. We randomly sample 200 texts from the test set of\nROC3 and obtain 1,200 texts from the six models. 3We do not conduct manual evaluation on WP since it would be hard to obtain acceptable annotation agreement for\nFor each pair of texts (one by our model and the other by a baseline, along with the input), three annotators are hired to give a preference (win, lose, or tie) in terms of fluency and coherence, respectively. We adopt majority voting to make final decisions among the three annotators. We resort to Amazon Mechanical Turk (AMT) for annotation. We follow Xu et al. (2020) to define fluency as a measure of intra-sentence linguistic quality and grammatical correctness, and coherence as inter-sentence relatedness, causal and temporal dependencies. Note that the two aspects are independently evaluated. Besides, we control the annotation quality by filtering out those annotations where the annotator can not make reasonable judgments when comparing a human-written text with a negative sample. Furthermore, we also ask workers to annotate the specific errors in the generated texts. We show the annotation instruction and the error analysis of different models in the appendix.\nTable 4 shows the manual evaluation results. All the results show moderate inter-annotator agreement (0.46 κ 60.6) or substantial agreement (0.6 6 κ 60.8). And we can see that HINT performs significantly better than baselines in coherence by capturing the high-level features, and has comparable fluency with baselines."
+    }, {
+      "heading" : "4.6 Language Modeling",
+      "text" : "It is still necessary to further investigate whether the learned representations help HINT capture the high-level coherence better. Therefore, we propose to evaluate the models using individual language modeling tests in different aspects (Ribeiro et al., 2020). To this end, we construct coherent and inco-\ntoo long texts.\nherent examples based on the test set of ROC, and compute perplexity on the examples of different aspects. Specifically, we focus on the following aspects: semantic repetition, relatedness, negation, causal and temporal relationship. We select humanwritten texts as coherent examples and construct incoherent examples by perturbing human-written texts. For example, we select those texts with timerelated words (e.g., “then”) as coherent examples for testing in the temporal relationship. And we exchange two sequential events connected by “then” of a human-written text or substitute “before” with\n“after” as incoherent examples of the aspect. We show more details in the appendix.\nWe present the results in Table 5. HINT can model the context coherence better in the above aspects than baseline models (lower perplexity on the coherent examples), and recognize the incoherent errors more effectively (higher perplexity on the incoherent examples). By contrast, both BART-Post and HINT (w/o Sen&Dis) achieve an overall drop of perplexity compared with BART even on the negative examples, indicating that they may still focus on capturing the token-level features. As for the ablation study, we can see that the sentence-level representation enhances the ability of HINT to capture the relatedness, negation and semantic repetition, while the discourse-level representation works mainly for causal and temporal relationship. However, we also notice the insignificant improvement of HINT compared with BART in recognizing the unreasonable causal and temporal relationship, which may require injecting explicit inferential knowledge besides learning sentence orders."
+    }, {
+      "heading" : "4.7 Case Study",
+      "text" : "We present several cases in the appendix to demonstrate that HINT can derive meaningful sentencelevel and discourse-level representations, and generate texts with better coherence than baselines with the help of the representations."
+    }, {
+      "heading" : "5 Conclusion",
+      "text" : "We present HINT, a generation model for ation, which can represent the prefix information at sentence level and discourse level in the decoding process. We propose two pretraining objectives including inter-sentence similarity prediction and sentence order discrimination to learn the sentencelevel and discourse-level representations, respectively. Extensive experiments demonstrate that HINT can generate more coherent texts with related context and proper sentence orders than strong baselines. Further analysis shows that HINT has better ability of language modeling thanks to ability of modeling high-level coherence."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "This work was supported by National Key R&D Program of China, under Grant No. 2020AAA0104500. This work was jointly supported by the NSFC projects (Key project with No. 61936010 and regular project with No. 61876096), and the Guoqiang Institute of Tsinghua University, with Grant No. 2019GQG1 and 2020GQG0005. We would also like to thank the anonymous reviewers for their invaluable suggestions and feedback.\nEthics Statement\nWe conduct the experiments based on two existing public datasets ROCStories and WritingPrompts, which are widely used for commonsense story generation and fiction generation tasks, respectively. Automatic and manual evaluation show that our model outperforms existing state-of-the-art models on both datasets, suggesting the generalization of our model to different domains. Besides, our approach can be easily extended to different syntactic levels (e.g., phrase-level, paragraph-level), different model architectures (e.g., GPT, UniLM) and different generation tasks (e.g., dialog generation, essay generation).\nWe resorted to Amazon Mechanical Turk (AMT) for manual evaluation. We did not ask about personal privacy or collect personal information of\nannotators in the annotation process. We hired three annotators and payed each annotator $0.05 for comparing each pair of stories. The payment is reasonable considering that it would cost average 30 seconds for an annotator to finish a comparison."
+    }, {
+      "heading" : "B Results on the Validation Set",
+      "text" : "Besides the performance on the test set which has been reported in the main paper, we also provide the performance on the validation set of ROC in Table 6 for HINT and strong baselines."
+    }, {
+      "heading" : "C ∆ for Sentence-Level Representation Learning",
+      "text" : "We tune ∆ in Equation 5 to investigate the influence of the margin between the predicted similarity score of HINT and that of SentenceBert. We present some automatic evaluation results with different ∆ in Table 7. Note that we use ∆ = 0.1 for the experiments in the main paper. We can see that a smaller ∆ (e.g., 0.01) would lead to less lexical and semantic repetition but worse fluency (indicated by higher perplexity) and context relatedness, which may be caused by the over-fitting to the model bias of the teacher model. On the other hand, a larger ∆ (e.g., 0.5) would result in worse performance in almost all the metrics even than ∆ = 1.0 (without the similarity prediction task). The result indicates\n4https://github.com/huggingface/ transformers\nthat a large ∆ makes the model not learn effectively from the teacher model, and impact on the representations of the model itself. By contrast, ∆ = 0.1 would bring better overall performance."
+    }, {
+      "heading" : "D Manual Evaluation",
+      "text" : "Annotation Instruction We show the manual annotation interface in Figure 3. In each HIT (human intelligence task) of AMT, we show workers an input along with two text pairs including (a) a pair of generated texts (one by HINT and the other by a baseline), and (b) a pair of the human-written text and a negative sample constructing by perturbing a text (e.g., repetition, substitution) randomly sampled from the data. Note that the two pairs are presented in random order. Then, we ask workers to select the better text in each pair in terms of the fluency and coherence, respectively. Besides, we also require workers to annotate the errors in each text, including repetition (repeating the same or similar words), unrelatedness (with unrelated entities or events to the input or within its own context), wrong temporal orders, and others. We reject an HIT where the worker does not think the human-written text has better coherence than the negative sample, or the worker does not annotate any errors for the negative sample. In this way, we reject 21.09% HITs in total. Finally, we ensure that there are three valid and independent comparison results for each pair of generated texts.\nError Analysis Based on the manual annotation of errors in the generated texts, we summarize the percentages of those texts with some error in all the annotated texts (200 for each model) in Table 8. We decide that a text contains some error when at least two of three annotators annotate the error for it. Note that each text of HINT is annotated five times (three annotators each time) since HINT is compared with other five models. Therefore, we take the average\nof five annotation results. We can see that HINT has less repetition, better context relatedness and temporal orders than baselines. However, the results show that generating coherent long texts is still challenging."
+    }, {
+      "heading" : "E Constructing Coherent and Incoherent Examples",
+      "text" : "Table 9 presents the details for constructing examples to test the ability to model the context coherence in different aspects. However, the approach of automatic construction may inevitably introduce unexpected grammatical errors, which would also impact the text coherence. To alleviate the issue, we train a binary classifier on the CoLA corpus (Warstadt et al., 2019) to learn to judge the grammaticality, and then filter out those examples that are classified as ungrammatical (the classifier score less than 0.5). For simplicity, we directly use the public model from TextAttack (Morris et al., 2020) as the classifier, which achieves an accuracy\nof 82.90% on the test set of CoLA. Finally, we filter out about 15.51% of the test examples."
+    }, {
+      "heading" : "F Case Study",
+      "text" : "Sentence-Level Representation Table 10 presents some cases from the test set of ROC to demonstrate the effectiveness of the learned sentence-level representation of HINT. We compute BLEU-1, BART similarity and HINT similarity for different sentence pairs, where BART/HINT similarity means the cosine distance between BART/HINT representations of two sentences. To obtain the BART representation of a sentence, we feed it into the BART decoder (along with its context) and apply mean-pooling on the hidden states at the last layer. HINT representation refers to the corresponding sentence-level representation after decoding the sentence. We normalize all the results into the standard Gaussian distribution6. We can see that HINT can derive meaningful sentence-level representations and gives high scores for semantically similar sentence pairs (the first two pairs) but low scores for dissimilar pairs (the last two pairs). By contrast, BART focuses more on tokenlevel similarity and thus derives accordant similarity with BLEU.\nDiscourse-Level Representation We also present a case in Table 11 to indicate the effectiveness of the learned discourse-level representation of HINT. We consider a segment in the text of Table 11, which consists of two adjacent\n2The paraphrases are generated based on the public checkpoint of the back translation augmentation system of UDA (Xie et al., 2020).\n6We compute the mean and standard deviation within 2,000 sentence pairs randomly sampled from the test set.\nsentences (e.g., the segment ®¯in ®¯°). Then, we can derive the segment representation by concatenating the contextualized representations of the two sentences. Besides, if we reverse the two sentences (from ®¯ to ¯®, other sentences in the text unchanged), we can also derive the segment representation in the same way. Note that in this case we concatenate the two sentence representations still in the normal order (i.e., first the representation of ® and then that of ¯). We expect the segment representations before and after the reversion to be distant in the vector space if the sentence representation contains discourse-level information. Otherwise, the segment representations would be similar since the segments have the same tokens before and after the reversion. For BART, we derive the sentence representation by feeding the whole text into BART and mean pooling the hidden states at the positions of tokens in the sen-\ntence. And for HUGO, we regard the corresponding discourse-level representation of each sentence as the sentence representation. For reference, we also show the results using the hidden state of BART at the position of the discourse token as the sentence representation, i.e., B (D). Table 11 shows the similarity between the segment representations before and after the sentence reversion. All the results are normalized into the standard Gaussian distribu-\ntion7. The results show that BART derives similar representations for the segments before and after reversion whether using mean-pooling or the hidden state corresponding to the discourse token. In comparison, although the reversion does not change the sentence semantics, segment representations derived by HINT are very dissimilar, suggesting that HINT can derive meaningful discourse-level representations.\nText Generation We presented some generated cases in Table 12. HINT can generate more coherent stories than baselines. Specifically, the baselines can easily predict some words which are related to the input (e.g., “sleepy”, “library”) or within its own context (e.g, “test results”, “hotel”). However, these words are used incoherently. For example, the text generated by Plan&Write has a wrong temporal order among the sentences (first “got test results” and then “fell asleep for the test”). The texts generated by Seq2Seq, BART and BART-CLS are chaotic in semantics and discourse structures. The text generated by BART-Post suffers from repetitive plots (“went to the library”) and conflicting logic (“the library closed” but “sat in the library”). By contrast, the text generated by HINT has a coherent event sequence with related content and a proper temporal order. The results indicate the effectiveness of modeling high-level coherence for ation.\n7We compute the mean and standard deviation within 2,000 segment pairs sampled from the test set of ROC."
+    } ],
+    "references" : [ {
+      "title" : "NLTK: the natural language toolkit",
+      "author" : [ "Steven Bird", "Edward Loper." ],
+      "venue" : "Proceedings of the 42nd Annual Meeting of the Association for Computational Linguistics, Barcelona, Spain, July 21-26, 2004 Poster and Demonstration. ACL.",
+      "citeRegEx" : "Bird and Loper.,? 2004",
+      "shortCiteRegEx" : "Bird and Loper.",
+      "year" : 2004
+    }, {
+      "title" : "Bert: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unified language model pre-training for natural language understanding and generation",
+      "author" : [ "Li Dong", "Nan Yang", "Wenhui Wang", "Furu Wei", "Xiaodong Liu", "Yu Wang", "Jianfeng Gao", "Ming Zhou", "Hsiao-Wuen Hon." ],
+      "venue" : "Advances in Neural Infor-",
+      "citeRegEx" : "Dong et al\\.,? 2019",
+      "shortCiteRegEx" : "Dong et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Hierarchical neural story generation",
+      "author" : [ "Angela Fan", "Mike Lewis", "Yann Dauphin." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 889–898.",
+      "citeRegEx" : "Fan et al\\.,? 2018",
+      "shortCiteRegEx" : "Fan et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Measuring nominal scale agreement among many raters",
+      "author" : [ "Fleiss", "L. Joseph." ],
+      "venue" : "Psychological Bulletin, 76(5):378–382.",
+      "citeRegEx" : "Fleiss and Joseph.,? 1971",
+      "shortCiteRegEx" : "Fleiss and Joseph.",
+      "year" : 1971
+    }, {
+      "title" : "Content planning for neural story generation with aristotelian rescoring",
+      "author" : [ "Seraphina Goldfarb-Tarrant", "Tuhin Chakrabarty", "Ralph Weischedel", "Nanyun Peng." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Process-",
+      "citeRegEx" : "Goldfarb.Tarrant et al\\.,? 2020",
+      "shortCiteRegEx" : "Goldfarb.Tarrant et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Content planning for neural story generation with aristotelian rescoring",
+      "author" : [ "Seraphina Goldfarb-Tarrant", "Tuhin Chakrabarty", "Ralph M. Weischedel", "Nanyun Peng." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Lan-",
+      "citeRegEx" : "Goldfarb.Tarrant et al\\.,? 2020",
+      "shortCiteRegEx" : "Goldfarb.Tarrant et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deep learning",
+      "author" : [ "Ian Goodfellow", "Yoshua Bengio", "Aaron Courville." ],
+      "venue" : "MIT press.",
+      "citeRegEx" : "Goodfellow et al\\.,? 2016",
+      "shortCiteRegEx" : "Goodfellow et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "A knowledge-enhanced pretraining model for commonsense story generation",
+      "author" : [ "Jian Guan", "Fei Huang", "Zhihao Zhao", "Xiaoyan Zhu", "Minlie Huang." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 8:93–108.",
+      "citeRegEx" : "Guan et al\\.,? 2020",
+      "shortCiteRegEx" : "Guan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "UNION: an unreferenced metric for evaluating open-ended story generation",
+      "author" : [ "Jian Guan", "Minlie Huang." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing, EMNLP 2020, Online, November 16-20, 2020,",
+      "citeRegEx" : "Guan and Huang.,? 2020",
+      "shortCiteRegEx" : "Guan and Huang.",
+      "year" : 2020
+    }, {
+      "title" : "The curious case of neural text degeneration",
+      "author" : [ "Ari Holtzman", "Jan Buys", "Li Du", "Maxwell Forbes", "Yejin Choi." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Holtzman et al\\.,? 2020",
+      "shortCiteRegEx" : "Holtzman et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Pretraining with contrastive sentence objectives improves discourse performance of language models",
+      "author" : [ "Dan Iter", "Kelvin Guu", "Larry Lansing", "Dan Jurafsky." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Iter et al\\.,? 2020",
+      "shortCiteRegEx" : "Iter et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Skip-thought vectors",
+      "author" : [ "Ryan Kiros", "Yukun Zhu", "Russ R Salakhutdinov", "Richard Zemel", "Raquel Urtasun", "Antonio Torralba", "Sanja Fidler." ],
+      "venue" : "Advances in neural information processing systems, 28:3294–3302.",
+      "citeRegEx" : "Kiros et al\\.,? 2015",
+      "shortCiteRegEx" : "Kiros et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Slm: Learning a discourse language representation with sentence unshuffling",
+      "author" : [ "Haejun Lee", "Drew A Hudson", "Kangwook Lee", "Christopher D Manning." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing",
+      "citeRegEx" : "Lee et al\\.,? 2020",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BART: denoising sequence-to-sequence pretraining for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A diversity-promoting objective function for neural conversation models",
+      "author" : [ "Jiwei Li", "Michel Galley", "Chris Brockett", "Jianfeng Gao", "Bill Dolan." ],
+      "venue" : "NAACL HLT 2016, The 2016 Conference of the North American Chapter of the Association for Com-",
+      "citeRegEx" : "Li et al\\.,? 2016",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "A hierarchical neural autoencoder for paragraphs and documents",
+      "author" : [ "Jiwei Li", "Minh-Thang Luong", "Dan Jurafsky." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference",
+      "citeRegEx" : "Li et al\\.,? 2015",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Roberta: A robustly optimized BERT pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "CoRR, abs/1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Textattack: A framework for adversarial attacks, data augmentation, and adversarial training in nlp",
+      "author" : [ "John Morris", "Eli Lifland", "Jin Yong Yoo", "Jake Grigsby", "Di Jin", "Yanjun Qi." ],
+      "venue" : "EMNLP: System Demonstrations, pages 119–126.",
+      "citeRegEx" : "Morris et al\\.,? 2020",
+      "shortCiteRegEx" : "Morris et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A corpus and cloze evaluation for deeper understanding of commonsense stories",
+      "author" : [ "Nasrin Mostafazadeh", "Nathanael Chambers", "Xiaodong He", "Devi Parikh", "Dhruv Batra", "Lucy Vanderwende", "Pushmeet Kohli", "James Allen." ],
+      "venue" : "Proceedings of NAACL-",
+      "citeRegEx" : "Mostafazadeh et al\\.,? 2016",
+      "shortCiteRegEx" : "Mostafazadeh et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Bleu: a method for automatic evaluation of machine translation",
+      "author" : [ "Kishore Papineni", "Salim Roukos", "Todd Ward", "WeiJing Zhu." ],
+      "venue" : "Proceedings of the 40th annual meeting on association for computational linguistics, pages 311–318. Association for",
+      "citeRegEx" : "Papineni et al\\.,? 2002",
+      "shortCiteRegEx" : "Papineni et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Deep contextualized word representations",
+      "author" : [ "Matthew Peters", "Mark Neumann", "Mohit Iyyer", "Matt Gardner", "Christopher Clark", "Kenton Lee", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Associ-",
+      "citeRegEx" : "Peters et al\\.,? 2018",
+      "shortCiteRegEx" : "Peters et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "Alec Radford", "Jeffrey Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever." ],
+      "venue" : "OpenAI Blog, 1(8).",
+      "citeRegEx" : "Radford et al\\.,? 2019",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Sentencebert: Sentence embeddings using siamese bertnetworks",
+      "author" : [ "Nils Reimers", "Iryna Gurevych." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natu-",
+      "citeRegEx" : "Reimers and Gurevych.,? 2019",
+      "shortCiteRegEx" : "Reimers and Gurevych.",
+      "year" : 2019
+    }, {
+      "title" : "Beyond accuracy: Behavioral testing of NLP models with checklist",
+      "author" : [ "Marco Túlio Ribeiro", "Tongshuang Wu", "Carlos Guestrin", "Sameer Singh." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, ACL 2020, On-",
+      "citeRegEx" : "Ribeiro et al\\.,? 2020",
+      "shortCiteRegEx" : "Ribeiro et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Generating high-quality and informative conversation responses with sequence-to-sequence models",
+      "author" : [ "Yuanlong Shao", "Stephan Gouws", "Denny Britz", "Anna Goldie", "Brian Strope", "Ray Kurzweil." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Meth-",
+      "citeRegEx" : "Shao et al\\.,? 2017",
+      "shortCiteRegEx" : "Shao et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Long and diverse text generation with planning-based hierarchical variational model",
+      "author" : [ "Zhihong Shao", "Minlie Huang", "Jiangtao Wen", "Wenfei Xu", "Xiaoyan Zhu." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language",
+      "citeRegEx" : "Shao et al\\.,? 2019",
+      "shortCiteRegEx" : "Shao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Progressive generation of long text",
+      "author" : [ "Bowen Tan", "Zichao Yang", "Maruan Al-Shedivat", "Eric P. Xing", "Zhiting Hu." ],
+      "venue" : "CoRR, abs/2006.15720.",
+      "citeRegEx" : "Tan et al\\.,? 2020",
+      "shortCiteRegEx" : "Tan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in neural information processing systems, pages 5998–6008.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Neural network acceptability judgments",
+      "author" : [ "Alex Warstadt", "Amanpreet Singh", "Samuel R Bowman." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 7:625–641.",
+      "citeRegEx" : "Warstadt et al\\.,? 2019",
+      "shortCiteRegEx" : "Warstadt et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unsupervised data augmentation for consistency training",
+      "author" : [ "Qizhe Xie", "Zihang Dai", "Eduard Hovy", "Thang Luong", "Quoc Le." ],
+      "venue" : "Advances in Neural Information Processing Systems, 33.",
+      "citeRegEx" : "Xie et al\\.,? 2020",
+      "shortCiteRegEx" : "Xie et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "MEGATRON-CNTRL: controllable story generation with external knowledge using large-scale language models",
+      "author" : [ "Peng Xu", "Mostofa Patwary", "Mohammad Shoeybi", "Raul Puri", "Pascale Fung", "Anima Anandkumar", "Bryan Catanzaro." ],
+      "venue" : "Proceedings of",
+      "citeRegEx" : "Xu et al\\.,? 2020",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Hierarchical attention networks for document classification",
+      "author" : [ "Zichao Yang", "Diyi Yang", "Chris Dyer", "Xiaodong He", "Alex Smola", "Eduard Hovy." ],
+      "venue" : "Proceedings of the 2016 conference of the North American chapter of the association for computa-",
+      "citeRegEx" : "Yang et al\\.,? 2016",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Planand-write: Towards better automatic storytelling",
+      "author" : [ "Lili Yao", "Nanyun Peng", "Ralph Weischedel", "Kevin Knight", "Dongyan Zhao", "Rui Yan." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, volume 33, pages 7378–7385.",
+      "citeRegEx" : "Yao et al\\.,? 2019",
+      "shortCiteRegEx" : "Yao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Hibert: Document level pre-training of hierarchical bidirectional transformers for document summarization",
+      "author" : [ "Xingxing Zhang", "Furu Wei", "Ming Zhou." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Zhang et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Moverscore: Text generation evaluating with contextualized embeddings and earth mover distance",
+      "author" : [ "Wei Zhao", "Maxime Peyrard", "Fei Liu", "Yang Gao", "Christian M Meyer", "Steffen Eger." ],
+      "venue" : "EMNLPIJCNLP, pages 563–578.",
+      "citeRegEx" : "Zhao et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Aligning books and movies: Towards story-like visual explanations by watching movies and reading books",
+      "author" : [ "Yukun Zhu", "Ryan Kiros", "Richard S. Zemel", "Ruslan Salakhutdinov", "Raquel Urtasun", "Antonio Torralba", "Sanja Fidler." ],
+      "venue" : "2015 IEEE Interna-",
+      "citeRegEx" : "Zhu et al\\.,? 2015",
+      "shortCiteRegEx" : "Zhu et al\\.",
+      "year" : 2015
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 3,
+      "context" : "While existing generation models (Fan et al., 2018; Radford et al., 2019) can generate texts with good intra-sentence coherence, it is still difficult to plan a coherent plot throughout the text, even when using the powerful pretrained models, as illustrated in Figure 1.",
+      "startOffset" : 33,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 22,
+      "context" : "While existing generation models (Fan et al., 2018; Radford et al., 2019) can generate texts with good intra-sentence coherence, it is still difficult to plan a coherent plot throughout the text, even when using the powerful pretrained models, as illustrated in Figure 1.",
+      "startOffset" : 33,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 22,
+      "context" : "Pretrained generation models have shown stateof-the-art performance on various NLG tasks such as summarization and translation (Radford et al., 2019; Lewis et al., 2020).",
+      "startOffset" : 127,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 14,
+      "context" : "Pretrained generation models have shown stateof-the-art performance on various NLG tasks such as summarization and translation (Radford et al., 2019; Lewis et al., 2020).",
+      "startOffset" : 127,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 14,
+      "context" : "Figure 1: Story examples written by the fine-tuned BART model (Lewis et al., 2020) and a human writer given the same leading context from ROCStories (Mostafazadeh et al.",
+      "startOffset" : 62,
+      "endOffset" : 82
+    }, {
+      "referenceID" : 19,
+      "context" : ", 2020) and a human writer given the same leading context from ROCStories (Mostafazadeh et al., 2016).",
+      "startOffset" : 74,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 8,
+      "context" : "provide sufficient source information in the input for generating desired texts, while open-ended generation tasks require expanding reasonable plots from very limited input information (Guan et al., 2020).",
+      "startOffset" : 186,
+      "endOffset" : 205
+    }, {
+      "referenceID" : 10,
+      "context" : "These issues are also commonly observed in other NLG models (Holtzman et al., 2020; Guan and Huang, 2020).",
+      "startOffset" : 60,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 9,
+      "context" : "These issues are also commonly observed in other NLG models (Holtzman et al., 2020; Guan and Huang, 2020).",
+      "startOffset" : 60,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 23,
+      "context" : "understanding model SentenceBERT (Reimers and Gurevych, 2019) as the teacher model; and (b) sentence order discrimination, which requires distinguishing between the normal and shuffled sentence orders using the discourse-level representation.",
+      "startOffset" : 33,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 28,
+      "context" : "(2017) proposed a self-attention mechanism to attend on the prefix by appending it to the RNN-based encoder, which is a similar idea with the vanilla Transformer (Vaswani et al., 2017).",
+      "startOffset" : 162,
+      "endOffset" : 184
+    }, {
+      "referenceID" : 3,
+      "context" : "Recent works proposed several multi-step generation models (Fan et al., 2018; Yao et al., 2019; Shao et al., 2019; Tan et al., 2020; Goldfarb-Tarrant et al., 2020), which first plan high-level sketches and then generate texts",
+      "startOffset" : 59,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 33,
+      "context" : "Recent works proposed several multi-step generation models (Fan et al., 2018; Yao et al., 2019; Shao et al., 2019; Tan et al., 2020; Goldfarb-Tarrant et al., 2020), which first plan high-level sketches and then generate texts",
+      "startOffset" : 59,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 26,
+      "context" : "Recent works proposed several multi-step generation models (Fan et al., 2018; Yao et al., 2019; Shao et al., 2019; Tan et al., 2020; Goldfarb-Tarrant et al., 2020), which first plan high-level sketches and then generate texts",
+      "startOffset" : 59,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 27,
+      "context" : "Recent works proposed several multi-step generation models (Fan et al., 2018; Yao et al., 2019; Shao et al., 2019; Tan et al., 2020; Goldfarb-Tarrant et al., 2020), which first plan high-level sketches and then generate texts",
+      "startOffset" : 59,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 5,
+      "context" : "Recent works proposed several multi-step generation models (Fan et al., 2018; Yao et al., 2019; Shao et al., 2019; Tan et al., 2020; Goldfarb-Tarrant et al., 2020), which first plan high-level sketches and then generate texts",
+      "startOffset" : 59,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 27,
+      "context" : "However, the lack of exposure to degenerate sketches may impair the generation performance since the models are only trained on sketches constructed from golden truth texts (Tan et al., 2020).",
+      "startOffset" : 173,
+      "endOffset" : 191
+    }, {
+      "referenceID" : 8,
+      "context" : "knowledge into generation especially for commonsense story generation (Guan et al., 2020; Xu et al., 2020).",
+      "startOffset" : 70,
+      "endOffset" : 106
+    }, {
+      "referenceID" : 31,
+      "context" : "knowledge into generation especially for commonsense story generation (Guan et al., 2020; Xu et al., 2020).",
+      "startOffset" : 70,
+      "endOffset" : 106
+    }, {
+      "referenceID" : 21,
+      "context" : "High-Level Language Representation Significant advances have been witnessed in many NLP tasks with pretrained contextualized representation (Peters et al., 2018; Devlin et al., 2019).",
+      "startOffset" : 140,
+      "endOffset" : 182
+    }, {
+      "referenceID" : 1,
+      "context" : "High-Level Language Representation Significant advances have been witnessed in many NLP tasks with pretrained contextualized representation (Peters et al., 2018; Devlin et al., 2019).",
+      "startOffset" : 140,
+      "endOffset" : 182
+    }, {
+      "referenceID" : 24,
+      "context" : "However, most models were limited on token-level representation learning, which is not enough for capturing the hierarchical structure of natural language texts (Ribeiro et al., 2020).",
+      "startOffset" : 161,
+      "endOffset" : 183
+    }, {
+      "referenceID" : 12,
+      "context" : "SkipThought vectors (Kiros et al., 2015) learned to encode a sentence by reconstructing its neighboring sentences.",
+      "startOffset" : 20,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 1,
+      "context" : "porated the hierarchical architecture to BERT (Devlin et al., 2019) and learned sentence representation by recovering masked sentences.",
+      "startOffset" : 46,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 23,
+      "context" : "SentenceBERT (Reimers and Gurevych, 2019) derived sentence representation by fine-tuning BERT for nat-",
+      "startOffset" : 13,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2020) and SLM (Lee et al., 2020) further trained BERT to understand relations among sentences at discourse level by distance prediction and sentence unshuffling, respectively.",
+      "startOffset" : 16,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 23,
+      "context" : "powerful models such as SentenceBERT (Reimers and Gurevych, 2019), we propose to directly transfer their semantic knowledge for our sentence representation learning.",
+      "startOffset" : 37,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 13,
+      "context" : "Previous work has shown that reconstructing the correct order from shuffled sentences helps understand the discourse relations (Lee et al., 2020).",
+      "startOffset" : 127,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 36,
+      "context" : "We adopt BookCorpus (Zhu et al., 2015) as our pretraining dataset and split each text to sentences using NLTK (Bird and Loper, 2004).",
+      "startOffset" : 20,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2015) as our pretraining dataset and split each text to sentences using NLTK (Bird and Loper, 2004).",
+      "startOffset" : 79,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 19,
+      "context" : "We evaluate HINT on ROCStories (ROC for short) (Mostafazadeh et al., 2016) and WritingPrompts (WP for short) (Fan et al.",
+      "startOffset" : 47,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 3,
+      "context" : ", 2016) and WritingPrompts (WP for short) (Fan et al., 2018).",
+      "startOffset" : 42,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 33,
+      "context" : "Plan&Write: It first plans a keyword sequence conditioned upon the input; and then generates a text based on the keywords (Yao et al., 2019).",
+      "startOffset" : 122,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 8,
+      "context" : "6384 ing objective and an auxiliary multi-label classification objective (Guan et al., 2020), which requires distinguishing human-written texts from auto-constructed negative samples.",
+      "startOffset" : 73,
+      "endOffset" : 92
+    }, {
+      "referenceID" : 10,
+      "context" : "We generate texts using nucleus sampling (Holtzman et al., 2020) with p=0.",
+      "startOffset" : 41,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 7,
+      "context" : "7 (Goodfellow et al., 2016) to balance the trade-off between diversity and fluency.",
+      "startOffset" : 2,
+      "endOffset" : 27
+    }, {
+      "referenceID" : 20,
+      "context" : "(2) BLEU (B-n): We use n = 1, 2 to evaluate n-gram overlap between generated texts and human-written texts (Papineni et al., 2002).",
+      "startOffset" : 107,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 26,
+      "context" : "(3) Lexical Repetition (LR-n): The metric computes the percentage of those texts which repeat a 4-gram at least n times in all the generated texts (Shao et al., 2019).",
+      "startOffset" : 147,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 15,
+      "context" : "(5) Distinct-4 (D-4) (Li et al., 2016): We adopt distinct-4, the ratio of distinct 4-grams to all the generated 4-grams, to measure the generation diversity.",
+      "startOffset" : 21,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 9,
+      "context" : "(6) Context Relatedness: It is a learnable automatic metric (Guan and Huang, 2020).",
+      "startOffset" : 60,
+      "endOffset" : 82
+    }, {
+      "referenceID" : 17,
+      "context" : "First, we train a classifier with RoBERTaBASE (Liu et al., 2019) to distinguish human-written texts and negative samples constructed by substituting words, phrases and sentences of human-written texts randomly.",
+      "startOffset" : 46,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 31,
+      "context" : "observation (Xu et al., 2020) that Plan&Write has less lexical repetition than pretraining models possibly because small models are better at learning short term statistics (e.",
+      "startOffset" : 12,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 8,
+      "context" : "to generate a limited set of texts (as demonstrated by much lower distinct-4 than golden texts) with generic plots (Guan et al., 2020), which may get high relatedness scores easily.",
+      "startOffset" : 115,
+      "endOffset" : 134
+    }, {
+      "referenceID" : 4,
+      "context" : "κ denotes Fleiss’ kappa (Fleiss and Joseph, 1971) to measure the interannotator agreement (all are moderate or substantial).",
+      "startOffset" : 24,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 24,
+      "context" : "Therefore, we propose to evaluate the models using individual language modeling tests in different aspects (Ribeiro et al., 2020).",
+      "startOffset" : 107,
+      "endOffset" : 129
+    } ],
+    "year" : 2021,
+    "abstractText" : "Generating long and coherent text is an important but challenging task, particularly for open-ended language generation tasks such as story generation. Despite the success in modeling intra-sentence coherence, existing generation models (e.g., BART) still struggle to maintain a coherent event sequence throughout the generated text. We conjecture that this is because of the difficulty for the decoder to capture the high-level semantics and discourse structures in the context beyond token-level co-occurrence. In this paper, we propose a long text generation model, which can represent the prefix sentences at sentence level and discourse level in the decoding process. To this end, we propose two pretraining objectives to learn the representations by predicting inter-sentence semantic similarity and distinguishing between normal and shuffled sentence orders. Extensive experiments show that our model can generate more coherent texts than state-of-the-art baselines.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

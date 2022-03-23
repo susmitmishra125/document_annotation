@@ -1,0 +1,613 @@
+{
+  "name" : "2021.acl-long.45.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Cascaded Head-colliding Attention",
+    "authors" : [ "Lin Zheng", "Zhiyong Wu", "Lingpeng Kong" ],
+    "emails" : [ ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 536–549\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n536"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Transformers (Vaswani et al., 2017) have advanced the field of natural language processing (NLP) on a variety of important tasks, including language modeling (Dai et al., 2019; Baevski and Auli, 2019), language understanding (Devlin et al., 2019; Yang et al., 2019b), and machine translation (Vaswani et al., 2017; Dehghani et al., 2019; Liu et al., 2020). It has also found its place in computer vision (Dosovitskiy et al., 2020), and in intelligent agents (Vinyals et al., 2019) where sequence modeling plays a key role as well. The cornerstone of the transformer architecture is the multi-head attention (MHA) mechanism which models pairwise interactions between the elements of the sequence.\n1Our implementation is publicly available at https:// github.com/LZhengisme/CODA.\nAn attention function can be described as mapping a query and a set of key-value pairs to an output, where the query, keys, values, and output are all vectors. The output is computed as a weighted sum of the values, where the weight assigned to each value is computed by a compatibility function of the query with the corresponding key. A multi-head attention (MHA) mechanism extends the idea through performing multiple separately parameterized attention functions acting in parallel to contextualize the input representations. Their outputs are then gathered by an affine transformation, allowing the model to jointly attend to information from different representation subspaces at different positions.\nDespite its massive success, the current framework ignores the interactions among different heads, leading to the problem that many of the heads are redundant in practice (i.e., attending to the same regions of the sequence), which underutilizes the capacity of the model (Voita et al., 2019; Michel et al., 2019a). At the same time, recent research (Tang et al., 2018; Clark et al., 2019; Voita et al., 2019; Wu et al., 2020, inter alia) demonstrates that heads in MHA have the potential to capture distinct information from input sequences, ranging from syntactic and semantic features to alignment information between source and target sentence pairs. These observations suggest that multiple heads should be encouraged to extract complementary information. Therefore, it is highly appealing to take into account the interactions among different attention heads from the perspective of parameter efficiency and the expressiveness of the model.\nIn this work, we introduce head-colliding attention (§3). We formulate MHA as a probabilistic model, where each attention head is represented by a latent variable and all of them collide into the observed sequence data (Figure 1a). In this\nprobabilistic graphical model structure, attention heads work as individual factors to explain the data. Although each factor is independent of each other a priori, they interact with each other automatically, conditioning on observations, thanks to the explaining-away effects (Pearl, 1989; Wellman and Henrion, 1993).\nThe head-colliding attention mechanism introduces new computational challenges in training the model. We will discuss how we tackle these using variational methods (Blei et al., 2017). We propose cascaded head-colliding attention (CODA, Figure 1b). As our main model, CODA adopts a hierarchical variational distribution (Ranganath et al., 2016) to allow both rich head interactions and effective computations (§4).\nWe validate our method in language modeling and machine translation experiments (§5). CODA outperforms the vanilla MHA transformer on both tasks, on Wikitext-103 by 0.6 perplexity and on WMT14 EN-DE by 0.6 BLEU. Further analysis shows that CODA learns to encourage diversity in different heads (Figure 2) and to promote parameter efficiency when increasing the number of heads (§5.3)."
+    }, {
+      "heading" : "2 Background",
+      "text" : "Multi-head attention (MHA) mechanism plays an important role in modern transformer architecture (Vaswani et al., 2017). It extends the classical attention mechanism by running multiple attention function heads in parallel.\nAn MHA module is composed of h identical blocks (usually referred to as attention heads). Each head will generate a hidden state Hi based on the input Query, Key and Value matrices, denoted as Q, K, and V respectively. The hidden states from different heads are then aggregated as the output of the MHA module: ∑n i=1HiW o i , where W oi are model parameters. In the i-th head, the input matrices Q, K and V are first linearly projected into different subspace representations Q̃i, K̃i, and Ṽi, based on different learnable parameters. After that, we compute the inner product over all projected queries and keys as the attention logits zi, which are then passed through a row-wise softmax2 to obtain head attention weights ai:\nai = softmax(zi) = softmax(Q̃iK̃ T i ). (1)\n2We omit the scaling factor for simplicity.\nThe final output of a single attention block is the weighted sum of Ṽi:\nHi = aiṼi.\nAs we can see, the core of MHA is to calculate ai in each head. We thus refer to ai as the i-th attention head.\nIn sequence prediction tasks, the model takes as input a source sequence of length m and outputs a target sequence of length n in an autoregressive manner. It predicts each token Y within the target sequence through a categorical distribution pvanilla(Y|X), where X includes the source sequence as well as a previously generated prefix. With respect to an MHA block a1, . . . ,ah, the model predicts target tokens Y by first feeding these heads into a complex non-linear transformation3 denoted by φ(·), and then passing it through a softmax function over the entire vocabulary. Therefore, the output probability can be written as pvanilla(Y|X) = f(a1, . . . ,ah), where\nf(a1, . . . ,ah) := softmax(φ(a1, . . . ,ah))."
+    }, {
+      "heading" : "3 Head-colliding Attention",
+      "text" : "In this section, we introduce head-colliding attention. Specifically, we formulate MHA as a probabilistic model, where each attention head is represented by a latent variable. The name reflects a “collider” in the context of probabilistic graphical models (Figure 1a). We will first explain how head-colliding attention permits the modeling of interactions among different heads and then discuss how vanilla MHA can be viewed as a marginalized version of head-colliding attention, which ignores any head interactions.\nConsidering a single MHA block, we cast each attention head ai as a latent variable. The probability of target Y conditioning on input X can be obtained by marginalizing over all heads A (we denote A := {a1, . . . ,ah}):\np(Y|X) = ∫ A p(Y|A,X)p(A|X)dA\n= Ep(A|X) [f(A)] .\np(A|X) is the joint prior distribution. The corresponding directed graphical model is demonstrated\n3Since a transformer typically stacks several attentive layers, for an MHA block in some layer, subsequent layers will induce a non-linear transformation φ(·) for its attention heads. For instance, φ(·) may include several other MHA blocks and feed-forward networks.\nin Figure 1a, where the links from different heads collide on the observation variable Y. A crucial property of this graphical model is the “explainingaway” effect (Pearl, 1989; Wellman and Henrion, 1993) of attention heads A when observing the output Y. In other words, if a head ai attends to part of the input which accords well with observation, it immediately discourages other heads from attending to the same part of the input but encourages them to look into complementary information.4 This mechanism effectively reduces head redundancy and in turn improves parameter efficiency.\nVanilla vs. head-colliding attention We now take a closer look at the vanilla MHA (§2). Recall that in vanilla MHA, all attention heads are deterministic. From the perspective of latent variable models, this is computationally equivalent to taking expectations of latent head variables. The output probability distribution pvanilla(Y|X) can then be expressed as:\nf(Ep(a1|X) [a1] , . . . ,Ep(ah|X) [ah]). (2)\nThis means we are only interested in the individual expectations when using the attention heads in vanilla MHA for predictions. On the contrary,\n4In other words, if we confirm that some head accords well with the observation, then the probability of other heads should be reduced since there is less need to invoke them, according to Occam’s razor.\nin head-colliding attention the distribution of Y is defined as:\np(Y|X) = Ep(a1,...,ah|X) [f(a1, . . . ,ah)] .\nNote the inherent difference of when to take the expectation in vanilla and head-colliding attention. Since f(·) is a complex non-linear function (§2), these two formulations are not equivalent in general and may have a large gap between the two distributions. Concretely, vanilla MHA ignores any possible interactions among different heads. As indicated in equation 2, it first marginalizes out every single head before observing targets – one head will not learn what other heads are attending to despite the fact Y is observed. This is why vanilla MHA is prone to redundancy as many previous studies (Voita et al., 2019; Michel et al., 2019a, inter alia) discovered. Head-colliding attention, on the other hand, permits rich head interactions due to the expressive non-linear function f(·) inside the expectation over different latent variables a1, . . . ,ah. However, the complexity of head interactions also leads to intractability in training the model, which we will discuss in the next section."
+    }, {
+      "heading" : "4 Training Head-colliding Attention",
+      "text" : "We train the model by performing maximum likelihood estimation. Here, the log marginal likelihood can be expressed as:\nlog p(Y|X) = logEp(A|X) [p(Y|A,X)] .\nUnfortunately, this is intractable in general because it requires marginalizing over all possible configurations of attention heads. The standard technique is to use variational inference, which optimizes the log marginal by maximizing its evidence lower bound (called ELBO) (Blei et al., 2017):\nL := Eq(A|X) [ log\np(Y|A,X)p(A|X) q(A|X)\n] (3)\n= log p(Y|X)−KL(q(A|X)||p(A|X,Y)) ≤ log p(Y|X),\nwhere q(A|X) is the variational distribution5 over latent variables A. p(A|X,Y) is the intractable posterior distribution of all heads given observations Y and the input X, which encodes the rich\n5Although the variational distribution q should depend on target Y in principle, such conditioning renders testing difficult since the target information is not available during testing. For this reason, we only consider the source X hereafter.\nhead interactions we desire, as discussed in §3. Therefore, an ideal variational distribution q(A|X) should be close to the true posterior p(A|X,Y). In this case, the samples would accurately reflect the head interactions and the variational distribution would yield a tighter bound to L to facilitate the training.\nA straight-forward choice of q(A|X) is to use the mean-field approximation (Kingma and Welling, 2013):\nq(A|X) = q(a1,a2, . . . ,ah|X) = h∏\ni=1\nq(ai|X).\nHowever, it has similar drawbacks as the vanilla MHA.6 The mean-field approximation assumes the independence of different heads and hence the interactions are greatly limited.\nAlternatively, one could parameterize q(A|X) using an auto-regressive model.7 Although this is much more expressive, its sequential nature severely slows down training, making it infeasible in practice.\nCascaded Head-colliding attention Our solution to this problem is to employ hierarchical structures for head-colliding attention, where interactions among heads could be effectively incorporated into the model (Sønderby et al., 2016; Ranganath et al., 2016).\nConveniently, the hierarchical nature of the transformer architecture offers an effective way of constructing such proposal distributions. Given a transformer with L layers, we denote the set of all attention heads at layer l − 1 and l as Al−1 and Al, respectively. Following the bottom-up computation of the transformer, the distribution of Al must rely on the instantiated values of Al−1. In this sense, Al−1 can be seen as the common variables that govern Al (Figure 1b). Formally, we have: q(A1, ...,AL|X)=q(A1|X) L∏\nj=2\nq(Aj |X,Aj−1).\nDespite the fact that each attention head ali ∈ Al at l-th layer is conditionally independent given Al−1, they become dependent when we marginalize Al−1\n6Note that the vanilla MHA does not define distributions over heads in its original context. We derive this from the latent-variable perspective.\n7This works well in our preliminary experience, despite its extremely expensive computational cost.\nout. In particular, the marginal distribution of each Al becomes:\nq(Al|X)= ∫ Al−1 q(Al−1|X)q(Al|X,Al−1)dAl−1.\nThis corresponds to an infinite mixture of the meanfield distributions q(Al|X,Al−1) and is able to capture rich head interactions (Ranganath et al., 2016). Our main model adopts this cascaded proposal distribution in figure 1b, and therefore we name it cascaded head-colliding attention (CODA).\nThe only problem left now is how to specify the conditional distribution q(Al|X,Al−1) for all l = 1, 2, . . . , L. We first impose the basic constraints on head values as in vanilla MHA, that is, all head values must range within a simplex ∆n−1:\n∆n−1 = {Al| n∑\nk=1\nali,:k = 1, ∀i = 1, . . . , h}.\nHere ali,:k is the k-th column of the i-th attention head at layer l and 1 denotes the vector of all 1’s. For efficient training and inference, we adopt Gaussian-logistic distributions (Blei and Lafferty, 2006; Cohen et al., 2008), which not only satisfy the constraints above but also benefit from the effective reparameterization trick (Kingma and Welling, 2013; Rezende et al., 2014; Titsias and Lázaro-Gredilla, 2014).\nIn particular, recall that in vanilla MHA, ai = softmax(zi) = softmax(Q̃iK̃ T i ) (equation 1). We also denote the attention logits at l-th layer as Zl := {zl1, . . . , zlh}. For head i at layer l, we first sample from a multivariate Gaussian distribution q(zli,j:|z l−1 i,j: )\n8 and pass the samples into a row-wise softmax function to yield head values:\nzli,j: ∼ N(µli,j:,Σ), ali,j: = softmax(zli,j:),\nwhere zli,j: and a l i,j: represent the j-th row of the i-th attention logit and attention head at layer l respectively.\nTo explicitly model hierarchical structures among attention heads, we propose to add a direct connection between attention heads at adjacent layers (Figure 1b). Such connections offer direct access to the information of attention in the previous layer. Specifically, for each head i at layer l we\n8We only explicitly define the attention logit z as random variables, while the distribution of heads a is induced via a deterministic transformation (i.e., softmax function) of z; therefore it suffices to build dependencies between attentive logits instead.\nset the mean µil as the sum of two parts:\nµi l = Q̃iK̃ T i︸ ︷︷ ︸\nvanilla MHA\n+ σi(Z l−1)︸ ︷︷ ︸\ndirect connection\n, (4)\nwhere σi(·) is a two-layer multilayer perceptron (MLP) to fuse information from different heads Zl−1 (see the cascading connections in Figure 1b for an illustration). We set the covariance matrix Σ to the identity matrix for all attentive logits. We give the prior the same form as the variational posterior and parameters are shared between q(A1, ...,AL|X) and p(A1, ...,AL|X) for our objective (equation 3). With the help of parameter sharing, the KL term in equation 3 is also cancelled out due to the identical distributions.9 This choice works well in practice, where it not only allows CODA to use almost the same amount of parameters as vanilla Transformer, but also eliminates the need to invoke advanced training techniques for amortized variational inference.10 More details can be found in Appendix A."
+    }, {
+      "heading" : "5 Experiments",
+      "text" : "We conduct experiments on language modeling and machine translation tasks."
+    }, {
+      "heading" : "5.1 Setup",
+      "text" : "Datasets First, we conducted experiments for token-level language modeling on a large-scale benchmark dataset Wikitext-103 (Merity et al., 2016), which consists of articles from Wikipedia with the token number around 103M/218K/246K for the training/validation/testing splits respectively. The vocabulary size is 267,744.\nFor machine translation, we consider two standard datasets:\n• WMT14 EN-DE (Bojar et al., 2014), which contains about 4.5M/3K/3K sentences pairs for training/validation/testing splits respectively. We follow Ott et al. (2018) and Peng et al. (2020) to preprocess the dataset, and obtain a shared vocabulary between source and target language of around 32K byte pair encoding (BPE, Sennrich et al. (2016)) types. 9Therefore, it can also be derived by directly applying the Jensen’s inequality on the log marginal likelihood. 10For instance, training a standard variational auto-encoder (VAE) for NLP tasks often suffers from the posterior collapse problem due to the heavy KL regularization (Bowman et al., 2016), where some tricks have to be used to achieve good performance, such as KL annealing, etc.\n• IWSLT14 DE-EN (Cettolo et al., 2014). Following standard practice (Edunov et al., 2018; Peng et al., 2020), we pre-process the 160K/7K/7K sentence pairs and build training/validation/testing sets accordingly. This generates a vocabulary of around 9K(7K) BPE types for source(target).\nImplementation details We implement our model with PyTorch (Paszke et al., 2019) and FairSeq toolkit (Ott et al., 2019). In particular, our model is based on the vanilla transformer architecture (Vaswani et al., 2017). For CODA, we replace all vanilla MHA blocks with the cascaded head-colliding attention, for both self attention and cross attention (if any). In language modeling, we use adaptive input embeddings (Baevski and Auli, 2019) and set context size to 512 and 480 for training and testing respectively, due to constraints of computational resources. In machine translation, we set beam size to 5 and adopt the hyperparameters from (Peng et al., 2020) for IWSLT14 DE-EN. For WMT14 EN-DE we set beam size to 4, length penalty to 0.6, and average last 10 checkpoints for testing, following Vaswani et al. (2017). Further implementation details can be found in Appendix A."
+    }, {
+      "heading" : "5.2 Main results",
+      "text" : "The results of language modeling on Wikitext-103 dataset are reported in Table 1. As we can see from the table, CODA barely introduces any additional parameters. However, by taking into account head interactions, CODA significantly outperforms TRANSFORMER by over 0.6 perplexity. For reference, we also report the best setting (denoted by TRANSFORMER †) in Baevski and Auli (2019), which uses a much larger context size (3072/2560 vs. 512/480 for training/testing), CODA still outperforms by a substantial margin of 0.3 perplexity. This indicates that encouraging head interactions can improve parameter efficiency.\nTo show whether CODA has promoted head interactions and reduced head redundancy, we qualitatively visualize the attention heads in both CODA and TRANSFORMER via heatmaps. Concretely, we compute the Jensen-Shannon Divergence (JSD) between each pair of attention heads at the same layer.\nIn particular, we assume head values define a categorical distribution in both TRANSFORMER and CODA model to facilitate comparison. That is, an\nattentive head ai induces n categorical distributions for each query position. For the j-th distribution, it indicates how the j-th target position attends to all m source positions and is denoted by p(x|ai,j:). For two heads i and i′, we first compute their average distribution as\nm := p(x|ai,j:) + p(x|ai′,j:)\n2\nThen the JSD value between the i-th and i′-th attention head is computed by summing all of n induced distributions: n∑ j=1 1 2 ( KL(p(x|ai,j:)||m)+KL(p(x|ai′,j:)||m))\n) We average computed JSDs for all validation samples. Note that a larger JSD value (darker color) indicates that two heads are behaving more differently (i.e. less redundancy between them), and vice versa.\nAs shown in Figure 2, JSD heatmaps in CODA are clearly darker than those in TRANSFORMER. This suggests that CODA permits richer head interactions, which fosters different heads to communicate with each other and encourages them to become complementary. Consequently, our model effectively reduces head redundancy in MHA and improves parameter-efficiency.\nThe results on IWSLT14 DE-EN and WMT14 EN-DE datasets are shown in Table 2. We see that CODA exhibits clear improvements over TRANSFORMER: a 1.1 point gain in BLEU on IWSLT14 DE-EN dataset and a 0.6 BLEU improvement on WMT14 EN-DE dataset. Despite such significant gains over the baseline, CODA only introduce very few additional parameters (e.g., 0.03% extra parameters on IWSLT14 DE-EN). This, again, shows\nthat CODA is more parameter efficient than vanilla Transformer due to the cascaded head-colliding attention we proposed. Similar to experiments on language modeling, we also visualize the head behaviors to measure attentive head interactions (See Figure 5 and Figure 6 in Appendix B), where we observe similar phenomena on translation tasks. Specifically, different heads in CODA are often complementary to each other and focus on quite different regions of sequences, rather than becoming redundant or even identical as observed in TRANSFORMER models."
+    }, {
+      "heading" : "5.3 Analysis: the effect of the number of attention heads",
+      "text" : "Despite one would hope increasing the head number in MHA leads to a free-ride in achieving better performance, in practice it is often not the case as vanilla MHA suffers from the problem of parameter redundancy. Following Vaswani et al. (2017), we vary the number of attention heads (4,8,16,32), but keep the amount of computation constant. Our results on IWSLT14 DE-EN are shown in Table 3. We observe that the translation quality of baseline transformer (which uses vanilla MHA as its main building blocks) decreases almost linearly when increasing number of attention heads (Figure 3), which agrees with previous studies (Vaswani et al., 2017; Voita et al., 2019; Michel et al., 2019b).\nIntuitively, since the total number of parameters in the model remains unchanged, more heads indicate that the number of parameters allocated to each head is reduced, which limits the representational power of every single attention head. Due to the independence assumption between the heads, many of them tend to focus on similar regions of the sequence, leading to a great waste of modeling capacity.\nIn the case of CODA, we observe better BLEU scores in response to the increasing head number. Rich interactions in CODA could encourage different heads to cover broader regions of input sequence, which in turn offers more useful information for training. The perplexity (PPL) reflects\nsimilar trends. The coordination between different heads in CODA greatly improves the model’s parameter efficiency."
+    }, {
+      "heading" : "5.4 Ablation analysis",
+      "text" : "In this section, we present an ablation study to investigate effects of different components in CODA. Concretely, we compare four models on the IWSLT14 DE-EN machine translation task: (i) the full model CODA, (ii) a variant of CODA ablating the cascaded structure (§4), (iii) a variant of CODA without using head-colliding attention (§3) and (iv) the baseline TRANSFORMER model.\nIn more details, for model (ii), we remove the second term in equation 4, which turns off the direct cascading structure, despite still being a proper\nhierarchical latent variable model11. In model (iii), attention heads are deterministic (instead of being latent variables) as in vanilla Transformers, but cascading connections are incorporated. We observe its close connection with the recently proposed REALFORMER (He et al., 2020), a TRANSFORMER model that adds a residual connection between attention logits at adjacent layers. Since in model (iii) all attention heads are deterministic, it is unnecessary to fuse different heads (see §4). In this case, we simply implement model (iii) as a REALFORMER (and thus referred to as REALFORMER hereafter) to demonstrate the effect of cascadinglike structures more clearly.12\nWe report BLEU score for translation quality, and the Jensen-Shannon Divergences (JSD) averaged over all heads pairs of all MHA blocks for quantitative evaluation of head interactions. As demonstrated in Table 4 and Figure 4, even without cascading connections for explicit hierarchical structures, head-colliding attention has the ability (albeit limited) to induce reasonable correlations among different heads, reflected in the average JSD. This is due to the explaining-away effects and the native hierarchical structure in the transformers, as discussed in §3. In CODA, because individual heads have access to the other heads from a probabilistic perspective, they are more prone to offering complementary information for each other to jointly explain the observed data. This effect is further enhanced when cascading connections are added to the model. In contrast, if we simply incorporate such cascading connections into a vanilla TRANSFORMER model, we found it does not significantly\n11Note that the first term Q̃iK̃Ti in equation 4 also depends on the instantiated value of zl−1i,j: , which induces an implicit hierarchical dependency for attention between adjacent layers.\n12The main difference between residual connections in REALFORMER and cascading connections in CODA is that, the former directly performs a head-wise addition of previouslayer attention logits; in contrast, our cascading connection makes use of an MLP σ(·) to mix different attention heads, which enhances head interactions for CODA.\nencourage head interactions and only improves the baseline marginally. In this case, the performance improvement might be mainly due to residual connections, which are often considered to be effective in facilitating training (He et al., 2016). Interestingly, we note a positive correlation between average JSD and BLEU, suggesting that encouraging complementary attention heads may help improve translation quality."
+    }, {
+      "heading" : "6 Related Work",
+      "text" : "Attention mechanisms were first applied to recurrent networks in (Bahdanau et al., 2014). It was then extended to multi-head attention (MHA) and became the key component in transformer architectures (Vaswani et al., 2017).\nTo study the utility of multiple attention heads, Voita et al. (2019) focused on identifying individual contributions of each attention head. Michel et al. (2019a) conducted extensive experiments to demonstrate that pruning out most heads after training does not lead to a drop in performance during inference. You et al. (2020) further revealed that replacing learnable attention heads with samples from fixed Gaussian distributions can achieve almost the same performance as original models. Additionally, Behnke and Heafield (2020) proposed to iteratively prune attention heads during training based on the lottery ticket hypothesis. These works indicate that there is a lot of head redundancy in the MHA transformer architectures.\nInstead of pruning unnecessary parameters and down-sizing transformer models, there are also works that propose to improve parameter efficiency in transformers. For instance, Li et al. (2018) introduced a regularization term to explicitly promote diversity among different heads. Yang et al. (2019a) proposed to use convolutional kernels to\ncapture correlations among not only local windows of sequences, but also different heads. An et al. (2020) considered each head as a sample from the same distribution, and presented a sampling algorithm that avoids samples from collapsing into local modes. It hence explicitly encouraged the repulsiveness in MHA. Besides, MAE (Peng et al., 2020) converted a vanilla MHA to a mixture-of-experts model, where each expert component activates only a subset of attention heads. With learned probabilities, different experts could be specialized on different inputs. Different from these works, CODA does not explicitly promote head diversity nor specialize different heads. Instead, we focus on studying head interactions from a probabilistic perspective, which reveals the close connection between vanilla MHA and CODA.\nAnother research line relating to our work is to incorporate latent variables into attention modules. Xu et al. (2015) investigated the connection between vanilla deterministic single-head attention and its stochastic counterpart. Deng et al. (2018) explored this further and proposed to use variational inference techniques for training the model. They considered both cases of discrete and continuous latent variables. Bayesian attention modules (Fan et al., 2020) introduced continuous latent distributions for attention that are amenable to reparameterization tricks. Our work is different from them in that we mainly investigate the MHA mechanism and aim to improve parameter-efficiency by recovering potential interactions among different heads, which are ignored in vanilla MHA.\nConcurrently, He et al. (2020) proposed to add residual connections between attention scores at adjacent layers, similar to our cascading connections. Nevertheless, our motivation for using the cascaded structure is quite different: we aim to construct direct hierarchical dependencies for latent variable models, while He et al. (2020) is mainly motivated to improve transformer architectures and obtain performance gains."
+    }, {
+      "heading" : "7 Conclusion and Future Work",
+      "text" : "We present CODA by re-formulating the multi-head attention (MHA) as a latent variable model from a probabilistic perspective. CODA explicit models of the interactions among attention heads through a hierarchical variational distribution. We conduct extensive experiments and demonstrate that CODA outperforms the transformer baseline in language\n0 1 2 3\nLayer 0 Layer 1 Layer 2 Layer 3 Layer 4 Layer 5\n0 1 2 3\n0 1 2 3\n0 1 2 3\n0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3\n(a) TRANSFORMER\n0 1 2 3\nLayer 0 Layer 1 Layer 2 Layer 3 Layer 4 Layer 5\n0 1 2 3\n0 1 2 3\n0 1 2 3\n0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3\n(b) REALFORMER\nLayer 0 Layer 1 Layer 2 Layer 3 Layer 4 Layer 5\nLayer 0 Layer 1 Layer 2 Layer 3 Layer 4 Layer 5\nmodeling and machine translation. The analysis shows that CODA learns to encourage the diversity in different heads and to promote parameter efficiency when increasing the number of heads. In this framework, we will be able to impose explicit constraints or regularization on different attention heads in a principal way (e.g. informative priors that promote diversity). Besides, we can also consider more expressive (data-driven) variational distributions. We leave these as the future work. Our code is publicly available at https://github.com/LZhengisme/CODA."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We thank the anonymous reviewers whose suggestions helped clarify this work. This research was supported in part by the University of Hong Kong Research Committee under account 104006039.111994.14200.301.01."
+    }, {
+      "heading" : "B Additional experimental results",
+      "text" : "Figure 5 and Figure 6 visualize head interactions within TRANSFORMER and CODA on IWSLT14 DE-EN and WMT14 EN-DE translation tasks respectively.\n14More details can be found in Baevski and Auli (2019) and the training script based on Fairseq codebase: https://github.com/pytorch/fairseq/blob/ master/examples/language_model/README. adaptive_inputs.md."
+    } ],
+    "references" : [ {
+      "title" : "Repulsive attention: Rethinking multi-head attention as Bayesian inference",
+      "author" : [ "Bang An", "Jie Lyu", "Zhenyi Wang", "Chunyuan Li", "Changwei Hu", "Fei Tan", "Ruiyi Zhang", "Yifan Hu", "Changyou Chen." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical",
+      "citeRegEx" : "An et al\\.,? 2020",
+      "shortCiteRegEx" : "An et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Adaptive input representations for neural language modeling",
+      "author" : [ "Alexei Baevski", "Michael Auli." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Baevski and Auli.,? 2019",
+      "shortCiteRegEx" : "Baevski and Auli.",
+      "year" : 2019
+    }, {
+      "title" : "Neural machine translation by jointly learning to align and translate",
+      "author" : [ "Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio." ],
+      "venue" : "arXiv preprint arXiv:1409.0473.",
+      "citeRegEx" : "Bahdanau et al\\.,? 2014",
+      "shortCiteRegEx" : "Bahdanau et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Losing heads in the lottery: Pruning transformer attention in neural machine translation",
+      "author" : [ "Maximiliana Behnke", "Kenneth Heafield." ],
+      "venue" : "Proceedings of",
+      "citeRegEx" : "Behnke and Heafield.,? 2020",
+      "shortCiteRegEx" : "Behnke and Heafield.",
+      "year" : 2020
+    }, {
+      "title" : "Correlated topic models",
+      "author" : [ "David Blei", "John Lafferty." ],
+      "venue" : "Advances in neural information processing systems, 18:147.",
+      "citeRegEx" : "Blei and Lafferty.,? 2006",
+      "shortCiteRegEx" : "Blei and Lafferty.",
+      "year" : 2006
+    }, {
+      "title" : "Variational inference: A review for statisticians",
+      "author" : [ "David M Blei", "Alp Kucukelbir", "Jon D McAuliffe." ],
+      "venue" : "Journal of the American statistical Association, 112(518):859–877.",
+      "citeRegEx" : "Blei et al\\.,? 2017",
+      "shortCiteRegEx" : "Blei et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Generating sentences from a continuous space",
+      "author" : [ "Samuel R. Bowman", "Luke Vilnis", "Oriol Vinyals", "Andrew Dai", "Rafal Jozefowicz", "Samy Bengio." ],
+      "venue" : "Proceedings of The 20th SIGNLL Conference on Computational Natural Language Learn-",
+      "citeRegEx" : "Bowman et al\\.,? 2016",
+      "shortCiteRegEx" : "Bowman et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Report on the 11th iwslt evaluation campaign, iwslt 2014",
+      "author" : [ "Mauro Cettolo", "Jan Niehues", "Sebastian Stüker", "Luisa Bentivogli", "Marcello Federico." ],
+      "venue" : "Proceedings of the International Workshop on Spoken Language Translation, Hanoi, Vietnam, vol-",
+      "citeRegEx" : "Cettolo et al\\.,? 2014",
+      "shortCiteRegEx" : "Cettolo et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "What does bert look at? an analysis of bert’s attention",
+      "author" : [ "Kevin Clark", "Urvashi Khandelwal", "Omer Levy", "Christopher D Manning." ],
+      "venue" : "arXiv preprint arXiv:1906.04341.",
+      "citeRegEx" : "Clark et al\\.,? 2019",
+      "shortCiteRegEx" : "Clark et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Logistic normal priors for unsupervised probabilistic grammar induction",
+      "author" : [ "Shay Cohen", "Kevin Gimpel", "Noah A Smith." ],
+      "venue" : "Advances in Neural Information Processing Systems, 21:321–328.",
+      "citeRegEx" : "Cohen et al\\.,? 2008",
+      "shortCiteRegEx" : "Cohen et al\\.",
+      "year" : 2008
+    }, {
+      "title" : "Transformer-XL: Attentive language models beyond a fixed-length context",
+      "author" : [ "Zihang Dai", "Zhilin Yang", "Yiming Yang", "Jaime Carbonell", "Quoc Le", "Ruslan Salakhutdinov." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computa-",
+      "citeRegEx" : "Dai et al\\.,? 2019",
+      "shortCiteRegEx" : "Dai et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Universal transformers",
+      "author" : [ "Mostafa Dehghani", "Stephan Gouws", "Oriol Vinyals", "Jakob Uszkoreit", "Lukasz Kaiser." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Dehghani et al\\.,? 2019",
+      "shortCiteRegEx" : "Dehghani et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Latent alignment and variational attention",
+      "author" : [ "Yuntian Deng", "Yoon Kim", "Justin Chiu", "Demi Guo", "Alexander Rush." ],
+      "venue" : "Advances in Neural Information Processing Systems, 31:9712–9724.",
+      "citeRegEx" : "Deng et al\\.,? 2018",
+      "shortCiteRegEx" : "Deng et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "An image is worth 16x16 words: Transformers",
+      "author" : [ "Alexey Dosovitskiy", "Lucas Beyer", "Alexander Kolesnikov", "Dirk Weissenborn", "Xiaohua Zhai", "Thomas Unterthiner", "Mostafa Dehghani", "Matthias Minderer", "Georg Heigold", "Sylvain Gelly" ],
+      "venue" : null,
+      "citeRegEx" : "Dosovitskiy et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Dosovitskiy et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Classical structured prediction losses for sequence to sequence learning",
+      "author" : [ "Sergey Edunov", "Myle Ott", "Michael Auli", "David Grangier", "Marc’Aurelio Ranzato" ],
+      "venue" : "In Proceedings of the 2018 Conference of the North American Chapter of the Asso-",
+      "citeRegEx" : "Edunov et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Edunov et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Bayesian attention modules",
+      "author" : [ "Xinjie Fan", "Shujian Zhang", "Bo Chen", "Mingyuan Zhou." ],
+      "venue" : "Advances in Neural Information Processing Systems, 33.",
+      "citeRegEx" : "Fan et al\\.,? 2020",
+      "shortCiteRegEx" : "Fan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deep residual learning for image recognition",
+      "author" : [ "Kaiming He", "Xiangyu Zhang", "Shaoqing Ren", "Jian Sun." ],
+      "venue" : "Proceedings of the IEEE conference on computer vision and pattern recognition, pages 770– 778.",
+      "citeRegEx" : "He et al\\.,? 2016",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "RealFormer: Transformer Likes Residual Attention",
+      "author" : [ "Ruining He", "Anirudh Ravula", "Bhargav Kanagal", "Joshua Ainslie." ],
+      "venue" : "arXiv e-prints, page arXiv:2012.11747.",
+      "citeRegEx" : "He et al\\.,? 2020",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P Kingma", "Jimmy Ba." ],
+      "venue" : "arXiv preprint arXiv:1412.6980.",
+      "citeRegEx" : "Kingma and Ba.,? 2014",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2014
+    }, {
+      "title" : "Autoencoding variational bayes",
+      "author" : [ "Diederik P Kingma", "Max Welling." ],
+      "venue" : "arXiv preprint arXiv:1312.6114.",
+      "citeRegEx" : "Kingma and Welling.,? 2013",
+      "shortCiteRegEx" : "Kingma and Welling.",
+      "year" : 2013
+    }, {
+      "title" : "Multi-head attention with disagreement regularization",
+      "author" : [ "Jian Li", "Zhaopeng Tu", "Baosong Yang", "Michael R. Lyu", "Tong Zhang." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 2897–2903, Brus-",
+      "citeRegEx" : "Li et al\\.,? 2018",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Very deep transformers for neural machine translation",
+      "author" : [ "Xiaodong Liu", "Kevin Duh", "Liyuan Liu", "Jianfeng Gao." ],
+      "venue" : "arXiv preprint arXiv:2008.07772.",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Pointer sentinel mixture models",
+      "author" : [ "Stephen Merity", "Caiming Xiong", "James Bradbury", "Richard Socher." ],
+      "venue" : "arXiv preprint arXiv:1609.07843.",
+      "citeRegEx" : "Merity et al\\.,? 2016",
+      "shortCiteRegEx" : "Merity et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Are sixteen heads really better than one",
+      "author" : [ "Paul Michel", "Omer Levy", "Graham Neubig" ],
+      "venue" : "In Advances in Neural Information Processing Systems,",
+      "citeRegEx" : "Michel et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Michel et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "On evaluation of adversarial perturbations for sequence-to-sequence models",
+      "author" : [ "Paul Michel", "Xian Li", "Graham Neubig", "Juan Pino." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics:",
+      "citeRegEx" : "Michel et al\\.,? 2019b",
+      "shortCiteRegEx" : "Michel et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "fairseq: A fast, extensible toolkit for sequence modeling",
+      "author" : [ "Myle Ott", "Sergey Edunov", "Alexei Baevski", "Angela Fan", "Sam Gross", "Nathan Ng", "David Grangier", "Michael Auli." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chap-",
+      "citeRegEx" : "Ott et al\\.,? 2019",
+      "shortCiteRegEx" : "Ott et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Scaling neural machine translation",
+      "author" : [ "Myle Ott", "Sergey Edunov", "David Grangier", "Michael Auli." ],
+      "venue" : "Proceedings of the Third Conference on Machine Translation: Research Papers, pages 1–9, Brussels, Belgium. Association for Computational",
+      "citeRegEx" : "Ott et al\\.,? 2018",
+      "shortCiteRegEx" : "Ott et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Pytorch: An imperative style, high-performance deep learning library",
+      "author" : [ "jani", "Sasank Chilamkurthy", "Benoit Steiner", "Lu Fang", "Junjie Bai", "Soumith Chintala" ],
+      "venue" : null,
+      "citeRegEx" : "jani et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "jani et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Probabilistic reasoning in intelligent systems - networks of plausible inference",
+      "author" : [ "J. Pearl." ],
+      "venue" : "Morgan Kaufmann series in representation and reasoning.",
+      "citeRegEx" : "Pearl.,? 1989",
+      "shortCiteRegEx" : "Pearl.",
+      "year" : 1989
+    }, {
+      "title" : "A mixture of h - 1 heads is better than h heads",
+      "author" : [ "Hao Peng", "Roy Schwartz", "Dianqi Li", "Noah A. Smith." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 6566–6577, Online. Association for Computa-",
+      "citeRegEx" : "Peng et al\\.,? 2020",
+      "shortCiteRegEx" : "Peng et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Hierarchical variational models",
+      "author" : [ "Rajesh Ranganath", "Dustin Tran", "David Blei." ],
+      "venue" : "International Conference on Machine Learning, pages 324–333.",
+      "citeRegEx" : "Ranganath et al\\.,? 2016",
+      "shortCiteRegEx" : "Ranganath et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Stochastic backpropagation and approximate inference in deep generative models",
+      "author" : [ "Danilo Jimenez Rezende", "Shakir Mohamed", "Daan Wierstra." ],
+      "venue" : "Proceedings of the 31st International Conference on Machine Learning, volume 32, pages 1278–1286.",
+      "citeRegEx" : "Rezende et al\\.,? 2014",
+      "shortCiteRegEx" : "Rezende et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Neural machine translation of rare words with subword units",
+      "author" : [ "Rico Sennrich", "Barry Haddow", "Alexandra Birch." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1715–",
+      "citeRegEx" : "Sennrich et al\\.,? 2016",
+      "shortCiteRegEx" : "Sennrich et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Ladder variational autoencoders",
+      "author" : [ "Casper Kaae Sønderby", "Tapani Raiko", "Lars Maaløe", "Søren Kaae Sønderby", "Ole Winther." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 29, pages 3738–3746. Curran Associates, Inc.",
+      "citeRegEx" : "Sønderby et al\\.,? 2016",
+      "shortCiteRegEx" : "Sønderby et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "On the importance of initialization and momentum in deep learning",
+      "author" : [ "Ilya Sutskever", "James Martens", "George Dahl", "Geoffrey Hinton." ],
+      "venue" : "Proceedings of the 30th International Conference on Machine Learning, pages 1139–1147.",
+      "citeRegEx" : "Sutskever et al\\.,? 2013",
+      "shortCiteRegEx" : "Sutskever et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Why self-attention? a targeted evaluation of neural machine translation architectures",
+      "author" : [ "Gongbo Tang", "Mathias Müller", "Annette Rios", "Rico Sennrich." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Tang et al\\.,? 2018",
+      "shortCiteRegEx" : "Tang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Doubly stochastic variational bayes for nonconjugate inference",
+      "author" : [ "Michalis Titsias", "Miguel Lázaro-Gredilla." ],
+      "venue" : "Proceedings of the 31st International Conference on Machine Learning, volume 32, pages 1971–1979.",
+      "citeRegEx" : "Titsias and Lázaro.Gredilla.,? 2014",
+      "shortCiteRegEx" : "Titsias and Lázaro.Gredilla.",
+      "year" : 2014
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in neural information processing systems, pages 5998–6008.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Grandmaster level in starcraft ii using multi-agent reinforcement",
+      "author" : [ "Oriol Vinyals", "Igor Babuschkin", "Wojciech M Czarnecki", "Michaël Mathieu", "Andrew Dudzik", "Junyoung Chung", "David H Choi", "Richard Powell", "Timo Ewalds", "Petko Georgiev" ],
+      "venue" : null,
+      "citeRegEx" : "Vinyals et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Vinyals et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Analyzing multi-head self-attention: Specialized heads do the heavy lifting, the rest can be pruned",
+      "author" : [ "Elena Voita", "David Talbot", "Fedor Moiseev", "Rico Sennrich", "Ivan Titov." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Com-",
+      "citeRegEx" : "Voita et al\\.,? 2019",
+      "shortCiteRegEx" : "Voita et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Explaining ’explaining away",
+      "author" : [ "Michael P. Wellman", "M. Henrion." ],
+      "venue" : "IEEE Trans. Pattern Anal. Mach. Intell., 15:287–292.",
+      "citeRegEx" : "Wellman and Henrion.,? 1993",
+      "shortCiteRegEx" : "Wellman and Henrion.",
+      "year" : 1993
+    }, {
+      "title" : "Perturbed masking: Parameter-free probing for analyzing and interpreting BERT",
+      "author" : [ "Zhiyong Wu", "Yun Chen", "Ben Kao", "Qun Liu." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 4166–4176, Online. As-",
+      "citeRegEx" : "Wu et al\\.,? 2020",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Show, attend and tell: Neural image caption generation with visual attention",
+      "author" : [ "Kelvin Xu", "Jimmy Ba", "Ryan Kiros", "Kyunghyun Cho", "Aaron Courville", "Ruslan Salakhudinov", "Rich Zemel", "Yoshua Bengio." ],
+      "venue" : "International conference on machine learn-",
+      "citeRegEx" : "Xu et al\\.,? 2015",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Convolutional self-attention networks",
+      "author" : [ "Baosong Yang", "Longyue Wang", "Derek F. Wong", "Lidia S. Chao", "Zhaopeng Tu." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Hu-",
+      "citeRegEx" : "Yang et al\\.,? 2019a",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Xlnet: Generalized autoregressive pretraining for language understanding",
+      "author" : [ "Zhilin Yang", "Zihang Dai", "Yiming Yang", "Jaime Carbonell", "Russ R Salakhutdinov", "Quoc V Le." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 32,",
+      "citeRegEx" : "Yang et al\\.,? 2019b",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Hard-coded Gaussian attention for neural machine translation",
+      "author" : [ "Weiqiu You", "Simeng Sun", "Mohit Iyyer." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 7689–7700, Online. Association for Computa-",
+      "citeRegEx" : "You et al\\.,? 2020",
+      "shortCiteRegEx" : "You et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "the number of attention heads is set to 8 with the dimension of hidden layer representations being 512; For feed forward networks, the hidden size is set to 2048. The rate of dropout is set to 0.1",
+      "author" : [ "Vaswani" ],
+      "venue" : "For training,",
+      "citeRegEx" : "Vaswani,? \\Q2048\\E",
+      "shortCiteRegEx" : "Vaswani",
+      "year" : 2048
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 38,
+      "context" : "Transformers (Vaswani et al., 2017) have advanced the field of natural language processing (NLP) on a variety of important tasks, including language modeling (Dai et al.",
+      "startOffset" : 13,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2017) have advanced the field of natural language processing (NLP) on a variety of important tasks, including language modeling (Dai et al., 2019; Baevski and Auli, 2019), language understanding (Devlin et al.",
+      "startOffset" : 130,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2017) have advanced the field of natural language processing (NLP) on a variety of important tasks, including language modeling (Dai et al., 2019; Baevski and Auli, 2019), language understanding (Devlin et al.",
+      "startOffset" : 130,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2019; Baevski and Auli, 2019), language understanding (Devlin et al., 2019; Yang et al., 2019b), and machine translation (Vaswani et al.",
+      "startOffset" : 56,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 45,
+      "context" : ", 2019; Baevski and Auli, 2019), language understanding (Devlin et al., 2019; Yang et al., 2019b), and machine translation (Vaswani et al.",
+      "startOffset" : 56,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 38,
+      "context" : ", 2019b), and machine translation (Vaswani et al., 2017; Dehghani et al., 2019; Liu et al., 2020).",
+      "startOffset" : 34,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 11,
+      "context" : ", 2019b), and machine translation (Vaswani et al., 2017; Dehghani et al., 2019; Liu et al., 2020).",
+      "startOffset" : 34,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2019b), and machine translation (Vaswani et al., 2017; Dehghani et al., 2019; Liu et al., 2020).",
+      "startOffset" : 34,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 14,
+      "context" : "It has also found its place in computer vision (Dosovitskiy et al., 2020), and in intelligent agents (Vinyals et al.",
+      "startOffset" : 47,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 39,
+      "context" : ", 2020), and in intelligent agents (Vinyals et al., 2019) where sequence modeling plays a key role as well.",
+      "startOffset" : 35,
+      "endOffset" : 57
+    }, {
+      "referenceID" : 40,
+      "context" : ", attending to the same regions of the sequence), which underutilizes the capacity of the model (Voita et al., 2019; Michel et al., 2019a).",
+      "startOffset" : 96,
+      "endOffset" : 138
+    }, {
+      "referenceID" : 29,
+      "context" : "Although each factor is independent of each other a priori, they interact with each other automatically, conditioning on observations, thanks to the explaining-away effects (Pearl, 1989; Wellman and Henrion, 1993).",
+      "startOffset" : 173,
+      "endOffset" : 213
+    }, {
+      "referenceID" : 41,
+      "context" : "Although each factor is independent of each other a priori, they interact with each other automatically, conditioning on observations, thanks to the explaining-away effects (Pearl, 1989; Wellman and Henrion, 1993).",
+      "startOffset" : 173,
+      "endOffset" : 213
+    }, {
+      "referenceID" : 5,
+      "context" : "We will discuss how we tackle these using variational methods (Blei et al., 2017).",
+      "startOffset" : 62,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 31,
+      "context" : "As our main model, CODA adopts a hierarchical variational distribution (Ranganath et al., 2016) to allow both rich head interactions and effective computations (§4).",
+      "startOffset" : 71,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 38,
+      "context" : "Multi-head attention (MHA) mechanism plays an important role in modern transformer architecture (Vaswani et al., 2017).",
+      "startOffset" : 96,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 29,
+      "context" : "A crucial property of this graphical model is the “explainingaway” effect (Pearl, 1989; Wellman and Henrion, 1993) of attention heads A when observing the output Y.",
+      "startOffset" : 74,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 41,
+      "context" : "A crucial property of this graphical model is the “explainingaway” effect (Pearl, 1989; Wellman and Henrion, 1993) of attention heads A when observing the output Y.",
+      "startOffset" : 74,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 5,
+      "context" : "The standard technique is to use variational inference, which optimizes the log marginal by maximizing its evidence lower bound (called ELBO) (Blei et al., 2017):",
+      "startOffset" : 142,
+      "endOffset" : 161
+    }, {
+      "referenceID" : 20,
+      "context" : "A straight-forward choice of q(A|X) is to use the mean-field approximation (Kingma and Welling, 2013):",
+      "startOffset" : 75,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 34,
+      "context" : "Cascaded Head-colliding attention Our solution to this problem is to employ hierarchical structures for head-colliding attention, where interactions among heads could be effectively incorporated into the model (Sønderby et al., 2016; Ranganath et al., 2016).",
+      "startOffset" : 210,
+      "endOffset" : 257
+    }, {
+      "referenceID" : 31,
+      "context" : "Cascaded Head-colliding attention Our solution to this problem is to employ hierarchical structures for head-colliding attention, where interactions among heads could be effectively incorporated into the model (Sønderby et al., 2016; Ranganath et al., 2016).",
+      "startOffset" : 210,
+      "endOffset" : 257
+    }, {
+      "referenceID" : 31,
+      "context" : "This corresponds to an infinite mixture of the meanfield distributions q(Al|X,Al−1) and is able to capture rich head interactions (Ranganath et al., 2016).",
+      "startOffset" : 130,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 4,
+      "context" : "For efficient training and inference, we adopt Gaussian-logistic distributions (Blei and Lafferty, 2006; Cohen et al., 2008), which not only satisfy the constraints above but also benefit from the effective reparameterization trick (Kingma and Welling, 2013; Rezende et al.",
+      "startOffset" : 79,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 9,
+      "context" : "For efficient training and inference, we adopt Gaussian-logistic distributions (Blei and Lafferty, 2006; Cohen et al., 2008), which not only satisfy the constraints above but also benefit from the effective reparameterization trick (Kingma and Welling, 2013; Rezende et al.",
+      "startOffset" : 79,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2008), which not only satisfy the constraints above but also benefit from the effective reparameterization trick (Kingma and Welling, 2013; Rezende et al., 2014; Titsias and Lázaro-Gredilla, 2014).",
+      "startOffset" : 115,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 32,
+      "context" : ", 2008), which not only satisfy the constraints above but also benefit from the effective reparameterization trick (Kingma and Welling, 2013; Rezende et al., 2014; Titsias and Lázaro-Gredilla, 2014).",
+      "startOffset" : 115,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 37,
+      "context" : ", 2008), which not only satisfy the constraints above but also benefit from the effective reparameterization trick (Kingma and Welling, 2013; Rezende et al., 2014; Titsias and Lázaro-Gredilla, 2014).",
+      "startOffset" : 115,
+      "endOffset" : 198
+    }, {
+      "referenceID" : 23,
+      "context" : "Datasets First, we conducted experiments for token-level language modeling on a large-scale benchmark dataset Wikitext-103 (Merity et al., 2016), which consists of articles from Wikipedia with the token number around 103M/218K/246K for the training/validation/testing splits respectively.",
+      "startOffset" : 123,
+      "endOffset" : 144
+    }, {
+      "referenceID" : 6,
+      "context" : "(10)For instance, training a standard variational auto-encoder (VAE) for NLP tasks often suffers from the posterior collapse problem due to the heavy KL regularization (Bowman et al., 2016), where some tricks have to be used to achieve good performance, such as KL annealing, etc.",
+      "startOffset" : 168,
+      "endOffset" : 189
+    }, {
+      "referenceID" : 15,
+      "context" : "Following standard practice (Edunov et al., 2018; Peng et al., 2020), we pre-process the 160K/7K/7K sentence pairs and build training/validation/testing sets accordingly.",
+      "startOffset" : 28,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 30,
+      "context" : "Following standard practice (Edunov et al., 2018; Peng et al., 2020), we pre-process the 160K/7K/7K sentence pairs and build training/validation/testing sets accordingly.",
+      "startOffset" : 28,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 38,
+      "context" : "In particular, our model is based on the vanilla transformer architecture (Vaswani et al., 2017).",
+      "startOffset" : 74,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 1,
+      "context" : "In language modeling, we use adaptive input embeddings (Baevski and Auli, 2019) and set context size to 512 and 480 for training and testing respectively, due to constraints of computational resources.",
+      "startOffset" : 55,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 30,
+      "context" : "In machine translation, we set beam size to 5 and adopt the hyperparameters from (Peng et al., 2020) for IWSLT14 DE-EN.",
+      "startOffset" : 81,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 38,
+      "context" : "We observe that the translation quality of baseline transformer (which uses vanilla MHA as its main building blocks) decreases almost linearly when increasing number of attention heads (Figure 3), which agrees with previous studies (Vaswani et al., 2017; Voita et al., 2019; Michel et al., 2019b).",
+      "startOffset" : 232,
+      "endOffset" : 296
+    }, {
+      "referenceID" : 40,
+      "context" : "We observe that the translation quality of baseline transformer (which uses vanilla MHA as its main building blocks) decreases almost linearly when increasing number of attention heads (Figure 3), which agrees with previous studies (Vaswani et al., 2017; Voita et al., 2019; Michel et al., 2019b).",
+      "startOffset" : 232,
+      "endOffset" : 296
+    }, {
+      "referenceID" : 25,
+      "context" : "We observe that the translation quality of baseline transformer (which uses vanilla MHA as its main building blocks) decreases almost linearly when increasing number of attention heads (Figure 3), which agrees with previous studies (Vaswani et al., 2017; Voita et al., 2019; Michel et al., 2019b).",
+      "startOffset" : 232,
+      "endOffset" : 296
+    }, {
+      "referenceID" : 18,
+      "context" : "We observe its close connection with the recently proposed REALFORMER (He et al., 2020), a TRANSFORMER model that adds a residual connection between attention logits at adjacent layers.",
+      "startOffset" : 70,
+      "endOffset" : 87
+    }, {
+      "referenceID" : 17,
+      "context" : "In this case, the performance improvement might be mainly due to residual connections, which are often considered to be effective in facilitating training (He et al., 2016).",
+      "startOffset" : 155,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 2,
+      "context" : "Attention mechanisms were first applied to recurrent networks in (Bahdanau et al., 2014).",
+      "startOffset" : 65,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 38,
+      "context" : "It was then extended to multi-head attention (MHA) and became the key component in transformer architectures (Vaswani et al., 2017).",
+      "startOffset" : 109,
+      "endOffset" : 131
+    }, {
+      "referenceID" : 30,
+      "context" : "Besides, MAE (Peng et al., 2020) converted a vanilla MHA to a mixture-of-experts model, where each expert component activates only a subset of attention heads.",
+      "startOffset" : 13,
+      "endOffset" : 32
+    }, {
+      "referenceID" : 16,
+      "context" : "Bayesian attention modules (Fan et al., 2020) introduced continuous latent distributions for attention that are amenable to reparameterization tricks.",
+      "startOffset" : 27,
+      "endOffset" : 45
+    } ],
+    "year" : 2021,
+    "abstractText" : "Transformers have advanced the field of natural language processing (NLP) in many ways. At the heart of the Transformer architecture is the multi-head attention (MHA) mechanism which models pairwise interactions between the elements of the sequence. Despite its massive success, the current framework ignores interactions among different heads, leading to the problem that many of the heads are redundant in practice, which underutilizes the capacity of the model. To improve parameter efficiency, we re-formulate the MHA as a latent variable model from a probabilistic perspective. We present cascaded head-colliding attention (CODA) which explicitly models the interactions between attention heads through a hierarchical variational distribution. We conduct extensive experiments and demonstrate that CODA outperforms the transformer baseline, by 0.6 perplexity on Wikitext-103 in language modeling, and by 0.6 BLEU on WMT14 EN-DE in machine translation, due to its improvements on the parameter efficiency.1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

@@ -1,0 +1,721 @@
+{
+  "name" : "2021.acl-long.74.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Span-based Semantic Parsing for Compositional Generalization",
+    "authors" : [ "Jonathan Herzig", "Jonathan Berant" ],
+    "emails" : [ "jonathan.herzig@cs.tau.ac.il", "joberant@cs.tau.ac.il" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 908–921\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n908"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "The most dominant approach in recent years for semantic parsing, the task of mapping a natural language utterance to an executable program, has been based on sequence-to-sequence (seq2seq) models (Jia and Liang, 2016; Dong and Lapata, 2016; Wang et al., 2020, inter alia). In these models, the output program is decoded step-by-step (autoregressively), using an attention mechanism that softly ties output tokens to the utterance.\nDespite the success of seq2seq models, recently, Finegan-Dollak et al. (2018) and Keysers et al. (2020) and Herzig and Berant (2019) demonstrated that such models fail at compositional generalization, that is, they do not generalize to program structures that were not seen at training time. For\nexample, a model that observes at training time the questions “What states border China?” and “What is the largest state?” fails to generalize to questions such as “What states border the largest state?”. This is manifested in large performance drops on data splits designed to measure compositional generalization (compositional splits), and is in contrast to the generalization abilities of humans (Fodor and Pylyshyn, 1988).\nIn this work, we posit that the poor generalization of seq2seq models is due to fact that the input utterance and output program are only tied softly through attention. We revisit a more traditional approach for semantic parsing (Zelle and Mooney, 1996; Zettlemoyer and Collins, 2005; Liang et al., 2011), where partial programs are predicted over short spans in the utterance, and are composed to build the program for the entire utterance. Such explicit inductive bias for compositionality should encourage compositional generalization.\nSpecifically, we propose to introduce such inductive bias via a span-based parser (Stern et al., 2017; Pasupat et al., 2019), equipped with the advantages of modern neural architectures. Our model, SPANBASEDSP, predicts for every span in the input a category, which is either a constant from the underlying knowledge-base, a composition category, or a null category. Given the category predictions for all spans, we can construct a tree over the input utterance and deterministically compute the output program. For example, in Figure 1, the category for the tree node covering the span “New York borders ?” is the composition category join, indicating the composition of the predicate next_to_1with the entity stateid(’new york’).\nCategories are predicted for each span independently, resulting in a very simple training procedure. CKY is used at inference time to find the best span tree, which is a tree with a category predicted at every node. The output program is computed from\nthis tree in a bottom-up manner. We enhance the applicability of span-based semantic parsers (Pasupat et al., 2019) in terms of both supervision and expressivity, by overcoming two technical challenges. First, we do not use gold trees as supervision, only programs with no explicit decomposition over the input utterance. To train with latent trees, we use a hard-EM approach, where we search for the best tree under the current model corresponding to the gold program, and update the model based on this tree. Second, some gold trees are non-projective, and cannot be parsed with a binary grammar. Thus, we extend the grammar of CKY to capture a class of non-projective structures that are common in semantic parsing. This leads to a model that is comparable and competitive with the prevailing seq2seq approach.\nWe evaluate our approach on three datasets, and find that SPANBASEDSP performs similarly to strong seq2seq baselines on standard i.i.d (random) splits, but dramatically improves performance on compositional splits, by 32.9, 34.6 and 13.5 absolute accuracy points on GEOQUERY (Zelle and Mooney, 1996), CLOSURE (Bahdanau et al., 2019), and SCAN (Lake and Baroni, 2018) respectively. Our code and data are available at https:// github.com/jonathanherzig/span-based-sp."
+    }, {
+      "heading" : "2 Problem Setup",
+      "text" : "We define span-based semantic parsing as follows. Given a training set {(xi, zi)}Mi=1, where xi is an utterance and zi is the corresponding program, our goal is to learn a model that maps a new utterance x to a span tree T (defined below), such that program(T)= z. The deterministic function program(·) maps span trees to programs.\nSpan trees A span tree T is a tree (see Figure 1) where, similar to constituency trees, each node covers a span (i, j) with tokens xi:j = (xi, xi+1, . . . , xj). A span tree can be viewed as a mapping from every span (i, j) to a single category c ∈ C, where categories describe how the meaning of a node is derived from the meaning of its children. A category c is one of the following: • Σ: a set of domain-specific categories represent-\ning domain constants, including entities and predicates. E.g., in Figure 1, capital, state, loc_2 and next_to_1 are binary predicates, and stateid(’new york’) is an entity. • join: a category for a node whose meaning is derived from the meaning of its two children. At most one of the children’s categories can be the φ category. • φ: a category for (i) a node that does not affect the meaning of the utterance. For example, in Figure 1, the nodes that cover “What is the” and “?” are tagged by φ; (ii) spans that do not correspond to constituents (tree nodes). Overall, the category set is C = Σ ∪ {φ,join}. We also define the terminal nodes set Σ+ = Σ ∪ {φ}, corresponding to categories that are directly over the utterance.\nComputing programs for span trees Given a mapping from spans to categories specifying a span tree T , we use the function program(·) to find the program for T . Concretely, program(T ) iterates over the nodes in T bottom-up, and generates a program zi:j for each node covering the span (i, j).\nThe program zi:j is computed deterministically. For a node with category c ∈ Σ, zi:j = c. For a join node over the span (i, j), we determine zi:j by composing the programs of its\nchildren, zi:s and zs,j where s is the split point. As in Combinatory Categorical Grammar (Steedman, 2000), composition is simply function application, where a domain-specific type system is used to determine which child is the function and which is the argument (along with the exact argument position for predicates with multiple arguments). If the category of one of the children is φ, the program for zi:j is copied from the other child. E.g., in Figure 1, the span (8, 9), where z8:9 = stateid(’new york’) combines with the span (10, 11), where z10:11 = next_to_1. As z10:11 is a binary predicate that takes an argument of type state, and z8:9 is an entity of type state, the output program is z8:11 = next_to_1(stateid(’new york’)). If no combination is possible according to the type system, the execution of program(T ) fails (§3.2).\nUnlike seq2seq models, computing programs with span trees is explicitly compositional. Our main hypothesis is that this strong inductive bias should improve compositional generalization."
+    }, {
+      "heading" : "3 A Span-based Semantic Parser",
+      "text" : "Span-based parsing had success in both syntactic (Stern et al., 2017; Kitaev and Klein, 2018) and semantic parsing (Pasupat et al., 2019). The intuition is that modern sequence encoders are powerful, and thus we can predict a category for every span independently, reducing the role of global structure. This leads to simple and fast training.\nSpecifically, our parser is based on a model pθ(T [i, j] = c), parameterized by θ, that provides for every span (i, j) a distribution over categories c ∈ C. Due to the above independence assumption, the log-likelihood of a tree T is defined as:\nlog p(T ) = ∑ i<j log pθ(T [i, j]), (1)\nwhere, similar to Pasupat et al. (2019), the sum is over all spans i < j and not only over constituents. We next describe the model pθ(T [i, j]) and its training, assuming we have access to gold span trees at training time (§3.1). We will later (§3.3) remove this assumption, and describe a CKY-based inference procedure (§3.2) that finds for every training example (x, z) the (approximately) most probable span tree T ∗train, such that program(T ∗ train) = z. We use T ∗train as a replacement for the gold tree. Last, we present an extension of our model that covers a class of span trees that are non-projective (§3.4)."
+    }, {
+      "heading" : "3.1 Model",
+      "text" : "We describe the architecture and training procedure of our model (SPANBASEDSP), assuming we are given for every utterance x a gold tree T , for which program(T) = z.\nSimilar to Pasupat et al. (2019), we minimize the negative log-likelihood − log p(T ) (Eq. 1) for the gold tree T . The loss decomposes over spans into cross-entropy terms for every span (i, j). This effectively results in multi-class problem, where for every span xi:j we predict a category c ∈ C. Training in this setup is trivial and does not require any structured inference.\nConcretely, the architecture of SPANBASEDSP is based on a BERT-base encoder (Devlin et al., 2019) that yields a contextual representation hi ∈ Rhdim for each token xi in the input utterance. We represent each span (i, j) by concatenating its start and end representations [hi;hj ], and apply a 1- hidden layer network to produce a real-valued score s(xi:j , c) for a span (i, j) and category c:\ns(xi:j , c) = [W2relu(W1[hi;hj ])]ind(c), (2)\nwhere W1 ∈ R250×2hdim , W2 ∈ R|C|×250, and ind(c) is the index of the category c. We take a softmax to produce the probabilities:\npθ(T [i, j] = c) = exp[s(xi:j , c)]∑ c′ exp[s(xi:j , c′)] , (3)\nand train the model with a cross-entropy loss averaged over all spans, as mentioned above."
+    }, {
+      "heading" : "3.2 CKY-based Inference",
+      "text" : "While we assume span-independence at training time, at test time we must output a valid span tree. We now describe an approximate K-best CKY algorithm that searches for theK most probable trees under p(T ), and returns the highest-scoring one that is semantically valid, i.e., that can be mapped to a program.1 As we elaborate below, some trees cannot be mapped to a program, due to violations of the type system.\nWe start by re-writing our objective function, as proposed in Pasupat et al. (2019). Given our\n1The requirement that trees are semantically valid is what prevents exact search.\ndefinition for pθ(T [i, j] = c), the log-likelihood is: log p(T ) = ∑ i<j log pθ(T [i, j]) =\n∑ i<j\n[ s(xi:j , T [i, j])− log\n∑ c′ exp[s(xi:j , c′)]\n] .\nWe shift the scoring function s(·) for each span, such that the score for the φ category is zero:\ns’(xi:j , ·) := s(xi:j , ·)− s(xi:j , φ).\nBecause softmax is shift-invariant, we can replace s(·) for s′(·) and preserve correctness. This is motivated by the fact that φ nodes, such as the one covering “What is the” in Figure 1, do not affect the semantics of utterance. By shifting scores such that for all spans s’(xi:j , φ) = 0, their score does not affect the overall tree score. Spans that do not correspond to tree nodes are labeled by φ and also do not affect the tree score.\nFurthermore, as ∑ i<j log ∑ c′ exp[s’(xi:j , c ′)] does not depend on T at all, maximizing log p(T ) is equivalent to maximizing the tree score:\nS(T ) := ∑ i<j s’(xi:j , T [i, j]).\nThis scoring function can be maximized using CKY (Cocke, 1969; Kasami, 1965; Younger, 1967). We now propose a grammar, which imposes further restrictions on the space of possible output trees at inference time.\nWe use a small grammar G = (N,Σ+, R, S), where N = {S,join} is the set of non-terminals, Σ+ is the set of terminals (defined in §2), R is a set of four rules detailed in Figure 2, and S is a special start symbol. The four grammar rules impose the following constraints on the set of possible output trees: (a) a join or S node can have at most one φ child, as explained in §2; (b) nodes with no semantics combine with semantic elements on their left; (c) except at the root where they combine with elements on their right. Imposing such consistent tree structure is useful for training SPANBASEDSP when predicted trees are used for training (§3.3).\nAlgorithm 1: CKY inference algorithm Input: ∀i, j, c : s(xi:j , c), G = (N,Σ+, R, S), x Output: π - scores for each span and non-terminal\n1 for 1 ≤ i ≤ j ≤ |x| do 2 π(i, j,join)← max\nc∈Σ s’(xij , c)\n3 π(i, j, φ)← s’(xij , φ) // equals zero 4 for 1 ≤ i ≤ j ≤ |x| do 5 for X ∈ N do 6 temp← max\n(X→Y Z)∈R s∈i...(j−1)\n[s’(xij ,join) +\nπ(i, s, Y ) + π(s+ 1, j, Z)] 7 π(i, j,X)← max(temp, π(i, j,join)) 8 return π\nThe grammar G can generate trees that are not semantically valid. For example, we could generate the program capital(placeid(’mount mckinley’)), which is semantically vacuous. We use a domain-specific type system and assign the score S(T ) = −∞ to every tree that yields a semantically invalid program. This global factor prevents exact inference, and thus we perform Kbest parsing, keeping the top-K (K = 5) best trees for every span (i, j) and non-terminal.\nAlg. 1 summarizes CKY inference, that outputs π(i, j,X), the maximal score for a tree with nonterminal root X over the span (i, j). In Lines 1-3 we initialize the parse chart, by going over all spans and setting π(i, j,join) to the top-K highest scoring domain constants (Σ), and fixing the score for φ to be zero. We then perform the typical CKY recursion to find the top-K trees that can be constructed through composition (Line 6), merge them with the domain constants found during initialization (Line 7), and keep the overall top-K trees.\nOnce inference is done, we retrieve the top-K trees from π(1, |x|, S), iterate over them in descending score order, and return the first tree T ∗ that is semantically valid."
+    }, {
+      "heading" : "3.3 Training without Gold Trees",
+      "text" : "We now remove the assumption of access to gold trees at training time, in line with standard supervised semantic parsing, where only the gold program z is given, without its decomposition over x. This can be viewed as a weakly-supervised setting, where the correct span tree is a discrete latent variable. In this setup, our goal is to maximize\nlog p(z | x) = log ∑\nT :program(T )=z\np(T )\n≈ log argmax T :program(T )=z p(T ).\nBecause marginalizing over trees is intractable, we take a hard-EM approach (Liang et al., 2017; Min et al., 2019), and replace the sum over trees with an argmax. More concretely, to approximately solve the argmax and find the highest scoring tree, T ∗train, we employ a constrained version of Alg. 1, that prunes out trees that cannot generate z.\nWe first remove all predictions of constants that do not appear in z by setting their score to −∞:\n∀c ∈ {Σ \\ const(z)}, i, j : s′(xi:j , c) := −∞,\nwhere const(z) is the set of domain constants appearing in z. Second, we allow a composition of two nodes covering spans (i, s) and (s, j) only if their sub-programs zi:s and zs:j can compose according to z. For instance, in Figure 1, a span with the sub-program capital can only compose with a span with the sub-program loc_2(·). After running this constrained CKY procedure we return the highest scoring tree that yields the correct program, T ∗train, if one is found. We then treat the span structure of T ∗train as labels for training the parameters of SPANBASEDSP.\nPast work on weakly-supervised semantic parsing often used maximum marginal likelihood, especially when training from denotations only (Guu et al., 2017). In this work, we found hard-EM to be simple and sufficient, since we are given the program z that provides a rich signal for guiding search in the space of latent trees.\nExact match features The challenge of weaklysupervised parsing is that SPANBASEDSP must learn to map language phrases to constants, and how the span tree is structured. To alleviate the language-to-constant problem we add an exact match feature, based on a small lexicon, indicating whether a phrase in xmatches the language description of a category c ∈ Σ. These features are considered in SPANBASEDSP when some phrase matches a category from Σ, updating the score s(xi:j , c) to be: [W2relu(W1[hi;hj ])]ind(c) + λδ(xi:j , c), where δ(xi:j , c) is an indicator that returns 1 if c ∈ lexicon[xi:j ], and 0 otherwise, and λ is a hyper-parameter that sets the feature’s importance.\nWe use two types of lexicon[·] functions. In the first, the lexicon is created automatically to map the names of entities (not predicates), as they appear in Σ, to their corresponding constant (e.g., lexicon[“new york”] = stateid(’new york’)). This endows SPANBASEDSP with a copying mechanism, similar to\nseq2seq models, for predicting entities unseen during training. In the second lexicon we manually add no more than two examples of language phrases for each constant in Σ. E.g., for the predicate next_to_1, we update the lexicon to include lexicon[“border”] = lexicon[“borders”] = next_to_1. This requires minimal manual work (if no language phrases are available), but is done only once, and is common in semantic parsing (Zettlemoyer and Collins, 2005; Wang et al., 2015; Liang et al., 2017)."
+    }, {
+      "heading" : "3.4 Non-Projective Trees",
+      "text" : "Our span-based parser assumes composition can only be done for adjacent spans that form together a contiguous span. However, this assumption does not always hold (Liang et al., 2011). For example, in Figure 3, while the predicate pop_1 should combine with the predicate state, the spans they align to (“people” and “state” respectively) are not contiguous, as they are separated by “most”, which contributes the semantics of a superlative.\nIn constituency parsing, such non-projective structures are treated by adding rules to the grammar G (Maier et al., 2012; Corro, 2020; Stanojević and Steedman, 2020). We identify one specific class of non-projective structures that is frequent in semantic parsing (Figure 3), and expand the grammar G and the CKY Algorithm to support this structure. Specifically, we add the ternary grammar rule join := join join join. During CKY, when calculating the top-K trees for spans (i, j) (line 6 in Alg. 1), we also consider the following top-K scores for the non-terminal join:\nmax s1∈i...(j−2)\ns2∈(s1+1)...(j−1)\n[s’(xij ,join) + π(i, s1,join)\n+ π(s1 + 1, s2,join) + π(s2 + 1, j,join)].\nThese additional trees are created by going over all possible ways of dividing a span (i, j) into three\nparts. The score of the sub-tree is then the sum of the score of the root added to the scores of the three children. To compute the program for such ternary nodes, we again use our type system, where we first compose the programs of the two outer spans (i, s1) and (s2 + 1, j) and then compose the resulting program with the program corresponding to the span (s1 + 1, s2). Supporting ternary nodes in the tree increases the time complexity of CKY from O(n3) to O(n4) for our implementation.2"
+    }, {
+      "heading" : "4 Experiments and Results",
+      "text" : "We now present our experimental evaluation, which demonstrates the advantage of span-based parsing for compositional generalization. We compare to baseline models over two types of data splits: (a) IID split, where the training and test sets are sampled from the same distribution, and (b) compositional split, where the test set includes structures that are unseen at training time. Details on the experimental setup are given in Appendix A."
+    }, {
+      "heading" : "4.1 Datasets",
+      "text" : "We evaluate on the following datasets (Table 1).\nGEOQUERY Contains 880 questions about US geography (Zelle and Mooney, 1996), using the FunQL formalism (Kate et al., 2005). For the IID split, we use the standard train/test split, randomly sampling 10% of the training set for development. We additionally use two compositional splits based on program templates (TEMPLATE) and on program lengths (LENGTH).\nFor the compositional split, TEMPLATE, we use the procedure from Finegan-Dollak et al. (2018) and split the 880 examples by templates. A template is created by anonymizing entities in the program to their type (both stateid(’new\n2Corro (2020) show an O(n3) algorithm for this type of non-projective structure.\nyork’) and stateid(’utah’) are anonymized to STATE). We then split to train/development/test sets, such that all examples that share a template are assigned to the same set. We also verify that the sizes of theses sets are as close as possible to the IID split.\nFor the compositional split, LENGTH, we sort the dataset by program token length and take the longest 280 examples to be the test set. We then randomly split the shortest 600 examples between the train and development set, where we take 10% of the 600 examples for the latter.\nCLEVR and CLOSURE CLEVR (Johnson et al., 2017) contains synthetic questions, created using 80 templates, over synthetic images with multiple objects of different shapes, colors, materials and sizes (example in Fig. 4 in the Appendix). The recent CLOSURE dataset (Bahdanau et al., 2019), includes seven new question templates that are created by combining referring expressions of various types from CLEVR in new ways.\nWe use the semantic parsing version of these datasets, where each image is described by a scene (knowledge-base) that holds the attributes and positional relations of all objects. We use programs in the DSL version from Mao et al. (2019).\nFor our experiments, we take 5K examples from the original CLEVR training set and treat them as our development set. We use the other 695K examples as training data for our baselines. Importantly, we only use 10K training examples for SPANBASEDSP to reduce training time. We then create an IID split where we test on the CLEVR original development set (test scenes are not publicly available). We additionally define the CLOSURE split, that tests compositional generalization, where we test on CLOSURE.\nSCAN-SP SCAN (Lake and Baroni, 2018) contains natural language navigation commands that are mapped to action sequences (x and y in Fig. 5 in the Appendix). As SCAN lacks programs, we automatically translate the input to programs (z in Fig. 5) to crate the semantic parsing version of SCAN, denoted SCAN-SP (more details are given in Appendix B). We experiment with the random SIMPLE split from Lake and Baroni (2018) as our IID split. we further use the primitive right (RIGHT) and primitive around right (AROUNDRIGHT) compositional splits from Loula et al. (2018). For each split we randomly assign 20% of the training set\nfor development."
+    }, {
+      "heading" : "4.2 Baselines",
+      "text" : "SEQ2SEQ Similar to Finegan-Dollak et al. (2018), our baseline parser is a standard seq2seq model (Jia and Liang, 2016) that encodes the utterance x with a BiLSTM encoder over pre-trained GloVe (Pennington et al., 2014) or ELMO (Peters et al., 2018) embeddings, and decodes the program with an attention-based LSTM decoder (Bahdanau et al., 2015) assisted by a copying mechanism for handling entities unseen during training time (Gu et al., 2016).\nBERT2SEQ Same as SEQ2SEQ, but we replace the BiLSTM encoder with BERT-base, which is identical to the encoder of SPANBASEDSP.\nGRAMMAR Grammar-based decoding has been shown to improve performance on IID splits (Krishnamurthy et al., 2017; Yin and Neubig, 2017). Because decoding is constrained by the grammar, the model outputs only valid programs, which could potentially improve performance on compositional splits. We use the grammar from (Wong and Mooney, 2007) for GEOQUERY, and write grammars for SCAN-SP and CLEVR + CLOSURE. The model architecture is identical to SEQ2SEQ.\nBART We additionally experiment with BART-base (Lewis et al., 2020), a seq2seq model pre-trained as a denoising autoencoder.\nEND2END Semantic parsers generate a program that is executed to retrieve an answer. However, other end-to-end models directly predict the answer from the context without an executor, where\nthe context can be an image (Hudson and Manning, 2018; Perez et al., 2018), a table (Herzig et al., 2020), etc. Because CLEVR and CLOSURE have a closed set of 28 possible answers and a short context (the scene), they are a good fit for end-to-end approaches. To check whether end-to-end models generalize compositionally, we implement the following model. We use BERT-base to encode the concatenation of the input x to a representation of all objects in the scene. Each scene object is represented by adding learned embeddings of all of its attributes: shape, material, size, color, and relative positional rank (from left to right, and from front to back). We fine-tune the model on the training set using cross-entropy loss, where the [CLS] token is used to predict the answer."
+    }, {
+      "heading" : "4.3 Main Results",
+      "text" : "Table 2 shows denotation accuracies for all baselines (top part) and our SPANBASEDSP model (middle part). For SPANBASEDSP, We also ablate the use of the manually constructed lexicon (§3.3) and the non-projective extension to CKY (§3.4), which is relevant only for GEOQUERY, where nonprojective structures are more frequent.\nThe table shows that all baselines generalize well on the IID split, but suffer from a large accuracy drop on the compositional splits (except BERT2SEQ and BART on AROUNDRIGHT). For instance, on the compositional CLOSURE split, all baselines achieve accuracy in the range of 51.3 − 64.2, while performing perfectly on the IID split. Conversely, SPANBASEDSP performs almost identically on both splits. SPANBASEDSP\nattains near-perfect performance on all SCAN-SP and CLEVR splits, despite training on only 10K examples from CLEVR compared to 695K training examples for the baselines (70x less data). On GEOQUERY, SPANBASEDSP performs similarly to other semantic parsers on the IID split (Dong and Lapata, 2016), and loses just 4 points on the compositional TEMPLATE split. On the LENGTH split, SPANBASEDSP yields an accuracy of 63.6, substantially outperforming all baselines by more than 37 accuracy points.\nOur ablations show that the lexicon is crucial for GEOQUERY, which has a small training set. In this setting, learning the mapping from language phrases to predicates is challenging. Ablating nonprojective parsing also hurts performance for GEOQUERY, and leads to a reduction of 2-6 points for all of the splits."
+    }, {
+      "heading" : "4.4 Decomposition Analysis",
+      "text" : "We now analyze whether trees learned by SPANBASEDSP are similar to gold trees. For this analysis we semi-automatically annotate our datasets with gold trees. We do this by manually creating a domain-specific lexicon for each dataset (extending the lexicon from §3.3), mapping domain constants to possible phrases in the input utterances. We then, for each example, traverse the program tree (rather than the span tree) bottom-up and annotate join and φ categories for spans in the utterance, aided by manually-written domain-specific rules. In cases where the annotation is ambiguous, e.g., examples with more than two instances of a specific domain constant, we do not produce a gold tree.\nWe manage to annotate 100%/94.9%/95.9% of the examples in SCAN-SP/ GEOQUERY/ CLEVR + CLOSURE respectively in this manner. We verify the correctness of our annotation by training SPANBASEDSP from our annotated gold trees (bottom part of Table 2). The results shows that training from these “gold” trees leads to similar performance as training only from programs.\nWe then train SPANBASEDSP from gold programs, as explained in §3.3, and calculate F1 test scores, comparing the predicted span trees to the gold ones. F1 is computed between the two sets of labeled spans, taking into account both the spans and their categories, but excluding spans with the φ category that do not contribute to the semantics.\nTable 3 shows that for GEOQUERY the trees SPANBASEDSP predicts are similar to the gold\ntrees (with 94.7, 91.6 and 93.7 F1 scores for the IID, TEMPLATE and LENGTH splits respectively), and in SCAN-SP we predict perfect trees. On CLEVR, we get a lower F1 score of 70.6 for both the IID and CLOSURE splits. However, when manually inspecting predicted trees on the IID split, we notice that predicted trees that are not identical to gold trees, are actually correct. This happens in cases where multiple gold trees are possible. For instance, in Figure 4 (in the Appendix), the span x13:15 =“matte block ?” can be either parsed as [matte [block ?]], as in the figure, or [[matte block] ?]. This phenomena is common in CLEVR and CLOSURE, as span trees tend to be deep, and thus have more ambiguity."
+    }, {
+      "heading" : "4.5 Limitations",
+      "text" : "Our approach assumes a one-to-one mapping between domain constants and their manifestation as phrases in language. This leads to strong results on compositional generalization, but hurts the flexibility that is sometimes necessary in semantic parsing. For example, in some cases predicates do not align explicitly to a phrase in the utterance or appear several times in the program but only once in the utterance (Berant et al., 2013; Pasupat and Liang, 2015). This is evident in text-to-SQL parsing, where an utterance such as “What is the minimum, and maximum age of all singers from France?” is mapped to SELECT min(age) , max(age) FROM singer WHERE country=’France’. Here, the constant age is mentioned only once in language (but twice in the program), and country is not mentioned at all. Thus, our approach is more suitable for formalisms where there is tighter alignment between the natural and formal language.\nIn addition, while we handle a class of nonprojective trees (§3.4), there are other nonprojective structures that SPANBASEDSP can not\nparse. Extending CKY to support all structures from Corro (2020) leads to a time complexity of O(n6), which might be impractical."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "Until the neural era, semantic parsers used a lexicon and composition rules to predict partial programs for spans and compose them until a full program is predicted, and typically scored with a log-linear model given features over the utterance and the program (Zettlemoyer and Collins, 2005; Liang et al., 2011). In this work, we use a similar compositional approach, but take advantage of powerful span representations based on modern neural architectures.\nThe most similar work to ours is by Pasupat et al. (2019), who presented a neural span-based semantic parser. While they focused on training using projective gold trees (having more supervision and less expressivity than seq2seq models) and testing on i.i.d examples, we handle non-projective trees, given only program supervision, rather than trees. More importantly, we show that this approach leads to dramatic gains in compositional generalization compared to autoregressive parsers.\nIn recent years, work on compositional generalization in semantic parsing mainly focused on the poor performance of parsers in compositional splits (Finegan-Dollak et al., 2018), creating new datasets that require compositional generalization (Keysers et al., 2020; Lake and Baroni, 2018; Bahdanau et al., 2019), and proposing specialized architectures mainly for the SCAN task (Lake, 2019; Nye et al., 2020; Gordon et al., 2020; Liu et al., 2020; Gupta and Lewis, 2018). In this work we present a general-purpose architecture for semantic parsing that incorporates an inductive bias towards compositional generalization. Finally, concurrently to us, Shaw et al. (2020) induced a synchronous grammar over program and utterance pairs and used it to introduce a compositional bias, showing certain improvements over compositional splits."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "Seq2seq models have become unprecedentedly popular in semantic parsing but struggle to generalize to unobserved structures. In this work, we show that our span-based parser, SPANBASEDSP, that precisely describes how meaning is composed over the input utterance leads to dramatic improvements in compositional generalization. In future work, we plan to investigate ways to introduce the explicit\ncompositional bias, inherent to SPANBASEDSP, directly into seq2seq models."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We thank Ben Bogin, Nitish Gupta, Matt Gardner and the anonymous reviewers for their constructive feedback, useful comments and suggestions. This work was completed in partial fulfillment for the PhD degree of the first author, which was also supported by a Google PhD fellowship. This research was partially supported by The Yandex Initiative for Machine Learning, and the European Research Council (ERC) under the European Union Horizons 2020 research and innovation programme. (grant ERC DELPHI 802800)."
+    }, {
+      "heading" : "A Experimental Setup",
+      "text" : "We evaluate models with denotation accuracy, that is, the proportion of questions for which the denotations of the predicted and gold programs are identical. For SPANBASEDSP, we selected a learning rate of 1e−5, considering the values [1e−4, 1e−5, 1e−6], and use a batch size of 5. For our baselines, we tune the learning rate, batch size, and dropout. We choose all hyper-parameters by early-stopping with respect to development set denotation accuracy. Training SPANBASEDSP takes between 2 hours for GEOQUERY up to 20 hours for CLEVR on a single GeForce GTX 1080 GPU. Our seq2seq baselines are from AllenNLP (Gardner et al., 2018), and all BERT-base (110M parameters) implementations are from the Transformers library (Wolf et al., 2019).\nWe additionally implement executors that calculate the denotation of a program with respect to the corresponding scene for CLEVR +CLOSURE and retrieve an action sequence as the denotation for SCAN-SP."
+    }, {
+      "heading" : "B Generating SCAN-SP",
+      "text" : "To create a semantic parsing version of SCAN, we introduce the binary predicates and, after, walk, jump, run, look and turn. We additionally introduce the unary predicates twice and thrice. Finally, we introduce the constants left, right, opposite and around. We then construct a synchronous context-free grammar (SCFG) that parses utterances in SCAN into programs in SCAN-SP by utilizing the constants above and simple composition rules. Finally, we use our grammar to parse all utterances in SCAN to generate the programs in SCAN-SP."
+    } ],
+    "references" : [ {
+      "title" : "Neural machine translation by jointly learning to align and translate",
+      "author" : [ "Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio." ],
+      "venue" : "3rd International Conference on Learning Representations, ICLR 2015, San Diego, CA, USA, May 7-9, 2015,",
+      "citeRegEx" : "Bahdanau et al\\.,? 2015",
+      "shortCiteRegEx" : "Bahdanau et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Closure: Assessing systematic generalization of clevr models. arXiv preprint arXiv:1912.05783",
+      "author" : [ "Dzmitry Bahdanau", "Harm de Vries", "Timothy J O’Donnell", "Shikhar Murty", "Philippe Beaudoin", "Yoshua Bengio", "Aaron Courville" ],
+      "venue" : null,
+      "citeRegEx" : "Bahdanau et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Bahdanau et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Semantic parsing on Freebase from question-answer pairs",
+      "author" : [ "Jonathan Berant", "Andrew Chou", "Roy Frostig", "Percy Liang." ],
+      "venue" : "Proceedings of the 2013 Conference on Empirical Methods in Natural Language Processing, pages 1533–1544, Seattle, Wash-",
+      "citeRegEx" : "Berant et al\\.,? 2013",
+      "shortCiteRegEx" : "Berant et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Programming Languages and Their Compilers: Preliminary Notes",
+      "author" : [ "John Cocke." ],
+      "venue" : "New York University, USA.",
+      "citeRegEx" : "Cocke.,? 1969",
+      "shortCiteRegEx" : "Cocke.",
+      "year" : 1969
+    }, {
+      "title" : "Span-based discontinuous constituency parsing: a family of exact chart-based algorithms with time complexities from O(nˆ6) down to O(nˆ3)",
+      "author" : [ "Caio Corro." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Process-",
+      "citeRegEx" : "Corro.,? 2020",
+      "shortCiteRegEx" : "Corro.",
+      "year" : 2020
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Language to logical form with neural attention",
+      "author" : [ "Li Dong", "Mirella Lapata." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 33–43, Berlin, Germany. Association for Computa-",
+      "citeRegEx" : "Dong and Lapata.,? 2016",
+      "shortCiteRegEx" : "Dong and Lapata.",
+      "year" : 2016
+    }, {
+      "title" : "Improving text-to-sql evaluation methodology",
+      "author" : [ "Catherine Finegan-Dollak", "Jonathan K. Kummerfeld", "Li Zhang", "Karthik Ramanathan", "Sesh Sadasivam", "Rui Zhang", "Dragomir Radev." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for",
+      "citeRegEx" : "Finegan.Dollak et al\\.,? 2018",
+      "shortCiteRegEx" : "Finegan.Dollak et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Connectionism and Cognitive Architecture: A Critical Analysis, page 3–71",
+      "author" : [ "Jerry A. Fodor", "Zenon W. Pylyshyn." ],
+      "venue" : "MIT Press, Cambridge, MA, USA.",
+      "citeRegEx" : "Fodor and Pylyshyn.,? 1988",
+      "shortCiteRegEx" : "Fodor and Pylyshyn.",
+      "year" : 1988
+    }, {
+      "title" : "AllenNLP: A deep semantic natural language processing platform",
+      "author" : [ "Matt Gardner", "Joel Grus", "Mark Neumann", "Oyvind Tafjord", "Pradeep Dasigi", "Nelson F. Liu", "Matthew Peters", "Michael Schmitz", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of Workshop for",
+      "citeRegEx" : "Gardner et al\\.,? 2018",
+      "shortCiteRegEx" : "Gardner et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Permutation equivariant models for compositional generalization in language",
+      "author" : [ "Jonathan Gordon", "David Lopez-Paz", "Marco Baroni", "Diane Bouchacourt." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Gordon et al\\.,? 2020",
+      "shortCiteRegEx" : "Gordon et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Incorporating copying mechanism in sequence-to-sequence learning",
+      "author" : [ "Jiatao Gu", "Zhengdong Lu", "Hang Li", "Victor O.K. Li." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers),",
+      "citeRegEx" : "Gu et al\\.,? 2016",
+      "shortCiteRegEx" : "Gu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Neural compositional denotational semantics for question answering",
+      "author" : [ "Nitish Gupta", "Mike Lewis." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 2152–2161, Brussels, Belgium. Association",
+      "citeRegEx" : "Gupta and Lewis.,? 2018",
+      "shortCiteRegEx" : "Gupta and Lewis.",
+      "year" : 2018
+    }, {
+      "title" : "From language to programs: Bridging reinforcement learning and maximum marginal likelihood",
+      "author" : [ "Kelvin Guu", "Panupong Pasupat", "Evan Liu", "Percy Liang." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Guu et al\\.,? 2017",
+      "shortCiteRegEx" : "Guu et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Don’t paraphrase, detect! rapid and effective data collection for semantic parsing",
+      "author" : [ "Jonathan Herzig", "Jonathan Berant." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International",
+      "citeRegEx" : "Herzig and Berant.,? 2019",
+      "shortCiteRegEx" : "Herzig and Berant.",
+      "year" : 2019
+    }, {
+      "title" : "TaPas: Weakly supervised table parsing via pre-training",
+      "author" : [ "Jonathan Herzig", "Pawel Krzysztof Nowak", "Thomas Müller", "Francesco Piccinno", "Julian Eisenschlos." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Lin-",
+      "citeRegEx" : "Herzig et al\\.,? 2020",
+      "shortCiteRegEx" : "Herzig et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Compositional attention networks for machine reasoning",
+      "author" : [ "Drew A Hudson", "Christopher D Manning." ],
+      "venue" : "International Conference on Learning Representations (ICLR).",
+      "citeRegEx" : "Hudson and Manning.,? 2018",
+      "shortCiteRegEx" : "Hudson and Manning.",
+      "year" : 2018
+    }, {
+      "title" : "Data recombination for neural semantic parsing",
+      "author" : [ "R. Jia", "P. Liang." ],
+      "venue" : "Association for Computational Linguistics (ACL).",
+      "citeRegEx" : "Jia and Liang.,? 2016",
+      "shortCiteRegEx" : "Jia and Liang.",
+      "year" : 2016
+    }, {
+      "title" : "Clevr: A diagnostic dataset for compositional language and elementary visual reasoning",
+      "author" : [ "Justin Johnson", "Bharath Hariharan", "Laurens van der Maaten", "Li Fei-Fei", "C Lawrence Zitnick", "Ross Girshick." ],
+      "venue" : "CVPR.",
+      "citeRegEx" : "Johnson et al\\.,? 2017",
+      "shortCiteRegEx" : "Johnson et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "An efficient recognition and syntax analysis algorithm for context-free languages",
+      "author" : [ "T. Kasami." ],
+      "venue" : "Technical Report AFCRL-65-758, Air Force Cambridge Research Laboratory, Bedford, MA†.",
+      "citeRegEx" : "Kasami.,? 1965",
+      "shortCiteRegEx" : "Kasami.",
+      "year" : 1965
+    }, {
+      "title" : "Learning to transform natural to formal languages",
+      "author" : [ "Rohit J. Kate", "Yuk Wah Wong", "Raymond J. Mooney." ],
+      "venue" : "Proceedings of the 20th National Conference on Artificial Intelligence - Volume 3, AAAI’05, page 1062–1068. AAAI Press.",
+      "citeRegEx" : "Kate et al\\.,? 2005",
+      "shortCiteRegEx" : "Kate et al\\.",
+      "year" : 2005
+    }, {
+      "title" : "Measuring compositional generalization: A comprehensive method",
+      "author" : [ "Daniel Keysers", "Nathanael Schärli", "Nathan Scales", "Hylke Buisman", "Daniel Furrer", "Sergii Kashubin", "Nikola Momchev", "Danila Sinopalnikov", "Lukasz Stafiniak", "Tibor Tihon" ],
+      "venue" : null,
+      "citeRegEx" : "Keysers et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Keysers et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Constituency parsing with a self-attentive encoder",
+      "author" : [ "Nikita Kitaev", "Dan Klein." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 2676–2686, Melbourne, Australia. Associa-",
+      "citeRegEx" : "Kitaev and Klein.,? 2018",
+      "shortCiteRegEx" : "Kitaev and Klein.",
+      "year" : 2018
+    }, {
+      "title" : "Neural semantic parsing with type constraints for semi-structured tables",
+      "author" : [ "Jayant Krishnamurthy", "Pradeep Dasigi", "Matt Gardner." ],
+      "venue" : "EMNLP.",
+      "citeRegEx" : "Krishnamurthy et al\\.,? 2017",
+      "shortCiteRegEx" : "Krishnamurthy et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Compositional generalization through meta sequence-to-sequence learning",
+      "author" : [ "Brenden M Lake." ],
+      "venue" : "Advances in Neural Information Processing Systems 32, pages 9791–9801. Curran Associates, Inc.",
+      "citeRegEx" : "Lake.,? 2019",
+      "shortCiteRegEx" : "Lake.",
+      "year" : 2019
+    }, {
+      "title" : "Generalization without systematicity: On the compositional skills of sequence-to-sequence recurrent networks",
+      "author" : [ "Brenden M. Lake", "Marco Baroni." ],
+      "venue" : "ICML.",
+      "citeRegEx" : "Lake and Baroni.,? 2018",
+      "shortCiteRegEx" : "Lake and Baroni.",
+      "year" : 2018
+    }, {
+      "title" : "BART: Denoising sequence-to-sequence pretraining for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Neural symbolic machines: Learning semantic parsers on Freebase with weak supervision",
+      "author" : [ "C. Liang", "J. Berant", "Q. Le", "K.D.F.N. Lao." ],
+      "venue" : "Association for Computational Linguistics (ACL).",
+      "citeRegEx" : "Liang et al\\.,? 2017",
+      "shortCiteRegEx" : "Liang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Learning dependency-based compositional semantics",
+      "author" : [ "Percy Liang", "Michael Jordan", "Dan Klein." ],
+      "venue" : "Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: Human Language Technologies, pages 590–599, Port-",
+      "citeRegEx" : "Liang et al\\.,? 2011",
+      "shortCiteRegEx" : "Liang et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "Compositional generalization by learning analytical expressions",
+      "author" : [ "Q. Liu", "Shengnan An", "Jianguang Lou", "B. Chen", "Zeqi Lin", "Yan Gao", "Bin Zhou", "Nanning Zheng", "Dongmei Zhang." ],
+      "venue" : "ArXiv, abs/2006.10627.",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Rearranging the familiar: Testing compositional generalization in recurrent networks",
+      "author" : [ "João Loula", "Marco Baroni", "Brenden Lake." ],
+      "venue" : "Proceedings of the 2018 EMNLP Workshop BlackboxNLP: Analyzing and Interpreting Neural Networks for",
+      "citeRegEx" : "Loula et al\\.,? 2018",
+      "shortCiteRegEx" : "Loula et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "PLCFRS parsing revisited: Restricting the fan-out to two",
+      "author" : [ "Wolfgang Maier", "Miriam Kaeshammer", "Laura Kallmeyer." ],
+      "venue" : "Proceedings of the 11th International Workshop on Tree Adjoining Grammars and Related Formalisms (TAG+11),",
+      "citeRegEx" : "Maier et al\\.,? 2012",
+      "shortCiteRegEx" : "Maier et al\\.",
+      "year" : 2012
+    }, {
+      "title" : "The NeuroSymbolic Concept Learner: Interpreting Scenes, Words, and Sentences From Natural Supervision",
+      "author" : [ "Jiayuan Mao", "Chuang Gan", "Pushmeet Kohli", "Joshua B. Tenenbaum", "Jiajun Wu." ],
+      "venue" : "International Conference on Learning Representa-",
+      "citeRegEx" : "Mao et al\\.,? 2019",
+      "shortCiteRegEx" : "Mao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A discrete hard EM approach for weakly supervised question answering",
+      "author" : [ "Sewon Min", "Danqi Chen", "Hannaneh Hajishirzi", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Min et al\\.,? 2019",
+      "shortCiteRegEx" : "Min et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Learning compositional rules via neural program synthesis",
+      "author" : [ "Maxwell I Nye", "Armando Solar-Lezama", "Joshua B Tenenbaum", "Brenden M Lake." ],
+      "venue" : "arXiv preprint arXiv:2003.05562.",
+      "citeRegEx" : "Nye et al\\.,? 2020",
+      "shortCiteRegEx" : "Nye et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Span-based hierarchical semantic parsing for task-oriented dialog",
+      "author" : [ "Panupong Pasupat", "Sonal Gupta", "Karishma Mandyam", "Rushin Shah", "Mike Lewis", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natu-",
+      "citeRegEx" : "Pasupat et al\\.,? 2019",
+      "shortCiteRegEx" : "Pasupat et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Compositional semantic parsing on semi-structured tables",
+      "author" : [ "Panupong Pasupat", "Percy Liang." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Language",
+      "citeRegEx" : "Pasupat and Liang.,? 2015",
+      "shortCiteRegEx" : "Pasupat and Liang.",
+      "year" : 2015
+    }, {
+      "title" : "GloVe: Global vectors for word representation",
+      "author" : [ "J. Pennington", "R. Socher", "C.D. Manning." ],
+      "venue" : "Empirical Methods in Natural Language Processing (EMNLP), pages 1532–1543.",
+      "citeRegEx" : "Pennington et al\\.,? 2014",
+      "shortCiteRegEx" : "Pennington et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Film: Visual reasoning with a general conditioning layer",
+      "author" : [ "Ethan Perez", "Florian Strub", "Harm de Vries", "Vincent Dumoulin", "Aaron C. Courville." ],
+      "venue" : "AAAI.",
+      "citeRegEx" : "Perez et al\\.,? 2018",
+      "shortCiteRegEx" : "Perez et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Deep contextualized word representations",
+      "author" : [ "Matthew Peters", "Mark Neumann", "Mohit Iyyer", "Matt Gardner", "Christopher Clark", "Kenton Lee", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Peters et al\\.,? 2018",
+      "shortCiteRegEx" : "Peters et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Compositional generalization and natural language variation: Can a semantic parsing approach handle both? arXiv preprint arXiv:2010.12725",
+      "author" : [ "Peter Shaw", "Ming-Wei Chang", "Panupong Pasupat", "Kristina Toutanova" ],
+      "venue" : null,
+      "citeRegEx" : "Shaw et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Shaw et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Spanbased LCFRS-2 parsing",
+      "author" : [ "Miloš Stanojević", "Mark Steedman." ],
+      "venue" : "Proceedings of the 16th International Conference on Parsing Technologies and the IWPT 2020 Shared Task on Parsing into Enhanced Universal Dependencies, pages 111–121,",
+      "citeRegEx" : "Stanojević and Steedman.,? 2020",
+      "shortCiteRegEx" : "Stanojević and Steedman.",
+      "year" : 2020
+    }, {
+      "title" : "The syntactic process, volume 24",
+      "author" : [ "Mark Steedman." ],
+      "venue" : "MIT press Cambridge, MA.",
+      "citeRegEx" : "Steedman.,? 2000",
+      "shortCiteRegEx" : "Steedman.",
+      "year" : 2000
+    }, {
+      "title" : "A minimal span-based neural constituency parser",
+      "author" : [ "Mitchell Stern", "Jacob Andreas", "Dan Klein." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 818–827, Vancouver, Canada.",
+      "citeRegEx" : "Stern et al\\.,? 2017",
+      "shortCiteRegEx" : "Stern et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "RAT-SQL: Relation-aware schema encoding and linking for text-to-SQL parsers",
+      "author" : [ "Bailin Wang", "Richard Shin", "Xiaodong Liu", "Oleksandr Polozov", "Matthew Richardson." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational",
+      "citeRegEx" : "Wang et al\\.,? 2020",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Building a semantic parser overnight",
+      "author" : [ "Yushi Wang", "Jonathan Berant", "Percy Liang." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Language Pro-",
+      "citeRegEx" : "Wang et al\\.,? 2015",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Huggingface’s transformers: State-of-the-art natural language",
+      "author" : [ "Thomas Wolf", "Lysandre Debut", "Victor Sanh", "Julien Chaumond", "Clement Delangue", "Anthony Moi", "Pierric Cistac", "Tim Rault", "R’emi Louf", "Morgan Funtowicz", "Jamie Brew" ],
+      "venue" : null,
+      "citeRegEx" : "Wolf et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Wolf et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Learning synchronous grammars for semantic parsing with lambda calculus",
+      "author" : [ "Yuk Wah Wong", "Raymond Mooney." ],
+      "venue" : "Proceedings of the 45th Annual Meeting of the Association of Computational Linguistics, pages 960–967, Prague, Czech Repub-",
+      "citeRegEx" : "Wong and Mooney.,? 2007",
+      "shortCiteRegEx" : "Wong and Mooney.",
+      "year" : 2007
+    }, {
+      "title" : "A syntactic neural model for general-purpose code generation",
+      "author" : [ "Pengcheng Yin", "Graham Neubig." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 440–450, Vancouver, Canada.",
+      "citeRegEx" : "Yin and Neubig.,? 2017",
+      "shortCiteRegEx" : "Yin and Neubig.",
+      "year" : 2017
+    }, {
+      "title" : "Recognition and parsing of context-free languages in time n3",
+      "author" : [ "D.H. Younger." ],
+      "venue" : "Information and Control, 10(2):189–208.",
+      "citeRegEx" : "Younger.,? 1967",
+      "shortCiteRegEx" : "Younger.",
+      "year" : 1967
+    }, {
+      "title" : "Learning to parse database queries using inductive logic programming",
+      "author" : [ "John M Zelle", "Raymond J Mooney." ],
+      "venue" : "Proceedings of the national conference on artificial intelligence, pages 1050–1055.",
+      "citeRegEx" : "Zelle and Mooney.,? 1996",
+      "shortCiteRegEx" : "Zelle and Mooney.",
+      "year" : 1996
+    }, {
+      "title" : "Learning to map sentences to logical form: Structured classification with probabilistic categorial grammars",
+      "author" : [ "Luke S. Zettlemoyer", "Michael Collins." ],
+      "venue" : "Proceedings of the Twenty-First Conference on Uncertainty in Artificial Intelligence, UAI’05, page",
+      "citeRegEx" : "Zettlemoyer and Collins.,? 2005",
+      "shortCiteRegEx" : "Zettlemoyer and Collins.",
+      "year" : 2005
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 8,
+      "context" : "This is manifested in large performance drops on data splits designed to measure compositional generalization (compositional splits), and is in contrast to the generalization abilities of humans (Fodor and Pylyshyn, 1988).",
+      "startOffset" : 195,
+      "endOffset" : 221
+    }, {
+      "referenceID" : 50,
+      "context" : "We revisit a more traditional approach for semantic parsing (Zelle and Mooney, 1996; Zettlemoyer and Collins, 2005; Liang et al., 2011), where partial programs are predicted over short spans in the utterance, and are composed to build the program for the entire utterance.",
+      "startOffset" : 60,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 51,
+      "context" : "We revisit a more traditional approach for semantic parsing (Zelle and Mooney, 1996; Zettlemoyer and Collins, 2005; Liang et al., 2011), where partial programs are predicted over short spans in the utterance, and are composed to build the program for the entire utterance.",
+      "startOffset" : 60,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 28,
+      "context" : "We revisit a more traditional approach for semantic parsing (Zelle and Mooney, 1996; Zettlemoyer and Collins, 2005; Liang et al., 2011), where partial programs are predicted over short spans in the utterance, and are composed to build the program for the entire utterance.",
+      "startOffset" : 60,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 43,
+      "context" : "Specifically, we propose to introduce such inductive bias via a span-based parser (Stern et al., 2017; Pasupat et al., 2019), equipped with the advantages of modern neural architectures.",
+      "startOffset" : 82,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 35,
+      "context" : "Specifically, we propose to introduce such inductive bias via a span-based parser (Stern et al., 2017; Pasupat et al., 2019), equipped with the advantages of modern neural architectures.",
+      "startOffset" : 82,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 35,
+      "context" : "We enhance the applicability of span-based semantic parsers (Pasupat et al., 2019) in terms of both supervision and expressivity, by overcoming two technical challenges.",
+      "startOffset" : 60,
+      "endOffset" : 82
+    }, {
+      "referenceID" : 50,
+      "context" : "5 absolute accuracy points on GEOQUERY (Zelle and Mooney, 1996), CLOSURE (Bahdanau et al.",
+      "startOffset" : 39,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 1,
+      "context" : "5 absolute accuracy points on GEOQUERY (Zelle and Mooney, 1996), CLOSURE (Bahdanau et al., 2019), and SCAN (Lake and Baroni, 2018) respectively.",
+      "startOffset" : 73,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 42,
+      "context" : "As in Combinatory Categorical Grammar (Steedman, 2000), composition is simply function application, where a domain-specific type system is used to determine which child is the function and which is the argument (along with the exact argument position for predicates with multiple arguments).",
+      "startOffset" : 38,
+      "endOffset" : 54
+    }, {
+      "referenceID" : 43,
+      "context" : "Span-based parsing had success in both syntactic (Stern et al., 2017; Kitaev and Klein, 2018) and semantic parsing (Pasupat et al.",
+      "startOffset" : 49,
+      "endOffset" : 93
+    }, {
+      "referenceID" : 22,
+      "context" : "Span-based parsing had success in both syntactic (Stern et al., 2017; Kitaev and Klein, 2018) and semantic parsing (Pasupat et al.",
+      "startOffset" : 49,
+      "endOffset" : 93
+    }, {
+      "referenceID" : 35,
+      "context" : ", 2017; Kitaev and Klein, 2018) and semantic parsing (Pasupat et al., 2019).",
+      "startOffset" : 53,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 5,
+      "context" : "Concretely, the architecture of SPANBASEDSP is based on a BERT-base encoder (Devlin et al., 2019) that yields a contextual representation hi ∈ Rhdim for each token xi in the input utterance.",
+      "startOffset" : 76,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 3,
+      "context" : "This scoring function can be maximized using CKY (Cocke, 1969; Kasami, 1965; Younger, 1967).",
+      "startOffset" : 49,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 19,
+      "context" : "This scoring function can be maximized using CKY (Cocke, 1969; Kasami, 1965; Younger, 1967).",
+      "startOffset" : 49,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 49,
+      "context" : "This scoring function can be maximized using CKY (Cocke, 1969; Kasami, 1965; Younger, 1967).",
+      "startOffset" : 49,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 27,
+      "context" : "912 Because marginalizing over trees is intractable, we take a hard-EM approach (Liang et al., 2017; Min et al., 2019), and replace the sum over trees with an argmax.",
+      "startOffset" : 80,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 33,
+      "context" : "912 Because marginalizing over trees is intractable, we take a hard-EM approach (Liang et al., 2017; Min et al., 2019), and replace the sum over trees with an argmax.",
+      "startOffset" : 80,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 13,
+      "context" : "Past work on weakly-supervised semantic parsing often used maximum marginal likelihood, especially when training from denotations only (Guu et al., 2017).",
+      "startOffset" : 135,
+      "endOffset" : 153
+    }, {
+      "referenceID" : 51,
+      "context" : "This requires minimal manual work (if no language phrases are available), but is done only once, and is common in semantic parsing (Zettlemoyer and Collins, 2005; Wang et al., 2015; Liang et al., 2017).",
+      "startOffset" : 131,
+      "endOffset" : 201
+    }, {
+      "referenceID" : 45,
+      "context" : "This requires minimal manual work (if no language phrases are available), but is done only once, and is common in semantic parsing (Zettlemoyer and Collins, 2005; Wang et al., 2015; Liang et al., 2017).",
+      "startOffset" : 131,
+      "endOffset" : 201
+    }, {
+      "referenceID" : 27,
+      "context" : "This requires minimal manual work (if no language phrases are available), but is done only once, and is common in semantic parsing (Zettlemoyer and Collins, 2005; Wang et al., 2015; Liang et al., 2017).",
+      "startOffset" : 131,
+      "endOffset" : 201
+    }, {
+      "referenceID" : 28,
+      "context" : "However, this assumption does not always hold (Liang et al., 2011).",
+      "startOffset" : 46,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 31,
+      "context" : "In constituency parsing, such non-projective structures are treated by adding rules to the grammar G (Maier et al., 2012; Corro, 2020; Stanojević and Steedman, 2020).",
+      "startOffset" : 101,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 4,
+      "context" : "In constituency parsing, such non-projective structures are treated by adding rules to the grammar G (Maier et al., 2012; Corro, 2020; Stanojević and Steedman, 2020).",
+      "startOffset" : 101,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 41,
+      "context" : "In constituency parsing, such non-projective structures are treated by adding rules to the grammar G (Maier et al., 2012; Corro, 2020; Stanojević and Steedman, 2020).",
+      "startOffset" : 101,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 50,
+      "context" : "GEOQUERY Contains 880 questions about US geography (Zelle and Mooney, 1996), using the FunQL formalism (Kate et al.",
+      "startOffset" : 51,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 20,
+      "context" : "GEOQUERY Contains 880 questions about US geography (Zelle and Mooney, 1996), using the FunQL formalism (Kate et al., 2005).",
+      "startOffset" : 103,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 18,
+      "context" : "CLEVR and CLOSURE CLEVR (Johnson et al., 2017) contains synthetic questions, created using 80 templates, over synthetic images with multiple objects of different shapes, colors, materials and sizes (example in Fig.",
+      "startOffset" : 24,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 1,
+      "context" : "The recent CLOSURE dataset (Bahdanau et al., 2019), includes seven new question templates that are created by combining referring expressions of various types from CLEVR in new ways.",
+      "startOffset" : 27,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 25,
+      "context" : "SCAN-SP SCAN (Lake and Baroni, 2018) contains natural language navigation commands that are mapped to action sequences (x and y in Fig.",
+      "startOffset" : 13,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 17,
+      "context" : "(2018), our baseline parser is a standard seq2seq model (Jia and Liang, 2016) that encodes the utterance x with a BiLSTM encoder over pre-trained GloVe (Pennington et al.",
+      "startOffset" : 56,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 37,
+      "context" : "(2018), our baseline parser is a standard seq2seq model (Jia and Liang, 2016) that encodes the utterance x with a BiLSTM encoder over pre-trained GloVe (Pennington et al., 2014) or ELMO (Peters et al.",
+      "startOffset" : 152,
+      "endOffset" : 177
+    }, {
+      "referenceID" : 39,
+      "context" : ", 2014) or ELMO (Peters et al., 2018) embeddings, and decodes the program with an attention-based LSTM decoder (Bahdanau et al.",
+      "startOffset" : 16,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2018) embeddings, and decodes the program with an attention-based LSTM decoder (Bahdanau et al., 2015) assisted by a copying mechanism for handling entities unseen during training time (Gu et al.",
+      "startOffset" : 81,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 11,
+      "context" : ", 2015) assisted by a copying mechanism for handling entities unseen during training time (Gu et al., 2016).",
+      "startOffset" : 90,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 23,
+      "context" : "GRAMMAR Grammar-based decoding has been shown to improve performance on IID splits (Krishnamurthy et al., 2017; Yin and Neubig, 2017).",
+      "startOffset" : 83,
+      "endOffset" : 133
+    }, {
+      "referenceID" : 48,
+      "context" : "GRAMMAR Grammar-based decoding has been shown to improve performance on IID splits (Krishnamurthy et al., 2017; Yin and Neubig, 2017).",
+      "startOffset" : 83,
+      "endOffset" : 133
+    }, {
+      "referenceID" : 47,
+      "context" : "We use the grammar from (Wong and Mooney, 2007) for GEOQUERY, and write grammars for SCAN-SP and CLEVR + CLOSURE.",
+      "startOffset" : 24,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 26,
+      "context" : "BART We additionally experiment with BART-base (Lewis et al., 2020), a seq2seq model pre-trained as a denoising autoencoder.",
+      "startOffset" : 47,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 16,
+      "context" : "However, other end-to-end models directly predict the answer from the context without an executor, where the context can be an image (Hudson and Manning, 2018; Perez et al., 2018), a table (Herzig et al.",
+      "startOffset" : 133,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 38,
+      "context" : "However, other end-to-end models directly predict the answer from the context without an executor, where the context can be an image (Hudson and Manning, 2018; Perez et al., 2018), a table (Herzig et al.",
+      "startOffset" : 133,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 6,
+      "context" : "On GEOQUERY, SPANBASEDSP performs similarly to other semantic parsers on the IID split (Dong and Lapata, 2016), and loses just 4 points on the compositional TEMPLATE split.",
+      "startOffset" : 87,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 2,
+      "context" : "For example, in some cases predicates do not align explicitly to a phrase in the utterance or appear several times in the program but only once in the utterance (Berant et al., 2013; Pasupat and Liang, 2015).",
+      "startOffset" : 161,
+      "endOffset" : 207
+    }, {
+      "referenceID" : 36,
+      "context" : "For example, in some cases predicates do not align explicitly to a phrase in the utterance or appear several times in the program but only once in the utterance (Berant et al., 2013; Pasupat and Liang, 2015).",
+      "startOffset" : 161,
+      "endOffset" : 207
+    }, {
+      "referenceID" : 51,
+      "context" : "Until the neural era, semantic parsers used a lexicon and composition rules to predict partial programs for spans and compose them until a full program is predicted, and typically scored with a log-linear model given features over the utterance and the program (Zettlemoyer and Collins, 2005; Liang et al., 2011).",
+      "startOffset" : 261,
+      "endOffset" : 312
+    }, {
+      "referenceID" : 28,
+      "context" : "Until the neural era, semantic parsers used a lexicon and composition rules to predict partial programs for spans and compose them until a full program is predicted, and typically scored with a log-linear model given features over the utterance and the program (Zettlemoyer and Collins, 2005; Liang et al., 2011).",
+      "startOffset" : 261,
+      "endOffset" : 312
+    }, {
+      "referenceID" : 7,
+      "context" : "In recent years, work on compositional generalization in semantic parsing mainly focused on the poor performance of parsers in compositional splits (Finegan-Dollak et al., 2018), creating new datasets that require compositional generalization (Keysers et al.",
+      "startOffset" : 148,
+      "endOffset" : 177
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2018), creating new datasets that require compositional generalization (Keysers et al., 2020; Lake and Baroni, 2018; Bahdanau et al., 2019), and proposing specialized architectures mainly for the SCAN task (Lake, 2019; Nye et al.",
+      "startOffset" : 73,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2018), creating new datasets that require compositional generalization (Keysers et al., 2020; Lake and Baroni, 2018; Bahdanau et al., 2019), and proposing specialized architectures mainly for the SCAN task (Lake, 2019; Nye et al.",
+      "startOffset" : 73,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2018), creating new datasets that require compositional generalization (Keysers et al., 2020; Lake and Baroni, 2018; Bahdanau et al., 2019), and proposing specialized architectures mainly for the SCAN task (Lake, 2019; Nye et al.",
+      "startOffset" : 73,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 24,
+      "context" : ", 2019), and proposing specialized architectures mainly for the SCAN task (Lake, 2019; Nye et al., 2020; Gordon et al., 2020; Liu et al., 2020; Gupta and Lewis, 2018).",
+      "startOffset" : 74,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 34,
+      "context" : ", 2019), and proposing specialized architectures mainly for the SCAN task (Lake, 2019; Nye et al., 2020; Gordon et al., 2020; Liu et al., 2020; Gupta and Lewis, 2018).",
+      "startOffset" : 74,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2019), and proposing specialized architectures mainly for the SCAN task (Lake, 2019; Nye et al., 2020; Gordon et al., 2020; Liu et al., 2020; Gupta and Lewis, 2018).",
+      "startOffset" : 74,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 29,
+      "context" : ", 2019), and proposing specialized architectures mainly for the SCAN task (Lake, 2019; Nye et al., 2020; Gordon et al., 2020; Liu et al., 2020; Gupta and Lewis, 2018).",
+      "startOffset" : 74,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2019), and proposing specialized architectures mainly for the SCAN task (Lake, 2019; Nye et al., 2020; Gordon et al., 2020; Liu et al., 2020; Gupta and Lewis, 2018).",
+      "startOffset" : 74,
+      "endOffset" : 166
+    } ],
+    "year" : 2021,
+    "abstractText" : "Despite the success of sequence-to-sequence (seq2seq) models in semantic parsing, recent work has shown that they fail in compositional generalization, i.e., the ability to generalize to new structures built of components observed during training. In this work, we posit that a span-based parser should lead to better compositional generalization. we propose SPANBASEDSP, a parser that predicts a span tree over an input utterance, explicitly encoding how partial programs compose over spans in the input. SPANBASEDSP extends Pasupat et al. (2019) to be comparable to seq2seq models by (i) training from programs, without access to gold trees, treating trees as latent variables, (ii) parsing a class of non-projective trees through an extension to standard CKY. On GEOQUERY, SCAN and CLOSURE datasets, SPANBASEDSP performs similarly to strong seq2seq baselines on random splits, but dramatically improves performance compared to baselines on splits that require compositional generalization: from 61.0→ 88.9 average accuracy.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

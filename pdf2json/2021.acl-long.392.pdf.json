@@ -1,0 +1,436 @@
+{
+  "name" : "2021.acl-long.392.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Improving Document Representations by Generating Pseudo Query Embeddings for Dense Retrieval",
+    "authors" : [ "Hongyin Tang", "Xingwu Sun", "Beihong Jin", "Jingang Wang", "Fuzheng Zhang", "Wei Wu" ],
+    "emails" : [ "tanghongyin14@otcaix.iscas.ac.cn,", "Beihong@iscas.ac.cn", "wuwei30}@meituan.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 5054–5064\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n5054"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Given a query and a collection of documents, the document retrieval task is to rank the documents based on their relevance with the query. To retrieve the target documents efficiently, most existing work adopts a two-stage fashion which retrieves a subset of candidate documents from the whole corpus by a recall model and then re-rank them by a sophisticated ranking model. In the first stage, many approaches use traditional information retrieval methods including BM25 based on sparse bag-of-word representation. Since the recall of the first-stage model determines the upper bound of the ranking quality, there is lots of work focusing on improving the recall performance(Dai and Callan, 2019; Nogueira et al., 2020; Nogueira and Lin, 2020).\n∗ These authors contributed equally. This work was done when the first author was an intern at Meituan.\n† Corresponding author.\nIn contrast to the sparse representations, dense representations encoding semantic information can enhance the retrieval performance by overcoming the limitations like term mismatching. They are usually produced by neural encoders whose parameters are learnable. Recently, inspired by the great success of pre-trained language models like BERT/RoBERTa(Devlin et al., 2018; Liu et al., 2019) in NLP applications, the dense passage retriever is proposed which encodes the documents by fine-tuning the huge language models (Karpukhin et al., 2020) and achieves state-of-theart results benefiting from their powerful contextual semantic representative ability.\nFollowing the typical fine-tuning paradigm on many NLP tasks(Devlin et al., 2018), a BERT encoder usually takes the concatenation of the query and document text as input and performs a full selfattention across the input tokens. Such architecture is called Cross-encoder (Humeau et al., 2019). Although it can achieve better performance than other architectures, it is infeasible in the recall stage since it needs to recompute the representation of each document in the corpus once a new query is provided. In contrast, Bi-encoder(Humeau et al., 2019) encodes the queries and documents separately and computes the matching scores between their dense representations. Since the documents in the corpus keep unchanged most of the time, the representation of the documents can be stored in advance for future use. With the help of Approximate Nearest Neighbor (ANN) search approaches(Johnson et al., 2017), the retrieval process can be further boosted.\nAlthough gaining retrieval efficiency, Bi-encoder sacrifices retrieval accuracy comparing to the Cross-encoder. To enrich the representations of the documents produced by Bi-encoder, some researchers extend the original Bi-encoder by employing more delicate structures like laterinteraction(Khattab and Zaharia, 2020), Poly-\nEncoder(Humeau et al., 2019), multi-embedding model(Luan et al., 2020). Increasing a little computational overhead, these models can gain much improvement of the encoding quality while remaining the fast retrieval characteristic of Bi-encoder.\nSimilar to these models, we focus on improving the effectiveness of Bi-encoder. In this work, we think that the limitation of the Bi-encoder origins from the agnostic nature of query when encoding the documents independently, i.e., the encoder cannot know what query could be potentially answered by the input document. As it is very common that a document with hundreds of tokens contains several distinct topics, some important semantic information might be easily missed or biased by each other without knowing the query.\nTo alleviate the query agnostic problem, we propose a novel approach that mimics multiple potential queries corresponding to the input document and we call them “pseudo query embeddings”. Ideally, each of the pseudo query embeddings corresponds to a semantic salient fragment in the document which is similar to a semantic cluster of the document. Thus, we implement the process by a clustering algorithm (i.e., K-means in this work) and regard the cluster centroids as the pseudo query embeddings. We generate and store all of the embeddings in an offline manner, thereby not only improving the encoding quality but also remaining the online computation unchanged. During the inference, the multiple pseudo query embeddings should be first aggregated through a softmax function and then the relevance score with the query embedding is computed. Unfortunately, directly applying softmax aggregation is not supported in the existing ANN search library. Thus, we first filter some documents in which all of the embeddings have low relevance scores and then perform the whole aggregation and score function using the filtered embeddings.\nOur main contributions can be summarized as follows:\n• We propose a novel approach to represent the document with multiple pseudo query embeddings which are generated by a clustering process.\n• We modify the embedding aggregation during the inference in order to directly utilize the off-the-shelf ANN search library.\n• We conduct experiments on several popular IR\nand OpenQA datasets. Experimental results show that our approach achieves state-of-theart retrieval performance while still remaining efficient computation. An in-depth analysis on gradients shows how the cluster centroids improve the performance."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "In this section, we will review the existing work related with the first-stage retrieval. According to the representations of text, the first stage retrieval approaches can be classified into two categories. One is based on the high-dimensional sparse representation and the other is based on the low-dimensional continuous representation. Traditional sparse vector space models weight the terms by their frequency information. In last few years, some researchers intend to weight the document and query terms adaptively by a neural network which could leverage some semantical information (Dehghani et al., 2017; Zheng and Callan, 2015). Recently, a trend of leveraging the deep pre-trained language models to weight or augment the document/query terms is emerged. DeepCT(Dai and Callan, 2019) uses BERT to learn the term importance and weight all of the terms. DocT5query(Nogueira and Lin, 2020) augments the document with possible query terms which are generated by a sequence-to-sequence model.\nIn contrast, the dense retrieval approaches map the text to continuous vectors which are mostly generated by neural networks. Models like DSSM(Huang et al., 2013),CLSM(Shen et al., 2014), DESM(Mitra et al., 2016) encode the query and document using their n-gram features or word embeddings independently and then compute their similarities. Recently, the dense retrieval approaches also tend to make use of the pre-trained language models. Sentence-BERT(Reimers and Gurevych, 2019) is a typical Bi-encoder model which encodes the text using BERT and calculates the similarity scores by the combination of several basic operations. Inspired by the interaction-based neural re-rankers, Khattab and Zaharia(2020) propose a later-interaction mechanism. Later on, some variants(Gao et al., 2020; Chen et al., 2020) are proposed. Xiong et al.(2020) identify that the negative samples during training may not be representative, lowering the training difficulty. Therefore, they propose a model to construct hard negative samples dynamically during training.\nComparing to existing work, our work serves the first stage of document retrieval and presents a new method to generate document representations which borrows the clustering technique to generate pseudo query embeddings from documents."
+    }, {
+      "heading" : "3 Dense Document Retrieval",
+      "text" : "In this section, we introduce the original Biencoder architecture and several existing variants. Then, we present our model in detail and describe the similarities and differences between our model and those Bi-encoder variants."
+    }, {
+      "heading" : "3.1 Preliminaries",
+      "text" : "Independent Aggregator We start with a Biencoder using BERT as its backbone neural network as shown in Figure 1. (a). Given a query with n tokens and a document with m tokens, a typical Bi-encoder encodes the query and the document separately, producing query token embeddings {qi}ni=1 ∈ Rn×h and document token embeddings {di}mi=1 ∈ Rm×h which are the hidden states of the last layer in most cases. Next, a module is needed to compute the matching score by aggregating the generated query and document representations. We call it “Aggregator” in the following sections. The simplest aggregator is the independent aggregator shown in Figure 1 (b). This aggregator uses a pooler to reduce the query and document token embeddings to fixed-length embeddings eq and ed respectively and then calculates the score by dot product/Euclidean distance between them. For example, Karpukhin et al.(2020) directly adopt the embedding of the [CLS] token. RepBERT(Zhan et al., 2020) leverages the mean value of the encoded embeddings. Although efficient to compute, compressing m or n (m,n >> 1) embeddings to one may lose information. Late Interaction Aggregator Col-BERT model(Khattab and Zaharia, 2020) employs a late interaction paradigm to reduce the loss of information. As shown in Figure 1 (c), the model preserves all of the document token embeddings {di}mi=1 in the cache until a new query is given. It then computes token-wise matching scores using all of the document and query embeddings. The final matching score is generated by pooling the m × n scores. This model preserves document semantics as much as possible and leaves the full query-document interaction during the inference.\nExperimental results show that Col-BERT is highly effective, improving the accuracy in a large margin. However, the time complexity of the score computation arises from constant O(1) to quadratic O(mn). Meanwhile, Lin et al.(2020) point out that the storage space occupation also arises rapidly along with the length of documents since Col-BERT needs to store all of the embeddings.\nSemi-interactive Aggregator Figure 1(d) shows another kind of aggregator which compresses the document token embeddings to a constant number k much smaller than the document length m (k << m). Since there are multiple but not all document token embeddings participating the interaction with query, we call the aggregator as a “semi-interactive aggregator”. (Humeau et al., 2019; Luan et al., 2020) adopt this aggregator in their model. Specifically, PolyEncoder(learnt-k) (Humeau et al., 2019) model employs k learnable code-vectors as the parameters and attend them with all of the document token embeddings {di}mi=1, representing global features of the document. Besides, Poly-Encoder(first-k) (Humeau et al., 2019) and ME-BERT(Luan et al., 2020) both adopt the first k document token embeddings as the compressed document representation. Obviously, the semi-interactive aggregator further makes time/space complexity and accuracy trade-offs over the independent aggregator and late interaction aggregator. However, there still exists some problem when applying current compressing strategies in the document retrieval task, which we would point out in the next section."
+    }, {
+      "heading" : "3.2 Our Method",
+      "text" : "The primary limitation of Bi-encoder is that we cannot know which part of the document would be asked during the encoding process. Preserving multiple semantic representations has been proved effective in the variants of Bi-encoder. However, existing models are still not perfect, leading to expensive computation or underfit problem. In this work, we intend to improve the semantic representations by mimicing the real matching process using the documents alone, generating a constant number of “pseudo query embeddings”. In this way, the model can preserve self-adaptive document embeddings representing different semantics. Actually, the whole procedure is analogous to the steps of the K-means clustering algorithm and the\ncluster centroids are treated as the pseudo query embeddings. In the following, we will interpret the approach using the K-means algorithm in detail.\nFirstly, following the semi-interactive aggregator, we feed the document tokens into BERT and use the last layer hidden states as the document token embeddings {di}mi=1. Next, we perform Kmeans algorithm on these token embeddings.\nThe K-means algorithm mainly contains two iterative steps: assignment step and update step. These two steps are performed alternatively until the convergence condition is satisfied. The assignment step can be expressed by the following equation.\nsti = argmin j ‖di − ctj‖2\ni ∈{1, ...,m}, j ∈ {1, ..., k} (1)\nwhere ctj is the j-th cluster centroid (we assume there are up to k clusters) when the algorithm is executing at the t-th time step. sti represents the nearest cluster to the i-th embedding di considering the Euclidean distance. After the assignment step, the algorithm updates each of the cluster centroid according to the cluster assignment of each embedding. The update step is shown as Eq. 2.\nct+1j = 1∑m\ni=1 1(s t i = j) ∑ {i|sti=j} di (2)\nIf we treat each centroid of cluster ctj as a “query embedding”, Eq. 1 can be interpreted as the similarity computation between the document and several queries, determining which of the queries can be answered by the i-th token embedding. Thus, the cluster centroid ctj plays a similar role as query and we name it “pseudo query embedding”. Next, the embeddings belong to one cluster compose the new pseudo query embedding by Eq. 2. As the two\nsteps alternatively iterate, the query embeddings that can be answered by the document are explored. Since this process only involves the documents, we can save the embeddings in memory and retrieve them using the real queries which are desired to be resolved.\nSince the pseudo query embeddings contain the underlying information of the document that real queries may ask, we use the the pseudo query embeddings as the compressed document embeddings (i.e., the embeddings output by a compressor, as shown in Figure 1(d)). In the inference stage, we compute the similarity between the pseudo query embeddings {cj}kj=1 and the real query embeddings {qi}ni=1 which can be formulated by the following equations.\neq = Pooling(q1, ..., qn) (3)\naj = softmax(eq · cj) (4)\ned = k∑\nj=1\najcj (5)\ny = eq · ed (6)\nEq. 3 means that we pool the query embeddings into a fixed-length embedding eq. Currently, we select the embedding of [CLS] token as eq. As the query is much shorter than the document and usually represents one concrete meaning, we assume this compression will not lose much information. In Eq. 4, we compute the similarity between the eq and cj following a softmax normalization. Then, using the normalized scores as weights, the final document embedding ed is a weighted sum of the document embeddings, as shown in Eq. 5. At last, the matching score is computed by the dot product between eq and ed.\nComparing with existing work, we find that the Poly-Encoder(learnt-k) (Humeau et al., 2019) is equivalent to learning multiple fixed global pseudo\nquery embeddings {cj}kj=1 across all of the documents. That model treats the pseudo query embeddings as learnable parameters which are kept fixed during the inference. It uses the linear combinations of document token embeddings {di}mi=1 as the compressed document embeddings, taking similarity scores between {di}mi=1 and {cj}kj=1 as the combination weights. Conversely, the PolyEncoder(first-k) (Humeau et al., 2019) and MEBERT(Luan et al., 2020) use the first k document token embeddings as the pseudo query embeddings, i.e., {cj}kj=1 = {di}ki=1 and adopt the pseudo query embeddings as compressed document embeddings. In contrast to Poly-Encoder(learnt-k), they rely on dynamic pseudo query embeddings. Experimental results on conversation datasets show PolyEncoder(first-k) is better than the former. However, only adopting the first-k document embeddings seems to be a coarse strategy since a lot of information may exist in the latter part of the document. To this end, we present an approach which generates multiple adaptive semantic embeddings for each document by exploring all of the contents in the document."
+    }, {
+      "heading" : "3.3 Large-scale Retrieval Optimization for ANN",
+      "text" : "The first-stage retrieval model should calculate the matching scores between the query and all of the documents in the collection. Most existing dense retrieval work adopts Approximate Nearest Neighbor (ANN) searching methods to boost the retrieval process. Faiss(Johnson et al., 2017) is one of the most popular ANN search libraries. It first builds vector index offline and make an ANN vector search based on the index. However, Faiss only supports basic similarity functions like the dot product/Euclidean distance other than the function listed in Eq. 4-Eq. 6. To boost in our method using Faiss, we build an index using all of the representations {cj}kj=1 of each document. During inference, we firstly select the cj which has the highest dot product value with eq as the final document embedding ed and compute the matching score using Eq. 6 . Since this operation only involves dot product, it can be accelerated by Faiss. This operation equals to substitute aj with âj in Eq. 4.\nâj = 1(j = argmax i=1...k\n(eq · ci)) (7)\nAs shown in Eq. 7, we use argmax operation instead of softmax. Such substitution is reasonable\nsince softmax is a derivative and smooth version of argmax (Goodfellow et al., 2016). However, only one of the embeddings can pass the argmax function and participate the similarity computation which may impact the retrieval accuracy. To make a trade-off, we firstly recall top-R documents according to Eq. 7 and then calculate accurate scores as described in Eq. 4-Eq. 6 on the retrieved documents."
+    }, {
+      "heading" : "4 Experimental Evaluation",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Datasets",
+      "text" : "MS MARCO Dataset(Nguyen et al., 2016) is a large-scale ad-hoc text retrieval dataset built for two separate tasks: document ranking and passage ranking. These two tasks are adopted in TREC 2019 Deep Learning Track(Craswell et al., 2020) where test sets are provided. The document ranking task contains 3.2 million documents and 0.3 million queries. The passage ranking task contains 8.8 million passages and 0.5 million queries. The main difference between these two tasks exists in the text length, where the average length of the documents and passages are 1124 and 54, respectively. Following most of the existing work, we use MRR to evaluate the development set of MS MARCO and use NDCG to evaluate the TREC test set.\nOpenQA Dataset(Karpukhin et al., 2020) is designed for open domain question answering. The authors collect about 21 million documents from Wikipedia as the document collection whose average length is 100. They collect question-answer pairs from several existing QA datasets (e.g., Natural Questions, Trivia QA, SQuAD etc.). Then, they select some documents that contain the answer text and have the highest BM25 scores with the queries, as the positive documents to the query. Currently, the authors release the data of Natural Questions, Trivia QA and SQuAD. For Natural Questions and Trivia QA, the test sets and development sets are available. For SQuAD, only the development set is available. We conduct experiments on this three datasets using top20/100 accuracy as the evaluating metric."
+    }, {
+      "heading" : "4.2 Implementation Details",
+      "text" : "We initiate the encoder using a BERT base model. Since the BERT base model could handle 512 tokens at most, we truncate each document up to 512\ntokens as the input. We set different cluster numbers according to the document length. In the MS MARCO document ranking task, we set the cluster number to 8. In other tasks, we set the cluster number to 4. More experiments about different cluster numbers are shown in the Section 4.5. Since the initial states of the clusters in K-means may influence the performance a lot, we tried two setups: random initiation(i.e., select the hidden states randomly as the initial states) and equal-interval initiation (i.e., cut the documents into equal length intervals and select the cutting locations as the initial states) and find that the equal-interval initiation can outperforms the random initiation. Therefore, we adopt equal-interval initiation in the following experiments. We use AdamW as the optimizer and set the learning rate to 2e-6 and batch-size to 16. During the training, we select one positive document and 4 negative documents for each of the queries. To improve the training efficiency, we adopt the inbatch negatives technique(Karpukhin et al., 2020) which takes all other documents in the batch except the positive one as the negative documents for each query. To reduce the discrepancy between the training and inference process, we also adopt the ANCE(Xiong et al., 2020) training paradigm which constructs new hard negative samples using the trained checkpoint of the models. After encoding of the documents, we save them to an IndexFlatIP index provided by Faiss which supports fast inner product calculation. During the inference, we set the number of the documents retrieved by Faiss (i.e., R in Section 3.3) to 1000*k."
+    }, {
+      "heading" : "4.3 Retrieval Performance",
+      "text" : "MS MARCO Since our goal is to improve the firststage retrieval performance, we mainly compare our model with other first-stage retrieval models including: docT5Query(Nogueira and Lin, 2020), DeepCT(Dai and Callan, 2019), RepBERT(Zhan et al., 2020), ANCE (First-P)(Xiong et al., 2020), ME-BERT(Luan et al., 2020), ColBERT(Khattab and Zaharia, 2020).\nTable 1 shows the results on the passage ranking task. We can see that our model outperforms other models except the ColBERT. However, our method is more efficient than ColBERT in terms of the time complexity (O(mn) vs O(kn), k << m). We think the margin is acceptable considering the trade-off between time and accuracy. Comparing\nto ME-BERT and ANCE, we can see that our proposed method can generate more effective representations. Noticing that ME-BERT adopts a BERT large encoder which has a more powerful language understanding ability than the BERT base encoder in our model, our proposed method is effective enough to bridging the gap.\nTable 2 shows the results on the document ranking task. Our model outperforms other models by a large margin. That is probably because the average length of the documents is much longer than the length of passages and our method can make full use of aggregating the semantics of the whole document.\nOpenQA As for the OpenQA dataset, we compare our model with the DPR model(Karpukhin et al., 2020) which is a typical Bi-encoder + independent aggregator structure. Table 3 shows the result of the test set of Natural Questions and Trivia QA and the result of the development set of SQuAD. We can see that our model is better than other models especially in the SQuAD dataset. To explore the possible causal link between the performance and the characteristic of the datasets, we examine the questions corresponding to one document in the training set of different datasets, and find the average number of questions in Trivia QA, Natural Questions and SQuAD are 1.1, 1.4, and 2.7, respectively. It means that the documents in SQuAD corresponds to more questions in comparison with\nother datasets which may indicate that the passages in SQuAD contain more distinct information than other two datasets. Thus, our method can take full advantage of aggregating different information into clusters."
+    }, {
+      "heading" : "4.4 Efficiency Analysis",
+      "text" : "We run our model on a single Nvidia Tesla V100 32GB GPU for the MS MARCO document retrieval task and record the time spent by each phase, as shown in Table 4. Leveraging the powerful parallel computation ability of GPU, the document can be quickly passed through the BERT encoder. It is quite surprising that the K-means algorithm costs more time than BERT given that the time complexity of K-means is less than the deep Transformer in theory. Presumably, this is because our K-means implementation includes a for-loop during the updating step which is not friendly for parallel computing. This part can be optimized using a more parallel friendly implementation. To retrieve documents for new queries, the queries should be firstly encoded. The encoding of queries usually spends less time than the documents because the length is shorter. Next, we record the retrieval time cost by each query with or without the help of the optimization mentioned in Section 3.3. We can find that the optimization can accelerate the retrieval, saving non-trivial time, which confirms the effectiveness of the proposed optimization. To compare our approach with other different aggregators, we also record the retrieval time using independent\naggregator and late interaction aggregator. We can see that our model spends an amount of time near to the independent aggregator and outperforms late interaction aggregator by a large margin."
+    }, {
+      "heading" : "4.5 Ablation Study",
+      "text" : "We conduct ablation study on the development set of MS MARCO document ranking task. The results are shown in Table 5. We firstly change the cluster initialization strategy to random. Clearly, the performance drops dramatically since the training becomes unstable. Next, we try to remove the ANCE training mechanism which alleviates the discrepancy between training and inference. We can find that although the performance decreases, it can still outperform the ANCE and the ME-BERT model, showing the effectiveness of the method proposed in this paper. Finally, we compare the performance under different number of clusters (k = 4, 8, 16, 32). We find that the model achieves the best performance when k = 16 but the margin leading k = 8 is not significant. Besides, when k = 32, the performance drops by a large margin. We infer the reason is that the documents do not have such a number of individual clusters. As a result, the clustering algorithm is hard to converge."
+    }, {
+      "heading" : "4.6 How Do the Cluster Centroids Work",
+      "text" : "Although the performance of the ranking metrics like MRR show the effectiveness of the our method, we still need an in-depth view of how the cluster centroid based embeddings improve the model\nagainst other methods. In this section, we try to show it by analyzing how the document embeddings affect the value of the loss function.\nGiven a query q and its relative document d, the training objective is to minimize the loss function in the following form:\nL = −log softmax(yd) (8)\nwhere yd is computed as Eq. 6. Next, we can see how a single step of gradient descent alters the loss value by analyzing the gradient of the loss function with respect to the document embeddings. For each document embedding cj , we have:\nOdLd =(yd − 1)eqOed (9) Ojed =r(cj)Ocj (10)\nr(cj) =[1 + ( ∑ j′ 6=j aj′(eqcj − eqcj′))]aj (11)\nwhere OdL means the gradient of loss with respect to document d and Ojed means the gradient of ed with respect to cj . Details of the derivation are shown in the Appendix. The absolute value of r(cj) can be interpreted as a weight of how much the cj can contribute to the loss value. For example, if we feed the model with document embedding producing large positive r(cj), a single gradient descent step would decrease the loss value faster than small r(cj).\nTo verify whether the cluster centroids are more effective than other document embeddings, we compare our model on MS MARCO document ranking task with two other models: the first one adopts the first k token embeddings as the document embeddings like Poly-Encoder(firstk)(Humeau et al., 2019) and the second one adopts k randomly selected token embeddings as the document embeddings. Other parts of the model remain unchanged. Ideally, we expect (1) at least one of the document embeddings can match its relative query embedding and (2) multiple document embeddings\ncan capture different semantic information of the document. We use the max value of r(cj) among multiple document embeddings to evaluate (1) and use the variance of r(cj) among the multiple embeddings of the same document to evaluate (2). We plot them during the training as shown in Figure 2.\nAt the beginning of the training, the loss value, max(r(cj)) and var(r(cj)) of the models are relatively high and rapidly decrease. When the decreasing of the loss slows down, our model can provide a much higher max(r(cj)) and lower loss. Besides, var(r(cj)) of our model is also higher than others indicating the document embeddings are different with each other. We infer that this is because the cluster algorithm expands the distance of the cluster centroids, i.e., cj and c′j , making the embeddings more distinct with each other. Assuming i = argmaxj(r(cj)), clustering produces larger r(ci) and lower r(ci′) as shown in Eq. 11. From Eq. 9-10, we can see that large r(ci) can amplify the impact of eq to ci making ci more approximate to eq. Therefore, the gradient descent can do an accurate update for the specific document embedding ci towards eq while leaves c′i (should represents information other than eq) less changed. As a result, the ci which is nearer to eq dominates the loss to reduce more than other models."
+    }, {
+      "heading" : "5 Conclusions",
+      "text" : "In this paper, we propose a method to improve the performance of the first-stage retrieval model which is based on Bi-encoder and semi-interactive aggregator. Specifically, our method mimics the real queries by an iterative K-means clustering algorithm. To accelerate the retrieval process, we also optimize the softmax matching function by filtering out some documents using argmax operation. We conduct experiments on the MS MARCO and OpenQA datasets. Through the analysis of the retrieval quality and efficiency, we can confirm the proposed approach is both effective and efficient."
+    }, {
+      "heading" : "A Appendices",
+      "text" : "First, the gradient of the loss function with respect to the final document embedding ed is in the following form:\nOdLd = −O log softmax(yd) = −(O(eqed)− O ∑ d′ yd′(eqed′))\n= −eqOed + ydeqOed = (yd − 1)eqOed\nwhere d′ includes the positive documents and sampled negative documents during the training. Since we only consider the gradient of the positive document, we ignore the gradients with respect to other documents. Next, ignoring eq which would not affect the gradient of the document embeddings, we can compute the gradient with respect to the pseudo query embeddings cj in the following form:\nOed =O( k∑\nj=1\najcj)\n= k∑\nj=1\n(ajOcj + Oajcj)\n= k∑\nj=1\n(ajOcj + ajO log ajcj)\n= k∑\nj=1\n(ajOcj + aj [O(eqcj)− k∑\nj′=1\naj′O(eqcj′)]cj)\n= k∑ j=1 (ajOcj + ajcj(eqOcj − k∑ j′=1 aj′O(eqcj′))) = k∑\nj=1\n(ajOcj + ajcjeqOcj − ajcjajeqOcj−\n( k∑ j′ 6=j aj′eqOcj′)ajcj)\nNow, we consider the gradient with respect to a\nsingle document embedding cj , we have:\nOjed =[aj + ajcjeq − ajcjajeq− ( ∑ j 6=j′ ajcj′eqaj)]Ocj\n=[aj + ajeqcj − a2jeqcj− ajeq( ∑ j′ 6=j aj′cj′)]Ocj\n=[aj + aj(1− aj)eqcj− ajeq( ∑ j′ 6=j aj′cj′)]Ocj\n=[aj + ajeq((1− aj)cj − ( ∑ j′ 6=j aj′cj′))]Ocj\n=[aj + ajeq( ∑ j′ 6=j aj′cj − ( ∑ j′ 6=j aj′cj′))]Ocj\n=[aj + ajeq( ∑ j′ 6=j aj′(cj − cj′))]Ocj\n=[1 + ( ∑ j′ 6=j aj′(eqcj − eqcj′))]ajOcj"
+    } ],
+    "references" : [ {
+      "title" : "Dipair: Fast and accurate distillation for trillionscale text matching and pair modeling",
+      "author" : [ "Jiecao Chen", "Liu Yang", "Karthik Raman", "Michael Bendersky", "Jung-Jung Yeh", "Yun Zhou", "Marc Najork", "Danyang Cai", "Ehsan Emadzadeh." ],
+      "venue" : "CoRR,",
+      "citeRegEx" : "Chen et al\\.,? 2020",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Overview of the trec 2019 deep learning track",
+      "author" : [ "Nick Craswell", "Bhaskar Mitra", "Emine Yilmaz", "Daniel Campos", "Ellen M. Voorhees" ],
+      "venue" : null,
+      "citeRegEx" : "Craswell et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Craswell et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Context-aware sentence/passage term importance estimation for first stage retrieval",
+      "author" : [ "Zhuyun Dai", "Jamie Callan." ],
+      "venue" : "CoRR, abs/1910.10687.",
+      "citeRegEx" : "Dai and Callan.,? 2019",
+      "shortCiteRegEx" : "Dai and Callan.",
+      "year" : 2019
+    }, {
+      "title" : "Neural ranking models with weak supervision",
+      "author" : [ "Mostafa Dehghani", "Hamed Zamani", "Aliaksei Severyn", "Jaap Kamps", "W. Bruce Croft." ],
+      "venue" : "CoRR, abs/1704.08803.",
+      "citeRegEx" : "Dehghani et al\\.,? 2017",
+      "shortCiteRegEx" : "Dehghani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "BERT: pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "CoRR, abs/1810.04805.",
+      "citeRegEx" : "Devlin et al\\.,? 2018",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Modularized transfomer-based ranking framework",
+      "author" : [ "Luyu Gao", "Zhuyun Dai", "Jamie Callan." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing, EMNLP 2020, Online, November 16-20, 2020, pages 4180–",
+      "citeRegEx" : "Gao et al\\.,? 2020",
+      "shortCiteRegEx" : "Gao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deep Learning",
+      "author" : [ "Ian Goodfellow", "Yoshua Bengio", "Aaron Courville." ],
+      "venue" : "MIT Press. http://www. deeplearningbook.org.",
+      "citeRegEx" : "Goodfellow et al\\.,? 2016",
+      "shortCiteRegEx" : "Goodfellow et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Learning deep structured semantic models for web search using clickthrough data",
+      "author" : [ "Po-Sen Huang", "Xiaodong He", "Jianfeng Gao", "Li Deng", "Alex Acero", "Larry Heck." ],
+      "venue" : "Proceedings of the 22nd ACM International Conference on Information",
+      "citeRegEx" : "Huang et al\\.,? 2013",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Real-time inference in multi-sentence tasks with deep pretrained transformers",
+      "author" : [ "Samuel Humeau", "Kurt Shuster", "Marie-Anne Lachaux", "Jason Weston." ],
+      "venue" : "CoRR, abs/1905.01969.",
+      "citeRegEx" : "Humeau et al\\.,? 2019",
+      "shortCiteRegEx" : "Humeau et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Billion-scale similarity search with gpus",
+      "author" : [ "Jeff Johnson", "Matthijs Douze", "Hervé Jégou." ],
+      "venue" : "arXiv preprint arXiv:1702.08734.",
+      "citeRegEx" : "Johnson et al\\.,? 2017",
+      "shortCiteRegEx" : "Johnson et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Dense passage retrieval for open-domain question answering",
+      "author" : [ "Vladimir Karpukhin", "Barlas Oguz", "Sewon Min", "Patrick S.H. Lewis", "Ledell Wu", "Sergey Edunov", "Danqi Chen", "Wen-tau Yih." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Meth-",
+      "citeRegEx" : "Karpukhin et al\\.,? 2020",
+      "shortCiteRegEx" : "Karpukhin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Colbert: Efficient and effective passage search via contextualized late interaction over BERT",
+      "author" : [ "Omar Khattab", "Matei Zaharia." ],
+      "venue" : "Proceedings of the 43rd International ACM SIGIR conference on research and development in Information Retrieval, SI-",
+      "citeRegEx" : "Khattab and Zaharia.,? 2020",
+      "shortCiteRegEx" : "Khattab and Zaharia.",
+      "year" : 2020
+    }, {
+      "title" : "Pretrained transformers for text ranking: BERT and beyond",
+      "author" : [ "Jimmy Lin", "Rodrigo Nogueira", "Andrew Yates." ],
+      "venue" : "CoRR, abs/2010.06467.",
+      "citeRegEx" : "Lin et al\\.,? 2020",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Roberta: A robustly optimized BERT pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "CoRR, abs/1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Sparse, dense, and attentional representations for text retrieval",
+      "author" : [ "Yi Luan", "Jacob Eisenstein", "Kristina Toutanova", "Michael Collins." ],
+      "venue" : "CoRR, abs/2005.00181.",
+      "citeRegEx" : "Luan et al\\.,? 2020",
+      "shortCiteRegEx" : "Luan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A dual embedding space model for document ranking",
+      "author" : [ "Bhaskar Mitra", "Eric T. Nalisnick", "Nick Craswell", "Rich Caruana." ],
+      "venue" : "CoRR, abs/1602.01137.",
+      "citeRegEx" : "Mitra et al\\.,? 2016",
+      "shortCiteRegEx" : "Mitra et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "MS MARCO: A human generated machine reading comprehension dataset",
+      "author" : [ "Tri Nguyen", "Mir Rosenberg", "Xia Song", "Jianfeng Gao", "Saurabh Tiwary", "Rangan Majumder", "Li Deng." ],
+      "venue" : "CoRR, abs/1611.09268.",
+      "citeRegEx" : "Nguyen et al\\.,? 2016",
+      "shortCiteRegEx" : "Nguyen et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Document ranking with a pretrained sequence-to-sequence model",
+      "author" : [ "Rodrigo Nogueira", "Zhiying Jiang", "Jimmy Lin" ],
+      "venue" : null,
+      "citeRegEx" : "Nogueira et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Nogueira et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "From doc2query to doctttttquery",
+      "author" : [ "Rodrigo Nogueira", "Jimmy Lin" ],
+      "venue" : null,
+      "citeRegEx" : "Nogueira and Lin.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Nogueira and Lin.",
+      "year" : 2020
+    }, {
+      "title" : "Sentencebert: Sentence embeddings using siamese bertnetworks",
+      "author" : [ "Nils Reimers", "Iryna Gurevych." ],
+      "venue" : "CoRR, abs/1908.10084.",
+      "citeRegEx" : "Reimers and Gurevych.,? 2019",
+      "shortCiteRegEx" : "Reimers and Gurevych.",
+      "year" : 2019
+    }, {
+      "title" : "A latent semantic model with convolutional-pooling structure for information retrieval",
+      "author" : [ "Yelong Shen", "Xiaodong He", "Jianfeng Gao", "Li Deng", "Grégoire Mesnil." ],
+      "venue" : "Proceedings of the 23rd ACM International Conference on Conference on Information",
+      "citeRegEx" : "Shen et al\\.,? 2014",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Approximate nearest neighbor negative contrastive learning for dense text retrieval",
+      "author" : [ "Lee Xiong", "Chenyan Xiong", "Ye Li", "Kwok-Fung Tang", "Jialin Liu", "Paul Bennett", "Junaid Ahmed", "Arnold Overwijk." ],
+      "venue" : "CoRR, abs/2007.00808.",
+      "citeRegEx" : "Xiong et al\\.,? 2020",
+      "shortCiteRegEx" : "Xiong et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Repbert: Contextualized text embeddings for first-stage retrieval",
+      "author" : [ "Jingtao Zhan", "Jiaxin Mao", "Yiqun Liu", "Min Zhang", "Shaoping Ma." ],
+      "venue" : "CoRR, abs/2006.15498.",
+      "citeRegEx" : "Zhan et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Learning to reweight terms with distributed representations",
+      "author" : [ "Guoqing Zheng", "Jamie Callan." ],
+      "venue" : "Proceedings of the 38th International ACM SIGIR Conference on Research and Development in Information Retrieval, Santiago, Chile, August 9-13,",
+      "citeRegEx" : "Zheng and Callan.,? 2015",
+      "shortCiteRegEx" : "Zheng and Callan.",
+      "year" : 2015
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 2,
+      "context" : "Since the recall of the first-stage model determines the upper bound of the ranking quality, there is lots of work focusing on improving the recall performance(Dai and Callan, 2019; Nogueira et al., 2020; Nogueira and Lin, 2020).",
+      "startOffset" : 159,
+      "endOffset" : 228
+    }, {
+      "referenceID" : 17,
+      "context" : "Since the recall of the first-stage model determines the upper bound of the ranking quality, there is lots of work focusing on improving the recall performance(Dai and Callan, 2019; Nogueira et al., 2020; Nogueira and Lin, 2020).",
+      "startOffset" : 159,
+      "endOffset" : 228
+    }, {
+      "referenceID" : 18,
+      "context" : "Since the recall of the first-stage model determines the upper bound of the ranking quality, there is lots of work focusing on improving the recall performance(Dai and Callan, 2019; Nogueira et al., 2020; Nogueira and Lin, 2020).",
+      "startOffset" : 159,
+      "endOffset" : 228
+    }, {
+      "referenceID" : 4,
+      "context" : "Recently, inspired by the great success of pre-trained language models like BERT/RoBERTa(Devlin et al., 2018; Liu et al., 2019) in NLP applications, the dense passage retriever is proposed which encodes the doc-",
+      "startOffset" : 88,
+      "endOffset" : 127
+    }, {
+      "referenceID" : 13,
+      "context" : "Recently, inspired by the great success of pre-trained language models like BERT/RoBERTa(Devlin et al., 2018; Liu et al., 2019) in NLP applications, the dense passage retriever is proposed which encodes the doc-",
+      "startOffset" : 88,
+      "endOffset" : 127
+    }, {
+      "referenceID" : 10,
+      "context" : "uments by fine-tuning the huge language models (Karpukhin et al., 2020) and achieves state-of-theart results benefiting from their powerful contextual semantic representative ability.",
+      "startOffset" : 47,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 4,
+      "context" : "Following the typical fine-tuning paradigm on many NLP tasks(Devlin et al., 2018), a BERT en-",
+      "startOffset" : 60,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 8,
+      "context" : "Such architecture is called Cross-encoder (Humeau et al., 2019).",
+      "startOffset" : 42,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 8,
+      "context" : "In contrast, Bi-encoder(Humeau et al., 2019) encodes the queries and documents separately and computes the matching scores between their dense representations.",
+      "startOffset" : 23,
+      "endOffset" : 44
+    }, {
+      "referenceID" : 9,
+      "context" : "With the help of Approximate Nearest Neighbor (ANN) search approaches(Johnson et al., 2017), the retrieval process can be further boosted.",
+      "startOffset" : 69,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 11,
+      "context" : "To enrich the representations of the documents produced by Bi-encoder, some researchers extend the original Bi-encoder by employing more delicate structures like laterinteraction(Khattab and Zaharia, 2020), Poly-",
+      "startOffset" : 178,
+      "endOffset" : 205
+    }, {
+      "referenceID" : 8,
+      "context" : "5055 Encoder(Humeau et al., 2019), multi-embedding model(Luan et al.",
+      "startOffset" : 12,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 18,
+      "context" : "DocT5query(Nogueira and Lin, 2020) augments the document with possible query terms which are generated by a sequence-to-sequence model.",
+      "startOffset" : 10,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 15,
+      "context" : ", 2014), DESM(Mitra et al., 2016) encode the query and document using their n-gram features or word embeddings independently and then compute their similarities.",
+      "startOffset" : 13,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 19,
+      "context" : "Sentence-BERT(Reimers and Gurevych, 2019) is a typical Bi-encoder model which encodes the text using BERT and calculates the similarity scores by the combination of several basic operations.",
+      "startOffset" : 13,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 5,
+      "context" : "Later on, some variants(Gao et al., 2020; Chen et al., 2020) are proposed.",
+      "startOffset" : 23,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 0,
+      "context" : "Later on, some variants(Gao et al., 2020; Chen et al., 2020) are proposed.",
+      "startOffset" : 23,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 22,
+      "context" : "RepBERT(Zhan et al., 2020) leverages the mean value of the encoded embeddings.",
+      "startOffset" : 7,
+      "endOffset" : 26
+    }, {
+      "referenceID" : 11,
+      "context" : "Late Interaction Aggregator Col-BERT model(Khattab and Zaharia, 2020) employs a late interaction paradigm to reduce the loss of information.",
+      "startOffset" : 42,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 8,
+      "context" : "(Humeau et al., 2019; Luan et al., 2020) adopt this aggregator in their model.",
+      "startOffset" : 0,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 14,
+      "context" : "(Humeau et al., 2019; Luan et al., 2020) adopt this aggregator in their model.",
+      "startOffset" : 0,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 8,
+      "context" : "Specifically, PolyEncoder(learnt-k) (Humeau et al., 2019) model employs k learnable code-vectors as the parameters and attend them with all of the document token",
+      "startOffset" : 36,
+      "endOffset" : 57
+    }, {
+      "referenceID" : 8,
+      "context" : "Besides, Poly-Encoder(first-k) (Humeau et al., 2019) and ME-BERT(Luan et al.",
+      "startOffset" : 31,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2019) and ME-BERT(Luan et al., 2020) both adopt the first k document token embeddings as the compressed document represen-",
+      "startOffset" : 19,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 8,
+      "context" : "Comparing with existing work, we find that the Poly-Encoder(learnt-k) (Humeau et al., 2019) is equivalent to learning multiple fixed global pseudo",
+      "startOffset" : 70,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 8,
+      "context" : "Conversely, the PolyEncoder(first-k) (Humeau et al., 2019) and MEBERT(Luan et al.",
+      "startOffset" : 37,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2019) and MEBERT(Luan et al., 2020) use the first k document token embeddings as the pseudo query embeddings, i.",
+      "startOffset" : 18,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 9,
+      "context" : "Faiss(Johnson et al., 2017) is one of the most popular ANN search libraries.",
+      "startOffset" : 5,
+      "endOffset" : 27
+    }, {
+      "referenceID" : 6,
+      "context" : "Such substitution is reasonable since softmax is a derivative and smooth version of argmax (Goodfellow et al., 2016).",
+      "startOffset" : 91,
+      "endOffset" : 116
+    }, {
+      "referenceID" : 16,
+      "context" : "MS MARCO Dataset(Nguyen et al., 2016) is a large-scale ad-hoc text retrieval dataset built for two separate tasks: document ranking and passage ranking.",
+      "startOffset" : 16,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 1,
+      "context" : "2019 Deep Learning Track(Craswell et al., 2020) where test sets are provided.",
+      "startOffset" : 24,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 10,
+      "context" : "OpenQA Dataset(Karpukhin et al., 2020) is designed for open domain question answering.",
+      "startOffset" : 14,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 10,
+      "context" : "To improve the training efficiency, we adopt the inbatch negatives technique(Karpukhin et al., 2020) which takes all other documents in the batch ex-",
+      "startOffset" : 76,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 21,
+      "context" : "To reduce the discrepancy between the training and inference process, we also adopt the ANCE(Xiong et al., 2020) training paradigm which constructs new hard negative samples us-",
+      "startOffset" : 92,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 18,
+      "context" : "MS MARCO Since our goal is to improve the firststage retrieval performance, we mainly compare our model with other first-stage retrieval models including: docT5Query(Nogueira and Lin, 2020), DeepCT(Dai and Callan, 2019), RepBERT(Zhan et al.",
+      "startOffset" : 165,
+      "endOffset" : 189
+    }, {
+      "referenceID" : 2,
+      "context" : "MS MARCO Since our goal is to improve the firststage retrieval performance, we mainly compare our model with other first-stage retrieval models including: docT5Query(Nogueira and Lin, 2020), DeepCT(Dai and Callan, 2019), RepBERT(Zhan et al.",
+      "startOffset" : 197,
+      "endOffset" : 219
+    }, {
+      "referenceID" : 22,
+      "context" : "MS MARCO Since our goal is to improve the firststage retrieval performance, we mainly compare our model with other first-stage retrieval models including: docT5Query(Nogueira and Lin, 2020), DeepCT(Dai and Callan, 2019), RepBERT(Zhan et al., 2020), ANCE (First-P)(Xiong et al.",
+      "startOffset" : 228,
+      "endOffset" : 247
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2020), ANCE (First-P)(Xiong et al., 2020), ME-BERT(Luan et al.",
+      "startOffset" : 23,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2020), ME-BERT(Luan et al., 2020), ColBERT(Khattab and Zaharia, 2020).",
+      "startOffset" : 16,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 10,
+      "context" : "OpenQA As for the OpenQA dataset, we compare our model with the DPR model(Karpukhin et al., 2020) which is a typical Bi-encoder + independent aggregator structure.",
+      "startOffset" : 73,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 8,
+      "context" : "To verify whether the cluster centroids are more effective than other document embeddings, we compare our model on MS MARCO document ranking task with two other models: the first one adopts the first k token embeddings as the document embeddings like Poly-Encoder(firstk)(Humeau et al., 2019) and the second one adopts k randomly selected token embeddings as the document embeddings.",
+      "startOffset" : 271,
+      "endOffset" : 292
+    } ],
+    "year" : 2021,
+    "abstractText" : "Recently, the retrieval models based on dense representations have been gradually applied in the first stage of the document retrieval tasks, showing better performance than traditional sparse vector space models. To obtain high efficiency, the basic structure of these models is Bi-encoder in most cases. However, this simple structure may cause serious information loss during the encoding of documents since the queries are agnostic. To address this problem, we design a method to mimic the queries on each of the documents by an iterative clustering process and represent the documents by multiple pseudo queries (i.e., the cluster centroids). To boost the retrieval process using approximate nearest neighbor search library, we also optimize the matching function with a two-step score calculation procedure. Experimental results on several popular ranking and QA datasets show that our model can achieve state-of-the-art results.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

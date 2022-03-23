@@ -1,0 +1,585 @@
+{
+  "name" : "2021.acl-long.560.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Language Embeddings for Typology and Cross-lingual Transfer Learning",
+    "authors" : [ "Dian Yu", "Taiqi He", "Kenji Sagae" ],
+    "emails" : [ "sagae}@ucdavis.edu" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 7210–7225\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n7210"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Recent efforts to leverage multilingual datasets in language modeling (Conneau and Lample, 2019; Devlin et al., 2019) and machine translation (Johnson et al., 2017; Lu et al., 2018) highlight the potential of multilingual models that can perform well across various languages, including ones for which training sets are scarce. Most of the current multilingual research focuses on learning invariant representations or removing language-specific features after training (Libovický et al., 2020; Bjerva and Augenstein, 2021). Despite recent advances, there are still limitations. Previous work has shown that similar languages can benefit from sharing parameters, but less similar languages do not help (Zoph et al., 2016; Pires et al., 2019). However, in spite of some interests in typology (Ponti et al., 2019), identifying similar languages is nontrivial, especially for less studied ones. In addition, as Zhao et al. (2019) suggest, learning invariant representations can actually harm model performance.\n∗Equal contribution. 1Our learned language embeddings and code available at https://github.com/DianDYu/language_ embeddings\nTherefore, in order to leverage language agnostic and language specific information effectively, we propose to generate language representations and examine the interactions among different language representations.\nOne way to represent language identity within a multilingual model is the use of language codes, or dense vectors representing language embeddings. If languages are represented with vectors that capture cross-lingual similarities and differences across different dimensions, this information can guide a multilingual model regarding what and how much of the information in the model should be shared among specific languages. Much of the previous research focused on generating language embeddings using prior knowledge such as word order (Ammar et al., 2016; Littell et al., 2017), using a parallel corpus (Bjerva et al., 2019b; Östling and Tiedemann, 2017), and using language codes as an indicator to distinguish input and output words in a shared vocabulary into different languages (Johnson et al., 2017; Conneau and Lample, 2019). In contrast, our work focuses on generating and using language embeddings more effectively as softsharing (de Lhoneux et al., 2018) of parameters among various languages in a single model. Furthermore, we are motivated by a more difficult setting where the properties of each language are not known in advance, and no parallel data is available.\nWe investigate whether we can generate language embeddings to represent typological information derived solely from corpora in each language without the use of any parallel text, translation models, or prior knowledge. Inspired by the findings that structural similarity, especially word ordering, is crucial in large pretrained multilingual language models (K et al., 2020), we propose an unsupervised method leveraging denoising autoencoders (Vincent et al., 2008) to generate language embeddings. We show that our ap-\nproach captures typological information by comparing the information in our language embeddings to language-specific information in the World Atlas of Language Structures (WALS, Dryer and Haspelmath, 2013). In addition, to address the question of whether the learned language embeddings can help in downstream language tasks, we plug-in the language embeddings to cross-lingual dependency parsing and natural language inference (XNLI, Conneau et al., 2018) in a zero-shot learning setting, obtaining performance improvements."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "Previous related research approached language representations by using prior knowledge, dense language embeddings with multilingual parallel data, or no prior knowledge about languages but having language embeddings primarily as a signal to identify different languages."
+    }, {
+      "heading" : "2.1 Feature-based language representations",
+      "text" : "An intuitive method to represent language information is through explicit information such as known word order patterns (Ammar et al., 2016; Little, 2017), part-of-speech tag sequences (Wang and Eisner, 2017), and syntactic dependencies (Östling, 2015). Littell et al. (2017) propose sparse vectors using pre-defined language features such as known typological and geographical information for a given language. However, linguistic features may not be available for less studied languages. Our proposed approach assumes no prior knowledge about each language, deriving typological information from plain text alone. Once a vector for a target language is created, it contains many typological features of the target language, and can be used for transfer learning in downstream tasks."
+    }, {
+      "heading" : "2.2 Dense representation with parallel data",
+      "text" : "Other previous work has also explored dense continuous representations of languages. One method is to append a language token to the beginning of a source sentence and train the language embeddings with a many-to-one neural machine translation model (Malaviya et al., 2017; Tan et al., 2019). Another method is to concatenate language embedding vectors to a character level language model (Östling and Tiedemann, 2017; Bjerva and Augenstein, 2018; Bjerva et al., 2019a). These two methods require parallel translation data such as Bible and TED Talk. Rabinovich et al. (2017)\nderive typological information in the form of phylogenetic trees from translation of different languages into English and French using the European Parliament speech corpus (Koehn, 2005), based on the assumption that unique language properties are present in translations (Baker et al., 1993; Toury, 1995). Bjerva et al. (2019b) abstract the translated sentences from other languages to English with part-of-speech tags, function words, dependency relation tags, and constituent tags, and train the embedding vectors by concatenating a language representation with a symbol representation. In comparison, we generate our language embeddings using no parallel corpora or linguistic annotation, which is suitable for a wider variety of languages, including in situations where no parallel data or prior knowledge is available."
+    }, {
+      "heading" : "2.3 Language vectors without parallel data",
+      "text" : "The approach that is closest to ours is XLM (Conneau and Lample, 2019), which adds language embeddings to each byte pair embedding using Wikipedia data in various languages with a masked language modeling objective. However, similar to Johnson et al. (2017), the trained language embeddings only serve as an indicator to the encoder and decoder to identify input and output words in the vocabulary as belonging to different languages. In fact, in a follow up paper, XLM-R (Conneau et al., 2020), language embeddings are removed from the model for better code-switching, which suggests that the learned language embeddings may not be optimal for cross-lingual tasks. In this paper, following the finding that structural similarity is critical in multilingual language models (K et al., 2020), we generate language embeddings from a denoising autoencoder objective and demonstrate that they can be effectively used in cross-lingual zero-shot learning."
+    }, {
+      "heading" : "3 Generating Language Embeddings",
+      "text" : "We first present the data used to generate language embeddings, then introduce our approach inspired by denoising autoencoders (Vincent et al., 2008)."
+    }, {
+      "heading" : "3.1 Data and preprocessing",
+      "text" : "To train our multilingual model, we use the CommonCrawl dataset from the CoNLL 2017 shared task (Ginter et al., 2017) to obtain monolingual plain text in various languages. To represent words across different languages in a shared space, we\nuse the unsupervised pretrained aligned word embeddings from MUSE (Lample et al., 2018). We choose the 29 languages from the CoNLL 2017 monolingual text dataset for which MUSE pretrained embeddings are available.2 A subset of 200K sentences are selected randomly for each language. The languages we use are: English, French, Romanian, Arabic, German, Russian, Bulgarian, Greek, Slovak, Catalan, Hebrew, Slovene, Croatian, Hungarian, Spanish, Czech, Indonesian, Swedish, Danish, Italian, Turkish, Dutch, Norwegian Bokmål, Ukrainian, Estonian, Polish, Vietnamese, Finnish, and Portuguese, which cover ten language genera.\nWe experiment with two types of word representations in training language embeddings. The most straightforward way is to use the pretrained MUSE embedding for each specific language (we refer to this setting as Spe.). We also experimented with mapping word embeddings from different languages into one language (English in our experiments because it is used as the pivot language in MUSE embeddings, Eng.) for three reasons. First, because MUSE is mainly trained by an orthogonal rotation matrix and the distances among words in each language are still maintained thereafter, language identities can potentially be revealed. The result is that the learned language embeddings reflect the features incorporated in the unsupervised word mapping methods instead of the intrinsic language features. Second, we hypothesize that mapping to a single language space requires the model to encode more information in language embeddings as their language identities instead of relying on their revealed ones. Finally, using shared word embeddings can reduce the vocabulary size for memory concerns by effectively reducing both the lookup table size and the output softmax dimension size.\nFor Eng. word embedding mapping, we align words from different languages to English embeddings using cross-domain similarity local scaling (CSLS, Lample et al., 2018). The vocabulary of our model is restricted to the words in the English MUSE embeddings, and all unknown words are replaced with a special unknown token. Although imperfect mapping from each language to English tokens may introduce noise (see scores in Appendix D) and result in a coarse approximation of the original sentences, crucial syntactic and semantic infor-\n2https://github.com/facebookresearch/ MUSE\nmation should still be present. In our experiments, a language code is appended to each token according to the original language of the sentence. For instance, the German sentence “Er hat den roten Hund nicht gesehen\" would be represented in our Spe. condition as\nEr_de hat_de den_de roten_de Hund_de nicht_de gesehen_de\nand in the Eng. condition as\nhe_de has_de the_de red_de dog_de not_de seen_de\nIntuitively, the idea is to have the words themselves be the same across languages (either through the aligned MUSE embeddings or by direct mapping to English words), and let the additional language code provide to the model the information that would explain the structural differences observed across languages in the training data."
+    }, {
+      "heading" : "3.2 Denoising autoencoder",
+      "text" : "Given a multilingual plain text corpus with sentences in each language (and no parallel text), we first perturb each sentence to create a noisy version of the sentence where its words are randomly shuffled. The training objective is to recover the original sentences, which requires the model to learn how to order words in each language. We hypothesize that compared to language modeling, this will encourage the language embeddings to learn more structural information instead of relying on topics or word co-occurrence to generate meaningful training sentences. We implement our multilingual denoising autoencoder with an LSTM-based (Hochreiter and Schmidhuber, 1997) sequence-tosequence model (Sutskever et al., 2014). The input strings are perturbed sentences and the output strings are the original sentences. See Appendix A.1 for implementation details.\nAfter preprocessing the data, we concatenate a language embedding vector initialized from normal distribution as a language identity feature (the language code mentioned in Section 3.1) to each of the pretrained word embeddings. Since certain languages are more similar to, or more different from, each other, the model will learn how to reorder a sequence of words depending on the specific language. For example, reordering an Italian sentence should be more similar to reordering a Spanish sentence than it is to reordering a German sentence. Because the decoder captures the actual word order of the sentences in each target language, whereas\nthe language codes in the encoder are meant to capture only language identity and no word order information, we use the extracted language embeddings from the decoder in our experiments.3 Each word is represented with a pretrained 300- dimensional vector, and each language embedding is represented with a 50-dimensional vector4. The input token is thus a 350-dimensional vector from the concatenation."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : "To examine the quality of the typological information captured by the language embeddings, we perform intrinsic and extrinsic evaluations. Our intrinsic evaluation consists of predicting linguistic typology and language features from the World Atlas of Language Structures (WALS, Dryer and Haspelmath, 2013). Our extrinsic evaluations are based on cross-lingual dependency parsing and cross-lingual natural language inference (XNLI, Conneau et al., 2018) in a zero-shot learning setting, where a trained model makes predictions on a language not seen during training, but for which a language embedding has been learned from plain monolingual text. In contrast with previous research which applies learned typology to cluster similar languages and train machine translation tasks in clusters (Tan et al., 2019), we explore if we can apply the learned embeddings directly into downstream tasks. We compare three different sets of embeddings based on our approach with three sets of embeddings from previous work:\nSpe. lang_emb represents language embeddings from our proposed denoising autoencoder trained with language specific MUSE embeddings, using CommonCrawl text.\nEng. lang_emb represents language embeddings trained with English MUSE embeddings after mapping words from different languages to English, using CommonCrawl text.\nWiki lang_emb represents language embeddings trained with English MUSE embeddings using Wikipedia. We use the same data selection and preprocessing process as detailed in Section 3.1. We use these embeddings to show the\n3To confirm our assumption about the embeddings for the language codes in the encoder and the decoder, we also performed experiments using the encoder language embeddings. As expected, the results obtained with embeddings from the encoder were inferior in every case tested.\n4We experimented with different dimensions for language embedding and did not observe performance difference.\nimpact of training data. In addition, we use these embeddings to compare with XLM embeddings trained with Wikipedia.\nMalaviya represents language embeddings from Malaviya et al. (2017), trained with a many-to-one machine translation model using Bible parallel data. It has 26 languages in common with our 29 languages except English, Hebrew, and Norwegian. We use these embeddings to represent previous methods of learning language representations from parallel data.5\nXLM mono represents language embeddings trained with XLM model using the same monolingual data as Wiki lang_emb on 29 languages.\nXLM parallel represents language embeddings trained with XLM using monolingual and parallel data from 15 XNLI languages. We extract the embeddings from the publicly available model."
+    }, {
+      "heading" : "4.1 Linguistic typology prediction",
+      "text" : "We first inspect the language embeddings qualitatively through principle component analysis (PCA) visualization. We also use spectral clustering to recover the language genus (language family subgroup) information from the embeddings. To compare the quality of the clusterings quantitatively, we calculate the adjusted Rand index (Hubert and Arabie, 1985) between the generated clusters and the actual language genera."
+    }, {
+      "heading" : "4.2 WALS feature prediction",
+      "text" : "We evaluate the language embeddings on predicting language features in WALS. Each WALS feature describes a characteristic of languages, such as the order of subject, object, and verb. We consider the features for which information is available for more than 50% of the languages we use and cast each feature prediction as a multi-class classification task. We then classify the features into the following categories (see details in Appendix B).\n• Lexicon: usage of specific words, e.g. whether the language has separate words for “hand” and “arm”, etc.;\n• Syntax: mostly related to the relative orders between various types of constituents, including order of subject, object and verb, adpo-\n5We do not evaluate the embeddings from Malaviya et al. (2017) on parsing and XNLI because they do not include English embeddings, which are necessary for a direct comparison. In XNLI, in particular, there is only training data for English.\nsitions and noun phrases, and also features related to syntactic constructions;\n• Partially Morphological (Part. Morph.): features that mainly concern syntax or semantics but either usually relate to morphology (such as inflectional morphemes), or have morphological information coded in the values of the features, e.g. gender systems, order of negative morphemes and verbs;\n• Non-learnable: features that mainly concern morphology, phonology, or phonotactics, and are not learnable from reordering plain text.\nThe categories make it easier to evaluate what the language embeddings capture. We train linear classifiers to predict WALS results. For each feature, we hold out one language and train a classifier on the language embeddings of the rest of the languages to predict the corresponding feature values on the held-out language embedding, in a leaveone-out cross-validation scheme. We then average the accuracy of the features within each category to report the results. In addition to comparing different language embeddings, we also compare to two baselines: a Random baseline, and a Majority baseline (which predicts the most common value for each feature). We repeat this procedure 100 times while randomly permuting the orders of the input vectors to the classifiers to eliminate possible effects due to initial states and report the average and significant scores.\nCompared to a recent shared task where the input is some features of a language (e.g. language family and various WALS features), with optionally pre-computed language embeddings to develop models to predict other features (Bjerva et al., 2020), we investigate if trained language embeddings alone can be used to predict WALS features. In addition, we showed that our language embeddings outperformed a frequency baseline among other baselines (see Section 5.2) compared to Bjerva et al. (2020)."
+    }, {
+      "heading" : "4.3 Cross-lingual dependency parsing",
+      "text" : "Since our language embeddings are trained using a word ordering task, we hypothesize that they capture syntactic information. To verify that meaningful syntactic information is captured in the language embeddings, we use a dependency parsing task where sentences for each target language are parsed with a model trained with treebanks from\nother languages, but no training data for the target language. This can be seen as a form of crosslingual parsing or zero-shot parsing, where multiple source languages are used to train a model for a new target language. Without annotated training data for parsing a target language, the model is expected to leverage treebanks from other languages through language embeddings.\nWe use 16 languages from Universal Dependencies v2.6 (Zeman et al., 2020), representing five distinct language genera (Table 2). We modified Yu Zhang’s implementation6 of biaffine dependency parser (Dozat and Manning, 2017). In specific, we freeze word embeddings, concatenate a 50- dimensional embedding (either the corresponding Eng. language embedding or a random embedding) to the embedding of each token, and not use partof-speech information (since we are assuming no annotated data is available for the target language). The goal of this evaluation is not to obtain stateof-the-art attachment scores, but to find whether a model that uses our language embeddings produces higher attachment scores than a model that instead uses random embeddings of the same size7. While our embeddings should capture syntactic typology, random embeddings would simply indicate to the model the language for each sentence with no information about how languages are related."
+    }, {
+      "heading" : "4.4 XNLI",
+      "text" : "Natural language inference (NLI) is a language understanding task where the goal is to predict textual entailment between a premise and a hypothesis as a three-way classification: neutral, contradiction, and entailment. The XNLI dataset (Conneau et al., 2018) translates English NLI validation and test data into 14 other languages. We evaluate on ten of the XNLI languages which we trained language embeddings with.\nState-of-the-art models on XNLI are Transformers (Vaswani et al., 2017) pretrained on large corpora (Hu et al., 2020). To evaluate if our learned language embeddings (from an LSTM model) can be plugged off-the-shelf into other architectures such as Transformer, we compare with two strong Transformer-based baselines, XLM (Conneau and Lample, 2019. L = 12, H = 1024, 250M params)\n6https://github.com/yzhangcs/parser 7Random embeddings are used to eliminate the effect of different dimensionality. In our preliminary experiments, we found that adding a random embedding performs better than not adding any embedding.\nand XLM-R (Conneau et al., 2020. XLM-RBase: L = 12, H = 768, 270M params; XLM-RLarge: L = 24, H = 1024, 550M params). XLM adds language embeddings together with each word embedding and position embedding as the input embedding in training masked language modeling (MLM, with monolingual data) and/or a translation language modeling (TLM, with translation parallel data). In comparison, XLM-R removes language embedding and is pretrained with MLM on much more data. We train our model on the English MultiNLI (Williams et al., 2018) dataset, and directly evaluate the trained model on the other languages without language-specific fine-tuning, in a zero-shot cross-lingual setting. To select the best checkpoint for test set evaluation, we follow Conneau et al. (2020) by evaluating on the development set of all languages. In addition, we also experiment with a fully zero-shot transfer setting where we select the best checkpoint by evaluating on the English development set. We run the selected checkpoint on the test set of each language and report the accuracy scores. We use the public available XLM model pretrained on 15 XNLI languages with MLM and TLM objectives, and XLM-R pretrained on 100 languages. In order to add our learned language embeddings into XLM and XLM-R models, we normalize our embeddings to have the same variance as the XLM language embeddings, and we learn a simple linear projection\nlayer to map our 50-dimension embeddings (which is frozen during training) to the hidden dimension of corresponding models. We report all results averaged over three random seeds. See Appendix A.2 for implementation details."
+    }, {
+      "heading" : "5 Results and Analysis",
+      "text" : "We show results of our proposed language embeddings in comparison to the baselines and language vectors generated from previous work on linguistic typology, WALS, cross-lingual parsing, and XNLI. We report results with Eng. language embeddings. Detailed comparison to other language embeddings on each task can be found in Appendix C."
+    }, {
+      "heading" : "5.1 Linguistic Typology",
+      "text" : "Figure 1 shows a two-dimensional PCA projec-\ntion of the learned language embeddings. Due to space limitations, we only show the projection of the language embeddings using words mapped to English embeddings; using language-specific embeddings produces similar results. We can clearly see the clustering of Slavic languages on the lower left, Romance on the right, and Germanic on the upper left. Our dataset also contains two Finnic languages, which appear right above the Slavic languages, and two Semitic languages, which appear on the lower right. The other languages, Vietnamese, Indonesian, Turkish, and Greek, are from language groups underrepresented in our dataset, and appear either mixed with the Germanic languages (in the case of Hungarian, Turkish and Greek), or far on the lower right corner (Vietnamese, Indonesian). Romanian, a Romance language, appears miscategorized by our language embeddings. While it is close to the cluster of romance languages, it appears closer to the singleton languages in the dataset and to the two Semitic languages.\nIn addition to actual language relationships represented by color, we also present the result of spectral clustering with four categories through different shapes. Results illustrate that our language embeddings can capture similarities and dissimilarities among language families. In comparison, language embeddings generated by Malaviya et al. (2017) do not capture clearly visible language relationships (see Appendix C.3). Quantitatively, clusters from our learned language embeddings (Eng.) achieve a much higher Rand score (0.58) compared to previous language embeddings, as shown in Table 1 (last column). This indicates that our clusters closely align with true language families."
+    }, {
+      "heading" : "5.2 WALS predictions",
+      "text" : "Table 1 shows the prediction accuracy for WALS features, averaged within each category. Unlike the language representations generated by Bjerva et al. (2019b), which do not outperform the majority baseline without finetuning, our derived language embeddings perform significantly better than the baselines and previous methods in lexicon, syntax, and partially morphological categories. Note that even though the training objective of the denoising autoencoder is to recover a language-specific word order, the model does not use linguistic features such as grammatical relation labels or subjectverb-object order information. Instead, it derives\ntypological information from text alone through the word reordering task. The language embeddings generated with words mapped to English embeddings (Wiki and Eng.) generally produce more accurate predictions, with the models trained from Wikipedia producing slightly better results likely due to cleaner training data. We show WALS results comparison on 29 languages and comparison to XLM parallel in Appendix C.1. Results from different settings show that we do not need clean data (e.g. Wiki) to generate language embeddings."
+    }, {
+      "heading" : "5.3 Cross-lingual dependency parsing",
+      "text" : "The cross-lingual dependency parsing results in Table 2 indicate that our language embeddings are in fact effective in allowing a parsing model to leverage information from different languages to parse a\nnew language. Substantial accuracy improvements were observed for 13 of the 16 languages used in the experiment, while accuracy degradation was observed for two languages. Notably, there were large improvements for each of the four Romance languages used (ranging from 7.32 to 10.62 absolute points), and a steep drop in accuracy for Hebrew (-8.21). Although a sizeable improvement was observed for the only other language from the same genus in our experiment (Arabic, with a 4.07 improvement), accuracy for the two Semitic languages was far lower than the accuracy for the other genera. This is likely due to the over-representation of Indo-European languages in our dataset, and the lower quality of the MUSE word alignments for these languages (Appendix D).\nWhile our accuracy results are well below current results obtained with supervised methods (i.e. using training data for each target language), the average accuracy improvement of 3.4 over the baseline, which uses the exact same parsing setup but without language embeddings, shows that our language embeddings encode actionable syntactic information, corroborating our results using WALS."
+    }, {
+      "heading" : "5.4 XNLI prediction",
+      "text" : "The XNLI results in Table 3 indicate that our language embeddings, which capture relationships between each test language and the training language (English), are also effective in tasks involving higher-level semantic information. We observe consistent performance gains over very strong baselines in all settings and models for each language. Specifically, in the fully zero-shot setting where\nwe select the best model based on the English development data, adding our learned language embeddings increases 1.1 absolute points on average for XLM. The same trend holds for XLM-R results, not shown due to space limits. On the other hand, if we select the best model on the averaged development set following Conneau et al. (2020), we observe averaged performance gain of 0.9, 0.5, and 0.6 absolute points for XLM, XLM-RBase, and XLM-RLarge, respectively. We conjecture that the lower improvement on XLM-R models compared to XLM is due to that XLM-R was pretrained without language embeddings. When we add our language embeddings to the original word and positional embeddings, the distribution of the overall input embedding such as variance is changed. Hence, the language embeddings can be considered as noise at the beginning, making it hard to learn and incorporate additional information. However, the improvement is consistent over all strong baselines, suggesting that our language embeddings, which are not optimized towards any specific task, can be leveraged off-the-shelf in large pretrained models and achieve better zero-shot transfer ability in downstream tasks."
+    }, {
+      "heading" : "5.5 Discussion",
+      "text" : "Our results in each of the intrinsic and extrinsic evaluation settings demonstrate that our denoising autoencoder objective, which has been shown to be effective in various language model pre-training tasks (Lewis et al., 2020; Raffel et al., 2020), is effective for learning language embeddings that capture typological information and can be used to\nimprove cross-lingual inference. Even though reconstructing the original sentence from a randomly ordered string is the direct training objective, our evaluation of the resulting embeddings is not based simply on word order.\nThe grammar of a language is of course an important factor in determining the order of words in a sentence in that language, although it is not the only factor. The syntax area features in our WALS evaluation, which are largely related to relative orders of constituents and syntactic constructions and therefore clearly relevant to our training objective, confirm that part of what our embeddings capture is in fact related to word ordering. However, our results on the lexicon and morphology areas indicate that language-specific information capture in our embeddings goes beyond ordering information. Although it may seem that the model only has access to information about word ordering during training, text in the various languages also provides information about word usage, co-occurrence, and to some extent even inflection through the word embeddings. As a result, language embeddings trained with our approach capture interpretable and useful typological information beyond word order. Because language embeddings are the only signal to the model indicating what each of the languages that are mixed within the training data reads like, we conjecture that our denoising autoencoder objective encourages the embeddings to encode language-specific information necessary to distinguish each language from the others."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "Language embeddings have the potential to contribute to our understanding of language and linguistic typology, and to improve the performance of downstream multilingual NLP applications. Our proposed method to generate dense vectors to capture language features is relatively simple, based on the idea of denoising autoencoders. The model does not require any labeled or parallel data, which makes it promising for cross-lingual learning in situations where no task-specific training datasets are available.\nWe showed that the trained language embeddings represent typological information, and can also benefit the downstream tasks in a zero-shot learning setting. This is an encouraging result that indicates that task-specific annotated data for various languages can be leveraged more effectively\nfor improved task performance in situations where language-specific resources may be scarce. At the same time, our results indicate that the effectiveness of our approach is sensitive to the set of languages used, highlighting the importance of using a more balanced variety of languages than is current practice, our work included. We will pursue an investigation of the impact of language selection in multilingual and cross-lingual models as future work, to our understanding of these methods and their broader applicability."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We thank the anonymous reviewers for their constructive suggestions. This work was supported by the National Science Foundation under Grant No. 1840191. Any opinions, findings, and conclusions or recommendations expressed are those of the authors and do not necessarily reflect the views of the NSF.\nEthical Consideration\nOur motivation to learn language embeddings without parallel data is to understand how language relationships and typology can be generated without any human annotation. We also explore how our learned language embeddings can be applied to downstream tasks. We hope that our proposed method can inspire future research on generating and utilizing typology in cross-lingual settings because we may not have a large amount of translation data for each language, which has been widely used in past research on data-driven modeling of linguistic typology. Since our proposed method can be easily adapted to different architectures and pre-trained models with minimal cost (in terms of both data annotation cost and computation cost), it can reduce resources needed when applying language embeddings for zero-shot crosslingual downstream tasks. We run all our experiments on two TITAN RTX GPUs and two RTX 2080Ti GPUs. We compare our language embeddings to baselines in the standard settings in literature."
+    }, {
+      "heading" : "B WALS Categories",
+      "text" : "Lexicon: 129A Hand and Arm, 138A Tea; Syntax: 81A Order of Subject, Object and Verb, 82A Order of Subject and Verb, 83A Order of Object and Verb, 84A Order of Object, Oblique, and Verb, 85A Order of Adposition and Noun Phrase, 86A Order of Genitive and Noun, 87A Order of Adjective and Noun, 88A Order of Demonstrative and Noun, 92A Position of Polar Question Particles, 93A Position of Interrogative Phrases in Content Questions, 95A Relationship between the Order of Object and Verb and the Order of Adposition and Noun Phrase, 96A Relationship between the Order of Object and Verb and the Order of Relative Clause and Noun, 97A Relationship between the Order of Object and Verb and the Order of Adjective and Noun, 106A Reciprocal Constructions, 110A Periphrastic Causative Constructions, 113A Symmetric and Asymmetric Standard Negation, 114A Subtypes of Asymmetric Standard Negation, 121A Comparative Constructions, 122A Relativization on Subjects, 125A Purpose Clauses, 126A ’When’ Clauses, 127A Reason Clauses, 128A Utterance Complement Clauses, 144B Position of negative words relative to beginning and end of clause and with respect to adjacency to verb;\nPartially Morphological: 30A Number of Genders, 31A Sex-based and Non-sex-based Gender Systems, 32A Systems of Gender Assignment, 34A Occurrence of Nominal Plurality, 35A Plurality in Independent Personal Pronouns, 36A The Associative Plural, 37A Definite Articles, 38A Indefinite Articles, 41A Distance Contrasts in Demonstratives, 43A Third Person Pronouns and Demonstratives, 44A Gender Distinctions in Independent Personal Pronouns, 45A Politeness Distinctions in Pronouns, 46A Indefinite Pronouns, 47A Intensifiers and Reflexive Pronouns, 48A Person Marking on Adpositions, 49A Number of Cases, 50A Asymmetrical Case-Marking, 51A Position of Case Affixes, 52A Comitatives and Instrumentals, 53A Ordinal Numerals, 54A Distributive Numerals, 57A Position of Pronominal Possessive Affixes, 62A Action Nominal Constructions, 65A Perfective/Imperfective Aspect, 66A The Past Tense, 67A The Future Tense, 68A The Perfect, 71A The Prohibitive, 72A Imperative-Hortative Systems, 74A Situational Possibility, 75A Epistemic Possibility, 76A Overlap between Situational and Epistemic Modal Marking, 77A Semantic Distinctions of Evidentiality, 78A Coding of Evidentiality, 98A Align-\nment of Case Marking of Full Noun Phrases, 101A Expression of Pronominal Subjects, 102A Verbal Person Marking, 103A Third Person Zero of Verbal Person Marking, 111A Nonperiphrastic Causative Constructions, 112A Negative Morphemes, 115A Negative Indefinite Pronouns and Predicate Negation, 116A Polar Questions, 117A Predicative Possession, 118A Predicative Adjectives, 119A Nominal and Locational Predication, 120A Zero Copula for Predicate Nominals, 124A ’Want’ Complement Subjects, 143A Order of Negative Morpheme and Verb, 143F Postverbal Negative Morphemes, 144A Position of Negative Word With Respect to Subject, Object, and Verb, 144D The Position of Negative Morphemes in SVO Languages, 144I SNegVO Order, 144J SVNegO Order, 144K SVONeg Order; Non-learnable: 1A Consonant Inventories, 2A Vowel Quality Inventories, 3A ConsonantVowel Ratio, 4A Voicing in Plosives and Fricatives, 5A Voicing and Gaps in Plosive Systems, 6A Uvular Consonants, 9A The Velar Nasal, 11A Front Rounded Vowels, 12A Syllable Structure, 14A Fixed Stress Locations, 15A Weight-Sensitive Stress, 16A Weight Factors in Weight-Sensitive Stress Systems, 17A Rhythm Types, 19A Presence of Uncommon Consonants, 21A Exponence of Selected Inflectional Formatives, 21B Exponence of Tense-Aspect-Mood Inflection, 22A Inflectional Synthesis of the Verb, 23A Locus of Marking in the Clause, 24A Locus of Marking in Possessive Noun Phrases, 25A Locus of Marking: Wholelanguage Typology, 26A Prefixing vs. Suffixing in Inflectional Morphology, 27A Reduplication, 29A Syncretism in Verbal Person/Number Marking, 69A Position of Tense-Aspect Affixes, 70A The Morphological Imperative, 79A Suppletion According to Tense and Aspect, 79B Suppletion in Imperatives and Hortatives, 104A Order of Person Markers on the Verb, 136A M-T Pronouns, 142A Para-Linguistic Usages of Clicks."
+    }, {
+      "heading" : "C Additional Results",
+      "text" : "C.1 WALS Additional comparison on WALS with different language embedding baselines.\nC.2 Cross-lingual dependency parsing\nC.3 Linguistic typology\nC.4 XNLI"
+    }, {
+      "heading" : "D MUSE Word Translation Accuracy",
+      "text" : ""
+    } ],
+    "references" : [ {
+      "title" : "Many languages, one parser",
+      "author" : [ "Waleed Ammar", "George Mulcaire", "Miguel Ballesteros", "Chris Dyer", "Noah A. Smith." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 4:431–444.",
+      "citeRegEx" : "Ammar et al\\.,? 2016",
+      "shortCiteRegEx" : "Ammar et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Corpus Linguistics and Translation Studies: Implications and Applications",
+      "author" : [ "Mona Baker", "Gill Francis", "Elena Tognini-Bonelli." ],
+      "venue" : "John Benjamins Publishing Company, Netherlands.",
+      "citeRegEx" : "Baker et al\\.,? 1993",
+      "shortCiteRegEx" : "Baker et al\\.",
+      "year" : 1993
+    }, {
+      "title" : "From phonology to syntax: Unsupervised linguistic typology at different levels with language embeddings",
+      "author" : [ "Johannes Bjerva", "Isabelle Augenstein." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Compu-",
+      "citeRegEx" : "Bjerva and Augenstein.,? 2018",
+      "shortCiteRegEx" : "Bjerva and Augenstein.",
+      "year" : 2018
+    }, {
+      "title" : "Does typological blinding impede cross-lingual sharing",
+      "author" : [ "Johannes Bjerva", "Isabelle Augenstein" ],
+      "venue" : "In Proceedings of the 16th Conference of the European Chapter of the Association for Computational Linguistics: Main Volume,",
+      "citeRegEx" : "Bjerva and Augenstein.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Bjerva and Augenstein.",
+      "year" : 2021
+    }, {
+      "title" : "A probabilistic generative model of linguistic typology",
+      "author" : [ "Johannes Bjerva", "Yova Kementchedjhieva", "Ryan Cotterell", "Isabelle Augenstein." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational",
+      "citeRegEx" : "Bjerva et al\\.,? 2019a",
+      "shortCiteRegEx" : "Bjerva et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "2019b. What do language representations really represent",
+      "author" : [ "Johannes Bjerva", "Robert Östling", "Maria Han Veiga", "Jörg Tiedemann", "Isabelle Augenstein" ],
+      "venue" : null,
+      "citeRegEx" : "Bjerva et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Bjerva et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "SIGTYP 2020 shared task: Prediction of typological features",
+      "author" : [ "Johannes Bjerva", "Elizabeth Salesky", "Sabrina J. Mielke", "Aditi Chaudhary", "Celano Giuseppe", "Edoardo Maria Ponti", "Ekaterina Vylomova", "Ryan Cotterell", "Isabelle Augenstein." ],
+      "venue" : "Proceedings",
+      "citeRegEx" : "Bjerva et al\\.,? 2020",
+      "shortCiteRegEx" : "Bjerva et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Unsupervised cross-lingual representation learning at scale",
+      "author" : [ "Alexis Conneau", "Kartikay Khandelwal", "Naman Goyal", "Vishrav Chaudhary", "Guillaume Wenzek", "Francisco Guzmán", "Edouard Grave", "Myle Ott", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "In",
+      "citeRegEx" : "Conneau et al\\.,? 2020",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Crosslingual language model pretraining",
+      "author" : [ "Alexis Conneau", "Guillaume Lample." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 32, pages 7059–7069. Curran Associates, Inc.",
+      "citeRegEx" : "Conneau and Lample.,? 2019",
+      "shortCiteRegEx" : "Conneau and Lample.",
+      "year" : 2019
+    }, {
+      "title" : "XNLI: Evaluating cross-lingual sentence representations",
+      "author" : [ "Alexis Conneau", "Ruty Rinott", "Guillaume Lample", "Adina Williams", "Samuel Bowman", "Holger Schwenk", "Veselin Stoyanov." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods",
+      "citeRegEx" : "Conneau et al\\.,? 2018",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Deep biaffine attention for neural dependency parsing",
+      "author" : [ "Timothy Dozat", "Christopher D. Manning." ],
+      "venue" : "5th International Conference on Learning Representations, ICLR 2017, Toulon, France, April 24-26, 2017, Conference Track Proceedings. Open-",
+      "citeRegEx" : "Dozat and Manning.,? 2017",
+      "shortCiteRegEx" : "Dozat and Manning.",
+      "year" : 2017
+    }, {
+      "title" : "CoNLL 2017 shared task - automatically annotated raw texts and word embeddings",
+      "author" : [ "Filip Ginter", "Jan Hajič", "Juhani Luotolahti", "Milan Straka", "Daniel Zeman." ],
+      "venue" : "LINDAT/CLARIN digital library at the Institute of Formal and Applied Linguistics (ÚFAL),",
+      "citeRegEx" : "Ginter et al\\.,? 2017",
+      "shortCiteRegEx" : "Ginter et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Long short-term memory",
+      "author" : [ "Sepp Hochreiter", "Jürgen Schmidhuber." ],
+      "venue" : "Neural Computation, 9(8):1735–1780.",
+      "citeRegEx" : "Hochreiter and Schmidhuber.,? 1997",
+      "shortCiteRegEx" : "Hochreiter and Schmidhuber.",
+      "year" : 1997
+    }, {
+      "title" : "XTREME: A massively multilingual multitask benchmark for evaluating cross-lingual generalisation",
+      "author" : [ "Junjie Hu", "Sebastian Ruder", "Aditya Siddhant", "Graham Neubig", "Orhan Firat", "Melvin Johnson." ],
+      "venue" : "Proceedings of the 37th International",
+      "citeRegEx" : "Hu et al\\.,? 2020",
+      "shortCiteRegEx" : "Hu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Comparing partitions",
+      "author" : [ "Lawrence Hubert", "Phipps Arabie." ],
+      "venue" : "Journal of classification, 2(1):193– 218.",
+      "citeRegEx" : "Hubert and Arabie.,? 1985",
+      "shortCiteRegEx" : "Hubert and Arabie.",
+      "year" : 1985
+    }, {
+      "title" : "Cross-lingual ability of multilingual bert: An empirical study",
+      "author" : [ "Karthikeyan K", "Zihan Wang", "Stephen Mayhew", "Dan Roth." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "K et al\\.,? 2020",
+      "shortCiteRegEx" : "K et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P. Kingma", "Jimmy Ba." ],
+      "venue" : "3rd International Conference on Learning Representations,",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "OpenNMT: Opensource toolkit for neural machine translation",
+      "author" : [ "Guillaume Klein", "Yoon Kim", "Yuntian Deng", "Jean Senellart", "Alexander Rush." ],
+      "venue" : "Proceedings of ACL 2017, System Demonstrations, pages 67–72, Vancouver, Canada. Association for",
+      "citeRegEx" : "Klein et al\\.,? 2017",
+      "shortCiteRegEx" : "Klein et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Europarl: A Parallel Corpus for Statistical Machine Translation",
+      "author" : [ "Philipp Koehn." ],
+      "venue" : "Conference Proceedings: the tenth Machine Translation Summit, pages 79–86, Phuket, Thailand. AAMT, AAMT.",
+      "citeRegEx" : "Koehn.,? 2005",
+      "shortCiteRegEx" : "Koehn.",
+      "year" : 2005
+    }, {
+      "title" : "Word translation without parallel data",
+      "author" : [ "Guillaume Lample", "Alexis Conneau", "Marc’Aurelio Ranzato", "Ludovic Denoyer", "Hervé Jégou" ],
+      "venue" : "In 6th International Conference on Learning Representations,",
+      "citeRegEx" : "Lample et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Lample et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "BART: Denoising sequence-to-sequence pretraining for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Parameter sharing between dependency parsers for related languages",
+      "author" : [ "Miryam de Lhoneux", "Johannes Bjerva", "Isabelle Augenstein", "Anders Søgaard." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Lhoneux et al\\.,? 2018",
+      "shortCiteRegEx" : "Lhoneux et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "On the language neutrality of pre-trained multilingual representations",
+      "author" : [ "Jindřich Libovický", "Rudolf Rosa", "Alexander Fraser." ],
+      "venue" : "Findings of the Association for Computational Linguistics: EMNLP 2020, pages 1663–1674, Online. Association for Computa-",
+      "citeRegEx" : "Libovický et al\\.,? 2020",
+      "shortCiteRegEx" : "Libovický et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "URIEL and lang2vec: Representing languages as typological, geographical, and phylogenetic vectors",
+      "author" : [ "Patrick Littell", "David R. Mortensen", "Ke Lin", "Katherine Kairis", "Carlisle Turner", "Lori Levin." ],
+      "venue" : "Proceedings of the 15th Conference of the Euro-",
+      "citeRegEx" : "Littell et al\\.,? 2017",
+      "shortCiteRegEx" : "Littell et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Connecting documentation and revitalization: A new approach to language apps",
+      "author" : [ "Alexa N. Little." ],
+      "venue" : "Proceedings of the 2nd Workshop on the Use of Computational Methods in the Study of Endangered Languages, pages 151–155, Honolulu. Association for",
+      "citeRegEx" : "Little.,? 2017",
+      "shortCiteRegEx" : "Little.",
+      "year" : 2017
+    }, {
+      "title" : "A neural interlingua for multilingual machine translation",
+      "author" : [ "Yichao Lu", "Phillip Keung", "Faisal Ladhak", "Vikas Bhardwaj", "Shaonan Zhang", "Jason Sun." ],
+      "venue" : "Proceedings of the Third Conference on Machine Translation: Research Papers, pages 84–92, Brus-",
+      "citeRegEx" : "Lu et al\\.,? 2018",
+      "shortCiteRegEx" : "Lu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Effective approaches to attention-based neural machine translation",
+      "author" : [ "Thang Luong", "Hieu Pham", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 1412–1421, Lis-",
+      "citeRegEx" : "Luong et al\\.,? 2015",
+      "shortCiteRegEx" : "Luong et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Learning language representations for typology prediction",
+      "author" : [ "Chaitanya Malaviya", "Graham Neubig", "Patrick Littell." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 2529–2535, Copenhagen,",
+      "citeRegEx" : "Malaviya et al\\.,? 2017",
+      "shortCiteRegEx" : "Malaviya et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Word order typology through multilingual word alignment",
+      "author" : [ "Robert Östling." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Language Processing (Vol-",
+      "citeRegEx" : "Östling.,? 2015",
+      "shortCiteRegEx" : "Östling.",
+      "year" : 2015
+    }, {
+      "title" : "Continuous multilinguality with language vectors",
+      "author" : [ "Robert Östling", "Jörg Tiedemann." ],
+      "venue" : "Proceedings of the 15th Conference of the European Chapter of the Association for Computational Linguistics: Volume 2, Short Papers, pages 644–649, Valencia,",
+      "citeRegEx" : "Östling and Tiedemann.,? 2017",
+      "shortCiteRegEx" : "Östling and Tiedemann.",
+      "year" : 2017
+    }, {
+      "title" : "How multilingual is multilingual BERT? In Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 4996– 5001, Florence, Italy",
+      "author" : [ "Telmo Pires", "Eva Schlinger", "Dan Garrette." ],
+      "venue" : "Association for Computa-",
+      "citeRegEx" : "Pires et al\\.,? 2019",
+      "shortCiteRegEx" : "Pires et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Modeling language variation and universals: A survey on typological linguistics for natural language processing",
+      "author" : [ "Edoardo Maria Ponti", "Helen O’Horan", "Yevgeni Berzak", "Ivan Vulić", "Roi Reichart", "Thierry Poibeau", "Ekaterina Shutova", "Anna Korhonen" ],
+      "venue" : null,
+      "citeRegEx" : "Ponti et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Ponti et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Found in translation: Reconstructing phylogenetic language trees from translations",
+      "author" : [ "Ella Rabinovich", "Noam Ordan", "Shuly Wintner." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Pa-",
+      "citeRegEx" : "Rabinovich et al\\.,? 2017",
+      "shortCiteRegEx" : "Rabinovich et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Sequence to sequence learning with neural networks",
+      "author" : [ "Ilya Sutskever", "Oriol Vinyals", "Quoc V Le." ],
+      "venue" : "Z. Ghahramani, M. Welling, C. Cortes, N. D. Lawrence, and K. Q. Weinberger, editors, Advances in Neural Information Processing Systems 27, pages",
+      "citeRegEx" : "Sutskever et al\\.,? 2014",
+      "shortCiteRegEx" : "Sutskever et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Multilingual neural machine translation with language clustering",
+      "author" : [ "Xu Tan", "Jiale Chen", "Di He", "Yingce Xia", "Tao Qin", "Tie-Yan Liu." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th Interna-",
+      "citeRegEx" : "Tan et al\\.,? 2019",
+      "shortCiteRegEx" : "Tan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Descriptive Translation Studies and beyond",
+      "author" : [ "Gideon Toury." ],
+      "venue" : "John Benjamins, Amsterdam /Philadelphia.",
+      "citeRegEx" : "Toury.,? 1995",
+      "shortCiteRegEx" : "Toury.",
+      "year" : 1995
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Ł ukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 30, pages 5998–6008. Cur-",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Extracting and composing robust features with denoising autoencoders",
+      "author" : [ "Pascal Vincent", "Hugo Larochelle", "Yoshua Bengio", "Pierre-Antoine Manzagol." ],
+      "venue" : "Proceedings of the 25th international conference on Machine learning, pages 1096–1103.",
+      "citeRegEx" : "Vincent et al\\.,? 2008",
+      "shortCiteRegEx" : "Vincent et al\\.",
+      "year" : 2008
+    }, {
+      "title" : "Fine-Grained Prediction of Syntactic Typology: Discovering Latent Structure with Supervised Learning",
+      "author" : [ "Dingquan Wang", "Jason Eisner." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 5:147–161.",
+      "citeRegEx" : "Wang and Eisner.,? 2017",
+      "shortCiteRegEx" : "Wang and Eisner.",
+      "year" : 2017
+    }, {
+      "title" : "A broad-coverage challenge corpus for sentence understanding through inference",
+      "author" : [ "Adina Williams", "Nikita Nangia", "Samuel Bowman." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Lin-",
+      "citeRegEx" : "Williams et al\\.,? 2018",
+      "shortCiteRegEx" : "Williams et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Transformers: State-of-the-art natural language processing",
+      "author" : [ "Teven Le Scao", "Sylvain Gugger", "Mariama Drame", "Quentin Lhoest", "Alexander Rush." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing:",
+      "citeRegEx" : "Scao et al\\.,? 2020",
+      "shortCiteRegEx" : "Scao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Universal dependencies 2.6. LINDAT/CLARIAH-CZ digital library at the Institute of Formal and Applied Linguistics (ÚFAL)",
+      "author" : [ "Zdeněk Žabokrtský", "Amir Zeldes", "Hanzhi Zhu", "Anna Zhuravleva" ],
+      "venue" : "Faculty of Mathematics and Physics,",
+      "citeRegEx" : "Žabokrtský et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Žabokrtský et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "On learning invariant representations for domain adaptation",
+      "author" : [ "Han Zhao", "Remi Tachet Des Combes", "Kun Zhang", "Geoffrey Gordon." ],
+      "venue" : "Proceedings of the 36th International Conference on Machine Learning, volume 97 of Proceedings of Machine",
+      "citeRegEx" : "Zhao et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Transfer learning for low-resource neural machine translation",
+      "author" : [ "Barret Zoph", "Deniz Yuret", "Jonathan May", "Kevin Knight." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 1568–1575, Austin,",
+      "citeRegEx" : "Zoph et al\\.,? 2016",
+      "shortCiteRegEx" : "Zoph et al\\.",
+      "year" : 2016
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 26,
+      "context" : ", 2019) and machine translation (Johnson et al., 2017; Lu et al., 2018) highlight the potential of multilingual models that can perform well across various languages, including ones for which training sets are scarce.",
+      "startOffset" : 32,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 23,
+      "context" : "Most of the current multilingual research focuses on learning invariant representations or removing language-specific features after training (Libovický et al., 2020; Bjerva and Augenstein, 2021).",
+      "startOffset" : 142,
+      "endOffset" : 195
+    }, {
+      "referenceID" : 3,
+      "context" : "Most of the current multilingual research focuses on learning invariant representations or removing language-specific features after training (Libovický et al., 2020; Bjerva and Augenstein, 2021).",
+      "startOffset" : 142,
+      "endOffset" : 195
+    }, {
+      "referenceID" : 44,
+      "context" : "that similar languages can benefit from sharing parameters, but less similar languages do not help (Zoph et al., 2016; Pires et al., 2019).",
+      "startOffset" : 99,
+      "endOffset" : 138
+    }, {
+      "referenceID" : 31,
+      "context" : "that similar languages can benefit from sharing parameters, but less similar languages do not help (Zoph et al., 2016; Pires et al., 2019).",
+      "startOffset" : 99,
+      "endOffset" : 138
+    }, {
+      "referenceID" : 32,
+      "context" : "However, in spite of some interests in typology (Ponti et al., 2019), identifying similar languages is nontrivial, especially for less studied ones.",
+      "startOffset" : 48,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 0,
+      "context" : "der (Ammar et al., 2016; Littell et al., 2017), using a parallel corpus (Bjerva et al.",
+      "startOffset" : 4,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 24,
+      "context" : "der (Ammar et al., 2016; Littell et al., 2017), using a parallel corpus (Bjerva et al.",
+      "startOffset" : 4,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 30,
+      "context" : ", 2017), using a parallel corpus (Bjerva et al., 2019b; Östling and Tiedemann, 2017), and using language codes as an indicator to distinguish input and output words in a shared vocabulary into different languages (John-",
+      "startOffset" : 33,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 16,
+      "context" : "Inspired by the findings that structural similarity, especially word ordering, is crucial in large pretrained multilingual language models (K et al., 2020), we propose an unsupervised method leveraging denoising autoencoders (Vincent et al.",
+      "startOffset" : 139,
+      "endOffset" : 155
+    }, {
+      "referenceID" : 38,
+      "context" : ", 2020), we propose an unsupervised method leveraging denoising autoencoders (Vincent et al., 2008) to generate language embeddings.",
+      "startOffset" : 77,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 0,
+      "context" : "word order patterns (Ammar et al., 2016; Little, 2017), part-of-speech tag sequences (Wang and Eisner, 2017), and syntactic dependencies (Östling, 2015).",
+      "startOffset" : 20,
+      "endOffset" : 54
+    }, {
+      "referenceID" : 25,
+      "context" : "word order patterns (Ammar et al., 2016; Little, 2017), part-of-speech tag sequences (Wang and Eisner, 2017), and syntactic dependencies (Östling, 2015).",
+      "startOffset" : 20,
+      "endOffset" : 54
+    }, {
+      "referenceID" : 39,
+      "context" : ", 2016; Little, 2017), part-of-speech tag sequences (Wang and Eisner, 2017), and syntactic dependencies (Östling, 2015).",
+      "startOffset" : 52,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 29,
+      "context" : ", 2016; Little, 2017), part-of-speech tag sequences (Wang and Eisner, 2017), and syntactic dependencies (Östling, 2015).",
+      "startOffset" : 104,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 28,
+      "context" : "One method is to append a language token to the beginning of a source sentence and train the language embeddings with a many-to-one neural machine translation model (Malaviya et al., 2017; Tan et al., 2019).",
+      "startOffset" : 165,
+      "endOffset" : 206
+    }, {
+      "referenceID" : 35,
+      "context" : "One method is to append a language token to the beginning of a source sentence and train the language embeddings with a many-to-one neural machine translation model (Malaviya et al., 2017; Tan et al., 2019).",
+      "startOffset" : 165,
+      "endOffset" : 206
+    }, {
+      "referenceID" : 30,
+      "context" : "Another method is to concatenate language embedding vectors to a character level language model (Östling and Tiedemann, 2017; Bjerva and Augenstein, 2018; Bjerva et al., 2019a).",
+      "startOffset" : 96,
+      "endOffset" : 176
+    }, {
+      "referenceID" : 2,
+      "context" : "Another method is to concatenate language embedding vectors to a character level language model (Östling and Tiedemann, 2017; Bjerva and Augenstein, 2018; Bjerva et al., 2019a).",
+      "startOffset" : 96,
+      "endOffset" : 176
+    }, {
+      "referenceID" : 4,
+      "context" : "Another method is to concatenate language embedding vectors to a character level language model (Östling and Tiedemann, 2017; Bjerva and Augenstein, 2018; Bjerva et al., 2019a).",
+      "startOffset" : 96,
+      "endOffset" : 176
+    }, {
+      "referenceID" : 19,
+      "context" : "genetic trees from translation of different languages into English and French using the European Parliament speech corpus (Koehn, 2005), based on the assumption that unique language properties are present in translations (Baker et al.",
+      "startOffset" : 122,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 8,
+      "context" : "The approach that is closest to ours is XLM (Conneau and Lample, 2019), which adds language embeddings to each byte pair embedding using Wikipedia data in various languages with a masked",
+      "startOffset" : 44,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 7,
+      "context" : "In fact, in a follow up paper, XLM-R (Conneau et al., 2020), language embeddings are removed from the model for better code-switching, which suggests that the learned language embeddings may not be optimal for cross-lingual tasks.",
+      "startOffset" : 37,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 16,
+      "context" : "following the finding that structural similarity is critical in multilingual language models (K et al., 2020), we generate language embeddings from a denoising autoencoder objective and demonstrate that they can be effectively used in cross-lingual zero-shot learning.",
+      "startOffset" : 93,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 12,
+      "context" : "To train our multilingual model, we use the CommonCrawl dataset from the CoNLL 2017 shared task (Ginter et al., 2017) to obtain monolingual plain text in various languages.",
+      "startOffset" : 96,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 13,
+      "context" : "We implement our multilingual denoising autoencoder with an LSTM-based (Hochreiter and Schmidhuber, 1997) sequence-tosequence model (Sutskever et al.",
+      "startOffset" : 71,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 34,
+      "context" : "We implement our multilingual denoising autoencoder with an LSTM-based (Hochreiter and Schmidhuber, 1997) sequence-tosequence model (Sutskever et al., 2014).",
+      "startOffset" : 132,
+      "endOffset" : 156
+    }, {
+      "referenceID" : 35,
+      "context" : "to cluster similar languages and train machine translation tasks in clusters (Tan et al., 2019), we explore if we can apply the learned embeddings directly into downstream tasks.",
+      "startOffset" : 77,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 15,
+      "context" : "To compare the quality of the clusterings quantitatively, we calculate the adjusted Rand index (Hubert and Arabie, 1985) between the generated clusters and",
+      "startOffset" : 95,
+      "endOffset" : 120
+    }, {
+      "referenceID" : 6,
+      "context" : "language family and various WALS features), with optionally pre-computed language embeddings to develop models to predict other features (Bjerva et al., 2020), we investigate if trained language embeddings alone can be used to predict WALS",
+      "startOffset" : 137,
+      "endOffset" : 158
+    }, {
+      "referenceID" : 11,
+      "context" : "We modified Yu Zhang’s implementation6 of biaffine dependency parser (Dozat and Manning, 2017).",
+      "startOffset" : 69,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 9,
+      "context" : "The XNLI dataset (Conneau et al., 2018) translates English NLI validation and test data into 14 other languages.",
+      "startOffset" : 17,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 37,
+      "context" : "State-of-the-art models on XNLI are Transformers (Vaswani et al., 2017) pretrained on large corpora (Hu et al.",
+      "startOffset" : 49,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2017) pretrained on large corpora (Hu et al., 2020).",
+      "startOffset" : 36,
+      "endOffset" : 53
+    }, {
+      "referenceID" : 40,
+      "context" : "MultiNLI (Williams et al., 2018) dataset, and directly evaluate the trained model on the other languages without language-specific fine-tuning, in a zero-shot cross-lingual setting.",
+      "startOffset" : 9,
+      "endOffset" : 32
+    }, {
+      "referenceID" : 21,
+      "context" : "Our results in each of the intrinsic and extrinsic evaluation settings demonstrate that our denoising autoencoder objective, which has been shown to be effective in various language model pre-training tasks (Lewis et al., 2020; Raffel et al., 2020), is effective for learning language embeddings that capture typological information and can be used to",
+      "startOffset" : 207,
+      "endOffset" : 248
+    } ],
+    "year" : 2021,
+    "abstractText" : "Cross-lingual language tasks typically require a substantial amount of annotated data or parallel translation data. We explore whether language representations that capture relationships among languages can be learned and subsequently leveraged in cross-lingual tasks without the use of parallel data. We generate dense embeddings for 29 languages using a denoising autoencoder, and evaluate the embeddings using the World Atlas of Language Structures (WALS) and two extrinsic tasks in a zero-shot setting: cross-lingual dependency parsing and cross-lingual natural language inference1.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

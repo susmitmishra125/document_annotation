@@ -1,0 +1,648 @@
+{
+  "name" : "2021.acl-long.475.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Generating Query Focused Summaries from Query-Free Resources",
+    "authors" : [ "Yumo Xu", "Mirella Lapata" ],
+    "emails" : [ "yumo.xu@ed.ac.uk", "mlap@inf.ed.ac.uk" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 6096–6109\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n6096"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "The neural encoder-decoder framework has become increasingly popular in generic summarization (See et al. 2017; Gehrmann et al. 2018; Liu and Lapata 2019a; Fabbri et al. 2019, inter alia) thanks to the availability of large-scale datasets containing hundreds of thousands of document-summary pairs. Training data of this magnitude is not readily available for query focused summarization (QFS; Dang 2005) which aims to create a short summary from a set of documents that answers a specific query. Existing corpora (Nema et al., 2017; Dang, 2005; Hoa, 2006; Baumel et al., 2016) are relatively small for modern data-hungry neural architectures and have been mostly used for evaluation purposes.\n1Our code and data is available at https://github. com/yumoxu/marge.\nA major bottleneck in leveraging generic summarization data for QFS is the absence of queries (Nema et al., 2017); the majority of existing datasets consist of document-summary pairs, while QFS summaries are expected to answer specific queries. Recent work (Xu and Lapata, 2020; Su et al., 2020; Laskar et al., 2020) sidesteps this problem by resorting to distant supervision from query-relevant NLP resources including question answering (Rajpurkar et al., 2016; Chakraborty et al., 2020) and paraphrase identification (Dolan and Brockett, 2005). Such approaches incorporate query modeling in the summarization process but are even more data hungry compared to generic summarization ones, since they additionally require access to QA datasets which can be extremely costly to create (Bajaj et al., 2016; Kwiatkowski et al., 2019). Moreover, there is often a mismatch between queries in QA datasets and those in QFS scenarios (Xu and Lapata, 2020); the two types of queries are not identically distributed and it is practically infeasible to find appropriate query-related resources for all domains and topics.\nIn this work we do not assume access to any resources other than those available for generic summarization. We further decompose abstractive QFS into two subtasks: (1) query modeling (i.e., finding supportive evidence within a set of documents for a query) and (2) conditional language modeling (i.e., generating an abstractive summary based on found evidence). Under this formulation, we use generic summarization data not only for conditional language modeling, but also for learning an evidence ranking model. Inspired by the Cloze task and its applications in NLP (Taylor, 1953; Lewis et al., 2019; Lee et al., 2019), we propose MARGE, a Masked ROUGE regression framework for evidence estimation and ranking. MARGE intro-\nduces a unified representation for summaries and queries, so that summaries in generic data can be converted into proxy queries for learning a query model. Based on the evidence selected by MARGE, we generate abstractive summaries whilst controlling their length and the extent to which the query influences their content.\nOur contributions in this work are threefold: we propose a weakly supervised system for abstractive QFS where no query-related resources are required; we discover a new type of connection between generic summaries and QFS queries, and provide a universal representation for them which allows generic summarization data to be exploited for QFS; we provide experimental results on QFS benchmarks, and show that across query types and domains our system achieves state-of-the-art results on both evidence ranking and abstractive QFS."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "The majority of previous QFS approaches have been extractive, operating over queries and document clusters from which they select query-relevant sentences to compose a summary. They mostly differ in the way centrality and relevance are estimated and incorporated, e.g., via manifold ranking (Wan et al., 2007), using a look-ahead strategy (Badrinath et al., 2011), uncertainty prediction (Wan and Zhang, 2014), or attention mechanisms (Li et al., 2017a,b). More recently Xu and Lapata (2020) propose a coarse-to-fine framework that leverages distant supervision from question answering to extract summary-worthy content.\nAbstractive QFS has received significantly less attention. This is due to generation models being particularly data-hungry (Lebanoff et al., 2018; Liu and Lapata, 2019a) and the scarcity of QFS training data. The increasing availability of pre-\ntrained models has prompted the development of pipeline-style frameworks for QFS which use resources from a wider range of NLP tasks. For example, Su et al. (2020) fine-tune BART (Lewis et al., 2020) on CNN/DailyMail (Hermann et al., 2015), a single-document summarization dataset, and generate abstracts for QFS by iteratively summarizing paragraphs to a budget. They learn a query model for paragraph selection based on a plethora of QA and machine reading datasets (Su et al., 2019; Rajpurkar et al., 2016). Similarly, Laskar et al. (2020) fine-tune BERTSUM on CNN/DailyMail, and propose a three-stage system which uses supervision from QFS data (typically reserved for evaluation) and related QA and paraphrase identification tasks.\nWe also focus on abstractive QFS, however, we do not assume access to any additional training resources over and above generic summarization datasets, even for query modeling. Moreover, our system is able to generate long QFS abstracts all at once, instead of iteratively creating bullet-style summaries which often lack coherence."
+    }, {
+      "heading" : "3 Problem Formulation",
+      "text" : "Let {(S,D)} denote a generic summarization dataset where D = {d1, d2, . . . , dM} is a collection of documents with corresponding summaries S. |D| = 1 for single-document summarization (SDS) and |D| > 1 for multi-document summarization (MDS). In QFS, a query Q additionally specifies an information request, {(S,D, Q)}. It is often assumed (e.g., in DUC benchmarks) that Q consists of a short title (e.g., Amnesty International ), and a query narrative which is longer and more detailed (e.g., What is the scope of operations of Amnesty International and what are the international reactions to its activities? ).\nIn this work, we propose to decompose QFS\ninto two sub-tasks, namely query modeling and conditional language modeling. The query model qθ(D|Q; θ) estimates whether textual units (e.g., sentences) within document cluster D are relevant to query Q, while pφ(S|D,Q;φ) generates summary S conditioned on evidence provided by the query model and (optionally) the query itself (see Figure 1(b) for an illustration). When S ⊥⊥ Q, we have a query-agnostic conditional language model pφ(S|D;φ). Otherwise, the conditional language model is query-guided. Our query model is trained with distant supervision derived from generic summarization data which is easier to obtain (e.g., from online sources) compared to QA datasets which must be annotated from scratch (e.g., for different types of questions and domains). Although queries are not verbalized in generic summarization, we hypothesize that the summaries themselves constitute a response to latent queries.\nSo, how can we reverse-engineer the queries from the summaries? Inspired by the standard Cloze task (Taylor, 1953) and its recent variants (Lewis et al., 2019; Lee et al., 2019), we render queries and summaries in a Unified Masked Representation (UMR) which enables summaries to serve as proxy queries for model training, as shown in Figure 1(a). We further assume that the answer to these queries can be found in sentences which form part of the document collection D. Although we do not know for certain what these sentences are we can assume that if they have a high ROUGE score against the reference summary they are likely to contain an answer. We therefore use ROUGE as a distant supervision signal, and train a model that takes a query and document sentence as input and estimates their relevance. At inference time, we also render actual queries in UMR and rank all sentences in the document collection with our trained model. The most relevant sentences serve as input to a conditional language model to generate query focused abstractive summaries."
+    }, {
+      "heading" : "4 Query Modeling",
+      "text" : "As explained earlier, we train a query model qθ(D|Q; θ) on summary-sentence pairs via distant supervision. We use a summary-based proxy query UMRS during training and an actual query UMRQ during testing. In the following, we first describe how UMRs are obtained and then discuss how the query model is trained.\nAlgorithm 1 Generate Masked Summary 1: function MASKSUMMARY(S, γ) . Summary sentences and mask ratio 2: Parse each s ∈ S with OpenIE to extract information slots I 3: Reveal budgetB = |I| ∗ γ . Reveal information partially 4: Initialize revealed word number b = 0 5: Initialize masked summaryM to S and fill with [MASK] 6: Initialize EOM = false . End of Masking 7: while true do 8: Sa =GETAVAIABLE(S) . Sentences with masked slots 9: for s← Sa do 10: b = b+ REVEAL(s) . Reveal a randomly sampled slot and record its length, i.e., #tokens 11: if b ≥ B then EOM = true 12: if EOM then . Start post-process 13: form←M do 14: MERGE(m) . Merge adjacent [MASK] 15: returnM 16: end function\nUnified Masked Representation The intuition behind UMR is that a summary will encapsulate most salient information a user needs, while a query typically covers only a small fraction. We thus add one or more “placeholders” to the query to represent missing information the user actually seeks. We also identify such information in generic summaries for selective masking, to reduce the distributional shift during training.\nThe UMR for a summary is the concatenation of its sentential UMRs. To convert a sentence from natural language to UMR, we parse it with Open Information Extraction (Open IE; Stanovsky et al. 2018) to a set of propositions consisting of verbs and their arguments. The latter are considered candidate information slots I. We initialize Algorithm 1, by replacing all such slots with a [MASK] token. We subsequently sample and reveal a set of slots subject to a budget constraint. We define the budget as B = γ ∗ |I| where γ ∈ [0, 1] modulates the proportion of tokens to be revealed within I slots (and is optimized on the development set). Finally, in order to keep the representation of UMRS and UMRQ consistent (see next paragraph), we merge adjacent [MASK] tokens to one [MASK] resulting in a partially masked summary.\nWe mask QFS queries by considering their structure and lexical makeup. Queries in DUC benchmarks often contain interrogative words (e.g., how is A and what is B ) and request words (e.g., describe A and tell me B ). Following this observation, we manually collect a small set of such query words and replace them with [MASK]. For queries with a title and a narrative, we first mask the narrative and then prepend “[MASK] T .”, where T is a sequence of title tokens. Figure 1(a) shows examples of a masked query and summary.\nEvidence Ranking We represent sentences in a document collection and UMR queries with a pretrained BERT model (Devlin et al., 2019). Specifically, we concatenate a UMR query and a candidate sentence to sequence “[CLS] U [SEP] C [SEP]” where U is a sequence of tokens within a UMR query and C a sequence of tokens in a document sentence (we pad each sequence in a minibatch of L tokens). The [CLS] vector serves as input to a single layer neural network which estimates whether the sentence contains sufficient evidence to answer the query (see Figure 1(b) right). We use the mean-square error to compute the loss and update the encoding parameters in BERT via standard backpropagation:\nL(θ) = 1 |D| ∑ (S,C)∼D [ (y − ŷ(S,C; θ))2 ] . (1)\nwhere S,C is a summary-sentence pair sampled from collection D and y the training signal. Recall the summary is rendered as UMRS .\nPrevious work (Liu and Lapata, 2019a) has used ROUGE-2 as training signal for paragraph ranking. However, sentences are significantly shorter than paragraphs, and we observe a number of instances with a ROUGE-2 score of 0. We therefore perform label smoothing and define y as the F1 interpolation of ROUGE-2 and ROUGE-1: y = R2(S,C) + λ ∗ R1(S,C) where λ is optimized on the development set. At inference time, we use the trained model to compute the affinity score between UMRQ and all candidate sentences inD and rank them accordingly. The highest ranked sentences are deemed query-relevant and passed on to our summary generation model.2\nQuery Narrative Expansion In some cases queries may be relatively short and narratives absent. This can be problematic for our setup since query proxies (in the form of summaries) are typically long and detailed. For datasets with short queries we automatically create query narratives in an unsupervised fashion. We employ LexRank (Erkan and Radev, 2004) to select a subset of representative sentences under a word budget and concatenate them to form narratives (which we append to the original queries).\n2The Cloze task has been also employed in recent work in generic summarization (Huang et al., 2020). In comparison, we address a different research question (i.e., query modeling vs. summary evaluation) based on a different formulation (masked ROUGE regression vs. multiple-choice QA)."
+    }, {
+      "heading" : "5 Query Focused Generation",
+      "text" : "We also leverage generic summarization datasets to fine-tune a pretrained language model for abstractive QFS. In experiments we employ the publicly released UNILMV2 (Bao et al., 2020) to instantiate the controllable generator shown in Figure 1(b), however any other language model could have been used instead.\nWith Transformer (Vaswani et al., 2017) as the backbone network, UNILMV2 is jointly pretrained for natural language understanding and generation. Specifically, a bidirectional model is employs an autoencoding objective (AE; identical to Devlin et al. 2019), while a partially autoregressive (PAR) sequence-to-sequence model decomposes the probability of masked tokens in input sequence x as:\np(xM | x\\M ) = |M |∏ i=1 ∏ m∈Mi p(xm | x\\M≥i) (2)\nwhere M is the uniformly-produced factorization order. The masked position set Mi at the ith factorization step can be either a token or a n-gram block. xM is a set of xMi , and similarly, x\\M is a set of x\\Mi . The pretraining loss is computed as LAE + LPAR.\nAt inference, UNILMV2 operates over sentences deemed relevant by the query model and decodes summaries autoregressively (see Figure 1(b) left).\nSynthetic MDS Data The pre-trained language model can be fine-tuned on MDS datasets (e.g., Multi-News; Fabbri et al. 2019) which are perhaps better aligned with the QFS task since both MDS and QFS operate over document clusters. We additionally propose a way to create synthetic MDS datasets based on SDS data. This is advantageous for two reasons. Firstly, MDS resources are fairly limited compared to SDS data (Zhang et al., 2018; Lebanoff et al., 2018). And secondly, by construction, we can ensure various data characteristics which might be desirable (e.g., the number of topics represented in the document collection).\nA challenge with leveraging SDS for QFS is the summary length (Lebanoff et al., 2018). Summaries in SDS datasets such as CNN/DailyMail (Hermann et al., 2015), are on average 30 tokens long. In contrast, query focused summaries can be as long as 250 tokens. We sidestep this problem by adopting a retrieval-based solution. Specifically, we first build a database with all summaries in the\noriginal dataset. For each sample (di, si), we query the database with summary si. We retrieve Ni − 1 other summaries Si with the bigram hashing and TF-IDF matching method described in Chen et al. (2017). Then, we fetch their corresponding articles Di, and form the ith cluster as:\nD∗i = {di} ⋃ Di (3)\nŝ∗i = concat(si, , si,1, . . . , si,Ni), si,n ∈ Si (4)\nwhere D∗i are the source documents, and ŝ∗i is a potentially redundant summary of them. We set Ni to minimize the length difference between ŝ∗i and our summary length requirement (e.g., 250 tokens). To obtain the final summary s∗i , we eliminate redundancy by selecting sentences from the start of ŝ∗i , skipping sentences that have high cosine similarity with those which have already been selected.\nSummarization Input In generic MDS, the input to the summarization model is a long sequence, i.e., documents within a cluster are concatenated together and sentences in each document follow their original order (Fabbri et al., 2019). In QFS, information about absolute (document) position is lost after evidence ranking. As a result, there is a discrepancy between training and testing for our generation model. To mitigate this, we collect all sentences across documents for each training sample and rank them in descending order according to their ROUGE-2 score against the reference summary. The pretrained language model is fine-tuned against this evidence-ranked list of sentences. During inference, when actual queries are available, we instead use the top sentences ranked by our query model as input to summary generation.\nQuery Guidance Given that summarization input essentially consists of sentences that are highly relevant to the query, an obvious question concerns the usefulness of explicitly modeling the query during generation. We thus instantiate two conditional language models. For a query-guided summarizer pφ(S|D,Q;φ), we prepend UMRSS to the selected evidence during training and UMRQ at inference. While for a query-agnostic summarizer pφ(S|D;φ), we only consider the selected evidence as input to our summarizer and this setting is identical to generic MDS.\nLength Control QFS tasks usually require summaries of a fixed length budget (e.g, 250 words), whereas summary length is bound to be variable\nin the training data. Inspired by Fan et al. (2018), we quantize summary length into discrete bins. We augment each training instance with this information, i.e., we prepend a length token (e.g., [230]) to document sentences. At inference, we inform the model of the summary budget by prepending the expected length token (e.g., [250]) to the sentences selected by the evidence ranker (see Figure 1(b))."
+    }, {
+      "heading" : "6 Experimental Setup",
+      "text" : "Datasets We performed experiments on the DUC 2005-2007 QFS benchmarks and TD-QFS (Baumel et al., 2016). DUC benchmarks contain long query narratives while TD-QFS focuses on medical texts with short keyword queries. Statistics for both datasets are given in Table 1. We used DUC 2005 as a development set to optimize hyperparameters and select abstractive models, and evaluated performance on the other three datasets.\nWe used Multi-News (Fabbri et al., 2019) and CNN/DailyMail (Hermann et al., 2015) as our generic summarization datasets to train MARGE (for evidence ranking) and to fine-tune UNILMV2 (for summary generation). Data statistics are shown in Table 2. To create the training and development sets for optimizing MARGE, we sampled sentences from each dataset. Specifically, we took the first and last 20 sentences from each cluster in Multi-News and the first and last three sentences from each article in CNN/DailyMail. For fine-tuning UNILMV2, we used the original MultiNews and the synthetic multi-document version of CNN/DailyMail described in Section 5.\nImplementation Details We used the publicly released BERT model3 and fine-tuned it for ROUGE regression with a learning rate of 3×10−5 and a batch size of 128 for 3 epochs on 8 GPUs (GTX 2080 Ti). We trained two summarization\n3https://github.com/huggingface/pytorch-transformers\nmodels on CNN/DailyMail and Multi-News, respectively, with the same hardware. For both models, we set the maximum input length to 768, and fine-tuned the publicly released UNILMV2 model4 with a learning rate of 7× 10−5 and a batch size of 16 for 40,000 steps with gradient accumulation every 4 steps. During decoding, we used beam search with beam size 5 and Trigram Blocking (Paulus et al., 2018) to reduce redundancy. The cosine similarity threshold for redundancy removal was set to 0.6 and summary length was discretized to 10 bins. The λ parameter for label smoothing was set to 0.15. We set γ, the parameter which modulates the proportion of information slots to reveal during masking, to 0 (see Appendix for detailed analysis of γ and its effect on model performance)."
+    }, {
+      "heading" : "7 Results",
+      "text" : "Our experiments evaluate both components of the proposed approach, namely query modeling and summary generation. We assess the evidence ranker and the effectiveness of the unified masking. We also compare our summaries against competitive abstractive and extractive systems using automatic and human-based evaluation."
+    }, {
+      "heading" : "7.1 Query Modeling",
+      "text" : "Evaluation Metrics We evaluate query modeling with retrieval and summarization metrics. For the former evaluation, we follow Liu and Lapata (2019a), concatenate the top k ranked sentences, and calculate recall against gold summaries. We additionally propose to evaluate model output as\n4https://github.com/microsoft/unilm\nif it were an extractive summary, to better assess coverage and informativeness. We thus take the top sentences subject to a budget of 250 tokens, and remove redundancy by selecting sentences from the top and skipping sentences that have high cosine similarity (e.g., ≥ 0.6) with selected ones. We use ROUGE F1 to evaluate the resulting summaries so that precision is also taken into account.\nResults We compare MARGE against Term Frequency, a simple but effective retrieval method that performs particularly well on DUC datasets (Katragadda and Varma, 2009). We also compare to two semantic matching models used for extractive QFS (Xu and Lapata, 2020): BERTQA which is trained on the joint set of WikiQA (Yang et al., 2015) and TrecQA (Yao et al., 2013), and BERTMRC which is fine-tuned on SQuAD 2.0 (Rajpurkar et al., 2018). ORACLE uses reference summaries as queries to retrieve summary sentences. For summarization evaluation, we report upper bound performance (GOLD) which we estimated by comparing a (randomly selected) reference summary against the remaining three reference summaries. In addition, we compare to LEAD which returns all lead sentences of the most recent document (up to 250 words) and LEXRANK (Erkan and Radev, 2004), a widelyused unsupervised method based on Markov random walks on sentence-similarity graphs.5\nWe summarize ranking and summarization results in Tables 3 and 4. As we can see, despite learning from weak signals, i.e., proxy queries and proxy answers, MARGE outperforms the strongest base-\n5To examine ranking performance, we exclude multi-stage frameworks like Xu and Lapata (2020) that rerank the evidence with additional modules (e.g., centrality).\nline, BERTQA, under both evaluation tasks. Without recourse to any question/answer annotations or dataset-specific retrieval methods, our model provides more informative input to the downstream generation task. As anticipated, query expansion (+EXPAND) gives a big boost on TD-QFS (which has short queries) leading to better coverage.\nAblation Studies Table 5 shows the outcome of various ablation studies which assess the effectiveness of masking and how to best instantiate it. Specifically, −Verb additionally treats verbs as information slots for sampling and masking; −Mask removes masking entirely so that the whole summary is revealed; −Query removes the proxy query (at training time) and the actual query (at inference time); this is to investigate whether our model simply learns to judge sentence salience based on its own features, instead of performing semantic matching with the given query; −OpenIE removes the dependency on Open IE and chooses words to mask at random. Specifically, we randomly mask 15% words in summaries as in BERT (Devlin et al., 2019) and merge adjacent [MASK] tokens. Performance drops in all cases, especially when queries\nare removed, underscoring the effectiveness of the proposed representation and training framework."
+    }, {
+      "heading" : "7.2 Abstractive Summarization",
+      "text" : "Automatic Evaluation Table 6 compares our model, which we call MARGESUM, against existing QFS systems. These include PQSUM-WSL (Laskar et al., 2020) a supervised abstractive system which represents the state of the art on DUC benchmarks. It first extracts relevant sentences for each document with a QA model, it then replaces some of these with reference summary sentences via a paraphrase model, and uses them to further fine-tune BERTSUM (Liu and Lapata, 2019b). In its supervised incarnation, two years’ DUC datasets are used for training and one for testing. QUERYSUM (Xu and Lapata, 2020) is state-of-the-art extractive system which adopts a coarse-to-fine process for salience estimation.\nThe second block compares our model with two distantly supervised approaches. BART-CAQ (Su et al., 2020) uses an ensembled QA model to extract answer evidence, and fine-tuned BART (Lewis et al., 2020) to iteratively generate summaries from paragraphs. PQSUM (Laskar et al., 2020), uses fine-tuned BERTSUM to generate summaries for each document in a cluster, and a QA model to rank summary sentences against the query. Table 7 compares these models and our own in terms of their training requirements.\nThe third block presents the performance of UNILM fine-tuned on Multi-News and CNN/DailyMail following the standard setting in Bao et al. (2020). It uses no query guidance or length control. Documents are concatenated as input for training. During testing, sentences are selected with MARGE but ordered according to\ntheir original document position. The last block shows two variants of MARGESUM, optimized on Multi-News and a synthetic training set built from CNN/DailyMail. Both take as input sentences selected with MARGE-MN during inference.\nAs we can see, without requiring expensive QA data (see Table 7), MARGESUM-CD outperforms existing distantly supervised approaches. Its performance on DUC is on par with one of the strongest extractive systems, while on TD-QFS it is superior across metrics. Also note that MARGE trained on synthetic MDS data outperforms MARGESUMMN. Compared to Multi-News, synthetic summaries cover more topics and are less redundant, which is suited to QFS where there are usually multiple sub-queries to answer.\nAblation Studies Table 8 presents the results of several ablation studies on MARGESUM-CD. Replacing the input to the summarization component with sentences selected by BERTQA (Xu and Lapata, 2020) significantly decreases performance, demonstrating that sentences selected by MARGE are useful to downstream abstractive summarization. Removing evidence ranking altogether (−Rank) leads to a large performance drop; this is expected since sentence position information from the original documents does not transfer well to QFS settings. Removing length control (−Length) also hurts performance as does the removal of query guidance (−Query) at inference time.\nHuman Evaluation We also evaluated model summaries in a judgment elicitation study via Amazon Mechanical Turk. Native English speakers (self-reported) were asked to rate query-summary pairs on two dimensions: Succinctness (does the summary avoid unnecessary detail and redundant information?) and Coherence (does the summary make logical sense?). The ratings were obtained using a fivepoint Likert scale. In addition, participants were asked to assess the Relevance of the summary to the query. Crowdworkers read a summary and for each sentence decided whether it is relevant (i.e., it provides an answer to the query), irrelevant (i.e., it does not answer the query), and partially relevant (i.e., it is not clear it directly answers the query). Relevant sentences were awarded a score of 5, partially relevant ones a score of 2.5, and 0 otherwise. Sentence scores were averaged to obtain a relevance score for the whole summary.\nParticipants assessed summaries created by PQSUM-WSL, the state-of-the-art abstractive system, QUERYSUM, a state-of-the-art extractive system, UNILM-CD, and MARGESUM-CD.6 We also randomly selected GOLD standard summaries to include as an upper bound. We sampled 20 querycluster pairs from DUC (2006, 2007; 10 from each set), and 20 pairs from TD-QFS (5 from each cluster) and collected three responses per pair.\n6We are grateful to Md Tahmid Rahman Laskar for providing us with the output of their PQSUM-WSL system. We include PQSUM-WSL only for human evaluation on DUC since it was not evaluated on TD-QFS (Laskar et al., 2020) and system output is not available.\nTable 9 shows the human ratings for each system (we provide examples of summary output in Appendix C). Participants perceive MARGESUMCD on par with PQSUM-WSL in terms of query relevance and summary succinctness, while significantly better than PQSUM-WSL and QUERYSUM in terms of coherence. In fact, participants find summaries PQSUM-WSL summaries as incoherent as those created by the extractive QUERYSUM; this is probably due to the fact that PQSUMWSL first generates an abstractive summary for each document and then re-ranks the generated sentences. Therefore, final summary sentences are less related to each other. Summaries from our system are also considered significantly more relevant than UNILM-CD. Compared to PQSUM-WSL, although UNILM-CD is not good at producing relevant content, it maintains relatively higher coherence, demonstrating the effectiveness of training abstractive systems with synthetic data from SDS and generating long summaries at once."
+    }, {
+      "heading" : "8 Conclusions",
+      "text" : "In this work we proposed an abstractive framework for query focused summarization. We provided a unified mask representation for summaries and queries, which enables summaries to serve as proxy queries for model training. As a result, a query model can be trained with generic summarization data without relying on additional question-answering resources. Experimental results across datasets show that the proposed system yields state-of-the-art performance despite the weakly supervised setting, and produces more relevant and coherent summaries compared to existing approaches. In the future, we would like to push this low-resource approach even further and attempt to generate abstractive summaries without access to any summarization datasets."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "The authors would like to thank the anonymous reviewers for their valuable feedback. We acknowledge the financial support of the European Research Council (Lapata; award number 681760). This research is based upon work supported in part by the Office of the Director of National Intelligence (ODNI), Intelligence Advanced Research Projects Activity (IARPA), via contract FA865017-C-9118. The views and conclusions contained herein are those of the authors and should not be\ninterpreted as necessarily representing the official policies or endorsements, either expressed or implied, of the ODNI, IARPA, or the U.S. Government. The U.S. Government is authorized to reproduce and distribute reprints for Governmental purposes notwithstanding any copyright annotation therein."
+    }, {
+      "heading" : "A Evidence Ranking Results",
+      "text" : "We show in the paper the top k retrieval performance of different models when k ∈ {10, 30}. In some cases, when top sentences are relatively short, the maximum input length to UNILM (which is set to 768) allows for more than 30 sentences to be selected. Therefore, in Table 3, we further show the top k retrieval performance of evidence rankers with larger k, set to k = 50. Results show that our model outperforms strong baseline systems, and we conclude that it consistently provides high quality content, under varied budgets (k ∈ {10, 30, 50}), to the downstream abstractive summarization task.\nWe report the full set of ROUGE results for evidence rankers on extractive summarization in the main paper in Table 4."
+    }, {
+      "heading" : "B The Effect of Reveal Ratio",
+      "text" : "We show how the mask reveal ratio γ affects model performance in Figure 2. As we can see, performance on the ROUGE regression task improves as γ increases; this is not surprising, the task becomes easier when fewer tokens are masked; when γ = 1.0, simply counting lexical overlap can solve the task perfectly. However, model performance on the QFS development set (DUC 2005) shows the opposite trend: actual queries seek information, instead of providing all the information needed. Therefore, the model is required to perform semantic matching (Guo et al., 2016) to accurately estimate evidence scores. Based on our empirical results, a simple but effective strategy is to mask all information slots (i.e., potential arguments) and reveal the rest of the words (including verbs) in the summary to construct proxy queries for training."
+    }, {
+      "heading" : "C Abstractive Summarization Results",
+      "text" : "We report the full set of ROUGE results for abstractive summarization models in Table 12. We also show an example of system outputs in Table 13."
+    }, {
+      "heading" : "D Datasets and Evaluation Package",
+      "text" : "Multi-News and CNN/Daily Mail are used to train the query model and abstractive summarization model described in this work, and they can be downloaded from https://github.com/ Alex-Fabbri/Multi-News and https://github. com/abisee/cnn-dailymail, respectively.\nFor evaluation purposes, the TD-QFS dataset is publicly available at https://www.cs.bgu.ac. il/~talbau/TD-QFS/dataset.html. DUC 2005- 2007 benchmarks can be requested from NIST: https://www-nlpir.nist.gov/projects/duc/ data.html. We computed ROUGE scores with pyrouge, a Python wrapper for the ROUGE summarization evaluation package: https://github.com/ bheinzerling/pyrouge."
+    } ],
+    "references" : [ {
+      "title" : "Improving query focused summarization using look-ahead strategy",
+      "author" : [ "Rama Badrinath", "Suresh Venkatasubramaniyan", "CE Veni Madhavan." ],
+      "venue" : "Proceedings of the 33rd European Conference on Advances in Information Retrieval, pages 641–652,",
+      "citeRegEx" : "Badrinath et al\\.,? 2011",
+      "shortCiteRegEx" : "Badrinath et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "2016. MS MARCO: A human generated machine reading comprehension",
+      "author" : [ "Payal Bajaj", "Daniel Campos", "Nick Craswell", "Li Deng", "Jianfeng Gao", "Xiaodong Liu", "Rangan Majumder", "Andrew McNamara", "Bhaskar Mitra", "Tri Nguyen" ],
+      "venue" : null,
+      "citeRegEx" : "Bajaj et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Bajaj et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "UniLMv2: Pseudo-masked language models for unified language model pre-training",
+      "author" : [ "Hangbo Bao", "Li Dong", "Furu Wei", "Wenhui Wang", "Nan Yang", "Xiaodong Liu", "Yu Wang", "Jianfeng Gao", "Songhao Piao", "Ming Zhou" ],
+      "venue" : null,
+      "citeRegEx" : "Bao et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Bao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Topic concentration in query focused summarization datasets",
+      "author" : [ "Tal Baumel", "Raphael Cohen", "Michael Elhadad." ],
+      "venue" : "Proceedings of the 30th AAAI Conference on Artificial Intelligence, pages 2573– 2579, Phoenix, Arizona.",
+      "citeRegEx" : "Baumel et al\\.,? 2016",
+      "shortCiteRegEx" : "Baumel et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "BioMedBERT: A pre-trained biomedical language model for qa and ir",
+      "author" : [ "Souradip Chakraborty", "Ekaba Bisong", "Shweta Bhatt", "Thomas Wagner", "Riley Elliott", "Francesco Mosconi." ],
+      "venue" : "Proceedings of the 28th International Conference on",
+      "citeRegEx" : "Chakraborty et al\\.,? 2020",
+      "shortCiteRegEx" : "Chakraborty et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Reading Wikipedia to answer opendomain questions",
+      "author" : [ "Danqi Chen", "Adam Fisch", "Jason Weston", "Antoine Bordes." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics, pages 1870–1879, Vancouver, Canada.",
+      "citeRegEx" : "Chen et al\\.,? 2017",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Overview of duc 2005",
+      "author" : [ "Hoa Trang Dang." ],
+      "venue" : "Proceedings of the 2005 Document Understanding Conference, pages 1–12, Vancouver, Canada.",
+      "citeRegEx" : "Dang.,? 2005",
+      "shortCiteRegEx" : "Dang.",
+      "year" : 2005
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Automatically constructing a corpus of sentential paraphrases",
+      "author" : [ "William B Dolan", "Chris Brockett." ],
+      "venue" : "Proceedings of the Third International Workshop on Paraphrasing, pages 9–16, Jeju Island, Korea.",
+      "citeRegEx" : "Dolan and Brockett.,? 2005",
+      "shortCiteRegEx" : "Dolan and Brockett.",
+      "year" : 2005
+    }, {
+      "title" : "Lexrank: Graph-based lexical centrality as salience in text summarization",
+      "author" : [ "Günes Erkan", "Dragomir R Radev." ],
+      "venue" : "Journal of Artificial Intelligence Research, 22:457–479.",
+      "citeRegEx" : "Erkan and Radev.,? 2004",
+      "shortCiteRegEx" : "Erkan and Radev.",
+      "year" : 2004
+    }, {
+      "title" : "Multi-News: A large-scale multi-document summarization dataset and abstractive hierarchical model",
+      "author" : [ "Alexander Richard Fabbri", "Irene Li", "Tianwei She", "Suyi Li", "Dragomir Radev." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for",
+      "citeRegEx" : "Fabbri et al\\.,? 2019",
+      "shortCiteRegEx" : "Fabbri et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Controllable abstractive summarization",
+      "author" : [ "Angela Fan", "David Grangier", "Michael Auli." ],
+      "venue" : "Proceedings of the 2nd Workshop on Neural Machine Translation and Generation, pages 45–54, Melbourne, Australia.",
+      "citeRegEx" : "Fan et al\\.,? 2018",
+      "shortCiteRegEx" : "Fan et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Bottom-up abstractive summarization",
+      "author" : [ "Sebastian Gehrmann", "Yuntian Deng", "Alexander Rush." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 4098–4109, Brussels, Belgium.",
+      "citeRegEx" : "Gehrmann et al\\.,? 2018",
+      "shortCiteRegEx" : "Gehrmann et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A deep relevance matching model for ad-hoc retrieval",
+      "author" : [ "Jiafeng Guo", "Yixing Fan", "Qingyao Ai", "W Bruce Croft." ],
+      "venue" : "Proceedings of the 25th ACM International on Conference on Information and Knowledge Management, pages 55–64, Indi-",
+      "citeRegEx" : "Guo et al\\.,? 2016",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Teaching machines to read and comprehend",
+      "author" : [ "Karl Moritz Hermann", "Tomáš Kočiský", "Edward Grefenstette", "Lasse Espeholt", "Will Kay", "Mustafa Suleyman", "Phil Blunsom." ],
+      "venue" : "Proceedings of the 28th International Conference on Neural Information Pro-",
+      "citeRegEx" : "Hermann et al\\.,? 2015",
+      "shortCiteRegEx" : "Hermann et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Overview of duc 2006",
+      "author" : [ "TD Hoa." ],
+      "venue" : "Proceedings of the 2006 Document Understanding Conference, New York, USA.",
+      "citeRegEx" : "Hoa.,? 2006",
+      "shortCiteRegEx" : "Hoa.",
+      "year" : 2006
+    }, {
+      "title" : "Knowledge graph-augmented abstractive summarization with semantic-driven cloze reward",
+      "author" : [ "Luyang Huang", "Lingfei Wu", "Lu Wang." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 5094–",
+      "citeRegEx" : "Huang et al\\.,? 2020",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Queryfocused summaries or query-biased summaries",
+      "author" : [ "Rahul Katragadda", "Vasudeva Varma" ],
+      "venue" : "In Proceedings of the 47th Annual Meeting of the Association for Computational Linguistics and the 4th International Joint Conference on Natural Language",
+      "citeRegEx" : "Katragadda and Varma.,? \\Q2009\\E",
+      "shortCiteRegEx" : "Katragadda and Varma.",
+      "year" : 2009
+    }, {
+      "title" : "Natural questions: a benchmark for question answering research",
+      "author" : [ "Kenton Lee" ],
+      "venue" : "Transactions of the Association for Computational Linguistics,",
+      "citeRegEx" : "Lee,? \\Q2019\\E",
+      "shortCiteRegEx" : "Lee",
+      "year" : 2019
+    }, {
+      "title" : "WSL-DS: Weakly supervised learning with distant supervision for query focused multi-document abstractive summarization",
+      "author" : [ "Md Tahmid Rahman Laskar", "Enamul Hoque", "Jimmy Xiangji Huang." ],
+      "venue" : "Proceedings of the 28th International Conference",
+      "citeRegEx" : "Laskar et al\\.,? 2020",
+      "shortCiteRegEx" : "Laskar et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Adapting the neural encoder-decoder framework from single to multi-document summarization",
+      "author" : [ "Logan Lebanoff", "Kaiqiang Song", "Fei Liu." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages",
+      "citeRegEx" : "Lebanoff et al\\.,? 2018",
+      "shortCiteRegEx" : "Lebanoff et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Latent retrieval for weakly supervised open domain question answering",
+      "author" : [ "Kenton Lee", "Ming-Wei Chang", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 6086–6096, Florence,",
+      "citeRegEx" : "Lee et al\\.,? 2019",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "BART: Denoising sequence-to-sequence pretraining for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Unsupervised question answering by cloze translation",
+      "author" : [ "Patrick Lewis", "Ludovic Denoyer", "Sebastian Riedel." ],
+      "venue" : "arXiv preprint arXiv:1906.04980.",
+      "citeRegEx" : "Lewis et al\\.,? 2019",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Cascaded attention based unsupervised information distillation for compressive summarization",
+      "author" : [ "Piji Li", "Wai Lam", "Lidong Bing", "Weiwei Guo", "Hang Li." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing,",
+      "citeRegEx" : "Li et al\\.,? 2017a",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Salience estimation via variational auto-encoders for multi-document summarization",
+      "author" : [ "Piji Li", "Zihao Wang", "Wai Lam", "Zhaochun Ren", "Lidong Bing." ],
+      "venue" : "Proceedings of the 31th AAAI Conference on Artificial Intelligence, pages 3497–3503, San Fran-",
+      "citeRegEx" : "Li et al\\.,? 2017b",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Hierarchical transformers for multi-document summarization",
+      "author" : [ "Yang Liu", "Mirella Lapata." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 5070– 5081, Florence, Italy.",
+      "citeRegEx" : "Liu and Lapata.,? 2019a",
+      "shortCiteRegEx" : "Liu and Lapata.",
+      "year" : 2019
+    }, {
+      "title" : "Text summarization with pretrained encoders",
+      "author" : [ "Yang Liu", "Mirella Lapata." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natural Language Processing, pages",
+      "citeRegEx" : "Liu and Lapata.,? 2019b",
+      "shortCiteRegEx" : "Liu and Lapata.",
+      "year" : 2019
+    }, {
+      "title" : "Diversity driven attention model for query-based abstractive summarization",
+      "author" : [ "Preksha Nema", "Mitesh M. Khapra", "Anirban Laha", "Balaraman Ravindran." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Nema et al\\.,? 2017",
+      "shortCiteRegEx" : "Nema et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "A deep reinforced model for abstractive summarization",
+      "author" : [ "Romain Paulus", "Caiming Xiong", "Richard Socher." ],
+      "venue" : "Proceedings of the 6th International Conference on Learning Representations, Vancouver, Canada.",
+      "citeRegEx" : "Paulus et al\\.,? 2018",
+      "shortCiteRegEx" : "Paulus et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Know what you don’t know: Unanswerable questions for squad",
+      "author" : [ "Pranav Rajpurkar", "Robin Jia", "Percy Liang." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics, pages 784–789, Austin, Texas.",
+      "citeRegEx" : "Rajpurkar et al\\.,? 2018",
+      "shortCiteRegEx" : "Rajpurkar et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "SQuAD: 100,000+ questions for machine comprehension of text",
+      "author" : [ "Pranav Rajpurkar", "Jian Zhang", "Konstantin Lopyrev", "Percy Liang." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 2383–2392, Syd-",
+      "citeRegEx" : "Rajpurkar et al\\.,? 2016",
+      "shortCiteRegEx" : "Rajpurkar et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Get to the point: Summarization with pointergenerator networks",
+      "author" : [ "Abigail See", "Peter J. Liu", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics, pages 1073–1083, Vancouver, Canada.",
+      "citeRegEx" : "See et al\\.,? 2017",
+      "shortCiteRegEx" : "See et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Supervised open information extraction",
+      "author" : [ "Gabriel Stanovsky", "Julian Michael", "Luke Zettlemoyer", "Ido Dagan." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Lan-",
+      "citeRegEx" : "Stanovsky et al\\.,? 2018",
+      "shortCiteRegEx" : "Stanovsky et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Generalizing question answering system with pretrained language model fine-tuning",
+      "author" : [ "Dan Su", "Yan Xu", "Genta Indra Winata", "Peng Xu", "Hyeondey Kim", "Zihan Liu", "Pascale Fung." ],
+      "venue" : "Proceedings of the 2nd Workshop on Machine Reading for Ques-",
+      "citeRegEx" : "Su et al\\.,? 2019",
+      "shortCiteRegEx" : "Su et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "CAiRECOVID: A question answering and query-focused multi-document summarization system for COVID19 scholarly information management",
+      "author" : [ "Dan Su", "Yan Xu", "Tiezheng Yu", "Farhad Bin Siddique", "Elham Barezi", "Pascale Fung." ],
+      "venue" : "Proceed-",
+      "citeRegEx" : "Su et al\\.,? 2020",
+      "shortCiteRegEx" : "Su et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Cloze Procedure”: A new tool for measuring readability",
+      "author" : [ "Wilson L Taylor." ],
+      "venue" : "Journalism Quarterly, 30(4):415–433.",
+      "citeRegEx" : "Taylor.,? 1953",
+      "shortCiteRegEx" : "Taylor.",
+      "year" : 1953
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 6000–6010.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Manifold-ranking based topic-focused multidocument summarization",
+      "author" : [ "Xiaojun Wan", "Jianwu Yang", "Jianguo Xiao." ],
+      "venue" : "Proceedings of the 20th International Joint Conference on Artificial Intelligence, pages 2903–2908, Hyderabad, India.",
+      "citeRegEx" : "Wan et al\\.,? 2007",
+      "shortCiteRegEx" : "Wan et al\\.",
+      "year" : 2007
+    }, {
+      "title" : "CTSUM: extracting more certain summaries for news articles",
+      "author" : [ "Xiaojun Wan", "Jianmin Zhang." ],
+      "venue" : "Proceedings of the 37th international ACM SIGIR Conference on Research & Development in Information Retrieval, pages 787–796, New York, United",
+      "citeRegEx" : "Wan and Zhang.,? 2014",
+      "shortCiteRegEx" : "Wan and Zhang.",
+      "year" : 2014
+    }, {
+      "title" : "Coarse-to-fine query focused multi-document summarization",
+      "author" : [ "Yumo Xu", "Mirella Lapata." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing, pages 3632–3645, Online.",
+      "citeRegEx" : "Xu and Lapata.,? 2020",
+      "shortCiteRegEx" : "Xu and Lapata.",
+      "year" : 2020
+    }, {
+      "title" : "WikiQA: A challenge dataset for open-domain question answering",
+      "author" : [ "Yi Yang", "Wen-tau Yih", "Christopher Meek." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 2013–2018, Lisbon, Portugal.",
+      "citeRegEx" : "Yang et al\\.,? 2015",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Answer extraction as sequence tagging with tree edit distance",
+      "author" : [ "Xuchen Yao", "Benjamin Van Durme", "Chris CallisonBurch", "Peter Clark." ],
+      "venue" : "Proceedings of the 2013 Conference of the North American Chapter of the Association for Computational",
+      "citeRegEx" : "Yao et al\\.,? 2013",
+      "shortCiteRegEx" : "Yao et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Neural single-document summarization model for abstractive multi-document summarization: A pilot studyadapting",
+      "author" : [ "Jianmin Zhang", "Jiwei Tan", "Xiaojun Wan." ],
+      "venue" : "Proceedings of the 11th International Conference on Natural Language Genera-",
+      "citeRegEx" : "Zhang et al\\.,? 2018",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "2016) to accurately estimate evidence scores. Based on our empirical results, a simple but effective strategy is to mask all information slots (i.e., potential arguments) and reveal the rest of the words",
+      "author" : [ "Guo" ],
+      "venue" : null,
+      "citeRegEx" : "Guo,? \\Q2016\\E",
+      "shortCiteRegEx" : "Guo",
+      "year" : 2016
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 28,
+      "context" : "Existing corpora (Nema et al., 2017; Dang, 2005; Hoa, 2006; Baumel et al., 2016) are relatively small for modern data-hungry neural architectures and have been mostly used for evaluation purposes.",
+      "startOffset" : 17,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 6,
+      "context" : "Existing corpora (Nema et al., 2017; Dang, 2005; Hoa, 2006; Baumel et al., 2016) are relatively small for modern data-hungry neural architectures and have been mostly used for evaluation purposes.",
+      "startOffset" : 17,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 15,
+      "context" : "Existing corpora (Nema et al., 2017; Dang, 2005; Hoa, 2006; Baumel et al., 2016) are relatively small for modern data-hungry neural architectures and have been mostly used for evaluation purposes.",
+      "startOffset" : 17,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 3,
+      "context" : "Existing corpora (Nema et al., 2017; Dang, 2005; Hoa, 2006; Baumel et al., 2016) are relatively small for modern data-hungry neural architectures and have been mostly used for evaluation purposes.",
+      "startOffset" : 17,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 28,
+      "context" : "(Nema et al., 2017); the majority of existing datasets consist of document-summary pairs, while QFS summaries are expected to answer specific queries.",
+      "startOffset" : 0,
+      "endOffset" : 19
+    }, {
+      "referenceID" : 31,
+      "context" : "problem by resorting to distant supervision from query-relevant NLP resources including question answering (Rajpurkar et al., 2016; Chakraborty et al., 2020) and paraphrase identification (Dolan and Brockett, 2005).",
+      "startOffset" : 107,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 4,
+      "context" : "problem by resorting to distant supervision from query-relevant NLP resources including question answering (Rajpurkar et al., 2016; Chakraborty et al., 2020) and paraphrase identification (Dolan and Brockett, 2005).",
+      "startOffset" : 107,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2020) and paraphrase identification (Dolan and Brockett, 2005).",
+      "startOffset" : 38,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 40,
+      "context" : "Moreover, there is often a mismatch between queries in QA datasets and those in QFS scenarios (Xu and Lapata, 2020); the two types of queries are not identically distributed and it is practically infeasible to find appropriate query-related",
+      "startOffset" : 94,
+      "endOffset" : 115
+    }, {
+      "referenceID" : 36,
+      "context" : "Inspired by the Cloze task and its applications in NLP (Taylor, 1953; Lewis et al., 2019; Lee et al., 2019), we propose MARGE, a Masked ROUGE regression framework for evidence estimation and ranking.",
+      "startOffset" : 55,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 23,
+      "context" : "Inspired by the Cloze task and its applications in NLP (Taylor, 1953; Lewis et al., 2019; Lee et al., 2019), we propose MARGE, a Masked ROUGE regression framework for evidence estimation and ranking.",
+      "startOffset" : 55,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 21,
+      "context" : "Inspired by the Cloze task and its applications in NLP (Taylor, 1953; Lewis et al., 2019; Lee et al., 2019), we propose MARGE, a Masked ROUGE regression framework for evidence estimation and ranking.",
+      "startOffset" : 55,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 38,
+      "context" : ", via manifold ranking (Wan et al., 2007), using a look-ahead strategy (Badrinath et al.",
+      "startOffset" : 23,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2007), using a look-ahead strategy (Badrinath et al., 2011), uncertainty prediction (Wan and Zhang, 2014), or attention mechanisms (Li et al.",
+      "startOffset" : 37,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 39,
+      "context" : ", 2011), uncertainty prediction (Wan and Zhang, 2014), or attention mechanisms (Li et al.",
+      "startOffset" : 32,
+      "endOffset" : 53
+    }, {
+      "referenceID" : 20,
+      "context" : "This is due to generation models being particularly data-hungry (Lebanoff et al., 2018; Liu and Lapata, 2019a) and the scarcity of QFS training data.",
+      "startOffset" : 64,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 26,
+      "context" : "This is due to generation models being particularly data-hungry (Lebanoff et al., 2018; Liu and Lapata, 2019a) and the scarcity of QFS training data.",
+      "startOffset" : 64,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 22,
+      "context" : "(2020) fine-tune BART (Lewis et al., 2020) on CNN/DailyMail (Hermann et al.",
+      "startOffset" : 22,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2020) on CNN/DailyMail (Hermann et al., 2015), a single-document summarization dataset, and gen-",
+      "startOffset" : 25,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 34,
+      "context" : "They learn a query model for paragraph selection based on a plethora of QA and machine reading datasets (Su et al., 2019; Rajpurkar et al., 2016).",
+      "startOffset" : 104,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 31,
+      "context" : "They learn a query model for paragraph selection based on a plethora of QA and machine reading datasets (Su et al., 2019; Rajpurkar et al., 2016).",
+      "startOffset" : 104,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 36,
+      "context" : "Cloze task (Taylor, 1953) and its recent variants (Lewis et al.",
+      "startOffset" : 11,
+      "endOffset" : 25
+    }, {
+      "referenceID" : 23,
+      "context" : "Cloze task (Taylor, 1953) and its recent variants (Lewis et al., 2019; Lee et al., 2019), we render queries and summaries in a Unified Masked Representation (UMR) which enables summaries to serve as proxy queries for model training, as shown in Figure 1(a).",
+      "startOffset" : 50,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 21,
+      "context" : "Cloze task (Taylor, 1953) and its recent variants (Lewis et al., 2019; Lee et al., 2019), we render queries and summaries in a Unified Masked Representation (UMR) which enables summaries to serve as proxy queries for model training, as shown in Figure 1(a).",
+      "startOffset" : 50,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 33,
+      "context" : "from natural language to UMR, we parse it with Open Information Extraction (Open IE; Stanovsky et al. 2018) to a set of propositions consisting of verbs and their arguments.",
+      "startOffset" : 75,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 7,
+      "context" : "document collection and UMR queries with a pretrained BERT model (Devlin et al., 2019).",
+      "startOffset" : 65,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 26,
+      "context" : "Previous work (Liu and Lapata, 2019a) has used ROUGE-2 as training signal for paragraph",
+      "startOffset" : 14,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 9,
+      "context" : "We employ LexRank (Erkan and Radev, 2004) to select a subset of rep-",
+      "startOffset" : 18,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 16,
+      "context" : "The Cloze task has been also employed in recent work in generic summarization (Huang et al., 2020).",
+      "startOffset" : 78,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 2,
+      "context" : "In experiments we employ the publicly released UNILMV2 (Bao et al., 2020) to instantiate the controllable generator shown in Figure 1(b), however any other language model could have been used instead.",
+      "startOffset" : 55,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 37,
+      "context" : "With Transformer (Vaswani et al., 2017) as the backbone network, UNILMV2 is jointly pretrained for natural language understanding and generation.",
+      "startOffset" : 17,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 10,
+      "context" : "Synthetic MDS Data The pre-trained language model can be fine-tuned on MDS datasets (e.g., Multi-News; Fabbri et al. 2019) which are perhaps better aligned with the QFS task since both MDS and QFS operate over document clusters.",
+      "startOffset" : 84,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 20,
+      "context" : "A challenge with leveraging SDS for QFS is the summary length (Lebanoff et al., 2018).",
+      "startOffset" : 62,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 14,
+      "context" : "Summaries in SDS datasets such as CNN/DailyMail (Hermann et al., 2015), are on average 30 tokens long.",
+      "startOffset" : 48,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 10,
+      "context" : "together and sentences in each document follow their original order (Fabbri et al., 2019).",
+      "startOffset" : 68,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 10,
+      "context" : "We used Multi-News (Fabbri et al., 2019) and CNN/DailyMail (Hermann et al.",
+      "startOffset" : 19,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2019) and CNN/DailyMail (Hermann et al., 2015) as our generic summarization datasets to train MARGE",
+      "startOffset" : 26,
+      "endOffset" : 48
+    }, {
+      "referenceID" : 29,
+      "context" : "During decoding, we used beam search with beam size 5 and Trigram Blocking (Paulus et al., 2018) to reduce redundancy.",
+      "startOffset" : 75,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 40,
+      "context" : "We also compare to two semantic matching models used for extractive QFS (Xu and Lapata, 2020): BERTQA which is trained on the joint set of WikiQA (Yang et al.",
+      "startOffset" : 72,
+      "endOffset" : 93
+    }, {
+      "referenceID" : 41,
+      "context" : "We also compare to two semantic matching models used for extractive QFS (Xu and Lapata, 2020): BERTQA which is trained on the joint set of WikiQA (Yang et al., 2015) and TrecQA (Yao et al.",
+      "startOffset" : 146,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 42,
+      "context" : ", 2015) and TrecQA (Yao et al., 2013), and BERTMRC which is",
+      "startOffset" : 19,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 9,
+      "context" : "In addition, we compare to LEAD which returns all lead sentences of the most recent document (up to 250 words) and LEXRANK (Erkan and Radev, 2004), a widelyused unsupervised method based on Markov random walks on sentence-similarity graphs.",
+      "startOffset" : 123,
+      "endOffset" : 146
+    }, {
+      "referenceID" : 7,
+      "context" : "Specifically, we randomly mask 15% words in summaries as in BERT (Devlin et al., 2019) and merge adjacent [MASK] tokens.",
+      "startOffset" : 65,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 19,
+      "context" : "These include PQSUM-WSL (Laskar et al., 2020) a supervised abstractive system which represents the state of the art on DUC benchmarks.",
+      "startOffset" : 24,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 27,
+      "context" : "each document with a QA model, it then replaces some of these with reference summary sentences via a paraphrase model, and uses them to further fine-tune BERTSUM (Liu and Lapata, 2019b).",
+      "startOffset" : 162,
+      "endOffset" : 185
+    }, {
+      "referenceID" : 40,
+      "context" : "QUERYSUM (Xu and Lapata, 2020) is state-of-the-art extractive system which adopts a coarse-to-fine process for salience estimation.",
+      "startOffset" : 9,
+      "endOffset" : 30
+    }, {
+      "referenceID" : 35,
+      "context" : "BART-CAQ (Su et al., 2020) uses an ensembled QA model to ex-",
+      "startOffset" : 9,
+      "endOffset" : 26
+    }, {
+      "referenceID" : 22,
+      "context" : "tract answer evidence, and fine-tuned BART (Lewis et al., 2020) to iteratively generate summaries from paragraphs.",
+      "startOffset" : 43,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 19,
+      "context" : "PQSUM (Laskar et al., 2020), uses fine-tuned BERTSUM to generate summaries for each document in a cluster, and a QA model to",
+      "startOffset" : 6,
+      "endOffset" : 27
+    }, {
+      "referenceID" : 35,
+      "context" : "BART-CAQ (Su et al., 2020) 3 7 3 7 PQSUM (Laskar et al.",
+      "startOffset" : 9,
+      "endOffset" : 26
+    }, {
+      "referenceID" : 19,
+      "context" : ", 2020) 3 7 3 7 PQSUM (Laskar et al., 2020) 3 7 3 7 PQSUM-WSL (Laskar et al.",
+      "startOffset" : 22,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 19,
+      "context" : ", 2020) 3 7 3 7 PQSUM-WSL (Laskar et al., 2020) 3 3 3 3 UNILM (Bao et al.",
+      "startOffset" : 26,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 40,
+      "context" : "Replacing the input to the summarization component with sentences selected by BERTQA (Xu and Lapata, 2020) significantly decreases performance, demonstrating that sentences selected by MARGE are useful to downstream abstractive summarization.",
+      "startOffset" : 85,
+      "endOffset" : 106
+    }, {
+      "referenceID" : 19,
+      "context" : "We include PQSUM-WSL only for human evaluation on DUC since it was not evaluated on TD-QFS (Laskar et al., 2020) and system output is not available.",
+      "startOffset" : 91,
+      "endOffset" : 112
+    } ],
+    "year" : 2021,
+    "abstractText" : "The availability of large-scale datasets has driven the development of neural models that create generic summaries from single or multiple documents. In this work we consider query focused summarization (QFS), a task for which training data in the form of queries, documents, and summaries is not readily available. We propose to decompose QFS into (1) query modeling (i.e., finding supportive evidence within a set of documents for a query) and (2) conditional language modeling (i.e., summary generation). We introduce MARGE, a Masked ROUGE Regression framework for evidence estimation and ranking which relies on a unified representation for summaries and queries, so that summaries in generic data can be converted into proxy queries for learning a query model. Experiments across QFS benchmarks and query types show that our model achieves state-of-the-art performance despite learning from weak supervision.1",
+    "creator" : "LaTeX with hyperref package"
+  }
+}

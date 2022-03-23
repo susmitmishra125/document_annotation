@@ -1,0 +1,493 @@
+{
+  "name" : "2021.acl-long.9.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Mention Flags (MF): Constraining Transformer-based Text Generators",
+    "authors" : [ "Yufei Wang", "Ian D. Wood", "Stephen Wan", "Mark Dras", "Mark Johnson" ],
+    "emails" : [ "yufei.wang@students.mq.edu.au,", "ian.wood@mq.edu.au", "stephen.wan@data61.csiro.au,", "mark.dras@mq.edu.au", "mark.mj.johnson@oracle.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 103–113\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n103"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "This paper focuses on Seq2Seq (S2S) constrained text generation where a set of encoder input tokens are required to be present in the generated outputs. For example, Keyword-to-Text (Lin et al., 2020), Data-to-Text (Gardent et al., 2017; Dušek et al., 2020) and Image-to-Text (Lin et al., 2014;\n1The source code for this paper is released at https: //github.com/GaryYufei/ACL2021MF\nAgrawal et al., 2019) require the models to mention all or some of the input keywords, key-value pairs and image object labels (respectively), potentially with linguistic variants, in the generated outputs. Large (pre-trained) Transformer-based S2S models such as T5 (Raffel et al., 2019) can be trained (fine-tuned) to perform this task. However, they only learn to copy the surface tokens from encoder inputs to the decoder outputs and there is no underlying mechanism guaranteeing good constraint satisfaction (the ratio of satisfied lexical constraints to given lexical constraints). Constrained Beam Search (CBS) (Anderson et al., 2017) and related algorithms can guarantee outputs satisfying all constraints, however they are much slower than the standard beam search algorithm. In addition, as they are all inference-based algorithms, their corresponding models are not aware of the\nconstraint words or phrases, the resulting generation could be poor. Ideally, a method for producing constrained text should: a) generate high-quality text; b) achieve high constraint satisfaction; c) have an efficient inference procedure.\nTo this end, we propose Mention Flags (MF), which trace whether a lexical constraint has been realized in partial decoder outputs. Specifically, each decoder input token is provided with a set of flags indicating which constraints have been satisfied up to that token. As shown in Fig 1, the Mention Flags for flower is set from the third step, because flower is generated at the second step. We represent the three possible Mention Flags as separate trainable embeddings and inject them into the decoder of the S2S Transformer-based Text generator. The dynamic Mention Flags explicitly inform the model about which constraints have been satisfied, which is helpful for the models to produce high-quality text satisfying the constraints (Goal a). During training, all the mention flags are set when the model is tasked to generate the End-ofSequence (EOS) token, strongly encouraging the model not to stop generation until all constraints are satisfied (Goal b). The MF models only require ordinary decoding algorithms. Their inference time and memory requirements are similar to their baseline models (Goal c).\nWe conduct experiments on three benchmarks: Commonsense Generative Reasoning (CommonGen) (Lin et al., 2020), where the only input is a set of words representing concepts, and the output text is constrained to include all of them; End-toEnd Data-to-Text (E2ENLG) (Dušek et al., 2020), where the constraints are meaning representations with lexicalised attributes and values that the output text should mention; and Novel Object Captioning at scale (nocaps) (Agrawal et al., 2019), where constraints are salient image objects that should be mentioned in the generated caption. Compared to the constrained decoding algorithms, the MF models can produce higher-quality text with a similar level of constraint satisfaction and much less inference run-time and memory. Mention Flags are a general mechanism that improves constraint satisfaction in the non-pre-trained and pre-trained S2S Transformer-based models. Furthermore, our experiments show that the MF models can satisfy novel constraints (i.e, involving words or phrases not seen during training) and they work well in low-resource settings. Our MF models set a new\nstate-of-the-art in these three tasks."
+    }, {
+      "heading" : "2 Background",
+      "text" : "In this paper, we focus on constraining transformerbased text generation models due to their popularity and success in various domains, especially in largescale pre-trained language models (Raffel et al., 2019; Lewis et al., 2020). Previous work can be roughly categorized into two streams: S2S training approaches and Constrained decoding approaches:\nTraining S2S Models S2S models can implicitly capture the co-occurrence between encoder and decoder sequences, particularly pre-trained ones such as T5 (Raffel et al., 2019) and BART (Lewis et al., 2020). Wen et al. (2015) uses a special gate to control what information will be generated in the following steps. Kale and Rastogi (2020) have shown that the T5 models achieve state-of-the-art results in various Data-to-Text tasks, requiring copying from encoder to decoder, after fine-tuning. As an alternative, the Copy Mechanism (Gu et al., 2016) explicitly learns where to copy the input constraints into the output by adding an extra copy pathway to the models. However, these approaches cannot control or guarantee their constraint satisfaction. Lin et al. (2020) also have observed lower constraint satisfaction in the above methods, compared to the constrained decoding approaches.\nConstrained Decoding These algorithms, including Constrained Beam Search (CBS) (Anderson et al., 2017) and Grid Beam Search (GBS) (Hokamp and Liu, 2017), maintain a set of states which have their own size-k beams and only allow hypotheses satisfying specific constraints to be considered during inference. Each CBS state corresponds to the hypotheses satisfying different constraints (exponential in the number of constraints) and the GBS states correspond to the hypotheses satisfying the same number of constraints (linear to constraint number). Balakrishnan et al. (2019); Juraska et al. (2018); Dušek and Jurčı́ček (2016) also modify their inference algorithm in a similar way to fulfill specific output requirements. However, they significantly increase the inference run-time and memory and can produce sub-optimal outputs."
+    }, {
+      "heading" : "3 Method",
+      "text" : "This section first formulates constrained text generation tasks, then introduces Mention Flags and their\nintegration with Transformer-based text generators."
+    }, {
+      "heading" : "3.1 S2S Constrained Text Generation",
+      "text" : "In the S2S constrained text generation tasks, we are given encoder inputs x = [x1, . . . , xlx ] ∈ X that describe the task, where some xi correspond to lexical constraints that must be satisfied in the generated outputs. At generation step t, the decoder takes as input the tokens generated so far y:t = [y1, · · · , yt] ∈ Y and generates the next output token yt+1."
+    }, {
+      "heading" : "3.2 Mention Flag",
+      "text" : "At generation step t, a set of Mention Flags indicates whether each lexical constraint has been satisfied up to this step (i.e., in the decoder input sequence y:t). Formally, they can be defined as m : X× Y→ {0, 1, 2}lx where |m(x,y:t)| = |x|. Specifically, Mention Flag m(x,y:t)i is for the input token xi in x:\nm(x,y:t)i =  0 xi is not a constraint 1 xi is not mentioned in y:t 2 xi is mentioned in y:t (1)\nThe values 1 and 2 represent the status of constraint satisfaction. Once y:t satisfies the constraints, the value of the corresponding Mention Flag(s) are updated from 1 to 2. Value 0 is a static default value for all tokens xi that do not correspond to any constraints. They are not required to be mentioned in the outputs. These typically act as instructions to the model. At the start, Mention Flags m(x, ε) ∈ {0, 1}lx where ε is the empty string because the empty string does not mention anything. During generation, m is monotonic in y∗: given decoder input sequence y:t and y:(t+1), m(x,y:t)i ≤ m(x,y:(t+1))i. The Mention Flags for any token xi can only remain unchanged or update from value 1 to 2.\nExample In Figure 2, given encoder input tokens x = [name, Tetas, area, South, Bank], we start from m(x, ε) = [0, 1, 0, 1, 1] because name and area are not lexical constraints. At step 4, m(x, [Tetas, is, located]) = [0, 2, 0, 1, 1] because Tetas has already been mentioned in the current decoder input sequence [Tetas, is, located].\nValue Update for Multi-Word Constraints As shown in Figure 2, Mention Flags for the tokens corresponding to the same constraint are updated together. Given encoder input tokens xi, · · · , xj , forming a multi-word constraint, we require that\nm(x,y∗)i = · · · = m(x,y∗)j for all (partial) outputs y∗, and m(x,y:t)i = · · · = m(x,y:t)j = 2 iff xi, · · · , xj are mentioned in y:t. We use conventions from the relevant data set to determine whether a constraint is a multi-word constraint. This avoids false update when the models only generate the prefix of the constraints, rather than the full constraints. For example, given constraint “washing machine”, the output could be “I put my washing in the new washing machine.” The situation becomes more complicated when both washing and washing machine are given lexical constraints. When we find this case, we delay the value 2 update for washing until the word in is generated. Modern tokenization methods, such as BPE (Sennrich et al., 2016), make this situation frequent.\nDefinition of Mentions We deliberately allow a flexible notion of mentions in the Function m(). We can define various types of mentions to fulfill the requirements of different applications and tasks. With this flexibility, the end-users can use Mention Flags in many constraint scenarios. For tasks with strict constraints, we define mentions to be the exact string match in y:t. Otherwise, inflectional variants or synonyms of words in the lexical constraints are allowed when checking for mentions. Our Mention Flag mechanism thus supports lexical constraints with multiple verbalizations. We leave more sophisticated constraints (e.g., using NLP parsers) to future work.\nMention Flag Matrix Given x, y:t, We define the two-dimensional Mention Flag Matrix F ∈\n{0, 1, 2}lx×t as follows:\nF = [m(x, ε);m(x,y:1); · · · ; m(x,y:t)] (2)\nDuring training, given x and ground-truth output Y gt (with lgt tokens), we can construct the groundtruth Mention Flag Matrix F gt ∈ {0, 1, 2}lx×lgt by finding the mentioning position of tokens in the lexical constraints in Y gt. F gt follows the same masking strategy as the decoder input tokens y:t. For the tokens whose corresponding lexical constraints having no alignment with Y gt, their Mention Flags are also assigned value 0. During inference, we build the Mention Flag matrix incrementally, starting from F inf ,0 = [m(x, ε)] ∈ {0, 1}lx×1. In step t, we add a new column m(x,y:t) to F inf ,t−1 ∈ {0, 1, 2}lx×(t−1) and obtain the new Mention Flag matrix F inf ,t ∈ {0, 1, 2}lx×t.\nWhy Mention Flags work During the training of MF models, the ground-truth always has all MFs set to “completed” before stopping the generation (i.e., before generating EOS Token). This provides a strong signal to satisfy all constraints before completing generation. The value update from 1 to 2 in MF provides implicit signals about where the constraints are satisfied during training. Otherwise, the model has to learn this information via the cooccurring sub-sequences between input sequence and output sequence. These two signals allow the model to achieve high constraint satisfaction and help to maintain high text quality (Sec. 4.5). Since there are only 3 added embeddings, learning does not require a substantial amount of training data (Sec. 4.7). Since these embeddings are independent of particular lexical constraints, we expect that performance on novel constraints, not seen during training, is improved (Sec. 4.5)."
+    }, {
+      "heading" : "3.3 Integration with S2S Transformer",
+      "text" : "As shown in Figure 3, Mention Flags are injected into the Transformer decoder. We first review the standard S2S Transformer proposed in Vaswani et al. (2017), then discuss how to inject Mention Flags information into the S2S Transformer model.\nStandard S2S Transformer Model The encoder input tokens x is fed into the Transformer Encoder he = Enc(x) where he ∈ Rlx×d and d is the model hidden size. In the Transformer decoder, there are two self-attention modules, Self MultiHead Attention (SA) which handles the current decoder input sequence y:t, and Cross Multi-Head\nAttention (CA) which handles the interaction between encoder output he and y:t:\nSA(y:t) = KV (W s q y:t,W s ky:t,W s vy:t) (3)\nCA(hdt ,h e) = KV (W cqh d t ,W c kh e,W cvh e) (4)\nwhere hdt = SA(y:t). KV is the standard keyvalue self-attention proposed in Vaswani et al. (2017). The outputs of CA(hdt ,h\ne) further determine the model output yt+1 via a Feed Forward layer, a Residual Connection and a softmax layer.\nIncorporating Mention Flag Matrix Our two-dimensional Mention Flag matrix F ∈ {0, 1, 2}lx×t is associated with the elements from encoder output he and current decoder input y:t. The optimal way is to incorporate the full F matrix into a component in the Transformer decoder. We note that the CA module in the Transformer decoder already uses y:t as query and he as key. The resulting query-key similarity matrix has the same size of our Mention Flag matrix, making it suitable to incorporate F .\nMention Flag Matrix as Relative Position Inspired by Shaw et al. (2018) which incorporates token relative positions into the SA module, we propose to inject Mention Flags as the “relative positions” between encoder output he and current decoder input y:t in the CA module. In each decoder layer, we represent F as two sets of trainable embeddings Mention Flag key mk = Ek(F ) and Mention Flag Value mv = Ev(F ) where\nEk, Ev ∈ R3×d are the Mention Flag embedding tables. mk and mv ∈ Rlx×t×d. We have separated Mention Flags representations for each decoder layer. Eq. 4 is changed to:\nCA(hdt ,h e,mk,mv) =\nR(W cqh d t ,W c kh e,W cvh e,mk,mv) (5)\nwhere R is the Self-Attention function with relative position, defined as follows:\nR(q,k,v,mk,mv)j = lx∑ i=1 ai,j(vi +m v i,j) (6)\na∗,j = Softmax (e∗,j) (7)\nei,j = qj(ki +m\nk i,j) T\n√ d\n(8)\nAs an alternative to representing F as mk and mv, we could follow the approach to relative position in the T5 model (Raffel et al., 2019) and represent F as scalars that are added to the corresponding logits ei,j in Eq. 7 used for computing the attention weights. However, we find this scalar approach less effective than our proposed one in Sec. 4.6."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : "We conduct experiments on three benchmarks with different forms of constraints including Commonsense Generative Reasoning (CommonGen) (Lin et al., 2020) with keyword constraints, End-to-End restaurants dialog (E2ENLG) (Dušek et al., 2020) with key-value constraints, and Novel Object Captioning at scale (nocaps) (Agrawal et al., 2019) with visual object word constraints. We integrate Mention Flags with a three-layer standard S2S Transformer models (Trans, L3) (Vaswani et al., 2017) and pre-trained T5 models (Raffel et al., 2019) for each task. The T5 models achieve state-of-the-art results in various Data-to-Text tasks (Kale and Rastogi, 2020). For the T5-Base and T5-Large models, we use the implementation of T5 models in the huggingface transformers 2. The Trans, L3 models share the same implementation of the T5-Base models, except that it is not initialized with the pretrained parameters and it only uses 3 layers, rather than 12 layers, for both encoder and decoder. In addition, to improve the generalization of our pretrained model, we freeze the parameters in the SelfAttention module and Feed-Forward Layers in each\n2https://github.com/huggingface/ transformers\nlayer of the T5 decoder. This parameters freezing technology is applied to both T5 baseline models and the MF models in all of our experiments. We report constraint satisfaction for all tasks. We use GBS in the CommonGen task (max 5 constraints) and CBS in the E2ENLG (max 1 constraint) and nocaps (max 2 constraints) task.\n4.1 CommonGen\nIn this task, the encoder input is a sequence of concepts C = [c1, · · · , ck], k ≤ 5. The models should generate a coherent sentence describing all concepts in C. m(C, ε) = [1, 1, · · · , 1] and m allows inflectional variants to satisfy lexical constraints. We train (fine-tune) Trans, L3, T5-Base and T5-Large model as our baselines. We apply Mention Flags to the T5-Base and T5-Large model (+ MF). Following the suggestions in Lin et al. (2020), we report CIDEr (Vedantam et al., 2015) and SPICE (Anderson et al., 2016) as generated text quality metrics. We calculate constraint satisfaction for all constraints (ALL), novel constraints (Novel) and seen constraints (Seen).\nResults Table 1 shows that the MF model improves the constraint satisfaction over the baselines for all cases, achieving close to 100% (i.e., 99.6% and 99.1%). Notably, Mention Flags improve novel constraint satisfaction from 2.3% to 49.2% in the randomly initialized Transformer models. Compared to the LevenTrans (Gu et al., 2019) and Con-\nstLeven (Susanto et al., 2020) models, our Trans, L3 + MF model achieves higher CIDEr and SPICE scores with constraint satisfaction 4.1% lower than the non-autoregressive ConstLeven model. While GBS provides a way to maximise constraint satisfaction (i.e., 100%), doing so significantly degrades the output text quality (more than 50 CIDEr). Our MF model achieves near optimum constraint satisfaction while improving text quality (5.7 CIDEr score improvement in T5-Base and 6.5 CIDEr score improvement in T5-Large). Finally, our T5-Large + MF model outperforms the previous state-of-the-art result (Liu et al., 2021), which integrates the ConceptNet (Speer et al., 2017) into the BART model, by 6.5 CIDEr and 0.7 SPICE, suggesting that pretrained language models with textual concepts may provide sufficient information for this task.\n4.2 E2ENLG\nIn this task, the encoder input is a sequence of key-value meaning representations C = [k1, v1, · · · , kn, vn], n ≤ 8. We lists all given key-value information as a space-separated string. m(C, ε) = [0, 1, 0, 1, · · · , 0, 1] and m allows synonyms to satisfy lexical constraints. For example, welcome children and is family friendly are both mentions of familyFriendly[yes]. The models must generate a fluent and coherent dialog response using all key-value pairs in the encoder. E2ENLG includes 79 different in-domain key-value constraints. We use the scripts from Dušek et al. (2019) 3 to construct the synonyms set for these inputs. We use Trans, L3 and T5-Base model as our baselines. We use CBS to constrain the T5 model to satisfy all missing constraints (T5-Base + C). We report NIST (Lin and Hovy, 2003), BLEU (Papineni et al., 2002) and METEOR (Banerjee and Lavie, 2005) as they are common metrics for evaluating the quality of long text in the E2ENLG outputs (more than 20 tokens).\nResults Table 2 shows that the MF models consistently achieve higher output text quality and constraint satisfaction than the baseline models (99.9% vs. 95.1% and 100% vs. 96.6%). CBS improves the T5 model’s constraint satisfaction, but negatively affects the text quality (0.3 BLUE points lower). Shen et al. (2019), the previous state-ofthe-art, trained the model via a complex speakerlistener approach inspired by cognitive science.\n3https://github.com/tuetschek/ e2e-cleaning/blob/master/slot_error.py\nWith a much simpler model architecture (S2S), our T5 + MF model achieves full constraint satisfaction and outperforms Shen et al. (2019) by 0.2 NIST and 0.3 METEOR.\n4.3 nocaps\nUsing T5 for Image Captioning In Image Captioning, each input image is represented by a sequence of visual objects. Each of these objects is assigned (by the object detector) with a textual label. The encoder input is a sequence of objects followed by the same textual labels C = [v11, · · · ,v s1 1 , l1, · · · ,v1k, · · · ,v sk k , lk] where v ∗ i is the visual feature vector (similar to the one in Li et al. (2020)) and li is the corresponding textual label. The visual features are used in the same way of normal textual tokens in the T5 models. We find this approach works well for both nocaps and standard COCO image captioning task.\nExperiment Setup Traditional image captioning models select and describe a subset of input objects jointly (Anderson et al., 2018). However, Puduppully et al. (2019) shows the benefits of separating content selection and text planning steps for general data-to-text tasks. Following this, we propose to first select salient objects and incorporate the selected objects into the description using Mention Flags. m(C, ε) = [0, 0, · · · , 1, · · · , 0, 0, · · · , 1] where only salient object labels receive value 1. m() allows inflectional variants to satisfy lexical constraints. We use T5-base model in this experiment. The T5 + C and T5 + MF + C models are constrained with CBS. Following Wang et al. (2021), we report CIDEr and SPICE as output text quality metrics and constraint satisfaction for novel constraints (Novel) and all constraints (ALL). We present the performance for all evaluation images\n(Overall) and for the challenging images with only novel objects (out-of-domain split).\nSalient Object Selector We use a transformerbased salient object detector to select a subset of object labels as lexical constraints. The visual representations of detected image objects are first fed into the 3-layer standard Transformer model without any positional embedding. We train this detector using binary Cross-Entropy loss averaged over all detected input objects. The training data for salient object detection is the training data in nocaps. We use COCO 2017 Dev set as the evaluation dataset to select the best checkpoint.\nResults Mention Flags achieve optimal constraint satisfaction in almost all cases. In particular the Trans, L3 + MF model shows marked improvement (i.e., from 16.3% to 49.3%) on novel constraints, despite the fact that the corresponding token embeddings are not changed from their random initialisation. The generated text quality is also improved, particularly in the out-of-domain split. The T5 + C model is 0.3 SPICE lower in both overall and the out-of-domain split than the T5 + MF\nmodel, indicating that the MF model correctly captures more long-range relationships (calculated by the parsing trees used in SPICE) among the (novel) objects than CBS. Our T5 + MF model outperforms the existing state-of-the-art end-to-end single-stage image captioning systems (Agrawal et al., 2019; Li et al., 2020; Wang et al., 2021) by 1.3 CIDEr and 0.1 SPICE on the validation set and 1.7 CIDEr and 0.2 SPICE on the test set, showing the advantage of our two-stage captioning model empowered by Mention Flags. VIVO + C (Hu et al., 2020) is not comparable as it uses additional visual-text aligned training data. Finally, we investigate the relatively lower constraint satisfaction in nocaps (98.3% vs. 99.5+%) compared to the MF models in the other two tasks and find that missing cases frequently happen in the instances with two constraints involving a) (near-) synonymy (e.g., mule and horse) and b) hyponymy (e.g., hot dog and fast food). A more advanced salient object detector would solve this issue."
+    }, {
+      "heading" : "4.4 Model Efficiency",
+      "text" : "The MF models use standard beam search and run much faster with less memory than the constrained beam search algorithms. For comparison, we select the GBS algorithm because its resource use is linear in the number of constraints and uses less run time and memory than CBS. We run the MF models and the models with GBS using beam size 5 and compare their run time (RT) and memory requirement (#M) in Table 4. Compared to the MF models, GBS runs one to two orders of magnitude slower, and uses 4.4 to 23.4 times more memory. Compared to the T5-Base model, the MF models only increases the inference time slightly."
+    }, {
+      "heading" : "4.5 Main Result Discussion",
+      "text" : "Constraint Satisfaction & Text Quality In all tasks, MFmodels improve the text quality over their baselines (including CBS and GBS) while achieving constraint satisfaction that is close to 100%.\nThis supports the claim in Sec 3.2 that training signals from Mention Flags can help to improve constraint satisfaction and text quality.\nNon-Pre-trained vs. Pre-trained Models In all tasks, Mention Flags have a similar effect (higher text quality and constraint satisfaction) on both nonpre-trained and pre-trained models. This indicates that Mention Flags do not rely on information from pre-trained models to be effective.\nNovel Constraints In the CommonGen and nocaps tasks, the Trans, L3 + MF model achieve much higher coverage (i.e., 2.3% to 49.2% in CommonGen; 16.3% to 49.3% in nocaps) for constraints with novel lexical items than the baseline models. Here, the MF models can satisfy novel constraints, even where the corresponding token representations did not receive any training signals. As Mention Flags decouples with model representations, the MF models learn lexicon-independent indicators to mention the novel words."
+    }, {
+      "heading" : "4.6 Design Choices for Mention Flags",
+      "text" : "We conduct experiments for following choices of Mention Flag: Static MF where value 2 (is mentioned) and 1 (not mentioned) are merged; Merged MF where value 0 (not a constraint) is merged with value 1; Scalar MF where Mention Flags are represented as scalars added to the attention logits in the CA module; and Shared MF where all decoder layers use the same Mention Flag embeddings. We apply Static MF, Scalar MF and Shared MF to all three tasks. We only use Merged MF in E2ENLG because a CommonGen model does not include value 0 and a nocaps model without value 0 cannot distinguish between constrained and non-constrained objects. As shown in Table 5, in the CommonGen and nocaps tasks, the Static MF models achieve much lower constraint satisfaction, 99.6% vs. 94.5% and 98.3% vs. 87.2% respectively. The explicit update from value 1 to 2 is important for high constraint satisfaction. The merged MF model produces lower constraint satisfaction (100% to 98.9%) and generated text quality (68.3 BLEU to 67.7 BLEU) in E2ENLG, indicating the utility of value 0 in this task. Compared to the MF models, Scalar MFmodels produce lower constraint satisfaction in the CommonGen and nocaps task (99.6% to 97.1%, 98.3% to 91.5%, respectively) and lower-quality generated text in all three tasks (1.2 BLEU, 3.2 CIDEr and 0.6 CIDEr lower). Representing Mention Flags as Key and Value dense\nvectors works better than scalars. Finally, using shared MF across all decoder layers has negative impact (e.g., all constraint satisfaction ratio drop) in all three tasks."
+    }, {
+      "heading" : "4.7 Low-Resource Learning",
+      "text" : "This section shows that Mention Flags are still useful for improving the constraint satisfaction and generated text quality when trained with many fewer instances. We use 0.1%, 1% and 10% of the original training instances to train the models. In the first two tasks (E2ENLG and CommonGen), we compare the MF models with T5-Base models. In the nocaps task, we additionally compare the T5Base + MF model with the T5-Base + C model. We report BLEU in E2ENLG CIDEr in CommonGen and nocaps. As shown in Table 6, the MF models consistently generate higher-quality text (higher METEOR or CIDEr Score) and achieve higher constraint satisfaction than the baseline models. The MF models reach 97+% when only training with 10% of the E2ENLG and CommonGen training data. This confirms our claim in Sec. 3.2 that the three added Mention Flag embeddings can be learned with relatively little training data."
+    }, {
+      "heading" : "4.8 Qualitative Analysis",
+      "text" : "We chose three representative examples that illustrate successful use of Mention Flags (Table 7).\ni) E2ENLG name[Punter], eatType[restaurant], area[riverside], priceRange[£20-25], familyFriendly[yes]\nT5-B Punter is a restaurant in the £20-25 price range. It is in the riverside area\n+ C Punter is a kid friendly restaurant in the riverside area. It has a price range of £20-25.\n+ MF Punter is a kid friendly restaurant in riverside with a price range of £20-25\nii) CommonGen mother, washer, clothes, toddler, help\nT5-B a mother helps a toddler to wash his clothes + G mother helping her toddler clothe in washer + MF a mother helps a toddler to wash clothes in the\nwasher\nGT the mother helps her toddler put the clothes in the washer\ni) The MF model generates the most concise dialogue response, compared to the baseline and constrained decoding model; ii) The MF model is the only model that generates a fluent and coherent sentence satisfying all input constraints; iii) The MF\nmodel is the only model that accurately describes the relationship between bee and flower, grounding to the input images and constraints.\nHuman Evaluation We have shown that our proposed MF model can achieve higher constraint satisfaction ratio and automatic metrics. However, the automatic metrics do not necessarily reflect human preference of the generated text. We therefore select 100 output samples from the T5 baseline and our MF model in all three tasks (300 in total). For each sample pair, we ask three annotators to judge which sample is “more human-like”. Table 8 shows that more than 70% of output of our MF model is generally better or similar than the output of the baseline model, verifying the output quality of our MF model."
+    }, {
+      "heading" : "5 Conclusion and Future Work",
+      "text" : "In this paper, we propose Mention Flags to constrain Transformer-based text generators via injecting mention status embeddings into text decoders. Our extensive experiments on three different tasks have shown the effectiveness of Mention Flags in maintaining high generated text quality and excellent constraint satisfaction, comparing favourably to competitive constrained decoding algorithms. We plan to expand Mention Flags i) to control larger input source text such as constrained text summarization and machine translation; ii) to handle larger granularity such as sentence-level."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We thank anonymous reviewers for their insightful suggestions to improve this paper. This research was supported by a Google award through the Natural Language Understanding Focused Program, by a MQ Research Excellence Scholarship and a CSIRO’s DATA61 Top-up Scholarship, and under the Australian Research Councils Discovery Projects funding scheme (project number DP160102156)."
+    } ],
+    "references" : [ {
+      "title" : "nocaps: novel object captioning at scale",
+      "author" : [ "Harsh Agrawal", "Karan Desai", "Yufei Wang", "Xinlei Chen", "Rishabh Jain", "Mark Johnson", "Dhruv Batra", "Devi Parikh", "Stefan Lee", "Peter Anderson." ],
+      "venue" : "Proceedings of the IEEE International Conference on Com-",
+      "citeRegEx" : "Agrawal et al\\.,? 2019",
+      "shortCiteRegEx" : "Agrawal et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Spice: Semantic propositional image caption evaluation",
+      "author" : [ "Peter Anderson", "Basura Fernando", "Mark Johnson", "Stephen Gould." ],
+      "venue" : "European conference on computer vision, pages 382–398. Springer.",
+      "citeRegEx" : "Anderson et al\\.,? 2016",
+      "shortCiteRegEx" : "Anderson et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Guided open vocabulary image captioning with constrained beam search",
+      "author" : [ "Peter Anderson", "Basura Fernando", "Mark Johnson", "Stephen Gould." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages",
+      "citeRegEx" : "Anderson et al\\.,? 2017",
+      "shortCiteRegEx" : "Anderson et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Bottom-up and top-down attention for image captioning and visual question answering",
+      "author" : [ "Peter Anderson", "Xiaodong He", "Chris Buehler", "Damien Teney", "Mark Johnson", "Stephen Gould", "Lei Zhang." ],
+      "venue" : "Proceedings of the IEEE Conference on Computer",
+      "citeRegEx" : "Anderson et al\\.,? 2018",
+      "shortCiteRegEx" : "Anderson et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Constrained decoding for neural NLG from compositional representations in task-oriented dialogue",
+      "author" : [ "Anusha Balakrishnan", "Jinfeng Rao", "Kartikeya Upasani", "Michael White", "Rajen Subba." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the As-",
+      "citeRegEx" : "Balakrishnan et al\\.,? 2019",
+      "shortCiteRegEx" : "Balakrishnan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "METEOR: An automatic metric for MT evaluation with improved correlation with human judgments",
+      "author" : [ "Satanjeev Banerjee", "Alon Lavie." ],
+      "venue" : "Proceedings of the ACL Workshop on Intrinsic and Extrinsic Evaluation Measures for Machine Transla-",
+      "citeRegEx" : "Banerjee and Lavie.,? 2005",
+      "shortCiteRegEx" : "Banerjee and Lavie.",
+      "year" : 2005
+    }, {
+      "title" : "Semantic noise matters for neural natural language generation",
+      "author" : [ "Ondřej Dušek", "David M. Howcroft", "Verena Rieser." ],
+      "venue" : "Proceedings of the 12th International Conference on Natural Language Generation, pages 421–426, Tokyo, Japan. Association for",
+      "citeRegEx" : "Dušek et al\\.,? 2019",
+      "shortCiteRegEx" : "Dušek et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Sequence-tosequence generation for spoken dialogue via deep syntax trees and strings",
+      "author" : [ "Ondřej Dušek", "Filip Jurčı́ček" ],
+      "venue" : "In Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Dušek and Jurčı́ček.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Dušek and Jurčı́ček.",
+      "year" : 2016
+    }, {
+      "title" : "Evaluating the State-of-the-Art of End-to-End Natural Language Generation: The E2E NLG Challenge",
+      "author" : [ "Ondřej Dušek", "Jekaterina Novikova", "Verena Rieser." ],
+      "venue" : "Computer Speech & Language, 59:123–156.",
+      "citeRegEx" : "Dušek et al\\.,? 2020",
+      "shortCiteRegEx" : "Dušek et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "The WebNLG challenge: Generating text from RDF data",
+      "author" : [ "Claire Gardent", "Anastasia Shimorina", "Shashi Narayan", "Laura Perez-Beltrachini." ],
+      "venue" : "Proceedings of the 10th International Conference on Natural Language Generation, pages 124–133, San-",
+      "citeRegEx" : "Gardent et al\\.,? 2017",
+      "shortCiteRegEx" : "Gardent et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Incorporating copying mechanism in sequence-to-sequence learning",
+      "author" : [ "Jiatao Gu", "Zhengdong Lu", "Hang Li", "Victor O.K. Li." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers),",
+      "citeRegEx" : "Gu et al\\.,? 2016",
+      "shortCiteRegEx" : "Gu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Levenshtein transformer",
+      "author" : [ "Jiatao Gu", "Changhan Wang", "Junbo Zhao." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 32. Curran Associates, Inc.",
+      "citeRegEx" : "Gu et al\\.,? 2019",
+      "shortCiteRegEx" : "Gu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Lexically constrained decoding for sequence generation using grid beam search",
+      "author" : [ "Chris Hokamp", "Qun Liu." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1535–1546,",
+      "citeRegEx" : "Hokamp and Liu.,? 2017",
+      "shortCiteRegEx" : "Hokamp and Liu.",
+      "year" : 2017
+    }, {
+      "title" : "Vivo: Surpassing human performance in novel object captioning with visual vocabulary pre-training",
+      "author" : [ "Xiaowei Hu", "Xi Yin", "Kevin Lin", "Lijuan Wang", "Lei Zhang", "Jianfeng Gao", "Zicheng Liu." ],
+      "venue" : "arXiv preprint arXiv:2009.13682.",
+      "citeRegEx" : "Hu et al\\.,? 2020",
+      "shortCiteRegEx" : "Hu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A deep ensemble model with slot alignment for sequence-to-sequence natural language generation",
+      "author" : [ "Juraj Juraska", "Panagiotis Karagiannis", "Kevin Bowden", "Marilyn Walker." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the",
+      "citeRegEx" : "Juraska et al\\.,? 2018",
+      "shortCiteRegEx" : "Juraska et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Text-to-text pre-training for data-to-text tasks",
+      "author" : [ "Mihir Kale", "Abhinav Rastogi." ],
+      "venue" : "Proceedings of the 13th International Conference on Natural Language Generation, pages 97–102, Dublin, Ireland. Association for Computational Linguistics.",
+      "citeRegEx" : "Kale and Rastogi.,? 2020",
+      "shortCiteRegEx" : "Kale and Rastogi.",
+      "year" : 2020
+    }, {
+      "title" : "BART: Denoising sequence-to-sequence pretraining for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Oscar: Object-semantics aligned pre-training",
+      "author" : [ "Xiujun Li", "Xi Yin", "Chunyuan Li", "Pengchuan Zhang", "Xiaowei Hu", "Lei Zhang", "Lijuan Wang", "Houdong Hu", "Li Dong", "Furu Wei", "Yejin Choi", "Jianfeng Gao" ],
+      "venue" : null,
+      "citeRegEx" : "Li et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "CommonGen: A constrained text generation challenge for generative commonsense reasoning",
+      "author" : [ "Bill Yuchen Lin", "Wangchunshu Zhou", "Ming Shen", "Pei Zhou", "Chandra Bhagavatula", "Yejin Choi", "Xiang Ren." ],
+      "venue" : "Findings of the Association for Computa-",
+      "citeRegEx" : "Lin et al\\.,? 2020",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Automatic evaluation of summaries using n-gram cooccurrence statistics",
+      "author" : [ "Chin-Yew Lin", "Eduard Hovy." ],
+      "venue" : "Proceedings of the 2003 Human Language Technology Conference of the North American Chapter of the Association for Computa-",
+      "citeRegEx" : "Lin and Hovy.,? 2003",
+      "shortCiteRegEx" : "Lin and Hovy.",
+      "year" : 2003
+    }, {
+      "title" : "Microsoft coco: Common objects in context",
+      "author" : [ "Tsung-Yi Lin", "Michael Maire", "Serge Belongie", "James Hays", "Pietro Perona", "Deva Ramanan", "Piotr Dollár", "C Lawrence Zitnick." ],
+      "venue" : "European conference on computer vision, pages 740–755. Springer.",
+      "citeRegEx" : "Lin et al\\.,? 2014",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Kg-bart: Knowledge graph-augmented bart for generative commonsense reasoning",
+      "author" : [ "Ye Liu", "Yao Wan", "Lifang He", "Hao Peng", "Philip S. Yu." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence.",
+      "citeRegEx" : "Liu et al\\.,? 2021",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Bleu: a method for automatic evaluation of machine translation",
+      "author" : [ "Kishore Papineni", "Salim Roukos", "Todd Ward", "WeiJing Zhu." ],
+      "venue" : "Proceedings of the 40th Annual Meeting of the Association for Computational Linguistics, pages 311–318, Philadelphia,",
+      "citeRegEx" : "Papineni et al\\.,? 2002",
+      "shortCiteRegEx" : "Papineni et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Data-to-text generation with content selection and planning",
+      "author" : [ "Ratish Puduppully", "Li Dong", "Mirella Lapata." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, 33(01):6908–6915.",
+      "citeRegEx" : "Puduppully et al\\.,? 2019",
+      "shortCiteRegEx" : "Puduppully et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Exploring the limits of transfer learning with a unified text-to-text transformer",
+      "author" : [ "Colin Raffel", "Noam Shazeer", "Adam Roberts", "Katherine Lee", "Sharan Narang", "Michael Matena", "Yanqi Zhou", "Wei Li", "Peter J Liu." ],
+      "venue" : "arXiv preprint arXiv:1910.10683.",
+      "citeRegEx" : "Raffel et al\\.,? 2019",
+      "shortCiteRegEx" : "Raffel et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Neural machine translation of rare words with subword units",
+      "author" : [ "Rico Sennrich", "Barry Haddow", "Alexandra Birch." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1715–",
+      "citeRegEx" : "Sennrich et al\\.,? 2016",
+      "shortCiteRegEx" : "Sennrich et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Self-attention with relative position representations",
+      "author" : [ "Peter Shaw", "Jakob Uszkoreit", "Ashish Vaswani." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-",
+      "citeRegEx" : "Shaw et al\\.,? 2018",
+      "shortCiteRegEx" : "Shaw et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Pragmatically informative text generation",
+      "author" : [ "Sheng Shen", "Daniel Fried", "Jacob Andreas", "Dan Klein." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language",
+      "citeRegEx" : "Shen et al\\.,? 2019",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Conceptnet 5.5: An open multilingual graph of general knowledge",
+      "author" : [ "Robyn Speer", "Joshua Chin", "Catherine Havasi" ],
+      "venue" : "In Proceedings of the ThirtyFirst AAAI Conference on Artificial Intelligence,",
+      "citeRegEx" : "Speer et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Speer et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Lexically constrained neural machine translation with Levenshtein transformer",
+      "author" : [ "Raymond Hendy Susanto", "Shamil Chollampatt", "Liling Tan." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 3536–",
+      "citeRegEx" : "Susanto et al\\.,? 2020",
+      "shortCiteRegEx" : "Susanto et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Ł ukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 30, pages 5998–6008. Cur-",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Cider: Consensus-based image description evaluation",
+      "author" : [ "Ramakrishna Vedantam", "C Lawrence Zitnick", "Devi Parikh." ],
+      "venue" : "Proceedings of the IEEE conference on computer vision and pattern recognition, pages 4566–4575.",
+      "citeRegEx" : "Vedantam et al\\.,? 2015",
+      "shortCiteRegEx" : "Vedantam et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "ECOL-R: Encouraging Copying in Novel Object Captioning with Reinforcement Learning",
+      "author" : [ "Yufei Wang", "Ian D. Wood", "Stephen Wan", "Mark Johnson." ],
+      "venue" : "arXiv preprint arXiv:2101.09865.",
+      "citeRegEx" : "Wang et al\\.,? 2021",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Semantically conditioned LSTM-based natural language generation for spoken dialogue systems",
+      "author" : [ "Tsung-Hsien Wen", "Milica Gašić", "Nikola Mrkšić", "PeiHao Su", "David Vandyke", "Steve Young." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical",
+      "citeRegEx" : "Wen et al\\.,? 2015",
+      "shortCiteRegEx" : "Wen et al\\.",
+      "year" : 2015
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 18,
+      "context" : "Our experiments on the Common Sense Generation task (CommonGen) (Lin et al., 2020), End2end Data-to-Text task (E2ENLG) (Dušek et al.",
+      "startOffset" : 64,
+      "endOffset" : 82
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2020), End2end Data-to-Text task (E2ENLG) (Dušek et al., 2020) and Novel Object Captioning task (nocaps) (Agrawal et al.",
+      "startOffset" : 44,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2020) and Novel Object Captioning task (nocaps) (Agrawal et al., 2019) show that the MF models maintain higher constraint satisfaction and text quality than the baseline models and other constrained text generation algorithms, achieving state-of-the-art performance on all three tasks.",
+      "startOffset" : 50,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 18,
+      "context" : "For example, Keyword-to-Text (Lin et al., 2020), Data-to-Text (Gardent et al.",
+      "startOffset" : 29,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2020), Data-to-Text (Gardent et al., 2017; Dušek et al., 2020) and Image-to-Text (Lin et al.",
+      "startOffset" : 22,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2020), Data-to-Text (Gardent et al., 2017; Dušek et al., 2020) and Image-to-Text (Lin et al.",
+      "startOffset" : 22,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 24,
+      "context" : "Large (pre-trained) Transformer-based S2S models such as T5 (Raffel et al., 2019) can be trained (fine-tuned) to perform this task.",
+      "startOffset" : 60,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 2,
+      "context" : "Constrained Beam Search (CBS) (Anderson et al., 2017) and related algorithms can guarantee outputs satisfying all constraints, however they are much slower than the standard beam search algorithm.",
+      "startOffset" : 30,
+      "endOffset" : 53
+    }, {
+      "referenceID" : 18,
+      "context" : "We conduct experiments on three benchmarks: Commonsense Generative Reasoning (CommonGen) (Lin et al., 2020), where the only input is a set of words representing concepts, and the output text is constrained to include all of them; End-toEnd Data-to-Text (E2ENLG) (Dušek et al.",
+      "startOffset" : 89,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2020), where the only input is a set of words representing concepts, and the output text is constrained to include all of them; End-toEnd Data-to-Text (E2ENLG) (Dušek et al., 2020), where the constraints are meaning representations with lexicalised attributes and values that the output text should mention; and Novel Object Captioning at scale (nocaps) (Agrawal et al.",
+      "startOffset" : 162,
+      "endOffset" : 182
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2020), where the constraints are meaning representations with lexicalised attributes and values that the output text should mention; and Novel Object Captioning at scale (nocaps) (Agrawal et al., 2019), where constraints are salient image objects that should be mentioned in the generated caption.",
+      "startOffset" : 181,
+      "endOffset" : 203
+    }, {
+      "referenceID" : 24,
+      "context" : "In this paper, we focus on constraining transformerbased text generation models due to their popularity and success in various domains, especially in largescale pre-trained language models (Raffel et al., 2019; Lewis et al., 2020).",
+      "startOffset" : 189,
+      "endOffset" : 230
+    }, {
+      "referenceID" : 16,
+      "context" : "In this paper, we focus on constraining transformerbased text generation models due to their popularity and success in various domains, especially in largescale pre-trained language models (Raffel et al., 2019; Lewis et al., 2020).",
+      "startOffset" : 189,
+      "endOffset" : 230
+    }, {
+      "referenceID" : 24,
+      "context" : "Training S2S Models S2S models can implicitly capture the co-occurrence between encoder and decoder sequences, particularly pre-trained ones such as T5 (Raffel et al., 2019) and BART (Lewis et al.",
+      "startOffset" : 152,
+      "endOffset" : 173
+    }, {
+      "referenceID" : 10,
+      "context" : "As an alternative, the Copy Mechanism (Gu et al., 2016) explicitly learns where to copy the input constraints",
+      "startOffset" : 38,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 2,
+      "context" : "Constrained Decoding These algorithms, including Constrained Beam Search (CBS) (Anderson et al., 2017) and Grid Beam Search (GBS) (Hokamp and Liu, 2017), maintain a set of states which have their own size-k beams and only allow hypotheses satisfying specific constraints to be considered during inference.",
+      "startOffset" : 79,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2017) and Grid Beam Search (GBS) (Hokamp and Liu, 2017), maintain a set of states which have their own size-k beams and only allow hypotheses satisfying specific constraints to be considered during inference.",
+      "startOffset" : 35,
+      "endOffset" : 57
+    }, {
+      "referenceID" : 25,
+      "context" : "Modern tokenization methods, such as BPE (Sennrich et al., 2016), make this situation frequent.",
+      "startOffset" : 41,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 24,
+      "context" : "As an alternative to representing F as mk and mv, we could follow the approach to relative position in the T5 model (Raffel et al., 2019) and represent F as scalars that are added to the corresponding logits ei,j in Eq.",
+      "startOffset" : 116,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 18,
+      "context" : "We conduct experiments on three benchmarks with different forms of constraints including Commonsense Generative Reasoning (CommonGen) (Lin et al., 2020) with keyword constraints, End-to-End restaurants dialog (E2ENLG) (Dušek et al.",
+      "startOffset" : 134,
+      "endOffset" : 152
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2020) with keyword constraints, End-to-End restaurants dialog (E2ENLG) (Dušek et al., 2020) with key-value constraints, and Novel Object Captioning at scale (nocaps) (Agrawal et al.",
+      "startOffset" : 73,
+      "endOffset" : 93
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2020) with key-value constraints, and Novel Object Captioning at scale (nocaps) (Agrawal et al., 2019) with",
+      "startOffset" : 82,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 30,
+      "context" : "We integrate Mention Flags with a three-layer standard S2S Transformer models (Trans, L3) (Vaswani et al., 2017) and pre-trained T5 models (Raffel et al.",
+      "startOffset" : 90,
+      "endOffset" : 112
+    }, {
+      "referenceID" : 24,
+      "context" : ", 2017) and pre-trained T5 models (Raffel et al., 2019) for each task.",
+      "startOffset" : 34,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 15,
+      "context" : "The T5 models achieve state-of-the-art results in various Data-to-Text tasks (Kale and Rastogi, 2020).",
+      "startOffset" : 77,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 31,
+      "context" : "(2020), we report CIDEr (Vedantam et al., 2015) and SPICE (Anderson et al.",
+      "startOffset" : 24,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2015) and SPICE (Anderson et al., 2016) as generated text quality metrics.",
+      "startOffset" : 18,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 11,
+      "context" : "Compared to the LevenTrans (Gu et al., 2019) and Con-",
+      "startOffset" : 27,
+      "endOffset" : 44
+    }, {
+      "referenceID" : 29,
+      "context" : "108 stLeven (Susanto et al., 2020) models, our Trans, L3 + MF model achieves higher CIDEr and SPICE scores with constraint satisfaction 4.",
+      "startOffset" : 12,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 21,
+      "context" : "Finally, our T5-Large + MF model outperforms the previous state-of-the-art result (Liu et al., 2021), which integrates the ConceptNet (Speer et al.",
+      "startOffset" : 82,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 28,
+      "context" : ", 2021), which integrates the ConceptNet (Speer et al., 2017) into the BART model, by 6.",
+      "startOffset" : 41,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 19,
+      "context" : "We report NIST (Lin and Hovy, 2003), BLEU (Papineni et al.",
+      "startOffset" : 15,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 22,
+      "context" : "We report NIST (Lin and Hovy, 2003), BLEU (Papineni et al., 2002) and METEOR (Banerjee and Lavie, 2005) as they are common metrics for evaluating the quality of long text in the E2ENLG outputs (more than 20 tokens).",
+      "startOffset" : 42,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 5,
+      "context" : ", 2002) and METEOR (Banerjee and Lavie, 2005) as they are common metrics for evaluating the quality of long text in the E2ENLG outputs (more than 20 tokens).",
+      "startOffset" : 19,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 3,
+      "context" : "Experiment Setup Traditional image captioning models select and describe a subset of input objects jointly (Anderson et al., 2018).",
+      "startOffset" : 107,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 0,
+      "context" : "Our T5 + MF model outperforms the existing state-of-the-art end-to-end single-stage image captioning systems (Agrawal et al., 2019; Li et al., 2020; Wang et al., 2021) by 1.",
+      "startOffset" : 109,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 17,
+      "context" : "Our T5 + MF model outperforms the existing state-of-the-art end-to-end single-stage image captioning systems (Agrawal et al., 2019; Li et al., 2020; Wang et al., 2021) by 1.",
+      "startOffset" : 109,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 32,
+      "context" : "Our T5 + MF model outperforms the existing state-of-the-art end-to-end single-stage image captioning systems (Agrawal et al., 2019; Li et al., 2020; Wang et al., 2021) by 1.",
+      "startOffset" : 109,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 13,
+      "context" : "VIVO + C (Hu et al., 2020) is not comparable as it uses additional visual-text aligned training data.",
+      "startOffset" : 9,
+      "endOffset" : 26
+    } ],
+    "year" : 2021,
+    "abstractText" : "This paper focuses on Seq2Seq (S2S) constrained text generation where the text generator is constrained to mention specific words, which are inputs to the encoder, in the generated outputs. Pre-trained S2S models such as T5 or a Copy Mechanism can be trained to copy the surface tokens from encoders to decoders, but they cannot guarantee constraint satisfaction. Constrained decoding algorithms always produce hypotheses satisfying all constraints. However, they are computationally expensive and can lower the generated text quality. In this paper, we propose Mention Flags (MF), which trace whether lexical constraints are satisfied in the generated outputs of an S2S decoder. The MF models are trained to generate tokens until all constraints are satisfied, guaranteeing high constraint satisfaction. Our experiments on the Common Sense Generation task (CommonGen) (Lin et al., 2020), End2end Data-to-Text task (E2ENLG) (Dušek et al., 2020) and Novel Object Captioning task (nocaps) (Agrawal et al., 2019) show that the MF models maintain higher constraint satisfaction and text quality than the baseline models and other constrained text generation algorithms, achieving state-of-the-art performance on all three tasks. These results are achieved with a much lower run-time than constrained decoding algorithms. We also show that the MF models work well in the low-resource setting. 1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

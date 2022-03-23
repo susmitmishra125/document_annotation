@@ -1,0 +1,506 @@
+{
+  "name" : "2021.acl-long.56.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Improving Dialog Systems for Negotiation with Personality Modeling",
+    "authors" : [ "Runzhe Yang", "Jingxiao Chen", "Karthik Narasimhan" ],
+    "emails" : [ "runzhey@princeton.edu", "timemachine@sjtu.edu.cn", "karthikn@princeton.edu" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 681–693\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n681"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Developing dialog systems for negotiation is challenging since the task requires a combination of good communication skills and strategic reasoning capabilities (Traum et al., 2008; Young et al., 2013; Keizer et al., 2017). While recent neural models (Wen et al., 2017; Dhingra et al., 2017; Zhou et al., 2019; He et al., 2018) have shown that useful dialogue strategies can be learned from offline corpora, they do not explicitly model the mental state of other agents, which can make it challenging to generate tailored strategies and utterances for different types of opponents.\nIn this paper, we introduce a new framework for generating strategic dialog inspired by the idea of Theory of Mind (ToM) from cognitive science (Premack and Woodruff, 1978; Bruner, 1981; Wimmer and Perner, 1983). When negotiating with others, humans innately infer the intention of the\n∗Authors contributed equally. 1Code and data available at https://github.com/\nprinceton-nlp/NegotiationToM\nother party, and guess how their own utterances would affect the opponent’s mental state. To emulate this capability in machines, we train a firstorder ToM model to predict an opponent’s response given the current state and the agent’s own possible utterances. This first-order ToM model can then be incorporated into dialog agents to enable one-step lookaheads during inference.\nIn order to predict future responses, we model the opponent’s personality type as a intermediate variable (z), which can be predicted using the dialogue history. We use this predicted personality, along with the previous state and utterance to calculate the likelihood of the opponent’s next state for all possible actions that our agent can take in the current state. This allows us to compute an expected value of return for each action, which is subsequently used to produce a policy for our agent. We propose two variants of our ToM-based dialog agent – an explicit version that outputs the opponent type as an intermediate prediction, and an implicit version that models the opponent type as a latent variable. Both models can be instantiated as end-to-end neural networks and can be trained using reinforcement learning.\nOur approach differs from existing opponent modeling work (Lee et al., 2018; Hadjinikolis et al., 2013; Oren and Norman, 2009; Rienstra et al., 2013; He and Boyd-Graber, 2016) in three aspects: 1) it provides strategic benefit during inference which leads to more successful negotiations, 2) it can flexibly adjust the degree of dependence on ToM predictions by changing a temperature parameter, and 3) it utilizes text utterances to infer types of opponents, thereby capturing side information (e.g., emotion) that is useful yet absent from standard dialog state transitions.\nWe perform experiments on a modified version of the CRAIGSLISTBARGAIN negotiation task (He et al., 2018), where the agent is matched with dif-\nferent opponents from diverse populations (e.g., cooperative, competitive, and aggressive negotiators), without being provided information about their identity. Empirically, our method outperforms several baselines on the task by completing more deals and achieving higher utility. For instance, our model achieves about 20% higher dialog agreement rate and utility than a baseline dialog manager trained with reinforcement learning. Our analysis reveals that the agent demonstrates diverse negotiation behavior and adapts well to different types of opponents."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "Speaker-follower models and rational speech acts. Our work is related to recent papers using the Rational Speech Acts (RSA) model for natural language (Goodman and Stuhlmüller, 2013; Monroe and Potts, 2015; Goodman and Frank, 2016; Shen et al., 2019). RSA has also been applied to language grounding (Andreas and Klein, 2016) and vision-language navigation (Fried et al., 2018). Our first-order theory of mind modeling is different since we learn how the speaker’s intent and utterance affect the opponent’s reaction, instead of assuming the optimality of the listener in the speaker’s mind. Recent RSA model (White et al., 2020) considers speakers and listeners in resourceconstrained settings, while we do not enforce constraints on opponents.\nOur approach with explicit characteristic modeling is also similar to the ToMnet (Rabinowitz et al., 2018), which uses a multi-agent reinforcement learning setting to learn identity embeddings of populations from past trajectories, and predict the mental state of an agent using the current trajectory. However, our first-order ToM models for negotiation also take utterances into account, which makes improving upon a base RL policy non-trivial.\nTheory of Mind in dialog systems. Theory of mind for modeling user personality types and predicting responses has been studied in the context of building user simulators (Georgila et al., 2006; Rieser and Lemon, 2006) for training RL-based dialog systems, and to make dialog systems explainable (Chandrasekaran et al., 2017). Recent work on dialog policy learning has employed theory of mind with a focus on specific domains. The Recursive Mental Model (RMM) (Roman et al., 2020) was proposed for navigation settings, where questions and answers are generated between a\nnavigating agent and a guiding agent. Another approach – Answerer in Questioner’s Mind (AQM) (Lee et al., 2018) – tackled an answer guessing game with information-theoretic methods. In these domains, the opponents are assumed to be cooperative, while our method is applicable for interacting with both cooperative and competitive opponents. Recently, Jang et al. (2020) employed Bayesianoptimal Monte-Carlo planning for end-to-end dialog generation at the utterance level. However, their method only models the latent goal of the opponent instead of potential responses like we do.\nOpponent modeling in RL. Apart from dialog systems, opponent modeling has been explored in other multi-agent reinforcement learning settings (Wen et al., 2019; von der Osten et al., 2017; He and Boyd-Graber, 2016; Hadjinikolis et al., 2013; Rienstra et al., 2013). Our approach differs from these works by: 1) providing strategic benefit during real-time inference, 2) adjusting the degree of dependence on the ToM predictions through a temperature parameter, and 3) utilizing text utterances in the dialog to infer types of opponents, thereby capturing side information that is useful yet absent from standard state transitions."
+    }, {
+      "heading" : "3 Framework",
+      "text" : "Task. We consider a task-oriented dialog setting where there are two agents, a buyer and a seller. The buyer’s goal is to purchase the listed item with minimum cost, and the seller’s goal is to sell the item at a price as high as possible. The item description is public for both agents, while the target prices are private for both buyer and seller. Two agents negotiate in alternating turns until they conclude with an agreement or disagreement.\nMDP Formulation. We formulate the negotiation process between two agents as a multiagent Markov Decision Process (MAMDP), 〈N ,S,A,P,R,Π, n〉. N = {−1, 1} is the set indicating two agents (buyer=-1 / seller = 1). A is the action space consisting of dialog acts. For example, a valid dialog act ait ∈ A can encode the intent (inform, propose, counter, etc.) and price that the agent i tries to express in the t-th round. Two agents act alternatively, i.e., if at the round t only the agent i moves, then at the round t+ 1 only the agent −i moves. S is the state space consisting of the negotiation status. We define s0 ∈ S as the initial status of the dialog, which contains the information about items\nto be negotiated (e.g., initial price, description). We also define st = (s0, ai1, a −i 2 , . . . , a i t−1, a −i t ). In this way, the only randomness of the environment comes from the opponents policy (st−1 → a−it ), i.e., st−1 → st is stochastic, while (st−1, a−it ) → st is deterministic. Note that the state st is only partially observable in reality, since one can only infer the true intent from the corresponding utterance. We provide a summary of all the symbols used in Table 1."
+    }, {
+      "heading" : "3.1 Negotiation Systems",
+      "text" : "As illustrated in Figure 1, our negotiation system encapsulates three important modules following traditional goal-oriented dialog systems (Young et al., 2013):\n• A parser that converts the opponent’s utterance u−it−1 to dialog act a −i t−1 (e.g., “Are\nyou interested in this GoPro” → confirm(price=None)). Since the dialog acts in our system do not intend to capture the complete semantics of a sentence, a simple rule-based parser is effective;\n• A manager that decides the responding dialog act ait according to the current dialog state st−1 = (s0, . . . , a −i t−1). Our ToM model is\napplied to this component of the system;\n• A generator that produces natural language response uit based on the current dialog act ait and the dialog state st−1, or equivalently st (e.g., the previous dialog state + propose(price=$230)→ “How does $230 for the GoPro sound?”). It can be either deterministic to reduce computational cost or probabilistic to encourage diversity in language.\nFollowing (He et al., 2018), the parser and the generator modules are obtained by rule-based method or supervised learning in advance, and fixed when training the dialog manager using supervised learning (SL) or fine turning using reinforcement learning (RL). The SL dialog manager employs a neural network to model state transitions P (st|st−1) (or equivalently, π(ait|st−1)) of the training corpus by minimizing the cross entropy loss. The RL dialog manager further fine tunes the SL model by maximizing a composed reward function with reinforcement learning. The learned dialog policy π(ait|st−1) can be further improved by enforcing some hand-craft rules.\nThere are two main problems with the SL or RL manager. First, the policy learned by an RLbased dialog manager produces reactive responses (Tamar et al., 2016) , which are usually inadequate in a long term planning problem requiring more\nstrategic thinking, such as negotiation. Second, it does not take the effect of the agent’s generated utterances on opponents’ reactions into account. To address these problems, we propose an approach to incorporate the theory of mind (ToM) (Premack and Woodruff, 1978) into the inference process. This enables one-step looking ahead to consider the effect of the agent’s utterances and generate more thoughtful strategies."
+    }, {
+      "heading" : "4 First-Order Theory of Mind for dialog",
+      "text" : "The goal of the first-order theory of mind is to predict how a dialog act and an utterance generated by us would affect the reaction of the opponent. As illustrated in Figure 1, suppose that our current dialog state is st−1, which consists of the history of past dialog acts and the initial information, as well as the current utterance u−it−1 from the opponent. The ToM model simulates the situations where we take dialog act ait (e.g., propose(price=$230)) and utter the sentence uit (“how does $ 230 for it sound”), and estimates the probability distribution of the opponents response ait+1. By combining actions and states by definition, our first-order ToM model estimates the transition probability T (st+1|u−it−1, st, uit).\nIn practice, the opponent may have different language preferences (e.g., using more aggressive or\nmild words when countering) and strategies (e.g., tend to insist on their target price or agree to a compromise). The first-order ToM can either implicitly capture these personalities by learning the transition T (st+1|u−it−1, st, uit), or explicitly infer the type of the opponent’s personalities z−i first, from the past interaction and the opponent’s utterance, i.e., learning an identifier z−it−1 = f(st−1, u −i t−1), and then learns the transition based on that information, i.e., T (st+1|z−it−1, st, uit), to make accurate prediction about opponents reaction."
+    }, {
+      "heading" : "4.1 First-order ToM Policies with Explicit Personality Modeling",
+      "text" : "We introduce a policy with an explicit first-order ToM model T (st+1|z−i, st, uit), where the opponent’s personality z−i can be estimated from partial dialog. During training, the ground truth of the type of opponents personalities, z, is given. Therefore we can train an identifier z−it−1 = f(st−1, u −i t−1) with extra supervision to predict the opponents type every round. During the inference process, the probability of taking action ait, i.e., a policy πToM(a i t|st−1, z−it−1), is proportional to\nexp  1β ∑ uit G(uit|st, z−it−1)︸ ︷︷ ︸ Generator ∑ st+1 T (st+1|z−it−1, st, u i t)︸ ︷︷ ︸ 1st-order ToM V (st+1)︸ ︷︷ ︸ Value Fn.  ,\nwhere the exponent can be interpreted as the expected best return over opponent’s next moves, after taking action ait at state st−1 (compressed as st). In the above expression, T (st+1|z−it−1, st, uit) is the explicit first-order ToM model, which can be trained by supervised learning from the corpus; G(uit|st, z−it−1) is the generator which renders utterance conditioned on the current state and the personality of the opponent; V (st+1), is the value function estimated by the RL-based dialog manager, which gives the best future return estimation supposing the current state is st+1. It approximates V (st+1, z −i t−1) when it is nearly optimal. β is the temperature parameter. Since πToM is normalized as a Boltzmann distribution, when temperature β → ∞, πToM is a uniform distribution over the next states; when β → 0, πToM is nearly deterministic assigning most probability mass to the st with the largest expected value after one-step ToM looking ahead."
+    }, {
+      "heading" : "4.2 First-Order ToM Policies with Implicit Personality Modeling",
+      "text" : "We also introduce first-order ToM policy with implicit personality modeling, where we do not have a module explicitly which explicitly predicts the opponent identity z. Instead, we combine the identifier and ToM model in the explicit version, to directly learn T (st+1|u−it−1, st, uit) without extra supervision. In this case, πToM(ait|st−1, u−it−1) is proportional to\nexp  1β ∑ uit G(uit|st)︸ ︷︷ ︸ Generator ∑ st+1 T (st+1|u−it−1, st, u i t)︸ ︷︷ ︸\n1st-order ToM\nV (st+1)︸ ︷︷ ︸ Value Fn.  , where T (st+1|u−it−1, st, uit) is called the implicit first-order ToM model, and the rest of components are similar to the explicit version.\nWe call πToM a first-order ToM policy, because it utilizes the first-order transition of the opponent, and estimates the expected outcome of performing a certain action which leads to state st. The personalities of the opponent are implicitly inferred from the previous utterance u−it−1 and the history st. In practice, the summation (expectation) is approximated by Monte Carlo sampling.\nImplicit vs Explicit model. We expect both explicit and implicit ToM models to provide several unique benefits. First, co-training the identifier f(st−1, u−it−1) and the explicit first-order ToM model T (st+1|z−i, st, uit) is expected to have better sample efficiency than the implicit ToM model T (st+1|u−it−1, st, uit) since it utilizes the prior knowledge that personality identity affects state transition, and is trained with more supervision. Besides, with the personality z−i, the generator and the value functions can also adapt to different populations of opponents. However, the annotations for opponent types are not available for all corpora, therefore the implicit model would be a more general approach."
+    }, {
+      "heading" : "4.3 Combining the RL Policy as a Prior",
+      "text" : "After learning the above two ToM models from the corpus, we leverage the pre-trained RL policy as a prior with the 1st-order ToM policy to perform the inference. The final policy is given by\nπ(ait|st−1, z−it−1) ∝ πrl(a i t|st−1) · πToM(ait|st−1, z−it−1),\nwhere πrl is a policy obtained in a previous RL training process (see Section 5).\nFrom a Bayesian point of view, πrl can be seen as a prior P(ait|st−1), and the πToM is analog to the likelihood P(best return|ait, st−1) by its definition (not strictly true since it has to be summed up to one) which modifies the probability assignment in πrl, i.e., the posterior P(ait|best return, st−1). This gives the probability that the current agent should move to st in order to reach the highest return in the end. πToM modifies the probability assignment in πrl, when β →∞ in πToM, it is equivalent to the original RL policy πrl."
+    }, {
+      "heading" : "5 Dialog Managers",
+      "text" : "We compare three hybrid dialog managers combining neural networks and rules to control the flow of dialog:\n(1) The SL+rule manager employs a LSTMbased network to learn the transitions from st−1 to st from corpus. Rules ensure that only deals meeting 70% target are acceptable.\n(2) The RL manager uses an actor-critic method (Mnih et al., 2016), which contains a policy network with the same neural network architecture as the SL manager, and a value network predicts the future returns given states.\n(3) The ToM manager uses the first-order ToM policy as described in Section 4. to learn the best response policy πToM(ait|st−1, u−it−1) which is aware of the opponent’s personalities and mental state.\nAn extra LSTM model is used to encode u−1t−1 in both explicit and implicit ToM models, and learn the personality z−it−1 = LSTM(u −1 t−1, st−1) in explicit ToM models which encodes a distribution. Note that for all three managers, we applied reasonable hand-crafted rules to prevent unreasonable policies. Specifically, the agent will never offer a price below its bottom line and will reject the opponent’s offer if it is worse than its bottom line.\nTraining and Fine Tuning. We first train the supervised learning (SL) manager to minimize a loss function for the dialog act predictions\nLSL = CEintent + α · MSEprice,\nwhich is a linear combination of the cross entropy loss between the predicted intent and the ground truth intent, and the mean squared error between the predicted price and the ground truth price. The\nreinforcement learning (RL) manager is then fined tuned from the SL manager to maximize a reward function described in Section 6, with the actorcritic methods (Mnih et al., 2016). The actor network is initialized as the SL manager’s LSTMbased network, and the critic network is partially initialized with the same network, followed by a MLP to predict the value.\nFor the ToM manager, we reuse V (st+1) from a well trained RL manager’s critic network, and fix it during inference. The implicit first-order ToM model T (st+1|u−it−1, st, uit) is directly trained via supervised learning to minimize the same loss LSL. For the explicit first-order ToM model, T (st+1|z−it−1, st, uit), we first train a LSTM-based identifier z−it−1 = f(st−1, u −i t−1), which receives ground truth opponent personality z−i from the corpus during training. T (st+1|z−it−1, st, uit) is learned with the input from the well-trained identifier.\nTo obtain the 1st-order ToM policy for the inference, we approximate the sum (expectation) in πToM by Monte Carlo sampling with the generator, and discretize the price in a normalized price range. In practice, we found quantizing the price range with 100 units is a good balance between time comsumption and the quality of approximation."
+    }, {
+      "heading" : "6 Experimental Setup",
+      "text" : "We test our ToM negotiation framework on the CRAIGSLISTBARGAIN (He et al., 2018), which contains 6682 human-human dialogs between a buyer and a seller alternately bargaining for the price of an item on Craigslist.\nOntology. We redesign the ontology of the CRAIGSLISTBARGAIN dataset to support a more diverse dialog act than the original coarse dialog acts (He et al., 2018), which can reflect more ways of mental state change in a negotiation. We used the Microsoft Language Understanding Intelligent Service (LUIS) to relabel the dataset , and merged some similar label types, such as insist and vagueprice into counter-noprice, and intro and great into greet. All fifteen dialog acts after our modifications are in Table 2. There are four intents propose, counter, agree, disagree that must be followed by a price slot, and four terminal acts accept, reject, and quit. When an agent takes an offer action, the other agent has to respond with accept or reject. Note that the function of this dialog act is not to capture the full semantic meaning of one utterance, but to serve as a logical skeleton for the dialog.\nReward function design. We set the reward ri for the agent i to be a linear function of the final price, such that the buyer achieves maximal reward of 1 at its target price, the seller achieves maximal reward of 1 at the listing price, and both agents receive zero rewards at the midpoint of the listing price and the target price. When there is no deal, both agents receives equivalent penalty.\nDiverse opponent populations. All our negotiation experiments are conducted against variations of the SL+rule manager as the opponent. For the variations, we create 7 different opponent populations (id=0∼6) by injecting different rules for changing prices and rendering utterances. Price changing rules are functions of the number of sentences in the conversation history, which model the agreeability and the flexibility of a person. When rendering utterances, we use a template-based language generator as in (He et al., 2018), and insert population-specific tokens in utterances by sampling according to different opponent types.\nThe cooperative population (id=5) will gradually compromise and move its price from the midpoint. The utterances of this population also contain more polite and mild words indicating its negotiable position. The most aggressive population (id=0) will insist its price until the end, and utters more stubborn words. The competitive population (id=6) compromises from target price slower than the cooperative. The other populations will follow price changing curves in between these two extremes, and also have different language properties. The population types are accessible during training as ground truth values of zi to provide supervision (see Appendix A for details).\nModels. The dialog managers we compare are described in Section 5. For the utterance parser, we use Microsoft Language Understanding Intelligent Service (LUIS) (Williams et al., 2015) with 10 annotated training examples for each dialog act. For the Generator, we use a retrieval-based model similar to He et al., 2018 which samples an utterance from the top 10 matched templates.\nEvaluation Metrics. We evaluate generated dialogs across four aspects:\n1. Agreement rate (Ag), which is the percentage of dialogs that reach agreements.\n2. Objective utility (Ut), which is given by\nUt i = { (Pdeal − P−itarget)/∆P, deal; 0, no deal\nwhere Pdeal is the final deal price, the and total price range ∆P = P itarget − P−itarget, where P itarget, and P −i target are the extreme target prices of the two agents. Note that this is different from the subjective utility of each agent based on only its own price range, which may result in utilities > 1 or < 0 more often.\n3. Deal fairness (Fa), which is only for completed deals, as Fai = 1− 2 ∗ |Uti − 0.5|.\n4. Dialog length (Len), which is the average turns of sample dialogs."
+    }, {
+      "heading" : "7 Results",
+      "text" : "Improvement of dialog policy. We evaluate SL+rule, RL, and our ToM model on a mixed population for 4352 dialogs, which contains about 630 dialogs for each population. As shown in Table 3, our explicit ToM model consistently achieves the highest agreement rate (Ag), with 56%, 4%, and 20% improvements compared to vanilla RL against cooperative, competitive, and mixed populations, respectively. Though deal agreement is hard for competitive opponents, our explicit ToM model achieves more than 30% improvement on the deal utility when interacting with this population. On the mixed population, the reward (Re) for SL+rule agent is low, as it is not directly optimized for better reward. RL agent improves the Re a lot compared with the SL+rule baseline. However, both ToM agents achieve better reward even when compared with RL agent, which shows the advantage of strategic planning. Besides, unlike the SL+rule only pursues high utility when there is a deal, but ends with every low Ag, our ToM models best balance both the agreement rate and agent utility of each dialog, and outperforms SL+rule and RL for all populations.\nImplicit vs. explicit models. We found that the implicit ToM model can also achieve better Ag and Ut than the baselines for all populations. But the overall performance is slightly worse than the explicit ToM model. This can be explained by the fact that the explicit model has more information about the population type during training. One may worry about the potential error cascade issue the explicit ToM models, as we see in Figure 2,\nthe top 1 accuracy of the identifier in the explicit model is only 69%, though it is significantly above the chance. Our experiment show that even with an imperfect identifier, the explicit model can still outperform an implicit model, which is directly optimized for better performance.\nPopulation-aware strategies. As Table 3 shows, the ToM model can provide more deal fairness (Fa, normalized price difference to the midpoint) to competitive opponents, since they rarely compromise, meanwhile reaching higher Ag and Ut. When opponents are cooperative and easy to negotiate with, our ToM model can achieve much better agent utility by taking advantage of losing some dialog fairness. This implies our ToM model is able to utilize different characteristics of the opponents in the strategy generation.\nWe provide some sample dialogs from the explicit ToM model in Table 4. When the seller is competitive, the buyer can adaptively raise its price and exchange for additional benefits, e.g., “ok. i can do $46 if you split the shipping in half” , to make the deal happen. We note that sometimes the offer prices slightly deviate from the agreed prince in negotiation but the ToM agent still accepts. This may be because the deflects of SL-based opponents is predictable to the ToM agent.\nEffectiveness of the opponent identifier. Figure 2 shows the identifier can capture the opponent identities well during interaction. The accuracy of the identifier increases as the dialog progresses. The top 1 accuracy after 6 opponent’s turns is above 69%, and the top 3 accuracy is above 84%, where the chance is only 14.2%. The average top 1 accuracy is 43.8% for all turns in 5000 dialogs of different lengths. We also find the explicit ToM models can better prevent overfitting than implicit models. More details are in appendix B.\nVisualization of population embeddings. In Figure 3, we show the PCA visualization of the\nnormalized latent variables in both explicit and implicit ToM models. The latent variables are extracted from one layer before the output of the identifier or its equivalence in the implicit model. The explicit ToM model learns embeddings encoding different opponent populations, as the major variances of variable are captured by the difference of opponent populations. However, without extra supervision, the extraction of the population identity is difficult in the implicit ToM model. Further analysis shows that the variances of the latent variables in the implicit ToM model are mainly explained by intent types. We include more detailed analysis and t-SNE visualization in appendix B."
+    }, {
+      "heading" : "8 Conclusion",
+      "text" : "In this work, we proposed a novel framework to integrate the concept of Theory of Mind (ToM) into generating task-oriented dialogs. Our approach provides the ability to model and infer personality types of opponents, predict changes in their mental state, and use this information to adapt the agent’s high-level strategy in negotiation tasks. We in-\ntroduced a probabilistic formulation for first-order ToM and introduce two ways to incorporate it into a dialog agent, by 1) explicitly and 2) implicitly modeling the personality of the opponent. We tested our approach on a modified version of the CRAIGSLISTBARGAIN dataset (He et al., 2018) with diverse opponents. Our experiments show that our method using ToM inference achieves about 20% higher dialog agreement rate and utility compared to baselines on a mixed population of opponents. When negotiating with the cooperative opponents, the improvement of agreement rate is 54%. Some directions for future work include developing efficient schemes to approximate the value computation for future states, exploring higher orders of ToM, as well as a tighter integration of ToM into utterance generation and processing.\nEthical Considerations\nOur dataset is modified from the open-sourced CRAIGSLISTBARGAIN dataset (He et al., 2018), which consists of negotiation dialogs between sellers and buyers on items from the Craigslist website. The initial dataset was collected using crowd workers on Amazon Mechanical Turk (AMT) playing the role of buyers and sellers. We redesigned the ontology to support more diverse dialog acts than the original coarse dialog acts. We manually labeled 10 examples for each intent, and used the Microsoft Language Understanding Intelligent Service to relabel the whole dataset. We create seven different populations by injecting different rules about changing prices and rendering utterances.\nOur paper involves an NLP application that can negotiate with people to reach agreement on deals. It is still at an early exploration stage so we do not expect it will currently cause any negative social impact such as massive job loss. If a mature version of such a system is deployed in the future, it may lead to less fair deals between the AI system and humans, as the system is optimized to find the best strategy that maximizes its own utility. But overall, we believe it will encourage market efficiency."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "We thank Robert Hawkins, Jens Tuyls, Vishvak Murahari, Howard Chen and members of the Princeton NLP group for helpful discussions and feedback. This research was supported by an Amazon Research Award."
+    }, {
+      "heading" : "A Experimental Setup",
+      "text" : "To test our proposed framework in a realistic persuasive negotiation setting, we use the CRAIGSLISTBARGAIN dataset (He et al., 2018), which contains 6682 human-human dialogs between a buyer and a seller alternately bargaining for the price of an item on Craigslist. The listed price and a description is presented to both agents, and a private price is assigned to the buyer as the target. We set the reward ri to be a linear function of the final price, such that the buyer achieves maximal reward of 1 at its target price, the seller achieves maximal reward of 1 at the listing price, and both agents receive zero rewards at the midpoint of the listing price and the target price. When there is no deal, both agents receives equivalent penalty of -0.5.\nOntology We redesign the ontology of the CRAIGSLISTBARGAIN dataset to support a more diverse dialog act than the original coarse dialog acts (He et al., 2018), which can reflect more ways of mental state change in a negotiation. A dialog act consists of intent and a set of arguments. In our experiments, we only focus on the price as it is the most important goal of this task. All fifteen dialog acts are listed in Table 2. There are four intents propose, counter, agree, disagree that must be followed by a price slot, and accept, reject, and quit are four terminal dialog acts with no utterance. When an agent takes an offer, the other agent has to respond with accept or reject. Note that the function of this dialog act is not to capture the full semantic meaning of one utterance, but to serve as a logic skeleton of the dialog.\nSystem Design Parser: We use Microsoft Language Understanding Intelligent Service (LUIS) (Williams et al., 2015) with 10 starting training examples for each dialog act in our experiment. Generator: We use a retrieval-based model similar to He et al., 2018 which samples an utterance from the top 10 matched templates. We compared three hybrid dialog managers combining neural nets and rules to control the flow of the dialog. (1) The SL manager employs a neural network to learn the transitions from st−1 to st from dataset. We use a sequence model with two-layer LSTM\nwith 300 hidden units for both the encoder and the decoder. (2) The RL manager uses an actorcritic method (Mnih et al., 2016), which contains a policy network with the same neural network architecture as the SL manager, and a value network predicts the cumulative reward given input states. The RL manager also learns πi(st|st−1) but with the goal of maximizing the total reward. (3) The ToM manager uses the first-order ToM policy as described in 4 to learn the best responding policy πToM(st|st−1, u−it−1) with the awareness of the opponent’s characteristics and mental state change. An extra LSTM model is used to learn the characteristic identity z−it−1 = f(st−1, u −i t−1) in the explicit ToM model. For all three managers, we improve the learned policy by enforcing hand-craft rules. For example, the agent should never offer price below its bottom line and reject the opponent’s offer if it is worse than its bottom line.\nPopulations of Opponents When playing against with a SL manager, we create 7 different populations of opponents by injecting rules for changing the price and rendering utterance. Price changing rules are functions of the number of sentences in the conversation history, which model the agreeability and the flexibility of a person. The agreeability of a person is reflected in the range of relative prices (utility) at which a deal could be made. For example, a competitive opponent has a higher lower bound on the price, while a cooperative opponent has a lower initial price. The flexibility of a person is reflected in the slope and convexity of the price-changing rules. The price changing function for the most aggressive and stubborn opponent has a zero slope, encouraging them to insist on their initial price until the end of the dialog. The more determined a seller is, the more concave the price changing function becomes.\nWhen rendering utterances, we use a templatebased language generator as in (He et al., 2018), and insert population-specific tokens in utterances by sampling according to different opponent types. For example, in the utterances from a competitive opponent, words like “afraid” or “unfortunately” appear more often, while words like “great” or “ok” will appear more frequently in the utterances from a cooperative opponent. Utterances of different populations should follow different distributions, and these sets of tokens are designed for this purpose.\nWe vary the price range, slope, and convexity to\nobtain the different behaviors for the seven different opponent types. The mildest population will gradually compromise and lower its price (or raise its price if it is buyer). The utterances of this population also contain more polite and mild words indicating its negotiable position. And the most aggressive population will insist its price until the end, and utters more stubborn words. The other five populations will follow different price changing curves in between these two extremes, and also have different language properties. All of these populations will deal at a certain price range, which depends on latest proposal price and current dialog length in different ways.\nTraining and Fine Tuning We train the SL manager on 5000 dialogs for 20 epochs and choose the model with the lowest validation loss. The RL manager is fine-tuned from a well-trained SL agent by playing against itself. We choose the model with the highest reward.\nFor the ToM manager, the value function V (st+1) is borrowed from a well trained RL manager, and fixed during inference. The implicit firstorder ToM model T (st+1|u−it−1, st, uit) is trained in a similar way as the SL manager. To obtain the explicit first-order ToM model T (st+1|z−it−1, st, uit), we co-trained it with a LSTM-based identifier z−it−1 = f(st−1, u −i t−1) for 2,000 episodes. Each run on training each manager was performed using a single NVIDIA GTX 2080 Ti GPU with 16GB RAM in approximate 2 hours. All the managers were trained using Adam with learning rate 0.001. For the ToM manager, hyperparameter β was randomly searched in range of 0.05, 0.1, 1, 10, and the setting with the best results was β = 0.05."
+    }, {
+      "heading" : "B Additional Experimental Results",
+      "text" : "B.1 Comparison of Implicit and Explicit ToM models\nWe compared the implicit and the explicit ToM models as described in Appendix Section 4 in the main article. Here additional Figure 4 shows the validation mean squared error between the predicted price and the ground truth price of the opponent in the next turn (if exists) over 3,584 dialogs. Two models can both be trained well to perform this one-step prediction, while the explicit model with an identifier has slightly better sample efficiency and better prevents overfitting. This supports our hypothesise that the prior of different types of opponents is important.\nB.2 Visualization of Latent Variables"
+    } ],
+    "references" : [ {
+      "title" : "Reasoning about pragmatics with neural listeners and speakers",
+      "author" : [ "Jacob Andreas", "Dan Klein." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 1173–1182.",
+      "citeRegEx" : "Andreas and Klein.,? 2016",
+      "shortCiteRegEx" : "Andreas and Klein.",
+      "year" : 2016
+    }, {
+      "title" : "Intention in the structure of action and interaction",
+      "author" : [ "Jerome S Bruner." ],
+      "venue" : "Advances in infancy research.",
+      "citeRegEx" : "Bruner.,? 1981",
+      "shortCiteRegEx" : "Bruner.",
+      "year" : 1981
+    }, {
+      "title" : "It takes two to tango: Towards theory of ai’s mind",
+      "author" : [ "Arjun Chandrasekaran", "Deshraj Yadav", "Prithvijit Chattopadhyay", "Viraj Prabhu", "Devi Parikh." ],
+      "venue" : "CoRR, abs/1704.00717.",
+      "citeRegEx" : "Chandrasekaran et al\\.,? 2017",
+      "shortCiteRegEx" : "Chandrasekaran et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Towards end-to-end reinforcement learning of dialogue agents for information access",
+      "author" : [ "Bhuwan Dhingra", "Lihong Li", "Xiujun Li", "Jianfeng Gao", "Yun-Nung Chen", "Faisal Ahmed", "Li Deng." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association",
+      "citeRegEx" : "Dhingra et al\\.,? 2017",
+      "shortCiteRegEx" : "Dhingra et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Speaker-follower models for vision-and-language navigation",
+      "author" : [ "Daniel Fried", "Ronghang Hu", "Volkan Cirik", "Anna Rohrbach", "Jacob Andreas", "Louis-Philippe Morency", "Taylor Berg-Kirkpatrick", "Kate Saenko", "Dan Klein", "Trevor Darrell." ],
+      "venue" : "Advances",
+      "citeRegEx" : "Fried et al\\.,? 2018",
+      "shortCiteRegEx" : "Fried et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "User simulation for spoken dialogue systems: learning and evaluation",
+      "author" : [ "Kallirroi Georgila", "James Henderson", "Oliver Lemon." ],
+      "venue" : "INTERSPEECH 2006 - ICSLP, Ninth International Conference on Spoken Language Processing, Pittsburgh,",
+      "citeRegEx" : "Georgila et al\\.,? 2006",
+      "shortCiteRegEx" : "Georgila et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "Pragmatic language interpretation as probabilistic inference",
+      "author" : [ "Noah D Goodman", "Michael C Frank." ],
+      "venue" : "Trends in cognitive sciences, 20(11):818–829.",
+      "citeRegEx" : "Goodman and Frank.,? 2016",
+      "shortCiteRegEx" : "Goodman and Frank.",
+      "year" : 2016
+    }, {
+      "title" : "Knowledge and implicature: Modeling language understanding as social cognition",
+      "author" : [ "Noah D Goodman", "Andreas Stuhlmüller." ],
+      "venue" : "Topics in cognitive science, 5(1):173–184.",
+      "citeRegEx" : "Goodman and Stuhlmüller.,? 2013",
+      "shortCiteRegEx" : "Goodman and Stuhlmüller.",
+      "year" : 2013
+    }, {
+      "title" : "Opponent modelling in persuasion dialogues",
+      "author" : [ "Christos Hadjinikolis", "Yiannis Siantos", "Sanjay Modgil", "Elizabeth Black", "Peter McBurney." ],
+      "venue" : "TwentyThird International Joint Conference on Artificial Intelligence.",
+      "citeRegEx" : "Hadjinikolis et al\\.,? 2013",
+      "shortCiteRegEx" : "Hadjinikolis et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Opponent modeling in deep reinforcement learning",
+      "author" : [ "He He", "Jordan L. Boyd-Graber." ],
+      "venue" : "Proceedings of the 33nd International Conference on Machine Learning, ICML 2016, New York City, NY, USA, June 19-24, 2016, pages 1804–1813.",
+      "citeRegEx" : "He and Boyd.Graber.,? 2016",
+      "shortCiteRegEx" : "He and Boyd.Graber.",
+      "year" : 2016
+    }, {
+      "title" : "Decoupling strategy and generation in negotiation dialogues",
+      "author" : [ "He He", "Derek Chen", "Anusha Balakrishnan", "Percy Liang." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, Brussels, Belgium, October 31 -",
+      "citeRegEx" : "He et al\\.,? 2018",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Bayes-adaptive monte-carlo planning and learning for goal-oriented dialogues",
+      "author" : [ "Youngsoo Jang", "Jongmin Lee", "Kee-Eung Kim." ],
+      "venue" : "The ThirtyFourth AAAI Conference on Artificial Intelligence, AAAI 2020, The Thirty-Second Innovative Appli-",
+      "citeRegEx" : "Jang et al\\.,? 2020",
+      "shortCiteRegEx" : "Jang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Evaluating persuasion strategies and deep reinforcement learning methods for negotiation",
+      "author" : [ "Simon Keizer", "Markus Guhe", "Heriberto Cuayáhuitl", "Ioannis Efstathiou", "Klaus-Peter Engelbrecht", "Mihai Sorin Dobre", "Alex Lascarides", "Oliver Lemon" ],
+      "venue" : null,
+      "citeRegEx" : "Keizer et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Keizer et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Answerer in questioner’s mind: information theoretic approach to goal-oriented visual dialog",
+      "author" : [ "Sang-Woo Lee", "Yu-Jung Heo", "Byoung-Tak Zhang." ],
+      "venue" : "Advances in Neural Information Processing Systems, pages 2579–2589.",
+      "citeRegEx" : "Lee et al\\.,? 2018",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Asynchronous methods for deep reinforcement learning",
+      "author" : [ "Volodymyr Mnih", "Adrià Puigdomènech Badia", "Mehdi Mirza", "Alex Graves", "Timothy P. Lillicrap", "Tim Harley", "David Silver", "Koray Kavukcuoglu." ],
+      "venue" : "Proceedings of the 33nd Inter-",
+      "citeRegEx" : "Mnih et al\\.,? 2016",
+      "shortCiteRegEx" : "Mnih et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Learning in the rational speech acts model",
+      "author" : [ "Will Monroe", "Christopher Potts." ],
+      "venue" : "arXiv preprint arXiv:1510.06807.",
+      "citeRegEx" : "Monroe and Potts.,? 2015",
+      "shortCiteRegEx" : "Monroe and Potts.",
+      "year" : 2015
+    }, {
+      "title" : "Arguing using opponent models",
+      "author" : [ "Nir Oren", "Timothy J Norman." ],
+      "venue" : "International Workshop on Argumentation in Multi-Agent Systems, pages 160– 174. Springer.",
+      "citeRegEx" : "Oren and Norman.,? 2009",
+      "shortCiteRegEx" : "Oren and Norman.",
+      "year" : 2009
+    }, {
+      "title" : "The minds of many: Opponent modeling in a stochastic game",
+      "author" : [ "Friedrich Burkhard von der Osten", "Michael Kirley", "Tim Miller." ],
+      "venue" : "Proceedings of the Twenty-Sixth International Joint Conference on Artificial Intelligence, IJCAI 2017, Melbourne, Aus-",
+      "citeRegEx" : "Osten et al\\.,? 2017",
+      "shortCiteRegEx" : "Osten et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Does the chimpanzee have a theory of mind? Behavioral and brain",
+      "author" : [ "David Premack", "Guy Woodruff" ],
+      "venue" : null,
+      "citeRegEx" : "Premack and Woodruff.,? \\Q1978\\E",
+      "shortCiteRegEx" : "Premack and Woodruff.",
+      "year" : 1978
+    }, {
+      "title" : "Machine theory of mind",
+      "author" : [ "Neil C. Rabinowitz", "Frank Perbet", "H. Francis Song", "Chiyuan Zhang", "S.M. Ali Eslami", "Matthew Botvinick." ],
+      "venue" : "Proceedings of the 35th International Conference on Machine Learning, ICML 2018, Stockholmsmässan,",
+      "citeRegEx" : "Rabinowitz et al\\.,? 2018",
+      "shortCiteRegEx" : "Rabinowitz et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Opponent models with uncertainty for strategic argumentation",
+      "author" : [ "Tjitze Rienstra", "Matthias Thimm", "Nir Oren." ],
+      "venue" : "Twenty-Third International Joint Conference on Artificial Intelligence.",
+      "citeRegEx" : "Rienstra et al\\.,? 2013",
+      "shortCiteRegEx" : "Rienstra et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Cluster-based user simulations for learning dialogue strategies",
+      "author" : [ "Verena Rieser", "Oliver Lemon." ],
+      "venue" : "INTERSPEECH 2006 - ICSLP, Ninth International Conference on Spoken Language Processing, Pittsburgh, PA, USA, September 17-21, 2006. ISCA.",
+      "citeRegEx" : "Rieser and Lemon.,? 2006",
+      "shortCiteRegEx" : "Rieser and Lemon.",
+      "year" : 2006
+    }, {
+      "title" : "RMM: A recursive mental model for dialog navigation",
+      "author" : [ "Homero Roman Roman", "Yonatan Bisk", "Jesse Thomason", "Asli Çelikyilmaz", "Jianfeng Gao." ],
+      "venue" : "CoRR, abs/2005.00728.",
+      "citeRegEx" : "Roman et al\\.,? 2020",
+      "shortCiteRegEx" : "Roman et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Pragmatically informative text generation",
+      "author" : [ "Sheng Shen", "Daniel Fried", "Jacob Andreas", "Dan Klein." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-",
+      "citeRegEx" : "Shen et al\\.,? 2019",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Value iteration networks",
+      "author" : [ "Aviv Tamar", "Sergey Levine", "Pieter Abbeel", "Yi Wu", "Garrett Thomas." ],
+      "venue" : "Advances in Neural Information Processing Systems 29: Annual Conference on Neural Information Processing Systems 2016, December 5-10, 2016,",
+      "citeRegEx" : "Tamar et al\\.,? 2016",
+      "shortCiteRegEx" : "Tamar et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Multi-party, multiissue, multi-strategy negotiation for multi-modal virtual agents",
+      "author" : [ "David Traum", "Stacy C Marsella", "Jonathan Gratch", "Jina Lee", "Arno Hartholt." ],
+      "venue" : "International Workshop on Intelligent Virtual Agents, pages 117–130. Springer.",
+      "citeRegEx" : "Traum et al\\.,? 2008",
+      "shortCiteRegEx" : "Traum et al\\.",
+      "year" : 2008
+    }, {
+      "title" : "A network-based end-to-end trainable task-oriented dialogue system",
+      "author" : [ "Tsung-Hsien Wen", "David Vandyke", "Nikola Mrksic", "Milica Gasic", "Lina Maria Rojas-Barahona", "Pei-Hao Su", "Stefan Ultes", "Steve J. Young." ],
+      "venue" : "Proceedings of the 15th Confer-",
+      "citeRegEx" : "Wen et al\\.,? 2017",
+      "shortCiteRegEx" : "Wen et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Probabilistic recursive reasoning for multi-agent reinforcement learning",
+      "author" : [ "Ying Wen", "Yaodong Yang", "Rui Luo", "Jun Wang", "Wei Pan." ],
+      "venue" : "7th International Conference on Learning Representations, ICLR 2019, New Orleans, LA, USA, May 6-9, 2019.",
+      "citeRegEx" : "Wen et al\\.,? 2019",
+      "shortCiteRegEx" : "Wen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Learning to refer informatively by amortizing pragmatic reasoning",
+      "author" : [ "Julia White", "Jesse Mu", "Noah D. Goodman." ],
+      "venue" : "CoRR, abs/2006.00418.",
+      "citeRegEx" : "White et al\\.,? 2020",
+      "shortCiteRegEx" : "White et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Fast and easy language understanding for dialog systems with microsoft language understanding intelligent service (LUIS)",
+      "author" : [ "Jason D. Williams", "Eslam Kamal", "Mokhtar Ashour", "Hani Amr", "Jessica Miller", "Geoffrey Zweig." ],
+      "venue" : "Proceedings of the SIGDIAL",
+      "citeRegEx" : "Williams et al\\.,? 2015",
+      "shortCiteRegEx" : "Williams et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Beliefs about beliefs: Representation and constraining function of wrong beliefs in young children’s understanding of deception",
+      "author" : [ "Heinz Wimmer", "Josef Perner." ],
+      "venue" : "Cognition, 13(1):103–128.",
+      "citeRegEx" : "Wimmer and Perner.,? 1983",
+      "shortCiteRegEx" : "Wimmer and Perner.",
+      "year" : 1983
+    }, {
+      "title" : "Pomdp-based statistical spoken dialog systems: A review",
+      "author" : [ "Steve J. Young", "Milica Gasic", "Blaise Thomson", "Jason D. Williams." ],
+      "venue" : "Proceedings of the IEEE, 101(5):1160–1179.",
+      "citeRegEx" : "Young et al\\.,? 2013",
+      "shortCiteRegEx" : "Young et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "A dynamic strategy coach for effective negotiation",
+      "author" : [ "Yiheng Zhou", "He He", "Alan W. Black", "Yulia Tsvetkov." ],
+      "venue" : "Proceedings of the 20th Annual SIGdial Meeting on Discourse and Dialogue, SIGdial 2019, Stockholm, Sweden, September 11-13,",
+      "citeRegEx" : "Zhou et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "2018 which samples an utterance from the top 10 matched templates. We compared three hybrid dialog managers combining neural nets and rules to control the flow of the dialog",
+      "author" : [ "He" ],
+      "venue" : null,
+      "citeRegEx" : "He,? \\Q2018\\E",
+      "shortCiteRegEx" : "He",
+      "year" : 2018
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 10,
+      "context" : "We test our approach on the CRAIGSLISTBARGAIN dataset (He et al., 2018) and show that our method using ToM inference achieves a 20% higher dialog agreement rate compared to baselines on a mixed population of opponents.",
+      "startOffset" : 54,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 25,
+      "context" : "lenging since the task requires a combination of good communication skills and strategic reasoning capabilities (Traum et al., 2008; Young et al., 2013; Keizer et al., 2017).",
+      "startOffset" : 112,
+      "endOffset" : 173
+    }, {
+      "referenceID" : 31,
+      "context" : "lenging since the task requires a combination of good communication skills and strategic reasoning capabilities (Traum et al., 2008; Young et al., 2013; Keizer et al., 2017).",
+      "startOffset" : 112,
+      "endOffset" : 173
+    }, {
+      "referenceID" : 12,
+      "context" : "lenging since the task requires a combination of good communication skills and strategic reasoning capabilities (Traum et al., 2008; Young et al., 2013; Keizer et al., 2017).",
+      "startOffset" : 112,
+      "endOffset" : 173
+    }, {
+      "referenceID" : 26,
+      "context" : "While recent neural models (Wen et al., 2017; Dhingra et al., 2017; Zhou et al., 2019; He et al., 2018) have shown that useful dialogue strategies can be learned from offline corpora, they do not explicitly model the mental state of other agents, which can make it challenging to generate tailored strategies and utterances for different types of opponents.",
+      "startOffset" : 27,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 3,
+      "context" : "While recent neural models (Wen et al., 2017; Dhingra et al., 2017; Zhou et al., 2019; He et al., 2018) have shown that useful dialogue strategies can be learned from offline corpora, they do not explicitly model the mental state of other agents, which can make it challenging to generate tailored strategies and utterances for different types of opponents.",
+      "startOffset" : 27,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 32,
+      "context" : "While recent neural models (Wen et al., 2017; Dhingra et al., 2017; Zhou et al., 2019; He et al., 2018) have shown that useful dialogue strategies can be learned from offline corpora, they do not explicitly model the mental state of other agents, which can make it challenging to generate tailored strategies and utterances for different types of opponents.",
+      "startOffset" : 27,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 10,
+      "context" : "While recent neural models (Wen et al., 2017; Dhingra et al., 2017; Zhou et al., 2019; He et al., 2018) have shown that useful dialogue strategies can be learned from offline corpora, they do not explicitly model the mental state of other agents, which can make it challenging to generate tailored strategies and utterances for different types of opponents.",
+      "startOffset" : 27,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 18,
+      "context" : "In this paper, we introduce a new framework for generating strategic dialog inspired by the idea of Theory of Mind (ToM) from cognitive science (Premack and Woodruff, 1978; Bruner, 1981; Wimmer and Perner, 1983).",
+      "startOffset" : 144,
+      "endOffset" : 211
+    }, {
+      "referenceID" : 1,
+      "context" : "In this paper, we introduce a new framework for generating strategic dialog inspired by the idea of Theory of Mind (ToM) from cognitive science (Premack and Woodruff, 1978; Bruner, 1981; Wimmer and Perner, 1983).",
+      "startOffset" : 144,
+      "endOffset" : 211
+    }, {
+      "referenceID" : 30,
+      "context" : "In this paper, we introduce a new framework for generating strategic dialog inspired by the idea of Theory of Mind (ToM) from cognitive science (Premack and Woodruff, 1978; Bruner, 1981; Wimmer and Perner, 1983).",
+      "startOffset" : 144,
+      "endOffset" : 211
+    }, {
+      "referenceID" : 13,
+      "context" : "Our approach differs from existing opponent modeling work (Lee et al., 2018; Hadjinikolis et al., 2013; Oren and Norman, 2009; Rienstra et al., 2013; He and Boyd-Graber, 2016) in three aspects: 1) it provides strategic benefit during inference which leads to more successful negotiations, 2) it can flexibly adjust the degree of dependence on ToM predictions by changing a temperature parameter, and 3) it utilizes text utterances to infer types of opponents, thereby capturing side information (e.",
+      "startOffset" : 58,
+      "endOffset" : 175
+    }, {
+      "referenceID" : 8,
+      "context" : "Our approach differs from existing opponent modeling work (Lee et al., 2018; Hadjinikolis et al., 2013; Oren and Norman, 2009; Rienstra et al., 2013; He and Boyd-Graber, 2016) in three aspects: 1) it provides strategic benefit during inference which leads to more successful negotiations, 2) it can flexibly adjust the degree of dependence on ToM predictions by changing a temperature parameter, and 3) it utilizes text utterances to infer types of opponents, thereby capturing side information (e.",
+      "startOffset" : 58,
+      "endOffset" : 175
+    }, {
+      "referenceID" : 16,
+      "context" : "Our approach differs from existing opponent modeling work (Lee et al., 2018; Hadjinikolis et al., 2013; Oren and Norman, 2009; Rienstra et al., 2013; He and Boyd-Graber, 2016) in three aspects: 1) it provides strategic benefit during inference which leads to more successful negotiations, 2) it can flexibly adjust the degree of dependence on ToM predictions by changing a temperature parameter, and 3) it utilizes text utterances to infer types of opponents, thereby capturing side information (e.",
+      "startOffset" : 58,
+      "endOffset" : 175
+    }, {
+      "referenceID" : 20,
+      "context" : "Our approach differs from existing opponent modeling work (Lee et al., 2018; Hadjinikolis et al., 2013; Oren and Norman, 2009; Rienstra et al., 2013; He and Boyd-Graber, 2016) in three aspects: 1) it provides strategic benefit during inference which leads to more successful negotiations, 2) it can flexibly adjust the degree of dependence on ToM predictions by changing a temperature parameter, and 3) it utilizes text utterances to infer types of opponents, thereby capturing side information (e.",
+      "startOffset" : 58,
+      "endOffset" : 175
+    }, {
+      "referenceID" : 9,
+      "context" : "Our approach differs from existing opponent modeling work (Lee et al., 2018; Hadjinikolis et al., 2013; Oren and Norman, 2009; Rienstra et al., 2013; He and Boyd-Graber, 2016) in three aspects: 1) it provides strategic benefit during inference which leads to more successful negotiations, 2) it can flexibly adjust the degree of dependence on ToM predictions by changing a temperature parameter, and 3) it utilizes text utterances to infer types of opponents, thereby capturing side information (e.",
+      "startOffset" : 58,
+      "endOffset" : 175
+    }, {
+      "referenceID" : 10,
+      "context" : "We perform experiments on a modified version of the CRAIGSLISTBARGAIN negotiation task (He et al., 2018), where the agent is matched with dif-",
+      "startOffset" : 87,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 0,
+      "context" : "RSA has also been applied to language grounding (Andreas and Klein, 2016) and vision-language navigation (Fried et al.",
+      "startOffset" : 48,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 4,
+      "context" : "RSA has also been applied to language grounding (Andreas and Klein, 2016) and vision-language navigation (Fried et al., 2018).",
+      "startOffset" : 105,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 28,
+      "context" : "Recent RSA model (White et al., 2020) considers speakers and listeners in resourceconstrained settings, while we do not enforce con-",
+      "startOffset" : 17,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 19,
+      "context" : "Our approach with explicit characteristic modeling is also similar to the ToMnet (Rabinowitz et al., 2018), which uses a multi-agent reinforcement learning setting to learn identity embeddings of",
+      "startOffset" : 81,
+      "endOffset" : 106
+    }, {
+      "referenceID" : 5,
+      "context" : "Theory of mind for modeling user personality types and predicting responses has been studied in the context of building user simulators (Georgila et al., 2006; Rieser and Lemon, 2006) for training RL-based dialog systems, and to make dialog systems explainable (Chandrasekaran et al.",
+      "startOffset" : 136,
+      "endOffset" : 183
+    }, {
+      "referenceID" : 21,
+      "context" : "Theory of mind for modeling user personality types and predicting responses has been studied in the context of building user simulators (Georgila et al., 2006; Rieser and Lemon, 2006) for training RL-based dialog systems, and to make dialog systems explainable (Chandrasekaran et al.",
+      "startOffset" : 136,
+      "endOffset" : 183
+    }, {
+      "referenceID" : 2,
+      "context" : ", 2006; Rieser and Lemon, 2006) for training RL-based dialog systems, and to make dialog systems explainable (Chandrasekaran et al., 2017).",
+      "startOffset" : 109,
+      "endOffset" : 138
+    }, {
+      "referenceID" : 22,
+      "context" : "The Recursive Mental Model (RMM) (Roman et al., 2020) was proposed for navigation settings, where questions and answers are generated between a navigating agent and a guiding agent.",
+      "startOffset" : 33,
+      "endOffset" : 53
+    }, {
+      "referenceID" : 13,
+      "context" : "Another approach – Answerer in Questioner’s Mind (AQM) (Lee et al., 2018) – tackled an answer guessing game with information-theoretic methods.",
+      "startOffset" : 55,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 27,
+      "context" : "other multi-agent reinforcement learning settings (Wen et al., 2019; von der Osten et al., 2017; He and Boyd-Graber, 2016; Hadjinikolis et al., 2013; Rienstra et al., 2013).",
+      "startOffset" : 50,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 9,
+      "context" : "other multi-agent reinforcement learning settings (Wen et al., 2019; von der Osten et al., 2017; He and Boyd-Graber, 2016; Hadjinikolis et al., 2013; Rienstra et al., 2013).",
+      "startOffset" : 50,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 8,
+      "context" : "other multi-agent reinforcement learning settings (Wen et al., 2019; von der Osten et al., 2017; He and Boyd-Graber, 2016; Hadjinikolis et al., 2013; Rienstra et al., 2013).",
+      "startOffset" : 50,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 20,
+      "context" : "other multi-agent reinforcement learning settings (Wen et al., 2019; von der Osten et al., 2017; He and Boyd-Graber, 2016; Hadjinikolis et al., 2013; Rienstra et al., 2013).",
+      "startOffset" : 50,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 31,
+      "context" : "As illustrated in Figure 1, our negotiation system encapsulates three important modules following traditional goal-oriented dialog systems (Young et al., 2013):",
+      "startOffset" : 139,
+      "endOffset" : 159
+    }, {
+      "referenceID" : 10,
+      "context" : "Following (He et al., 2018), the parser and the generator modules are obtained by rule-based method or supervised learning in advance, and fixed when training the dialog manager using supervised learning (SL) or fine turning using reinforcement learning (RL).",
+      "startOffset" : 10,
+      "endOffset" : 27
+    }, {
+      "referenceID" : 24,
+      "context" : "First, the policy learned by an RLbased dialog manager produces reactive responses (Tamar et al., 2016) , which are usually inadequate in a long term planning problem requiring more",
+      "startOffset" : 83,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 14,
+      "context" : "(2) The RL manager uses an actor-critic method (Mnih et al., 2016), which contains a policy network with the same neural network architecture as the SL manager, and a value network predicts the future returns given states.",
+      "startOffset" : 47,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 14,
+      "context" : "reinforcement learning (RL) manager is then fined tuned from the SL manager to maximize a reward function described in Section 6, with the actorcritic methods (Mnih et al., 2016).",
+      "startOffset" : 159,
+      "endOffset" : 178
+    }, {
+      "referenceID" : 10,
+      "context" : "CRAIGSLISTBARGAIN (He et al., 2018), which contains 6682 human-human dialogs between a buyer and a seller alternately bargaining for the price of an item on Craigslist.",
+      "startOffset" : 18,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 10,
+      "context" : "We redesign the ontology of the CRAIGSLISTBARGAIN dataset to support a more diverse dialog act than the original coarse dialog acts (He et al., 2018), which can reflect more ways of mental state change in a negotiation.",
+      "startOffset" : 132,
+      "endOffset" : 149
+    }, {
+      "referenceID" : 10,
+      "context" : "rendering utterances, we use a template-based language generator as in (He et al., 2018), and insert population-specific tokens in utterances by sampling according to different opponent types.",
+      "startOffset" : 71,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 29,
+      "context" : "For the utterance parser, we use Microsoft Language Understanding Intelligent Service (LUIS) (Williams et al., 2015) with 10 annotated training examples for each dialog act.",
+      "startOffset" : 93,
+      "endOffset" : 116
+    }, {
+      "referenceID" : 10,
+      "context" : "We tested our approach on a modified version of the CRAIGSLISTBARGAIN dataset (He et al., 2018) with diverse opponents.",
+      "startOffset" : 78,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 10,
+      "context" : "Our dataset is modified from the open-sourced CRAIGSLISTBARGAIN dataset (He et al., 2018), which consists of negotiation dialogs between sellers and buyers on items from the Craigslist website.",
+      "startOffset" : 72,
+      "endOffset" : 89
+    } ],
+    "year" : 2021,
+    "abstractText" : "In this paper, we explore the ability to model and infer personality types of opponents, predict their responses, and use this information to adapt a dialog agent’s high-level strategy in negotiation tasks. Inspired by the idea of incorporating a theory of mind (ToM) into machines, we introduce a probabilistic formulation to encapsulate the opponent’s personality type during both learning and inference. We test our approach on the CRAIGSLISTBARGAIN dataset (He et al., 2018) and show that our method using ToM inference achieves a 20% higher dialog agreement rate compared to baselines on a mixed population of opponents. We also find that our model displays diverse negotiation behavior with different types of opponents.1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

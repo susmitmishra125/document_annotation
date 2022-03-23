@@ -1,0 +1,629 @@
+{
+  "name" : "2021.acl-long.275.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Nested Named Entity Recognition via Explicitly Excluding the Influence of the Best Path",
+    "authors" : [ "Yiran Wang", "Hiroyuki Shindo", "Yuji Matsumoto", "Taro Watanabe" ],
+    "emails" : [ "yiran.wang@nict.go.jp,", "shindo@is.naist.jp,", "yuji.matsumoto@riken.jp,", "taro@is.naist.jp" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 3547–3557\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n3547"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Named entity recognition (NER), as a key technique in natural language processing, aims at detecting entities and assigning semantic category labels to them. Early research (Huang et al., 2015; Ma and Hovy, 2016; Lample et al., 2016) proposed to employ deep learning methods and obtained significant performance improvements. However, most of them assume that the entities are not nested within other entities, so-called flat NER. Inherently, these methods do not work satisfactorily when nested entities exist. Figure 1 displays an example of the nested NER task.\nRecently, a large number of papers proposed novel methods (Fisher and Vlachos, 2019; Wang et al., 2020) for the nested NER task. Among them, layered methods solve this task through multi-level sequential labeling, in which entities are divided into several levels, where the term level indicates the depth of entity nesting, and sequential labeling is performed repeatedly. As a special case of layered method, Shibuya and Hovy (2020) force the\n∗This work was done when the first author was at NAIST.\nFormer Hogwarts headmaster DumbledoreAlbus\nROLE\nROLE\nORG ROLE PER\nPER\nFigure 1: An example of nested NER.\nnext level entities to locate on the second-best path of the current level search space. Hence, their algorithm can repeatedly detect inner entities through applying a conventional conditional random field (CRF) (Lafferty et al., 2001) and then exclude the obtained best paths from the search space. To accelerate computation, they also designed an algorithm to efficiently compute the partition function with the best path excluded. Moreover, because they search the outermost entities first, performing the second-best path search only on the spans of extracted entities is sufficient, since inner entities can only exist within outer entities.\nHowever, we claim that the target path at the next level is neither necessary nor likely to be the second-best path at the current level. Instead, those paths sharing many overlapping labels with the current best path are likely to be the second-best path. Besides, Shibuya and Hovy (2020) reuse the same potential function at all higher levels. Thus, even though they exclude the best path, the influence of the best path is still preserved, since the emission scores of labels on the best path are used in the next level recognition. Moreover, these best path labels are treated as the target labels at the current level. However, if they are not on the best path of the next level, they will be treated as non-target labels at the next level, hence these adversarial optimization goals eventually hurt performance.\nIn this paper, we use a different potential function at each level to solve this issue. We propose to achieve this by introducing an encoder that pro-\nduces a set of hidden states at each time step. At each level, we select some hidden states for entity recognition, then, remove these hidden states which have interaction with the best path labels before moving to the next level. In this way, the emission scores of these best path labels are completely different, so we can explicitly exclude the influence of the best path. Furthermore, we also propose three different selection strategies for fully leveraging information among hidden states.\nBesides, Shibuya and Hovy (2020) proposed to recognize entities from outermost to inner. We empirically demonstrate that extracting the innermost entities first results in better performance. This may due to the fact that some long entities do not contain any inner entity, so using outermostfirst encoding mixes these entities with other short entities at the same levels, therefore leading encoder representations to be dislocated. In this paper, we convert entities to the IOBES encoding scheme (Ramshaw and Marcus, 1995), and solve nested NER through applying CRF level by level.\nOur contributions are considered as fourfold, (a) we design a novel nested NER algorithm to explicitly exclude the influence of the best path through using a different potential function at each level, (b) we propose three different selection strategies for fully utilizing information among hidden states, (c) we empirically demonstrate that recognizing entities from innermost to outer results in better performance, (d) and we provide extensive experimental results to demonstrate the effectiveness and efficiency of our proposed method on the ACE2004, ACE2005, and GENIA datasets."
+    }, {
+      "heading" : "2 Proposed Method",
+      "text" : "Named entities recognition task aims to recognize entities in a given sequence {xt}nt=1. For nested NER some shorter entities may be nested within longer entities, while for flat NER there is no such case. Existing algorithms solve flat NER by applying a sequential labeling method, which assigns each token a label yt ∈ Y to determine the span and category of each entity and non-entity simultaneously. To solve nested NER, we follow the previous layered method and extend this sequential labeling method with a multi-level encoding scheme. In this encoding scheme, entities are divided into several levels according to their depths, we apply the sequential labeling method level by level to recognize all entities."
+    }, {
+      "heading" : "2.1 Encoding Schemes",
+      "text" : "Shibuya and Hovy (2020) proposed to recognize the outermost entities first and recursively detect the nested inner entities. However, we find that detecting from the innermost entities results in better performance. We take the sentence in Figure 1 as an example to illustrate the details of these two encoding schemes. The results of the outermost-first encoding scheme look as follows.\n(level 1) B-PER I-PER I-PER I-PER E-PER (level 2) B-ROLE I-ROLE E-ROLE B-PER E-PER (level 3) O B-ROLE E-ROLE O O (level 4) O S-ORG S-ROLE O O (level 5) O O O O O (level 6) O O O O O\nLabels B-, I-, E- indicate the current word is the beginning, the intermediate, and the end of an entity, respectively. Label S- means this is a single word entity, and label O stands for nonentity word. For example, the outermost entity “Former Hogwarts headmaster Albus Dumbledore” appears at the first level, while innermost entities “Hogwarts” and “headmaster” appear at the fourth level. Since there exists no deeper nested entity, the remaining levels contain only label O.\nIn contrast, the innermost-first encoding scheme converts the same example to the following label sequences.\n(level 1) O S-ORG S-ROLE B-PER E-PER (level 2) O B-ROLE E-ROLE O O (level 3) B-ROLE I-ROLE E-ROLE O O (level 4) B-PER I-PER I-PER I-PER E-PER (level 5) O O O O O (level 6) O O O O O\nIn this encoding scheme, innermost entities “Hogwarts”, “headmaster”, and “Albus Dumbledore” appear at the first level. Note that the innermost-first encoding scheme is not the simple reverse of the outermost-first encoding scheme. For example, the entity “Former Hogwarts headmaster” and the entity “Albus Dumbledore” appear at the same level in the outermost-first scheme but they appear at different levels in the innermost-first scheme."
+    }, {
+      "heading" : "2.2 Influence of the Best Path",
+      "text" : "Although the second-best path searching algorithm is proposed as the main contribution of Shibuya and Hovy (2020), we claim that forcing the target path at the next level to be the second-best path at\nthe current level is not optimal. As the innermostfirst encoding example above, the best path at level 3 is B-ROLE,I-ROLE,E-ROLE,O,O. Therefore the second-best path is more likely to be one of those paths that share as many as possible labels with the best path, e.g., B-ROLE,I-ROLE,E-ROLE,O,S-ORG, rather than the actual target label sequence at level 4, i.e., B-PER,I-PER,I-PER,I-PER,E-PER, which does not overlap with the best path at all. In addition, Shibuya and Hovy (2020) reuse the same potential function at all higher levels. This indicates that, for instance, at level 3 and time step 1, their model encourages the dot product of the hidden state and the label embedding h>1 vB-ROLE to be larger than h>1 vB-PER, while at level 4, the remaining influence of the best path reversely forces h>1 vB-PER to be larger than h > 1 vB-ROLE. These adversarial optimization goals eventually hurt performance and result in sub-optimal performance.\nTherefore, the crux of the matter is to introduce different emission scores for different levels. For example, encouraging h3>1 vB-ROLE > h 3> 1 vB-PER at level 3 and encouraging h4>1 vB-PER > h4>1 vB-ROLE at level 4 will not lead to adversarial optimization directions anymore, where h31 and h41 are two distinctive hidden states to be used at levels 3 and 4, respectively.\nTo achieve this goal, we introduce a novel encoder which outputs m hidden states {hlt}ml=1, where m is the number of levels, as an alternative to the conventional encoder which can only output a single hidden state ht ∈ Rdh at each time step. To make a distinction between our m hidden states and the conventional single hidden state, we use the term chunk from now on to refer to these hidden states hlt ∈ Rdh/m. We restrict chunk dimension to\nbe dh/m, so the total number of parameters remain unchanged."
+    }, {
+      "heading" : "2.3 Chunk Selection",
+      "text" : "As we mentioned above, our algorithm maintains a chunk set for each time step, through selecting and removing chunks, to exclude the influence of the best path. Naturally, how to select chunk becomes the next detail to be finalized.\nFor clarity, we use notation Hlt to denote the chunk set at level l, and use Hl to refer to all of these chunk sets at level m across time steps, i.e., {Hlt}nt=1. Because we remove one and only one chunk at each time step, |Hlt|+ l = m+ 1 always holds.\nAn intuitive idea is to follow the original chunk order and simply to select the l-th chunk for level l. At level l, no matter to which label, the emission score is calculated by using hlt. In this way, this naive potential function can be defined as follow,\nφ (ylt−1, y l t,Hlt) = Aylt−1,ylt + h l> t vylt\n(1)\nwhere A ∈ R|Y|×|Y| is the transition matrix, Y is the label set, Aylt−1,ylt indicates the transition score from label ylt−1 to label y l t, and vylt ∈ R\ndh/m is the embedding of label ylt. In this case, the l-th chunk hlt ∈ Hlt is just the chunk which have an interaction with target label, thus should be removed fromHlt.\nHl+1t = Hlt \\ {hlt} (2)\nOne concern of the naive potential function is that it implicitly assumes the outputs of the encoder are automatically arranged in the level order instead of other particular syntactic or semantic order, e.g., the encoder may encodes all LOC related information at the first hd/m dimensions while remaining\nAlgorithm 1: Training input :first level chunk setsH1 input : target label sequences y1, · · · ,ym output :negative log-likelihood L L ← 0 for l = 1 to m do L ← L− log p (y l | Hl) for t = 1 to n do Hl+1t ← Hlt \\ {argmax\nh∈Hlt h>vylt }\nend end\nORG relevant information to the final hd/m dimension. For instance, at level 3 time step 1, naive potential function forces h3>1 vB-ROLE > h 3> 1 vB-PER. But if there exists another chunk, say h51, which is more similar to vB-PER, then directly selecting h51 and forcing h 3> 1 vB-ROLE > h 5> 1 vB-PER is more reasonable. Because it makes training harder than the former one, due to h5>1 vB-PER > h 3> 1 vB-PER. In other words, this selection strategy leads to hσ1>t vy1t > h σ2> t vy2t > . . . > h σm> t vymt , where σl is the index of selected chunk at level l, but for naive potential function, the inequation above does not always hold. From this aspect, our method can also be considered as selecting the best path in the second-best search space.\nTherefore, instead of following the original chunk orders, we propose to let each label yj select the most similar chunk to it to obtain an emission score. We denote this definition as max potential function,\nφ (ylt−1, y l t,Hlt) = Aylt−1,ylt + maxh∈Hlt h>vylt (3)\nIn this case, we update chunk sets by removing these chunks which are selected by the target labels.\nHl+1t = Hlt \\ {argmax h∈Hlt h>vylt } (4)\nFurthermore, since the log-sum-exp operation is a well known differentiable approximation of the max operation, we also introduce it as the third potential function,\nφ (ylt−1, y l t,Hlt) = Aylt−1,ylt + log ∑ h∈Hlt exph>vylt\n(5)\nAlgorithm 2: Decoding input :first level chunk setsH1 output :recognized entity set E E ← ∅ for l = 1 to m do\nŷl ← argmax y′∈Yn p (y′ | Hl) for t = 1 to n do Hl+1t ← Hlt \\ {argmax\nh∈Hlt h>vŷlt }\nend E ← E ⋃ label-to-entity (ŷl)\nend\nThe chunk set is updated in the same way as Equation 4. We refer to this potential function definition as logsumexp in the rest of this paper."
+    }, {
+      "heading" : "2.4 Embedding Layer",
+      "text" : "Following previous work (Shibuya and Hovy, 2020), we convert words to word embeddings wt ∈ Rdw and employ a character-level bidirectional LSTM to obtain character-based word embeddings ct ∈ Rdc . The concatenation of them is fed into the encoding layer as the token representation xt = [wt, ct] ∈ Rdx ."
+    }, {
+      "heading" : "2.5 Encoding Layer",
+      "text" : "We employ a three-layered bidirectional LSTM to encode sentences and leverage contextual information,\n{ht}nt=1 = LSTM({xt}nt=1) (6)\nwhere ht ∈ Rdh is the hidden state. In contrast to the encoders of previous work, which can only output single hidden states at each time step, we split ht into m chunks,\n[h1t , . . . ,h m t ] = ht (7)\nwhere hjt ∈ Rdh/m, and use them as the first level chunk set, i.e.,H1t = {h j t}mj=1, to start recognition."
+    }, {
+      "heading" : "2.6 Decoding Layer",
+      "text" : "At each level, we run a shared conventional CRF with its corresponding potential function φ (ylt−1, y l t,Hlt) and update the chunk sets until finishing all m levels. On the training stage, we remove chunks according to the selections of the target labels, while on the decoding stage, it depends on the selections of the predicted labels."
+    }, {
+      "heading" : "2.7 Training and Decoding",
+      "text" : "Following the definition of CRF, the conditional probabilistic function of a given label sequence at l-th level, i.e., yl = {ylt}nt=1, can be defined as,\np (y l | Hl) = 1 Z(Hl) exp n∑ t=1 φ (ylt−1, y l t,Hlt)\n(8)\nZ(Hl) = ∑\ny′∈Yn exp n∑ t=1 φ (y′lt−1, y ′l t ,Hlt) (9)\nwhere Z(Hl) is the sum of all paths’ scores and is commonly known as the partition function.\nWe optimize our model by minimizing the sum of the negative log-likelihoods of all levels.\nL = − m∑ l=1 log p (y l | Hl) (10)\nOn the decoding stage, we iteratively apply the Viterbi algorithm (Forney, 1973) at each level to search the most probable label sequences.\nŷl = argmax y′∈Yn p (y′ | Hl) (11)\nThe pseudocodes of the training and the decoding algorithms with max or logsumexp potential function can be found in Algorithms 1 and 2, respectively."
+    }, {
+      "heading" : "3 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Datasets",
+      "text" : "We conduct experiments on three nested named entity recognition datasets in English, i.e., ACE2004 (Doddington et al., 2004), ACE2005 (Walker et al., 2006) and GENIA (Kim et al., 2003). We divide all these datasets into tran/dev/test split by following Shibuya and Hovy (2020) and Wang et al. (2020). The dataset statistics can be found in Table 1."
+    }, {
+      "heading" : "3.2 Hyper-parameters Settings",
+      "text" : "For word embeddings initialization, we utilize 100- dimensional pre-trained GloVe (Pennington et al., 2014) for the ACE2004 and the ACE2005 datasets, and use 200-dimensional biomedical domain word embeddings1 (Chiu et al., 2016) for the GENIA dataset. Moreover, we randomly initialize 30- dimensional vectors for character embeddings. The hidden state dimension of character-level LSTM dc is 100, i.e., 50 in each direction, thus the dimension of token representation dx is 200. We apply dropout (Srivastava et al., 2014) on token representations before feeding it into the encoder.\nThe hidden state dimension of the three-layered LSTM is 600 for ACE2004 and ACE2005, i.e., 300 in each direction, and 400 for GENIA. Choosing a different dimension is because the maximal depth of entity nesting m is different. We apply layer normalization (Ba et al., 2016) and dropout with 0.5 ratio after each bidirectional LSTM layer.\nDifferent from Shibuya and Hovy (2020), we use only one CRF instead of employing different CRFs for different entity types. Besides, our CRF is also shared across levels, which means we learn and decode entities at all levels with the same CRF.\nOur model is optimized by using stochastic gradient descent (SGD), with a decaying learning rate ητ = η0/(1 + γ · τ), where τ is the index of the current epoch. For ACE2004, ACE2005, and GENIA, the initial learning rates η0 are 0.2, 0.2, and 0.1, and the decay rates γ are 0.01, 0.02, and 0.02 respectively. We set the weight decay rate, the momentum, the batch size, and the number of epochs to be 10−8, 0.5, 32, and 100 respectively, especially we use batch size 64 on the GENIA dataset. We clip the gradient exceeding 5.\nBesides, we also conduct experiments to evaluate the performance of our model with contextual word representations. BERT (Devlin et al., 2019) and Flair (Akbik et al., 2018) are the most commonly used contextual word representations in previous work, and have also been proved that they can substantially improve the model performance. In these settings, contextual word representations are concatenated with word and character representations to form the token representations, i.e., xt = [wt, ct, et], where et is the contextual word representation and it is not fine-tuned in any of our experiments.\n1https://github.com/cambridgeltl/ BioNLP-2016\nBERT is a transformer-based (Vaswani et al., 2017) pre-trained contextual word representation. In our experiments, for the ACE2004 and ACE2005 datasets we use the general domain checkpoint bert-large-uncased, and for the GENIA dataset we use the biomedical domain checkpoint BioBERT large v1.1 2 (Lee et al., 2019). We average all BERT subword embeddings in the last four layers to build 1024-dimensional vectors.\nFlair is a character-level BiLSTM-based pretrained contextual word representation. We concatenate these vectors obtained from the news-forward and news-backward checkpoints for ACE2004 and ACE2005, and use the pubmed-forward and pubmed-backward checkpoints for GENIA, to build 4096-dimensional vectors."
+    }, {
+      "heading" : "3.3 Evaluation",
+      "text" : "Experiments are all evaluated by precision, recall, and F1. All of our experiments were run 4 times\n2https://github.com/naver/ biobert-pretrained\nwith different random seeds and averaged scores are reported in the following tables.\nOur model 3 is implemented with PyTorch (Paszke et al., 2019) and we run experiments on GeForce GTX 1080Ti with 11 GB memory."
+    }, {
+      "heading" : "3.4 Experimental Results",
+      "text" : "Table 2 shows the performance of previous work and our model on the ACE2004, ACE2005, and GENIA datasets. Our model substantially outperforms most of the previous work, especially when comparing with our baseline Shibuya and Hovy (2020). When using only word embeddings and character-based word embeddings our method exceeds theirs by 2.64 F1 score, and also achieves comparable results with the recent competitive method (Wang et al., 2020). In the case of utilizing BERT and further employing Flair, our method consistently outperforms Shibuya and Hovy (2020) by 1.09 and 0.60 by F1 scores, respectively.\nOn the ACE2005 dataset, our method improves the F1 scores by 1.98, 0.72, and 0.59 respectively, comparing with Shibuya and Hovy (2020). Although our model performance is inferior to Wang\n3https://github.com/speedcell4/nersted\net al. (2020) at general, our max potential function method is slightly superior to them by 0.05 in F1 score when employing BERT.\nFurthermore, on the biomedical domain dataset GENIA, our method constantly outperforms Shibuya and Hovy (2020) by 0.18, 1.62, and 1.57 in F1 score, respectively. Although the low scores of Shibuya and Hovy (2020) are due to their usage of the general domain checkpoint bert-large-uncased, instead of our biomedical domain checkpoint, our model is still superior to Straková et al. (2019) by 0.47 and 0.62 in F1 scores, who used the same checkpoint as us.\nAs for these three potential functions, we notice the max and logsumexp potential functions generally works better than the naive potential function. These results demonstrate that the chunk selection strategy of the max and logsumexp can leverage information from all remaining chunks and constrains hidden states of LSTM to be more semantically ordered. When we use BERT and Flair, the advantage of the max and the logsumexp potential function is less obvious compared with the case when we only use word embeddings and characterbased word embeddings, especially on the GENIA dataset. We hypothesize that BERT and Flair can provide rich contextual information, then selecting chunks in the original order is sufficient, thus our dynamic selecting mechanism can only slightly improve the model performance."
+    }, {
+      "heading" : "3.5 Influence of the Encoding Scheme",
+      "text" : "We also conduct experiments on the ACE2004 dataset to measure the influence of the outermostfirst and innermost-first encoding schemes. As shown in Table 3, the innermost-first encoding scheme consistently works better than the outermost-first encoding scheme with all potential functions. We hypothesize that outermost entities do not necessarily contain inner entities especially for longer ones, and that putting those diversely\nnested outermost entities at the same level would dislocate the encoding representation. Furthermore, even if we use the outermost-first encoding scheme, our method is superior to Shibuya and Hovy (2020), which further demonstrates the effectiveness of excluding the influence of the best path."
+    }, {
+      "heading" : "3.6 Time Complexity and Speed",
+      "text" : "The time complexity of encoder is O (n), and because we employ the same tree reduction acceleration trick4 as Rush (2020), the time complexity of CRF is reduced to O (log n), therefore the overall time complexity is O (n+m · log n).\nEven our model outperforms slightly worse than Wang et al. (2020), the training and inference speed of our model is much faster than them, as shown in Table 4, since we do not need to stack the decoding component to 16 layers. Especially, when we increase the batch size to 64, the decoding speed is more than two times faster than their model."
+    }, {
+      "heading" : "3.7 Level-wise Performance",
+      "text" : "We display the performance on the dataset ACE2005 at each level, as in Table 5. The max potential function at the first three levels achieves constantly higher precision scores than the naive and logsumexp potential functions, while at the same time obtains the lowest recall scores. The logsumexp potential function on the contrary achieves the highest recall scores but fails to obtain satisfactory precision scores. Because most entities are located at the first two levels, the max and logsumexp achieves the best overall precision and recall scores, respectively."
+    }, {
+      "heading" : "3.8 Chunk Distribution",
+      "text" : "We analyze the chunk distribution on the test split of the dataset ACE2005 by plotting the heat maps\n4https://github.com/speedcell4/ torchlatent\nin Figure 3, in which these numbers indicate the percentages of each chunk being selected by a particular level or label. For example, the 35 at the upper-right corner means when using logsumexp potential function, 35% of predictions at the first level are made by choosing the sixth chunk, while the 78 at the lower-left corner shows 78% of WEA are related to the first chunk with naive. To make it easier to compare with the naive, we arranged the chunk orders of max and logsumexp, without losing generality, to make the level-chunk distribution mainly concentrate on the diagonal.\nThe naive potential function simply selects the l-th chunk at l-th level, therefore the heat map is\njust diagonal. At the first level, the logsumexp potential function also prefers to select the sixth and the fourth chunks rather than the first chunk, we hypothesis this is due to most of B- and S- labels are located on the first level, and this can be confirmed according to the syntactic-chunk heat map of logsumexp where 78% B- and 70% S- labels go to the sixth and fourth chunks. Similarly, max also has a high probability to select the second chunk.\nGenerally, the chunk distribution of logsumexp is more smooth than max. Besides, we find label O almost uniformly select chunks, in both the syntactic and semantic heat maps, while other meaningful labels have their distinguished preferences.\nSyntactic labels S- and B- mainly represent the beginning of an entity, while I- and E- stands for the continuation and ending of an entity. In the syntactic-chunk heat map of naive, they are indiscriminately distributed to the first chunk, because most of the entities are located on the first level. However, max and logsumexp utilize different chunks to represents these different syntactic categories.\nLikewise, the semantic label GPE, when using logsumexp, also has a 61% probability to select the sixth chunks other than concentrating on the first\nchunk as naive. These observations further demonstrate our dynamic chunk selection strategies are capable of learning more meaningful representations."
+    }, {
+      "heading" : "4 Related Work",
+      "text" : "Existing NER algorithms commonly employ various neural networks to leverage more morphological and contextual information to improve performance. For example, to handle the out-ofvocabulary issue through introducing morphological features, Huang et al. (2015) proposed to employ manual spelling feature, while Ma and Hovy (2016) and Lample et al. (2016) suggested introducing CNN and LSTM to build word representations from character-level. Zhang et al. (2018) and Chen et al. (2019) introduced global representation to enhance encoder capability of encoding contextual information.\nLayered Model As a layered model, Ju et al. (2018) dynamically update span-level representations for next layer recognition according to recognized inner entities. Fisher and Vlachos (2019) proposed a merge and label method to enhance this idea further. Recently, Shibuya and Hovy (2020) designed a novel algorithm to efficiently learn and decode the second-best path on the span of detected entities. Luo and Zhao (2020) build two different graphs, one is the original token sequence, and the other is the tokens in recognized entities, to model the interaction among them. Wang et al. (2020) proposed to learn the l-gram representations at layer l through applying a decoder component to reduce a sentence layer by layer and to directly classify these l-gram spans.\nRegion-based Model Lin et al. (2019) proposed an anchor-region network to recognize nested entities through detecting anchor words and entity boundaries first, and then classify each detected span. Exhaustive models simply enumerate all possible spans and utilize a maximum entropy tagger (Byrne, 2007) and neural networks (Xu et al., 2017; Sohrab and Miwa, 2018; Zheng et al., 2019) for classification. Luan et al. (2019) additionally aims to consider the relationship among entities and proposed a novel method to jointly learn both entities and relations.\nHypergraph-based Model Lu and Roth (2015) proposed a hyper-graph structure, in which edges are connected to multiple nodes to represents\nnested entities. Muis and Lu (2017) and Wang and Lu (2018) resolved spurious structures and ambiguous issue of hyper-graph structure. And Katiyar and Cardie (2018) proposed another kind of hyper-graph structure.\nParsing-based Model Finkel and Manning (2009) indicated all these nested entities are located in some non-terminal nodes of the constituency parses of the original sentences, thus they proposed to use a CRF-based constituency parser to obtain them. However, the cubic time complexity limits its applicability. Wang et al. (2018) instead proposed to use a transition-based constituency parser to incrementally build constituency forest, its linear time complexity ensures it can handle longer sentences."
+    }, {
+      "heading" : "5 Conclusion",
+      "text" : "In this paper, we proposed a simple and effective method for nested named entity recognition by explicitly excluding the influence of the best path through selecting and removing chunks at each level to build different potential functions. We also proposed three different selection strategies to leverage information from all remaining chunks. Besides, we found the innermost-first encoding scheme works better than the conventional outermost-first encoding scheme. Extensive experimental results demonstrate the effectiveness and efficiency of our method. However, one of the demerits of our method is the number of chunks, i.e., the maximal depth of entity nesting, must be chosen in advance as a hyper-parameter. We will extend it to arbitrary depths as future work."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "This work was partly supported by JST CREST Grant Number JPMJCR1513. The authors would like to thank the anonymous reviewers for their instructive comments."
+    } ],
+    "references" : [ {
+      "title" : "Contextual string embeddings for sequence labeling",
+      "author" : [ "Alan Akbik", "Duncan Blythe", "Roland Vollgraf." ],
+      "venue" : "Proceedings of the 27th International Conference on Computational Linguistics, pages 1638–1649, Santa Fe, New Mexico, USA. Associ-",
+      "citeRegEx" : "Akbik et al\\.,? 2018",
+      "shortCiteRegEx" : "Akbik et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Layer normalization",
+      "author" : [ "Jimmy Lei Ba", "Jamie Ryan Kiros", "Geoffrey E Hinton." ],
+      "venue" : "arXiv preprint arXiv:1607.06450.",
+      "citeRegEx" : "Ba et al\\.,? 2016",
+      "shortCiteRegEx" : "Ba et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Nested named entity recognition in historical archive text",
+      "author" : [ "K. Byrne." ],
+      "venue" : "International Conference on Semantic Computing (ICSC 2007), pages 589– 596.",
+      "citeRegEx" : "Byrne.,? 2007",
+      "shortCiteRegEx" : "Byrne.",
+      "year" : 2007
+    }, {
+      "title" : "GRN: Gated relation network to enhance convolutional neural network for named entity recognition",
+      "author" : [ "Hui Chen", "Zijia Lin", "Guiguang Ding", "Jianguang Lou", "Yusen Zhang", "Borje Karlsson." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intel-",
+      "citeRegEx" : "Chen et al\\.,? 2019",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "How to train good word embeddings for biomedical NLP",
+      "author" : [ "Billy Chiu", "Gamal Crichton", "Anna Korhonen", "Sampo Pyysalo." ],
+      "venue" : "Proceedings of the 15th Workshop on Biomedical Natural Language Processing, pages 166–174, Berlin, Germany. Asso-",
+      "citeRegEx" : "Chiu et al\\.,? 2016",
+      "shortCiteRegEx" : "Chiu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The automatic content extraction (ACE) program – tasks, data, and evaluation",
+      "author" : [ "George Doddington", "Alexis Mitchell", "Mark Przybocki", "Lance Ramshaw", "Stephanie Strassel", "Ralph Weischedel." ],
+      "venue" : "Proceedings of the Fourth International Conference",
+      "citeRegEx" : "Doddington et al\\.,? 2004",
+      "shortCiteRegEx" : "Doddington et al\\.",
+      "year" : 2004
+    }, {
+      "title" : "Nested named entity recognition",
+      "author" : [ "Jenny Rose Finkel", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2009 Conference on Empirical Methods in Natural Language Processing, pages 141–150, Singapore. Association for Computational Linguistics.",
+      "citeRegEx" : "Finkel and Manning.,? 2009",
+      "shortCiteRegEx" : "Finkel and Manning.",
+      "year" : 2009
+    }, {
+      "title" : "Merge and label: A novel neural network architecture for nested NER",
+      "author" : [ "Joseph Fisher", "Andreas Vlachos." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 5840–5850, Florence, Italy. Association",
+      "citeRegEx" : "Fisher and Vlachos.,? 2019",
+      "shortCiteRegEx" : "Fisher and Vlachos.",
+      "year" : 2019
+    }, {
+      "title" : "The viterbi algorithm",
+      "author" : [ "G David Forney." ],
+      "venue" : "Proceedings of the IEEE, 61(3):268–278.",
+      "citeRegEx" : "Forney.,? 1973",
+      "shortCiteRegEx" : "Forney.",
+      "year" : 1973
+    }, {
+      "title" : "Bidirectional LSTM-CRF models for sequence tagging",
+      "author" : [ "Zhiheng Huang", "Wei Xu", "Kai Yu." ],
+      "venue" : "CoRR, abs/1508.01991.",
+      "citeRegEx" : "Huang et al\\.,? 2015",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "A neural layered model for nested named entity recognition",
+      "author" : [ "Meizhi Ju", "Makoto Miwa", "Sophia Ananiadou." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Lan-",
+      "citeRegEx" : "Ju et al\\.,? 2018",
+      "shortCiteRegEx" : "Ju et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Nested named entity recognition revisited",
+      "author" : [ "Arzoo Katiyar", "Claire Cardie." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long Pa-",
+      "citeRegEx" : "Katiyar and Cardie.,? 2018",
+      "shortCiteRegEx" : "Katiyar and Cardie.",
+      "year" : 2018
+    }, {
+      "title" : "GENIA corpus—a semantically annotated corpus for bio-textmining",
+      "author" : [ "J.-D. Kim", "T. Ohta", "Y. Tateisi", "J. Tsujii." ],
+      "venue" : "Bioinformatics, 19:i180–i182.",
+      "citeRegEx" : "Kim et al\\.,? 2003",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2003
+    }, {
+      "title" : "Conditional random fields: Probabilistic models for segmenting and labeling sequence data",
+      "author" : [ "John D. Lafferty", "Andrew McCallum", "Fernando C.N. Pereira." ],
+      "venue" : "Proceedings of the Eighteenth International Conference on Machine Learning, ICML",
+      "citeRegEx" : "Lafferty et al\\.,? 2001",
+      "shortCiteRegEx" : "Lafferty et al\\.",
+      "year" : 2001
+    }, {
+      "title" : "Neural architectures for named entity recognition",
+      "author" : [ "Guillaume Lample", "Miguel Ballesteros", "Sandeep Subramanian", "Kazuya Kawakami", "Chris Dyer." ],
+      "venue" : "Proceedings of the 2016 Conference of the North American Chapter of the Association for Computa-",
+      "citeRegEx" : "Lample et al\\.,? 2016",
+      "shortCiteRegEx" : "Lample et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Biobert: a pre-trained biomedical language representation model for biomedical text mining",
+      "author" : [ "Jinhyuk Lee", "Wonjin Yoon", "Sungdong Kim", "Donghyeon Kim", "Sunkyu Kim", "Chan Ho So", "Jaewoo Kang." ],
+      "venue" : "CoRR, abs/1901.08746.",
+      "citeRegEx" : "Lee et al\\.,? 2019",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Sequence-to-nuggets: Nested entity mention detection via anchor-region networks",
+      "author" : [ "Hongyu Lin", "Yaojie Lu", "Xianpei Han", "Le Sun." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 5182–5192,",
+      "citeRegEx" : "Lin et al\\.,? 2019",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Joint mention extraction and classification with mention hypergraphs",
+      "author" : [ "Wei Lu", "Dan Roth." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 857–867, Lisbon, Portugal. Association for Compu-",
+      "citeRegEx" : "Lu and Roth.,? 2015",
+      "shortCiteRegEx" : "Lu and Roth.",
+      "year" : 2015
+    }, {
+      "title" : "A general framework for information extraction using dynamic span graphs",
+      "author" : [ "Yi Luan", "Dave Wadden", "Luheng He", "Amy Shah", "Mari Ostendorf", "Hannaneh Hajishirzi." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the",
+      "citeRegEx" : "Luan et al\\.,? 2019",
+      "shortCiteRegEx" : "Luan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Bipartite flat-graph network for nested named entity recognition",
+      "author" : [ "Ying Luo", "Hai Zhao." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 6408– 6418, Online. Association for Computational Lin-",
+      "citeRegEx" : "Luo and Zhao.,? 2020",
+      "shortCiteRegEx" : "Luo and Zhao.",
+      "year" : 2020
+    }, {
+      "title" : "End-to-end sequence labeling via bi-directional LSTM-CNNsCRF",
+      "author" : [ "Xuezhe Ma", "Eduard Hovy." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1064–1074, Berlin, Ger-",
+      "citeRegEx" : "Ma and Hovy.,? 2016",
+      "shortCiteRegEx" : "Ma and Hovy.",
+      "year" : 2016
+    }, {
+      "title" : "Labeling gaps between words: Recognizing overlapping mentions with mention separators",
+      "author" : [ "Aldrian Obaja Muis", "Wei Lu." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 2608–2618, Copenhagen,",
+      "citeRegEx" : "Muis and Lu.,? 2017",
+      "shortCiteRegEx" : "Muis and Lu.",
+      "year" : 2017
+    }, {
+      "title" : "Pytorch: An imperative style, high-performance deep learning library",
+      "author" : [ "jani", "Sasank Chilamkurthy", "Benoit Steiner", "Lu Fang", "Junjie Bai", "Soumith Chintala" ],
+      "venue" : null,
+      "citeRegEx" : "jani et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "jani et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "GloVe: Global vectors for word representation",
+      "author" : [ "Jeffrey Pennington", "Richard Socher", "Christopher Manning." ],
+      "venue" : "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1532–1543, Doha,",
+      "citeRegEx" : "Pennington et al\\.,? 2014",
+      "shortCiteRegEx" : "Pennington et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Text chunking using transformation-based learning",
+      "author" : [ "Lance Ramshaw", "Mitch Marcus." ],
+      "venue" : "Third Workshop on Very Large Corpora.",
+      "citeRegEx" : "Ramshaw and Marcus.,? 1995",
+      "shortCiteRegEx" : "Ramshaw and Marcus.",
+      "year" : 1995
+    }, {
+      "title" : "Torch-struct: Deep structured prediction library",
+      "author" : [ "Alexander Rush." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics: System Demonstrations, pages 335– 342, Online. Association for Computational Linguis-",
+      "citeRegEx" : "Rush.,? 2020",
+      "shortCiteRegEx" : "Rush.",
+      "year" : 2020
+    }, {
+      "title" : "Nested named entity recognition via second-best sequence learning and decoding",
+      "author" : [ "Takashi Shibuya", "Eduard Hovy." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 8:605–620.",
+      "citeRegEx" : "Shibuya and Hovy.,? 2020",
+      "shortCiteRegEx" : "Shibuya and Hovy.",
+      "year" : 2020
+    }, {
+      "title" : "Deep exhaustive model for nested named entity recognition",
+      "author" : [ "Mohammad Golam Sohrab", "Makoto Miwa." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 2843–2849, Brussels, Belgium. Associa-",
+      "citeRegEx" : "Sohrab and Miwa.,? 2018",
+      "shortCiteRegEx" : "Sohrab and Miwa.",
+      "year" : 2018
+    }, {
+      "title" : "Dropout: A simple way to prevent neural networks from overfitting",
+      "author" : [ "Nitish Srivastava", "Geoffrey Hinton", "Alex Krizhevsky", "Ilya Sutskever", "Ruslan Salakhutdinov." ],
+      "venue" : "Journal of Machine Learning Research, 15(56):1929–1958.",
+      "citeRegEx" : "Srivastava et al\\.,? 2014",
+      "shortCiteRegEx" : "Srivastava et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Neural architectures for nested NER through linearization",
+      "author" : [ "Jana Straková", "Milan Straka", "Jan Hajic." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 5326–5331, Florence, Italy. Association for",
+      "citeRegEx" : "Straková et al\\.,? 2019",
+      "shortCiteRegEx" : "Straková et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Ł ukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "I. Guyon, U. V. Luxburg, S. Bengio, H. Wallach, R. Fergus, S. Vishwanathan, and R. Gar-",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Ace 2005 multilingual training corpus",
+      "author" : [ "Christopher Walker", "Stephanie Strassel", "Julie Medero", "Kazuaki Maeda." ],
+      "venue" : "Linguistic Data Consortium, Philadelphia, 57:45.",
+      "citeRegEx" : "Walker et al\\.,? 2006",
+      "shortCiteRegEx" : "Walker et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "Neural segmental hypergraphs for overlapping mention recognition",
+      "author" : [ "Bailin Wang", "Wei Lu." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 204–214, Brussels, Belgium. Association for Com-",
+      "citeRegEx" : "Wang and Lu.,? 2018",
+      "shortCiteRegEx" : "Wang and Lu.",
+      "year" : 2018
+    }, {
+      "title" : "A neural transition-based model for nested mention recognition",
+      "author" : [ "Bailin Wang", "Wei Lu", "Yu Wang", "Hongxia Jin." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 1011–1017, Brussels, Belgium. Associa-",
+      "citeRegEx" : "Wang et al\\.,? 2018",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Pyramid: A layered model for nested named entity recognition",
+      "author" : [ "Jue Wang", "Lidan Shou", "Ke Chen", "Gang Chen." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 5918–5928, Online. Association for",
+      "citeRegEx" : "Wang et al\\.,? 2020",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A local detection approach for named entity recognition and mention detection",
+      "author" : [ "Mingbin Xu", "Hui Jiang", "Sedtawut Watcharawittayakul." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long",
+      "citeRegEx" : "Xu et al\\.,? 2017",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Sentencestate LSTM for text representation",
+      "author" : [ "Yue Zhang", "Qi Liu", "Linfeng Song." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 317–327, Melbourne, Australia. Association",
+      "citeRegEx" : "Zhang et al\\.,? 2018",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A boundary-aware neural model for nested named entity recognition",
+      "author" : [ "Changmeng Zheng", "Yi Cai", "Jingyun Xu", "Ho-fung Leung", "Guandong Xu." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Zheng et al\\.,? 2019",
+      "shortCiteRegEx" : "Zheng et al\\.",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 10,
+      "context" : "Early research (Huang et al., 2015; Ma and Hovy, 2016; Lample et al., 2016) proposed to employ deep learning methods and obtained significant performance improvements.",
+      "startOffset" : 15,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 21,
+      "context" : "Early research (Huang et al., 2015; Ma and Hovy, 2016; Lample et al., 2016) proposed to employ deep learning methods and obtained significant performance improvements.",
+      "startOffset" : 15,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 15,
+      "context" : "Early research (Huang et al., 2015; Ma and Hovy, 2016; Lample et al., 2016) proposed to employ deep learning methods and obtained significant performance improvements.",
+      "startOffset" : 15,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 8,
+      "context" : "Recently, a large number of papers proposed novel methods (Fisher and Vlachos, 2019; Wang et al., 2020) for the nested NER task.",
+      "startOffset" : 58,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 35,
+      "context" : "Recently, a large number of papers proposed novel methods (Fisher and Vlachos, 2019; Wang et al., 2020) for the nested NER task.",
+      "startOffset" : 58,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 8,
+      "context" : "Recently, a large number of papers proposed novel methods (Fisher and Vlachos, 2019; Wang et al., 2020) for the nested NER task. Among them, layered methods solve this task through multi-level sequential labeling, in which entities are divided into several levels, where the term level indicates the depth of entity nesting, and sequential labeling is performed repeatedly. As a special case of layered method, Shibuya and Hovy (2020) force the",
+      "startOffset" : 59,
+      "endOffset" : 435
+    }, {
+      "referenceID" : 14,
+      "context" : "Hence, their algorithm can repeatedly detect inner entities through applying a conventional conditional random field (CRF) (Lafferty et al., 2001) and then exclude the obtained best paths from the search space.",
+      "startOffset" : 123,
+      "endOffset" : 146
+    }, {
+      "referenceID" : 27,
+      "context" : "Besides, Shibuya and Hovy (2020) reuse the same potential function at all higher levels.",
+      "startOffset" : 9,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 25,
+      "context" : "In this paper, we convert entities to the IOBES encoding scheme (Ramshaw and Marcus, 1995), and solve nested NER through applying CRF level by level.",
+      "startOffset" : 64,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 26,
+      "context" : "Besides, Shibuya and Hovy (2020) proposed to recognize entities from outermost to inner.",
+      "startOffset" : 9,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 27,
+      "context" : "Although the second-best path searching algorithm is proposed as the main contribution of Shibuya and Hovy (2020), we claim that forcing the target path at the next level to be the second-best path at",
+      "startOffset" : 90,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 27,
+      "context" : "In addition, Shibuya and Hovy (2020) reuse the same potential function at all higher levels.",
+      "startOffset" : 13,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 27,
+      "context" : "Following previous work (Shibuya and Hovy, 2020), we convert words to word embeddings wt ∈ Rdw and employ a character-level bidirectional LSTM to obtain character-based word embeddings ct ∈ Rdc .",
+      "startOffset" : 24,
+      "endOffset" : 48
+    }, {
+      "referenceID" : 9,
+      "context" : "On the decoding stage, we iteratively apply the Viterbi algorithm (Forney, 1973) at each level to search the most probable label sequences.",
+      "startOffset" : 66,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 32,
+      "context" : ", 2004), ACE2005 (Walker et al., 2006) and GENIA (Kim et al.",
+      "startOffset" : 17,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 6,
+      "context" : ", ACE2004 (Doddington et al., 2004), ACE2005 (Walker et al., 2006) and GENIA (Kim et al., 2003). We divide all these datasets into tran/dev/test split by following Shibuya and Hovy (2020) and Wang et al. (2020). The dataset statistics can be found in Table 1.",
+      "startOffset" : 11,
+      "endOffset" : 211
+    }, {
+      "referenceID" : 24,
+      "context" : "For word embeddings initialization, we utilize 100dimensional pre-trained GloVe (Pennington et al., 2014) for the ACE2004 and the ACE2005 datasets, and use 200-dimensional biomedical domain word embeddings1 (Chiu et al.",
+      "startOffset" : 80,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2014) for the ACE2004 and the ACE2005 datasets, and use 200-dimensional biomedical domain word embeddings1 (Chiu et al., 2016) for the GENIA dataset.",
+      "startOffset" : 109,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 29,
+      "context" : "We apply dropout (Srivastava et al., 2014) on token representations before feeding it into the encoder.",
+      "startOffset" : 17,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 1,
+      "context" : "We apply layer normalization (Ba et al., 2016) and dropout with 0.",
+      "startOffset" : 29,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2019) and Flair (Akbik et al., 2018) are the most commonly used contextual word representations in previous work, and have also been proved that they can substantially improve the model performance.",
+      "startOffset" : 18,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 0,
+      "context" : "We apply layer normalization (Ba et al., 2016) and dropout with 0.5 ratio after each bidirectional LSTM layer. Different from Shibuya and Hovy (2020), we use only one CRF instead of employing different CRFs for different entity types.",
+      "startOffset" : 30,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 31,
+      "context" : "BERT is a transformer-based (Vaswani et al., 2017) pre-trained contextual word representation.",
+      "startOffset" : 28,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 35,
+      "context" : "64 F1 score, and also achieves comparable results with the recent competitive method (Wang et al., 2020).",
+      "startOffset" : 85,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 27,
+      "context" : "Our model substantially outperforms most of the previous work, especially when comparing with our baseline Shibuya and Hovy (2020). When using only word embeddings and character-based word embeddings our method exceeds theirs by 2.",
+      "startOffset" : 107,
+      "endOffset" : 131
+    }, {
+      "referenceID" : 27,
+      "context" : "Our model substantially outperforms most of the previous work, especially when comparing with our baseline Shibuya and Hovy (2020). When using only word embeddings and character-based word embeddings our method exceeds theirs by 2.64 F1 score, and also achieves comparable results with the recent competitive method (Wang et al., 2020). In the case of utilizing BERT and further employing Flair, our method consistently outperforms Shibuya and Hovy (2020) by 1.",
+      "startOffset" : 107,
+      "endOffset" : 456
+    }, {
+      "referenceID" : 27,
+      "context" : "Our model substantially outperforms most of the previous work, especially when comparing with our baseline Shibuya and Hovy (2020). When using only word embeddings and character-based word embeddings our method exceeds theirs by 2.64 F1 score, and also achieves comparable results with the recent competitive method (Wang et al., 2020). In the case of utilizing BERT and further employing Flair, our method consistently outperforms Shibuya and Hovy (2020) by 1.09 and 0.60 by F1 scores, respectively. On the ACE2005 dataset, our method improves the F1 scores by 1.98, 0.72, and 0.59 respectively, comparing with Shibuya and Hovy (2020). Although our model performance is inferior to Wang",
+      "startOffset" : 107,
+      "endOffset" : 636
+    }, {
+      "referenceID" : 27,
+      "context" : "Furthermore, on the biomedical domain dataset GENIA, our method constantly outperforms Shibuya and Hovy (2020) by 0.",
+      "startOffset" : 87,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 27,
+      "context" : "Furthermore, on the biomedical domain dataset GENIA, our method constantly outperforms Shibuya and Hovy (2020) by 0.18, 1.62, and 1.57 in F1 score, respectively. Although the low scores of Shibuya and Hovy (2020) are due to their usage of the general domain checkpoint bert-large-uncased, instead of our biomedical domain checkpoint, our model is still superior to Straková et al.",
+      "startOffset" : 87,
+      "endOffset" : 213
+    }, {
+      "referenceID" : 27,
+      "context" : "Furthermore, on the biomedical domain dataset GENIA, our method constantly outperforms Shibuya and Hovy (2020) by 0.18, 1.62, and 1.57 in F1 score, respectively. Although the low scores of Shibuya and Hovy (2020) are due to their usage of the general domain checkpoint bert-large-uncased, instead of our biomedical domain checkpoint, our model is still superior to Straková et al. (2019) by 0.",
+      "startOffset" : 87,
+      "endOffset" : 388
+    }, {
+      "referenceID" : 27,
+      "context" : "Furthermore, even if we use the outermost-first encoding scheme, our method is superior to Shibuya and Hovy (2020), which further demonstrates the effectiveness of excluding the influence of the best path.",
+      "startOffset" : 91,
+      "endOffset" : 115
+    }, {
+      "referenceID" : 26,
+      "context" : "The time complexity of encoder is O (n), and because we employ the same tree reduction acceleration trick4 as Rush (2020), the time complexity of CRF is reduced to O (log n), therefore the overall time complexity is O (n+m · log n).",
+      "startOffset" : 110,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 26,
+      "context" : "The time complexity of encoder is O (n), and because we employ the same tree reduction acceleration trick4 as Rush (2020), the time complexity of CRF is reduced to O (log n), therefore the overall time complexity is O (n+m · log n). Even our model outperforms slightly worse than Wang et al. (2020), the training and inference speed of our model is much faster than them, as shown in Table 4, since we do not need to stack the decoding component to 16 layers.",
+      "startOffset" : 110,
+      "endOffset" : 299
+    }, {
+      "referenceID" : 9,
+      "context" : "For example, to handle the out-ofvocabulary issue through introducing morphological features, Huang et al. (2015) proposed to employ manual spelling feature, while Ma and Hovy (2016) and Lample et al.",
+      "startOffset" : 94,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 9,
+      "context" : "For example, to handle the out-ofvocabulary issue through introducing morphological features, Huang et al. (2015) proposed to employ manual spelling feature, while Ma and Hovy (2016) and Lample et al.",
+      "startOffset" : 94,
+      "endOffset" : 183
+    }, {
+      "referenceID" : 9,
+      "context" : "For example, to handle the out-ofvocabulary issue through introducing morphological features, Huang et al. (2015) proposed to employ manual spelling feature, while Ma and Hovy (2016) and Lample et al. (2016) suggested introducing CNN and LSTM to build word representations from character-level.",
+      "startOffset" : 94,
+      "endOffset" : 208
+    }, {
+      "referenceID" : 9,
+      "context" : "For example, to handle the out-ofvocabulary issue through introducing morphological features, Huang et al. (2015) proposed to employ manual spelling feature, while Ma and Hovy (2016) and Lample et al. (2016) suggested introducing CNN and LSTM to build word representations from character-level. Zhang et al. (2018) and Chen et al.",
+      "startOffset" : 94,
+      "endOffset" : 315
+    }, {
+      "referenceID" : 3,
+      "context" : "(2018) and Chen et al. (2019) introduced global representation to enhance encoder capability of encoding contextual information.",
+      "startOffset" : 11,
+      "endOffset" : 30
+    }, {
+      "referenceID" : 10,
+      "context" : "Layered Model As a layered model, Ju et al. (2018) dynamically update span-level representations for next layer recognition according to recognized inner entities.",
+      "startOffset" : 34,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 8,
+      "context" : "Fisher and Vlachos (2019) proposed a merge and label method to enhance this idea further.",
+      "startOffset" : 0,
+      "endOffset" : 26
+    }, {
+      "referenceID" : 8,
+      "context" : "Fisher and Vlachos (2019) proposed a merge and label method to enhance this idea further. Recently, Shibuya and Hovy (2020) designed a novel algorithm to efficiently learn and decode the second-best path on the span of detected entities.",
+      "startOffset" : 0,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 8,
+      "context" : "Fisher and Vlachos (2019) proposed a merge and label method to enhance this idea further. Recently, Shibuya and Hovy (2020) designed a novel algorithm to efficiently learn and decode the second-best path on the span of detected entities. Luo and Zhao (2020) build two different graphs, one is the original token sequence, and the other is the tokens in recognized entities, to model the interaction among them.",
+      "startOffset" : 0,
+      "endOffset" : 258
+    }, {
+      "referenceID" : 8,
+      "context" : "Fisher and Vlachos (2019) proposed a merge and label method to enhance this idea further. Recently, Shibuya and Hovy (2020) designed a novel algorithm to efficiently learn and decode the second-best path on the span of detected entities. Luo and Zhao (2020) build two different graphs, one is the original token sequence, and the other is the tokens in recognized entities, to model the interaction among them. Wang et al. (2020) proposed to learn the l-gram representations at layer l through applying a decoder component to reduce a sentence layer by layer and to directly classify these l-gram spans.",
+      "startOffset" : 0,
+      "endOffset" : 430
+    }, {
+      "referenceID" : 2,
+      "context" : "Exhaustive models simply enumerate all possible spans and utilize a maximum entropy tagger (Byrne, 2007) and neural networks (Xu et al.",
+      "startOffset" : 91,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 36,
+      "context" : "Exhaustive models simply enumerate all possible spans and utilize a maximum entropy tagger (Byrne, 2007) and neural networks (Xu et al., 2017; Sohrab and Miwa, 2018; Zheng et al., 2019) for classification.",
+      "startOffset" : 125,
+      "endOffset" : 185
+    }, {
+      "referenceID" : 28,
+      "context" : "Exhaustive models simply enumerate all possible spans and utilize a maximum entropy tagger (Byrne, 2007) and neural networks (Xu et al., 2017; Sohrab and Miwa, 2018; Zheng et al., 2019) for classification.",
+      "startOffset" : 125,
+      "endOffset" : 185
+    }, {
+      "referenceID" : 38,
+      "context" : "Exhaustive models simply enumerate all possible spans and utilize a maximum entropy tagger (Byrne, 2007) and neural networks (Xu et al., 2017; Sohrab and Miwa, 2018; Zheng et al., 2019) for classification.",
+      "startOffset" : 125,
+      "endOffset" : 185
+    }, {
+      "referenceID" : 16,
+      "context" : "Region-based Model Lin et al. (2019) proposed an anchor-region network to recognize nested entities through detecting anchor words and entity boundaries first, and then classify each detected span.",
+      "startOffset" : 19,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 2,
+      "context" : "Exhaustive models simply enumerate all possible spans and utilize a maximum entropy tagger (Byrne, 2007) and neural networks (Xu et al., 2017; Sohrab and Miwa, 2018; Zheng et al., 2019) for classification. Luan et al. (2019) additionally aims to consider the relationship among entities and proposed a novel method to jointly learn both entities and relations.",
+      "startOffset" : 92,
+      "endOffset" : 225
+    }, {
+      "referenceID" : 17,
+      "context" : "Hypergraph-based Model Lu and Roth (2015) proposed a hyper-graph structure, in which edges are connected to multiple nodes to represents nested entities.",
+      "startOffset" : 23,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 17,
+      "context" : "Hypergraph-based Model Lu and Roth (2015) proposed a hyper-graph structure, in which edges are connected to multiple nodes to represents nested entities. Muis and Lu (2017) and Wang and Lu (2018) resolved spurious structures and ambiguous issue of hyper-graph structure.",
+      "startOffset" : 23,
+      "endOffset" : 173
+    }, {
+      "referenceID" : 17,
+      "context" : "Hypergraph-based Model Lu and Roth (2015) proposed a hyper-graph structure, in which edges are connected to multiple nodes to represents nested entities. Muis and Lu (2017) and Wang and Lu (2018) resolved spurious structures and ambiguous issue of hyper-graph structure.",
+      "startOffset" : 23,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 12,
+      "context" : "And Katiyar and Cardie (2018) proposed another kind of hyper-graph structure.",
+      "startOffset" : 4,
+      "endOffset" : 30
+    }, {
+      "referenceID" : 7,
+      "context" : "Parsing-based Model Finkel and Manning (2009) indicated all these nested entities are located in some non-terminal nodes of the constituency parses of the original sentences, thus they proposed to use a CRF-based constituency parser to obtain them.",
+      "startOffset" : 20,
+      "endOffset" : 46
+    }, {
+      "referenceID" : 7,
+      "context" : "Parsing-based Model Finkel and Manning (2009) indicated all these nested entities are located in some non-terminal nodes of the constituency parses of the original sentences, thus they proposed to use a CRF-based constituency parser to obtain them. However, the cubic time complexity limits its applicability. Wang et al. (2018) instead proposed to use a transition-based constituency parser to incrementally build constituency forest, its linear time complexity ensures it can handle longer sentences.",
+      "startOffset" : 20,
+      "endOffset" : 329
+    } ],
+    "year" : 2021,
+    "abstractText" : "This paper presents a novel method for nested named entity recognition. As a layered method, our method extends the prior secondbest path recognition method by explicitly excluding the influence of the best path. Our method maintains a set of hidden states at each time step and selectively leverages them to build a different potential function for recognition at each level. In addition, we demonstrate that recognizing innermost entities first results in better performance than the conventional outermost entities first scheme. We provide extensive experimental results on ACE2004, ACE2005, and GENIA datasets to show the effectiveness and efficiency of our proposed method.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

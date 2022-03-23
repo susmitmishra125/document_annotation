@@ -1,0 +1,390 @@
+{
+  "name" : "2021.acl-long.23.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Multi-Head Highly Parallelized LSTM Decoder for Neural Machine Translation",
+    "authors" : [ "Hongfei Xu", "Qiuhui Liu", "Josef van Genabith", "Deyi Xiong", "Meng Zhang" ],
+    "emails" : [ "liuqhano}@foxmail.com,", "genabith@dfki.de,", "dyxiong@tju.edu.cn,", "zhangmeng92@huawei.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 273–282\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n273"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "The Transformer translation model (Vaswani et al., 2017) has achieved great success and is used extensively in the NLP community. It achieves outstanding performance compared to previous RNN/CNN\nbased translation models (Bahdanau et al., 2015; Gehring et al., 2017) while being much faster to train.\nThe Transformer can be trained efficiently due to the highly parallelized self-attention network. It enables sequence-level parallelization in context modelling, as all token representations can be computed in parallel, and linear transformations are only required to compute the sequence once. On the other hand, previous RNN-based methods process a sequence in a token-by-token manner, which means that they have to compute linear layers once for each token, i.e. n times if the number of tokens in the sequence is n.\nHowever, the complexity of a self-attention network which compares each token with all the other tokens is O(n2), while for LSTM (Hochreiter and Schmidhuber, 1997) it is only O(n). In practice, however, LSTM is slower than the self-attention network in training. This is mainly due to the fact that the computation of its current step relies on the computation output of the previous step, which prevents efficient parallelization over the sequence. As for the performance of using recurrent models in machine translation, Chen et al. (2018) shows that an LSTM-based decoder can further improve the performance over the Transformer.\nIn this paper, we investigate how we can efficiently parallelize all linear transformations of an LSTM at the sequence level, i.e. compute its linear transformations only once with a given input sequence. Given that linear transformations are implemented by matrix multiplication, compared to the other element-wise operations, we suggest that they take the largest part of the model’s overall computation, and parallelizing the linear transformations at sequence level may significantly accelerate the training of LSTM-based models.\nOur contributions are as follows:\n• We present the HPLSTM model, which computes LSTM gates and the hidden state with the current input embedding and a bag-ofwords representation of preceding representations, rather than with the current input and the full LSTM output of the previous step, to enable efficient parallelization over the sequence and handling long sequences;\n• We propose to divide a high-dimensional HPLSTM computation into several lowdimensional HPLSTM transformations, namely Multi-head HPLSTM, to constrain both the number of parameters and computation cost of the model;\n• We empirically show that the MHPLSTM decoder can achieve improved performance over self-attention networks and recurrent approaches, while being even slightly faster in training, and significantly faster in decoding."
+    }, {
+      "heading" : "2 Preliminaries: LSTM",
+      "text" : "We design our HPLSTM based on the Layer Normalization (Ba et al., 2016) enhanced LSTM (LNLSTM) presented by Chen et al. (2018) as illustrated in Figure 1, which achieves better performance than the Transformer when used in decoding.\nFor the computation of gates and the hidden state, the model concatenates the input it of the current step t to the output of the previous step ot−1:\nvt = it|ot−1 (1)\nwhere “|” indicates concatenation, and vt is the concatenated vector.\nNext, it computes three gates (input gate itg, forget gate f tg and output gate o t g) and the hidden representation ht with vt:\nitg = σ(LN(Wiv t + bi)) (2)\nf tg = σ(LN(Wfv t + bf )) (3)\notg = σ(LN(Wov t + bo)) (4)\nht = α(LN(Whv t + bh)) (5)\nwhere Wi, Wf , Wo, Wh and bi, bf , bo, bh are weight and bias parameters, σ indicates the sigmoid activation function, α is the activation function for the hidden state computation, LN is the layer normalization.\nLayer normalization (Ba et al., 2016) is computed as follows:\nLNOutput = LNInput − µ\nδ ∗ wLN + bLN (6)\nwhere LNInput is the input, µ and δ stand for the mean and standard deviation of LNInput, wLN and bLN are two vector parameters initialized by ones and zeros respectively.\nAfter the computation of the hidden state, the cell ct and the output of the LSTM unit ot are computed as:\nct = ct−1 ∗ f tg + ht ∗ itg (7)\not = ct ∗ otg (8)\nwhere ∗ indicates element-wise multiplication."
+    }, {
+      "heading" : "3 Our Approach",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Highly Parallelized LSTM",
+      "text" : "Equation 1 shows that the computation of the hidden state and gates for step t requires the output of the step t− 1. This prevents the LSTM from efficient parallelization at the sequence level: unless ot−1 is ready, we cannot compute ot.\nTo enable the LSTM to compute ot in parallel, we propose the HPLSTM, as shown in Figure 2.\nThe HPLSTM uses a bag-of-words representation st of preceding tokens for the computation of gates and the hidden state:\nst = t−1∑ k=1 ik (9)\nwhere s1 is a zero vector. The bag-of-words representations st can be obtained efficiently via the cumulative sum operation.\nNext, we concatenate the input i and the corresponding layer normalized bag-of-words representation LN(s) for subsequent computing:\nv = i|LN(s) (10)\nthe layer normalization is introduced to prevent potential explosions due to accumulation in Equation 9 to stabilize training.\nNext, we compute the input gate, forget gate and the hidden state:\nig = σ(LN(Wiv + bi)) (11)\nfg = σ(LN(Wfv + bf )) (12)\nh = α(LN(Whv + bh)) (13)\nSince v is computed over the sequence before the computation of these gates and the hidden states, Equations 11, 12 and 13 are only required to be computed once for the whole sequence, enabling efficient sequence-level parallelization of high cost linear transformations, while in the original LSTM, they (Equations 2, 3 and 5) have to be computed one after the other as many times as the number of items in the sequence. However, the bag-ofwords context representation st lacks a weighting mechanism compared to the previous step output ot−1 of the original LSTM, thus we also try to use a two-layer feed-forward network for the hidden state computation to alleviate potentially related drawbacks:\nh =Wh2α(LN(Wh1v + bh1)) + bh2 (14)\nThen we update the hidden state h with the input gate ig:\nhr = h ∗ ig (15)\nwhere hr is the updated hidden state. With hr and fg, we compute LSTM cells across the sequence:\nct = ct−1 ∗ f tg + htr (16)\nEquation 16 preserves the step-by-step recurrence update of the LSTM cell and cannot be parallelized across the sequence, but it only contains element-wise multiplication-addition operations, which are light-weight and, compared to linear transformations, can be computed very fast on modern hardware.\nUnlike the original LSTM which computes the output gate og based on the concatenated vector vt (Equation 4), we compute the output gate with the newly produced cell state c and the input to the LSTM, as c is expected to have better quality than the bag-of-words representation.\nog = σ(LN(Woi|c+ bo)) (17)\nFinally, we apply the output gate to the cell, and obtain the output of the HPLSTM layer.\no = c ∗ og (18)\nBoth Equation 17 (including the linear transformation for the computation of the output gate) and 18 can also be efficiently parallelized over the sequence."
+    }, {
+      "heading" : "3.2 Multi-Head HPLSTM",
+      "text" : "Computing n smaller networks in parallel can remove the connections between hidden units across sub-networks, reducing both computation and the number of parameters.\nTake for example a 512→ 512 transformation: using a densely fully-connected linear layer costs 8 times the number of parameters and computation compared to splitting the 512 dimension input into 8 folds and processing them with 8 × 64 → 64 linear transformations correspondingly.\nSince our HPLSTM involves more parameters and computation than a self-attention network with the same input size, to constrain the number of parameters, we compute n low-dimensional HPLSTMs in parallel. The resulting Multi-head HPLSTM (MHPLSTM) is illustrated in Figure 3.\nSpecifically, the MHPLSTM first transforms its input i into n different embedding spaces of HPLSTM transformations with a linear transformation and splits the transformed representation into n folds:\ni1|...|in=Wsi+ bs (19)\nNext, the kth input ik is fed into the corresponding HPLSTM network HPLSTMk, and the output ok is obtained:\nok = HPLSTMk(ik) (20)\nIn practice, the forward propagation of each HPLSTM is independent, thus for each HPLSTM Equation 20 is computed in parallel.\nFinally, outputs of all individual HPLSTM networks are concatenated and transformed by another linear transformation as the output of the MHPLSTM layer o:\no =Wm(o1|...|on) + bm (21)"
+    }, {
+      "heading" : "4 Experiments",
+      "text" : "We replace the self-attention layers of the Transformer decoder with the MHPLSTM in our experiments."
+    }, {
+      "heading" : "4.1 Settings",
+      "text" : "To compare with Vaswani et al. (2017), we conducted our experiments on the WMT 14 English to German and English to French news translation tasks. The concatenation of newstest 2012 and newstest 2013 was used for validation and newstest 2014 as test set.\nWe applied joint Byte-Pair Encoding (BPE) (Sennrich et al., 2016) with 32k merging operations on all data sets. We only kept sentences with a maximum of 256 subword tokens for training. Training sets were randomly shuffled in each training epoch.\nWe followed Vaswani et al. (2017) for the experiment settings. The training steps for Transformer Base and Transformer Big were 100k and 300k respectively. We used a dropout of 0.1 for all experiments except for the Transformer Big setting on the En-De task which was 0.3. For the Transformer Base setting, the embedding dimension and the hidden dimension of the position-wise feed-forward neural network were 512 and 2048 respectively, the corresponding values for the Transformer Big\nsetting were 1024 and 4096 respectively. The dimension of each head is 64, thus there were 8 and 16 heads for the base setting and the big setting respectively. We implemented our approaches based on the Neutron implementation (Xu and Liu, 2019) of the Transformer translation model. Parameters were initialized under the Lipschitz constraint (Xu et al., 2020c).\nWe used a beam size of 4 for decoding, and evaluated tokenized case-sensitive BLEU with the averaged model of the last 5 checkpoints for the Transformer Base setting and 20 checkpoints for the Transformer Big setting saved with an interval of 1500 training steps. We also conducted significance tests (Koehn, 2004)."
+    }, {
+      "heading" : "4.2 Main Results",
+      "text" : "We first verify the performance by comparing our approach with the Transformer in both the base setting and the big setting. Results are shown in Table 1.\nTable 1 shows that using an LSTM-based decoder can bring significant improvements over the self-attention decoder. Specifically, using MHPLSTM improves +0.82 and +0.77 BLEU on the En-De and En-Fr task respectively using the base setting, +1.13 and +0.92 correspondingly using the big setting. The fact that using an LSTM-based decoder can improve the translation quality is consistent with Chen et al. (2018), with MHPLSTM further improving over LN-LSTM (Table 2).\nWe also compare our approach with the Averaged Attention Network (AAN) decoder (Zhang et al., 2018a), LN-LSTM and the Additionsubtraction Twin-gated Recurrent (ATR) network (Zhang et al., 2018b) on the WMT 14 En-De task.\nThe AAN consists of an average layer that averages preceding embeddings, a feed-forward network to perform context-aware encoding based on the averaged context embedding, and a gating layer to enhance the expressiveness.\nWith a simple addition and subtraction operation, Zhang et al. (2018b) introduce a twin-gated mechanism to build input and forget gates which are highly correlated, and present a heavily simplified ATR which has the smallest number of weight matrices among units of all existing gated RNNs. Despite this simplification, the essential non-linearities and capability of modelling longdistance dependencies are preserved.\nAs LN-LSTM and ATR lead to the out-ofmemory issue when handling long sentences, we follow Zhang et al. (2018b) to use sentences no longer than 80 subwords for their training, but we keep the batch size and training steps the same as the others for fairness. Their training without excluding these long sentences is slower than we reported. Results are shown in Table 2.\nTable 2 shows that the MHPLSTM is not only the fastest in both training and decoding, but also leads to the best performance compared to baselines. Surprisingly, MHPLSTM even surpasses LN-LSTM. We conjecture potential reasons that MHPLSTM surpasses both self-attention and LNLSTM might be:\n• The self-attention network relies on absolute positional embedding for position encoding, which has its drawbacks (Shaw et al., 2018; Wang et al., 2019; Chen et al., 2019a; Wang et al., 2020), while LSTMs seem to have natural advantages in (relative) positional encod-\nApproach BLEU\nPara. (M) Speed-Up\nHidden Gates BLEU\ndev test √ × 24.65 28.37√ √ 24.71 28.38 × × 24.23 27.92 × √ 24.36 27.97"
+    }, {
+      "heading" : "4.3 Effect of FFN Layers",
+      "text" : "We conducted ablation studies on the WMT 14 En-De task.\nSince the LSTM hidden state computation may take the role of the position-wise Feed-Forward Network (FFN) sub-layer of decoder layers, we first study removing the FFN sub-layer in decoder layers. Results are shown in Table 3.\nTable 3 shows that removing the FFN layer of the MHPLSTM-based decoder can lead to further acceleration while performing competitively with the Transformer baseline with fewer parameters. However, it hampers MHPLSTM performance, thus we\nkeep the feed-forward layer in the other experiments.\nWe also study the effects of using a 1-layer or a 2-layer neural network for the computation of the MHPLSTM hidden states (Equations 13 and 14) and gates (Equations 11 and 12). Results are shown in Table 4.\nTable 4 shows that using a 2-layer neural network for the computation of hidden states is important for the performance, but the impact of using a 2-layer neural network for the gate computation is neglectable. Thus we only apply the 2-layer network for the computation of the LSTM hidden states in the other experiments."
+    }, {
+      "heading" : "4.4 Number of MHPLSTM Heads",
+      "text" : "We examined the effects of the impact of the number of MHPLSTM heads on performance and efficiency with the base setting (input dimension: 512). Results are shown in Table 5.\nTable 5 shows that reducing the number of heads increases both parameters and time consumption with small performance gains compared to using 8 heads (with a dimension of 64 per head). Using 16 heads significantly hampers the performance with only a small reduction in the number of parameters and a slight acceleration. Thus we use a head dimension of 64 (8 heads for the base setting, 16 for the big setting) in our experiments, consistent with the Transformer."
+    }, {
+      "heading" : "4.5 MHPLSTM for Encoding",
+      "text" : "We tested the performance of using a bidirectional MHPLSTM for encoding. Results are shown in Table 6.\nTable 6 shows that using MHPLSTM for encoding leads to a significant performance drop with more parameters: it even underperforms the baseline, while slowing down both training and decoding.\nWe conjecture that the self-attention network has advantages in encoding compared to the MHPLSTM: it can collect and process bi-directional\nApproach BLEU\nPara. (M) Speed-Up\ncontext in one forward pass, while MHPLSTM has to compute 2 forward passes, one for the forward direction, another one for the reverse direction. For each direction, relevant context is processed separately in the recurrent models."
+    }, {
+      "heading" : "4.6 Length Analysis",
+      "text" : "To analyze the effects of MHPLSTM on performance with increasing input length, we conducted a length analysis on the news test set of the WMT 14 En-De task. Following Bahdanau et al. (2015); Tu et al. (2016); Xu et al. (2020b), we grouped sentences of similar lengths together and computed BLEU scores of the MHPLSTM and our baselines for each group. BLEU score results and decoding speed-up of each group are shown in Figure 4 and 5 respectively.\nFigure 4 shows that MHPLSTM surpasses the other approaches in most length groups, and improvements of using an MHPLSTM based-decoder\nare more significant for long sentences than short sentences.\nFigure 5 shows that all recurrent-based approaches are faster than the self-attention decoder in all length groups, and MHPLSTM achieves comparable decoding speed as LSTM and ATR. Even though the decoding speed of all approaches decreases very fast with increasing sentence length, the acceleration of MHPLSTM is more significant with long sentences (1.91 times faster than Transformer for sentences longer than 45) than with short sentences (1.41 times faster than Transformer for sentences no longer than 15)."
+    }, {
+      "heading" : "4.7 Local / Global Pattern Learning Analysis",
+      "text" : "We compare the ability of the MHPLSTM and baselines in capturing dependencies of various distances with the linguistically-informed verb-subject agreement analysis on the Lingeval97 dataset (Sennrich,\n2017). In German, subjects and verbs must agree with one another in grammatical number and person. In Lingeval97, each contrastive translation pair consists of a correct reference translation, and a contrastive example that has been minimally modified to introduce one translation error. The accuracy of a model is the number of times it assigns a higher score to the reference translation than to the contrastive one, relative to the total number of predictions. Results are shown in Figure 6.\nFigure 6 shows that the MHPLSTM outperforms baselines in almost all cases. For distances longer than 15, the self-attention network still performs best, indicating its strong ability in long-distance relation learning, but the MHPLSTM still surpasses the other recurrent approaches."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "Sequence-to-sequence neural machine translation models started with recurrent models (Sutskever et al., 2014; Bahdanau et al., 2015; Cho et al., 2014). But recurrent models cannot be parallelized at the sequence level. Convolutional models (Gehring et al., 2017; Wu et al., 2019) and the Transformer (Vaswani et al., 2017) have been proposed.\nDue to the O(n2) self-attention network complexity, which slows down decoding, Zhang et al. (2018a) presented the average attention network to accelerate decoding. Even though LSTMs cannot be parallelized at the sequence level, its complexity is O(n), and Chen et al. (2018) shows that using the layer normalization enhanced LSTM-based decoder can bring improvements in translation quality and accelerate decoding.\nLSTM (Hochreiter and Schmidhuber, 1997) and GRU (Cho et al., 2014) are the most popular recur-\nrent models. To accelerate RNN models, Zhang et al. (2018b) propose a heavily simplified ATR network to have the smallest number of weight matrices among units of all existing gated RNNs.\nPeter et al. (2016) investigate exponentially decaying bag-of-words input features for feedforward NMT models. In addition to sequencelevel parallelization, asynchronous optimization (Heigold et al., 2014) and data parallelization with a larger batch size (Ott et al., 2018; Chen et al., 2018; Xu et al., 2020a) can also accelerate training."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "In this paper, we observe that the sequence-level parallelization issue of LSTM is due to the fact that its computation of gates and hidden states of the current step relies on the computation result of the preceding step, and linear transformations have to be propagated the same number of times as the sequence length. To improve the sequencelevel parallelization of the LSTM, we propose to remove the dependency of the current step LSTM computation on the result of the previous step by computing hidden states and gates with the current input embedding and a bag-of-words representation of preceding tokens, and present the Highly Parallelized LSTM. To constrain the number of LSTM parameters, we compute several small HPLSTMs in parallel like multi-head self-attention.\nIn our experiments, we empirically show that the MHPLSTM model achieves better performance than self-attention networks, while being even slightly faster in training, and much faster in decoding, than the self-attention Transformer decoder."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We thank anonymous reviewers for their insightful comments. Hongfei Xu acknowledges the support of China Scholarship Council ([2018]3101, 201807040056). Josef van Genabith is supported by the German Federal Ministry of Education and Research (BMBF) under funding code 01IW20010 (CORA4NLP). Deyi Xiong is partially supported by the joint research center between GTCOM and Tianjin University and the Royal Society (London) (NAF\\R1\\180122). Meng Zhang is partially supported by MindSpore,1 which is a new deep learning computing framework.\n1https://www.mindspore.cn/."
+    } ],
+    "references" : [ {
+      "title" : "Layer normalization",
+      "author" : [ "Jimmy Lei Ba", "Jamie Ryan Kiros", "Geoffrey E Hinton." ],
+      "venue" : "arXiv preprint arXiv:1607.06450.",
+      "citeRegEx" : "Ba et al\\.,? 2016",
+      "shortCiteRegEx" : "Ba et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Neural machine translation by jointly learning to align and translate",
+      "author" : [ "Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio." ],
+      "venue" : "3rd International Conference on Learning Representations, ICLR 2015, San Diego, CA, USA, May 7-9, 2015,",
+      "citeRegEx" : "Bahdanau et al\\.,? 2015",
+      "shortCiteRegEx" : "Bahdanau et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Neural machine translation with reordering embeddings",
+      "author" : [ "Kehai Chen", "Rui Wang", "Masao Utiyama", "Eiichiro Sumita." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 1787–1799, Florence, Italy.",
+      "citeRegEx" : "Chen et al\\.,? 2019a",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Recurrent positional embedding for neural machine translation",
+      "author" : [ "Kehai Chen", "Rui Wang", "Masao Utiyama", "Eiichiro Sumita." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International",
+      "citeRegEx" : "Chen et al\\.,? 2019b",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Learning phrase representations using RNN encoder–decoder for statistical machine translation",
+      "author" : [ "Kyunghyun Cho", "Bart van Merriënboer", "Caglar Gulcehre", "Dzmitry Bahdanau", "Fethi Bougares", "Holger Schwenk", "Yoshua Bengio." ],
+      "venue" : "Proceedings of",
+      "citeRegEx" : "Cho et al\\.,? 2014",
+      "shortCiteRegEx" : "Cho et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Convolutional sequence to sequence learning",
+      "author" : [ "Jonas Gehring", "Michael Auli", "David Grangier", "Denis Yarats", "Yann N. Dauphin." ],
+      "venue" : "Proceedings of the 34th International Conference on Machine Learning, volume 70 of Proceedings of Machine",
+      "citeRegEx" : "Gehring et al\\.,? 2017",
+      "shortCiteRegEx" : "Gehring et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Asynchronous stochastic optimization for sequence training of deep neural networks",
+      "author" : [ "G. Heigold", "E. McDermott", "V. Vanhoucke", "A. Senior", "M. Bacchiani." ],
+      "venue" : "2014 IEEE International Conference on Acoustics, Speech and Signal Processing",
+      "citeRegEx" : "Heigold et al\\.,? 2014",
+      "shortCiteRegEx" : "Heigold et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Long short-term memory",
+      "author" : [ "Sepp Hochreiter", "Jürgen Schmidhuber." ],
+      "venue" : "Neural Comput., 9(8):1735– 1780.",
+      "citeRegEx" : "Hochreiter and Schmidhuber.,? 1997",
+      "shortCiteRegEx" : "Hochreiter and Schmidhuber.",
+      "year" : 1997
+    }, {
+      "title" : "Statistical significance tests for machine translation evaluation",
+      "author" : [ "Philipp Koehn." ],
+      "venue" : "Proceedings of the 2004 Conference on Empirical Methods in Natural Language Processing, pages 388– 395, Barcelona, Spain. Association for Computa-",
+      "citeRegEx" : "Koehn.,? 2004",
+      "shortCiteRegEx" : "Koehn.",
+      "year" : 2004
+    }, {
+      "title" : "Scaling neural machine translation",
+      "author" : [ "Myle Ott", "Sergey Edunov", "David Grangier", "Michael Auli." ],
+      "venue" : "Proceedings of the Third Conference on Machine Translation: Research Papers, pages 1–9, Brussels, Belgium. Association for Computational",
+      "citeRegEx" : "Ott et al\\.,? 2018",
+      "shortCiteRegEx" : "Ott et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Exponentially decaying bag-of-words input features for feed-forward neural network in statistical machine translation",
+      "author" : [ "Jan-Thorsten Peter", "Weiyue Wang", "Hermann Ney." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Compu-",
+      "citeRegEx" : "Peter et al\\.,? 2016",
+      "shortCiteRegEx" : "Peter et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "How grammatical is characterlevel neural machine translation? assessing MT quality with contrastive translation pairs",
+      "author" : [ "Rico Sennrich." ],
+      "venue" : "Proceedings of the 15th Conference of the European Chapter of the Association for Computational Linguistics:",
+      "citeRegEx" : "Sennrich.,? 2017",
+      "shortCiteRegEx" : "Sennrich.",
+      "year" : 2017
+    }, {
+      "title" : "Neural machine translation of rare words with subword units",
+      "author" : [ "Rico Sennrich", "Barry Haddow", "Alexandra Birch." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1715–1725.",
+      "citeRegEx" : "Sennrich et al\\.,? 2016",
+      "shortCiteRegEx" : "Sennrich et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Self-attention with relative position representations",
+      "author" : [ "Peter Shaw", "Jakob Uszkoreit", "Ashish Vaswani." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-",
+      "citeRegEx" : "Shaw et al\\.,? 2018",
+      "shortCiteRegEx" : "Shaw et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Sequence to sequence learning with neural networks",
+      "author" : [ "Ilya Sutskever", "Oriol Vinyals", "Quoc V Le." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 27, pages 3104–3112. Curran Associates, Inc.",
+      "citeRegEx" : "Sutskever et al\\.,? 2014",
+      "shortCiteRegEx" : "Sutskever et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Modeling coverage for neural machine translation",
+      "author" : [ "Zhaopeng Tu", "Zhengdong Lu", "Yang Liu", "Xiaohua Liu", "Hang Li." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 76–",
+      "citeRegEx" : "Tu et al\\.,? 2016",
+      "shortCiteRegEx" : "Tu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Ł ukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "I. Guyon, U. V. Luxburg, S. Bengio, H. Wallach, R. Fergus, S. Vishwanathan, and R. Gar-",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Encoding word order in complex embeddings",
+      "author" : [ "Benyou Wang", "Donghao Zhao", "Christina Lioma", "Qiuchi Li", "Peng Zhang", "Jakob Grue Simonsen." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Wang et al\\.,? 2020",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Self-attention with structural position representations",
+      "author" : [ "Xing Wang", "Zhaopeng Tu", "Longyue Wang", "Shuming Shi." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Confer-",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Pay less attention with lightweight and dynamic convolutions",
+      "author" : [ "Felix Wu", "Angela Fan", "Alexei Baevski", "Yann Dauphin", "Michael Auli." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Wu et al\\.,? 2019",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Dynamically adjusting transformer batch size by monitoring gradient direction change",
+      "author" : [ "Hongfei Xu", "Josef van Genabith", "Deyi Xiong", "Qiuhui Liu." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Xu et al\\.,? 2020a",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Learning source phrase representations for neural machine translation",
+      "author" : [ "Hongfei Xu", "Josef van Genabith", "Deyi Xiong", "Qiuhui Liu", "Jingyi Zhang." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Xu et al\\.,? 2020b",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Neutron: An Implementation of the Transformer Translation Model and its Variants",
+      "author" : [ "Hongfei Xu", "Qiuhui Liu." ],
+      "venue" : "arXiv preprint arXiv:1903.07402.",
+      "citeRegEx" : "Xu and Liu.,? 2019",
+      "shortCiteRegEx" : "Xu and Liu.",
+      "year" : 2019
+    }, {
+      "title" : "Lipschitz constrained parameter initialization for deep transformers",
+      "author" : [ "Hongfei Xu", "Qiuhui Liu", "Josef van Genabith", "Deyi Xiong", "Jingyi Zhang." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Xu et al\\.,? 2020c",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Leveraging local and global patterns for self-attention networks",
+      "author" : [ "Mingzhou Xu", "Derek F. Wong", "Baosong Yang", "Yue Zhang", "Lidia S. Chao." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages",
+      "citeRegEx" : "Xu et al\\.,? 2019",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Accelerating neural transformer via an average attention network",
+      "author" : [ "Biao Zhang", "Deyi Xiong", "Jinsong Su." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1789–",
+      "citeRegEx" : "Zhang et al\\.,? 2018a",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Simplifying neural machine translation with addition-subtraction twin-gated recurrent networks",
+      "author" : [ "Biao Zhang", "Deyi Xiong", "Jinsong Su", "Qian Lin", "Huiji Zhang." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language",
+      "citeRegEx" : "Zhang et al\\.,? 2018b",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2018
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 16,
+      "context" : "The Transformer translation model (Vaswani et al., 2017) has achieved great success and is used extensively in the NLP community.",
+      "startOffset" : 34,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 1,
+      "context" : "It achieves outstanding performance compared to previous RNN/CNN based translation models (Bahdanau et al., 2015; Gehring et al., 2017) while being much faster to train.",
+      "startOffset" : 90,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 5,
+      "context" : "It achieves outstanding performance compared to previous RNN/CNN based translation models (Bahdanau et al., 2015; Gehring et al., 2017) while being much faster to train.",
+      "startOffset" : 90,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 7,
+      "context" : "However, the complexity of a self-attention network which compares each token with all the other tokens is O(n2), while for LSTM (Hochreiter and Schmidhuber, 1997) it is only O(n).",
+      "startOffset" : 129,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 0,
+      "context" : "We design our HPLSTM based on the Layer Normalization (Ba et al., 2016) enhanced LSTM (LNLSTM) presented by Chen et al.",
+      "startOffset" : 54,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 0,
+      "context" : "Layer normalization (Ba et al., 2016) is computed as follows:",
+      "startOffset" : 20,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 12,
+      "context" : "We applied joint Byte-Pair Encoding (BPE) (Sennrich et al., 2016) with 32k merging operations on all data sets.",
+      "startOffset" : 42,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 22,
+      "context" : "We implemented our approaches based on the Neutron implementation (Xu and Liu, 2019) of the Transformer translation model.",
+      "startOffset" : 66,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 23,
+      "context" : "Parameters were initialized under the Lipschitz constraint (Xu et al., 2020c).",
+      "startOffset" : 59,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 8,
+      "context" : "We also conducted significance tests (Koehn, 2004).",
+      "startOffset" : 37,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 25,
+      "context" : "We also compare our approach with the Averaged Attention Network (AAN) decoder (Zhang et al., 2018a), LN-LSTM and the Additionsubtraction Twin-gated Recurrent (ATR) network (Zhang et al.",
+      "startOffset" : 79,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 26,
+      "context" : ", 2018a), LN-LSTM and the Additionsubtraction Twin-gated Recurrent (ATR) network (Zhang et al., 2018b) on the WMT 14 En-De task.",
+      "startOffset" : 81,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 13,
+      "context" : "• The self-attention network relies on absolute positional embedding for position encoding, which has its drawbacks (Shaw et al., 2018; Wang et al., 2019; Chen et al., 2019a; Wang et al., 2020), while LSTMs seem to have natural advantages in (relative) positional encod-",
+      "startOffset" : 116,
+      "endOffset" : 193
+    }, {
+      "referenceID" : 18,
+      "context" : "• The self-attention network relies on absolute positional embedding for position encoding, which has its drawbacks (Shaw et al., 2018; Wang et al., 2019; Chen et al., 2019a; Wang et al., 2020), while LSTMs seem to have natural advantages in (relative) positional encod-",
+      "startOffset" : 116,
+      "endOffset" : 193
+    }, {
+      "referenceID" : 2,
+      "context" : "• The self-attention network relies on absolute positional embedding for position encoding, which has its drawbacks (Shaw et al., 2018; Wang et al., 2019; Chen et al., 2019a; Wang et al., 2020), while LSTMs seem to have natural advantages in (relative) positional encod-",
+      "startOffset" : 116,
+      "endOffset" : 193
+    }, {
+      "referenceID" : 17,
+      "context" : "• The self-attention network relies on absolute positional embedding for position encoding, which has its drawbacks (Shaw et al., 2018; Wang et al., 2019; Chen et al., 2019a; Wang et al., 2020), while LSTMs seem to have natural advantages in (relative) positional encod-",
+      "startOffset" : 116,
+      "endOffset" : 193
+    }, {
+      "referenceID" : 24,
+      "context" : "• LSTMs lack a mechanism to directly connect distant words, which may lead to overlooking neighboring information, while the use of a bag-of-words representation (Equation 9) enables MHPLSTM to connect tokens directly regardless of the distance, thus MHPLSTM is able to leverage both local (Equation 16) and global patterns (Xu et al., 2019).",
+      "startOffset" : 324,
+      "endOffset" : 341
+    }, {
+      "referenceID" : 14,
+      "context" : "Sequence-to-sequence neural machine translation models started with recurrent models (Sutskever et al., 2014; Bahdanau et al., 2015; Cho et al., 2014).",
+      "startOffset" : 85,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 1,
+      "context" : "Sequence-to-sequence neural machine translation models started with recurrent models (Sutskever et al., 2014; Bahdanau et al., 2015; Cho et al., 2014).",
+      "startOffset" : 85,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 4,
+      "context" : "Sequence-to-sequence neural machine translation models started with recurrent models (Sutskever et al., 2014; Bahdanau et al., 2015; Cho et al., 2014).",
+      "startOffset" : 85,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 5,
+      "context" : "Convolutional models (Gehring et al., 2017; Wu et al., 2019) and the Transformer (Vaswani et al.",
+      "startOffset" : 21,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 19,
+      "context" : "Convolutional models (Gehring et al., 2017; Wu et al., 2019) and the Transformer (Vaswani et al.",
+      "startOffset" : 21,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2019) and the Transformer (Vaswani et al., 2017) have been proposed.",
+      "startOffset" : 28,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 4,
+      "context" : "LSTM (Hochreiter and Schmidhuber, 1997) and GRU (Cho et al., 2014) are the most popular recurrent models.",
+      "startOffset" : 48,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 6,
+      "context" : "In addition to sequencelevel parallelization, asynchronous optimization (Heigold et al., 2014) and data parallelization with a larger batch size (Ott et al.",
+      "startOffset" : 72,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2014) and data parallelization with a larger batch size (Ott et al., 2018; Chen et al., 2018; Xu et al., 2020a) can also accelerate training.",
+      "startOffset" : 58,
+      "endOffset" : 113
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2014) and data parallelization with a larger batch size (Ott et al., 2018; Chen et al., 2018; Xu et al., 2020a) can also accelerate training.",
+      "startOffset" : 58,
+      "endOffset" : 113
+    } ],
+    "year" : 2021,
+    "abstractText" : "One of the reasons Transformer translation models are popular is that self-attention networks for context modelling can be easily parallelized at sequence level. However, the computational complexity of a self-attention network is O(n), increasing quadratically with sequence length. By contrast, the complexity of LSTM-based approaches is only O(n). In practice, however, LSTMs are much slower to train than self-attention networks as they cannot be parallelized at sequence level: to model context, the current LSTM state relies on the full LSTM computation of the preceding state. This has to be computed n times for a sequence of length n. The linear transformations involved in the LSTM gate and state computations are the major cost factors in this. To enable sequence-level parallelization of LSTMs, we approximate full LSTM context modelling by computing hidden states and gates with the current input and a simple bag-of-words representation of the preceding tokens context. This allows us to compute each input step efficiently in parallel, avoiding the formerly costly sequential linear transformations. We then connect the outputs of each parallel step with computationally cheap element-wise computations. We call this the Highly Parallelized LSTM. To further constrain the number of LSTM parameters, we compute several small HPLSTMs in parallel like multi-head attention in the Transformer. The experiments show that our MHPLSTM decoder achieves significant BLEU improvements, while being even slightly faster than the self-attention network in training, and much faster than the standard LSTM.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

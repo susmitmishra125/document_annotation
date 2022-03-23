@@ -1,0 +1,528 @@
+{
+  "name" : "2021.acl-long.231.pdf",
+  "metadata" : {
+    "source" : "CRF",
+    "title" : "LeeBERT: Learned Early Exit for BERT with Cross-Level Optimization",
+    "authors" : [ "Wei Zhu" ],
+    "emails" : [ "52205901018@stu.ecnu.edu.cn." ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 2968–2980\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n2968"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "The last couple of years have witnessed the rise of pre-trained language models (PLMs), such as BERT (Devlin et al., 2018), GPT (Radford et al., 2019), XLNet (Yang et al., 2019), and ALBERT (Lan et al., 2020), etc. By pre-training on the unlabeled corpus and fine-tuning on labeled ones, BERT-like models achieved considerable improvements in many Natural Language Processing (NLP) tasks, such as text classification and natural language inference (NLI), sequence labeling, etc.\nHowever, these PLMs suffer from two problems. The first problem is efficiency. The state-of-the-art (SOTAs) achievements of these models usually rely\n∗Contact: 52205901018@stu.ecnu.edu.cn.\non very deep model architectures accompanied by high computational demands, impairs their practicalities. Like general search engines or online medical consultation services, industrial settings process generally millions of requests per minute. What makes efficiency more critical is that the traffic of online services varies drastically with time. For example, during the flu season, the search requests of Dingxiangyuan1 are ten times more than usual. And the number of claims during the holidays is five to ten times more than that of the workdays for online shopping. Many servers need to be deployed to enable BERT in industrial settings, which is unbearable for many companies.\nSecond, previous literature (Fan et al., 2020; Michel et al., 2019; Zhou et al., 2020) pointed out that large PLMs with dozens of stacked Transformer layers are over-parameterized and could suffer from the “overthinking” problem (Kaya et al., 2019). That is, for many input samples, their shallow representations at a shallow layer are enough to make a correct classification. In contrast, the final layer’s representations may be overfitting or distracted by irrelevant features that do not generalize. The overthinking problem leads to not only poor generalization but also wasted computation.\nTo address these issues, both the industry and academia have devoted themselves to accelerating PLMs at inference time. Standard methods include direct network pruning (Zhu and Gupta, 2018; Xu et al., 2020; Fan et al., 2020; Michel et al., 2019), knowledge distillation (Sun et al., 2019; Sanh et al., 2019; Jiao et al., 2020), weight quantization (Zhang et al., 2020; Bai et al., 2020; Kim et al., 2021) and adaptive inference (Zhou et al., 2020; Xin et al., 2020; Geng et al., 2021; Liu et al., 2020). Among them, adaptive inference has attracted much attention. Given that real-world data is usually com-\n1https://search.dxy.cn/\nposed of easy samples and difficult samples, adaptive inference aims to deal with simple examples with only a small part of a PLM, thus speeding up inference time on average. The speed-up ratio can be controlled with certain hyper-parameters to cope with drastic changes in request traffic. What’s more, it can address the over-thinking problem and improve the model’s generalization ability.\nEarly exiting is one of the most crucial adaptive inference methods (Bolukbasi et al., 2017). It implements adaptive inference by installing exits, or intermediate prediction layer, at each layer of BERT and exiting ”easy” samples at exits of the shallow layers to speed up inference (Figure 1). Strategies for early exiting are designed (Teerapittayanon et al., 2016; Kaya et al., 2019; Xin et al., 2020; Zhou et al., 2020), which decides when to exit given the current obtained predictions (from previous and current layers).\nEarly exiting architectures’ training procedure is essentially a multi-objective problem since each exit is trying to improve its performance. Different objectives from different classifiers may conflict and interfere with one-another (Phuong and Lampert, 2019; Yu et al., 2020). Thus they incorporate distillation loss to improve the training procedure by encouraging early exits to mimic the output distributions of the last exit. The motivation is that the last exit has the maximum network capacity and should be more accurate than the earlier exits. In their work, only the last exit can act as a teacher exit. Besides, the multiple objectives are uniformly weighted.\nIn this work, we propose a novel training mechanism called Learned Early Exiting for BERT (LeeBERT). Our contributions are three folded. First, instead of learning from the last exit, LeeBERT asks each exit to learn from each other. The motivation is that different layers extract features of varying granularity. Thus they have different perspectives of the sentence. Distilling knowledge from each other improves the expressiveness of lower exits and alleviates the overfittng of the later exits. Second, to achieve the optimal trade-offs between different loss terms, their weights are treated as parameters and are learned along with model parameters. The optimization of the learnable weights and model parameters is formulated as a bi-level optimization problem, optimized with gradient descent. Built upon previous literature (Liu et al., 2019), we propose a novel cross-level optimization\n(CLO) algorithm to solve the bilevel optimization better.\nExtensive experiments are conducted on the GLUE benchmark (Wang et al., 2018), and show that LeeBERT outperforms existing SOTA BERT early exiting methods, sometimes by a large margin. Ablation study shows that: (1) knowledge distillation among all the exits can improve their performances, especially for the shallow ones; (2) our novel CLO algorithm is useful in learning more suitable weights and brings performance gains.\nOur contributions are integrated into our LeeBERT framework, which can be summarized as follows:\n• We propose a novel training method for early exiting PLMs to ask each exit to learn from each other.\n• We propose to find the optimal trade-off of different loss terms by assigning learnable weights.\n• We propose a novel cross-level optimization (CLO) algorithm to learn the loss term weights better."
+    }, {
+      "heading" : "2 Preliminaries",
+      "text" : "In this section, we introduce the necessary background for BERT early exiting. Throughout this work, we consider the case of multi-class classification with samples {(xn, yn), xn ∈ X , yn ∈ Y, i = 1, 2, ..., N}, e.g., sentences, and the number of classes is K."
+    }, {
+      "heading" : "2.1 Backbone models",
+      "text" : "In this work, we adopt BERT and ALBERT as backbone models. BERT is a multi-layer Transformer (Vaswani et al., 2017) network, which is pre-trained in a self-supervised manner on a large corpus. ALBERT is more lightweight than BERT since it shares parameters across different layers, and the embedding matrix is factorized."
+    }, {
+      "heading" : "2.2 Early exiting architecture",
+      "text" : "As depicted in Figure 1, early exiting architectures are networks with exits at different transformer layers. With M exits, M classifiers pm : X → ∆K (m = 1, 2, ...,M ) are designated at M layers of BERT, each of which maps its input to the probability simplex ∆K , i.e., the set of probability distributions over the K classes. Previous literature (Phuong and Lampert, 2019; Liu et al., 2020) think\nof p1, ...,pM as being ordered from least to most expressive. However, in terms of generalization ability, due to the over-thinking problem, later layers may not be superior to shallow layers.\nIn principle, the classifiers may or may not share weights and computation, but in the most interesting and practically useful case, they share both."
+    }, {
+      "heading" : "2.3 Early exiting strategies",
+      "text" : "There are mainly three early exiting strategies for BERT early exiting. BranchyNet (Teerapittayanon et al., 2016), FastBERT (Liu et al., 2020) and DeeBERT (Xin et al., 2020) calculated the entropy of the prediction probability distribution as a proxy for the confidence of exiting classifiers to enable early exiting. Shallow-Deep Nets (Kaya et al., 2019) and RightTool (Schwartz et al., 2020) leveraged the softmax scores of predictions of exiting classifiers, that is, if the score of a particular class is dominant and large enough, the model will exit. Recently, PABEE (Zhou et al., 2020) propose a patience based exiting strategy analogous to early stopping model training, that is, if the exits’ predictions remain unchanged for a pre-defined number of times (patience), the model will stop inference and exit. PABEE achieves SOTAs results for BERT early exiting.\nIn this work, we mainly adopt the PABEE’s patience based early exiting strategy. However, in ablation studies, we will show that our LeeBERT framework can improve the inference performance\nof other exiting strategies."
+    }, {
+      "heading" : "3 Our LeeBERT framework",
+      "text" : "In this section, we introduce the proposed LeeBERT framework. First, we present our distillation based loss design, and then we elaborate on how to optimize with learnable weights. Our main contribution is a novel training mechanism for BERT early exiting, which extends Liu et al. (2020) and Phuong and Lampert (2019) via mutual distillation and learned weights."
+    }, {
+      "heading" : "3.1 Loss objectives",
+      "text" : ""
+    }, {
+      "heading" : "3.1.1 Classification loss",
+      "text" : "When receiving an input sample (xn, yn), each exit will calculate the cross-entropy loss based on its predicted, and all the exits are simultaneously optimized with a summed loss, i.e.,\nLCE(xn, yn) = M∑ m=1 LCE(pm(xn), yn). (1)\nNote that the above objective directly assumes uniform weights for all M loss terms."
+    }, {
+      "heading" : "3.1.2 Distillation loss",
+      "text" : "To introduce our contribution, we first remind the reader of the classical distillation framework as introduced in Hinton et al. (2015): assume we want a probabilistic classifier s (student) to learn from another classifier t (teacher). This can be achieved by\nminimizing the (temperature-scaled) cross-entropy between their prediction distributions, LKD(t, s) = −τ2 K∑ k=1 [t1/τ (xn)]k log[[s 1/τ (xn)]k], (2) where τ ∈ R+ is the distillation temperature, and\n[t1/τ (x)]k = tk(x) 1/τ∑K k ′ =1 tk′ (x) 1/τ , (3)\nis the distribution obtained from the distribution t(x) by temperature-scaling, and [t1/τ (x)]k is defined analogously.\nThe temperature parameter allows controlling the softness of the teachers’ predictions: the higher the temperature, the more suppressed is the difference between the largest and the smallest value of the probability vector. The temperature scaling allows compensating for the over-confidence of the network’s outputs, i.e., they put too much probability mass on the top predicted class and too little on the others. The factor τ2 in Eq 2 ensures that the temperature scaling does not negatively affect the gradient magnitude.\nReturning to the early exiting architecture, we follow the same strategy as classical distillation but use exits of different layers both as students and teachers. For any exit m, let T (m) ⊂ 1, ...,M (which could be empty) be the set of teacher exits it is meant to learn from. Then we define the overall distillation loss as LKD(xn) = M∑ m=1 ∑ t∈T (m) LKD(pt(xn),pm(xn)) M ∗ |T (m)| .\n(4) Previous work (Phuong and Lampert, 2019; Liu et al., 2020) considers using only the last exit as as the teacher and all exits learn from it. The usual belief is that deeper exits have more network capacity and more accurate than the early exits. However, the over-thinking phenomenon reveals that later exits may not be superior to earlier ones. The more shallow exit may provide different perspectives in semantic understanding of the input sentences. Thus, to fully learn from available information, later exits can benefit from learning from early exits. With this motivation, we consider two settings:\nLearn from Later Exits (LLE). In this setting, early exits learn from all its later exits.\nLearn from All Exits (LAE). In this setting, an exit learns from all other exits."
+    }, {
+      "heading" : "3.2 Weighted loss",
+      "text" : "Previous work considers uniform weights for the distillation loss terms or classification loss term, which does not effectively take the trade-off among multiple objectives. First, from the perspective of knowledge distillation, intuitively, later exits should place little weights on the very early exits since they have less to offer. And all exits should place higher importance on exits that are performant and not overfitting. Second, different loss objectives are usually competing, which may hurt the final results.\nTo address these issues, we propose to assign a set of learnable weights to our loss objective, which are updated via gradient descent along with the model parameters. We give weight wi for each classification loss term and wm,t for the distillation loss term coming from exit m learning from exit t, and the overall loss objective becomes\nL(xn, yn) = M∑ m=1 wiLCE(pm(xn), yn)\n+ M∑ m=1 ∑ t∈T (m) wm,t LKD(pt(xn),pm(xn)) M ∗ |T (m)| .\n(5)\nNote that Ω = {wi, wm,t} can be understood as a set of learnable training hyper-parameter."
+    }, {
+      "heading" : "3.3 Optimization of Learned weights",
+      "text" : ""
+    }, {
+      "heading" : "3.3.1 Single vs. Bi-level optimization",
+      "text" : "Assume we have two datasets D1 and D2, which usually are both subsets of the training set Dtr. D1 can be equal to D2. For a given set of Ω = {wi, wm,t}, the optimal solution Θ∗(Ω) of network parameters Θ are derived from D1, and the optimal Ω∗ are determined on D2. We denote the loss on dataset D as LD(Θ,Ω), a function of two sets of parameters for convenience. Then the optimization problem becomes\nminΩLD2(Θ∗(Ω),Ω), s.t.,Θ∗(Ω) = arg min\nΘ LD1(Θ,Ω) (6)\nThough the above bi-level optimization can accurately describe our problem, it is generally difficult to solve. One heuristic simplification of the above equation is to let D1 = D2 = Dtr, and\nthe optimization problem in Eq 16 reduces to the single-level optimization (SLO),\nminΘ,ΩLDtr(Θ,Ω), (7)\nwhich can be solved directly by stochastic gradient descent. This reduced formulation treats the learnable weights Ω just as a part of the model parameters. Despite its efficiency, compared with Θ, the number of parameters in Ω is almost neglectable. Thus optimization will need to fit Θ well for gradient descent, resulting in inadequate solutions of Ω.\nThe most widely adopted optimization algorithm for Eq 16 is the bi-level optimization (BLO) algorithm Liu et al. (2019), which asksD1 andD2 to be a random split of Dtr.2 And the gradient descent is done following:\nΘ = Θ− λ1∇ΘLD1 , Ω = Ω− λ2∇ΩLD2 . (8)\nthat is, updating the parameters in an interleaving fashion: one-step gradient descent of Θ on D1 followed by one step gradient descent of Ω on D2. Note that Θ∗(ω) in Eq 16 is not satisfied in BLO due to first-order approximation, leading gradient updates of ω into wrong directions, collapsing the bi-level optimization."
+    }, {
+      "heading" : "3.4 Cross-level optimization",
+      "text" : "We now propose our cross-level optimization algorithm. The gradient descent updating of Θ and Ω follows\nΘ = Θ− λ1∇ΘLD1 , Ω = Ω− λ1∇ΩLD1 − λ2∇ΩLD2 . (9)\nThe above equation is the core of our CLO algorithm, which we will refer to as CLO-v1, which are derived and demonstrated in detail in the Appendix. We can see that our cross-level optimization’s core idea is to draw gradient information from both splits of the training set, thus making the updating of Ω more reliable.\nNote that updating Ω requires its gradients on both the D1 set and D2 set. Thus its computation complexity is higher than the BLO algorithm. We propose a more efficient version of cross-level optimization (CLO-v2), which can also be found in the Appendix. We divide the training procedure into\n2Note that on each epoch start, the split of Dtr can be re-generated.\ngroups, each group containing C steps, Θ is updated solely on the training set for C − 1 steps, and updated following Eq 9 for the remaining one step. We will call the hyper-parameter C as the crosslevel cycle length. CLO-v2 is more efficient than CLO-v1, and our experiments show that CLO-v2 works well and is comparable with CLO-v1."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Tasks and Datasets",
+      "text" : "We evaluate our proposed approach to the classification tasks on GLUE benchmark. We only exclude the STS-B task since it is a regression task, and we exclude the WNLI task following previous work (Devlin et al., 2018; Jiao et al., 2020; Xu et al., 2020)."
+    }, {
+      "heading" : "4.2 Backbone models",
+      "text" : "Backbone models. All of the experiments are built upon the Google BERT, ALBERT. We ensure fair comparison by setting the hyper-parameters related to the PLM backbones the same with HuggingFace Transformers (Wolf et al., 2020)."
+    }, {
+      "heading" : "4.3 Baseline methods",
+      "text" : "We compare with the previous BERT early exiting methods and compare other methods that speed up BERT inference.\nDirectly reducing layers. We experiment with directly utilizing the first 6 and 9 layers of the original (AL)BERT with a single output layer on the top, denoted by (AL)BERT-6L and (AL)BERT-9L, respectively. These two baselines serve as a lower bound for performance metrics since it does not employ any technique.\nStatic model compression approaches. For model parameter pruning, we include the results of LayerDrop (Fan et al., 2020) and attention head pruning (Michel et al., 2019) on ALBERT. For knowledge distillation, we include DistillBERT (Sanh et al., 2019), BERT-PKD (Sun et al., 2019). 3 For module replacing, we include BERT-ofTheseus (Xu et al., 2020).\nInput-adaptive inference. This category includes entropy-based method DeeBERT, scorebased method Shallow-deep, and patience-based exiting method PABEE as our baselines. We also\n3Note that the two methods consider knowledge distillation on the fine-tuning stage, whereas TinyBERT (Jiao et al., 2020) and Turc et al. (2019) investigate knowledge distillation during both the pre-training stage and fine-tuning stage.\nMethod #Param Speed-up CoLA MNLI MRPC QNLI QQP RTE SST-2 Dev set\nALBERT-base 12M 1.00x 57.4 84.6 89.5 89.2 89.6 75.6 91.8 ALBERT-6L 12M 1.96x 51.9 80.2 85.8 84.7 86.8 70.6 88.8 ALBERT-9L 12M 1.30x 53.8 81.2 87.1 86.2 88.3 72.9 90.3 LayerDrop 12M 1.96x 52.2 79.8 85.9 84.5 87.3 71.3 89.7 HeadPrune 12M 1.22x 52.6 80.3 86.2 84.3 88.0 72.1 89.5 DeeBERT 12M 1.88x 53.7 81.7 87.2 86.4 87.4 72.4 89.6 Shallow-Deep 12M 1.95x 54.1 81.5 87.1 86.7 87.8 72.2 89.7 PABEE 12M 1.91x 56.4 83.9 88.7 88.6 88.9 74.4 90.5\nFastBERT 12M 1.94x 57.1 84.7 89.1 89.0 89.3 75.6 90.9 FastBERT-CLO-v2 12M 1.95x 57.2 85.0 89.2 89.3 89.5 76.3 91.1\nLeeBERT-LLE 12M 1.96x 57.5 85.1 89.5 89.4 89.8 76.7 91.3 LeeBERT-rand 12M 1.95x 57.0 84.8 89.2 89.1 89.2 75.8 91.0 LeeBERT-uniform 12M 1.95x 57.1 84.9 89.1 89.0 89.3 75.9 91.0 LeeBERT-SLO 12M 1.94x 57.2 85.0 89.2 89.3 89.6 76.0 90.9 LeeBERT-BLO 12M 1.93x 57.4 85.1 89.5 89.4 89.8 76.4 91.3 LeeBERT-CLO-v1 12M 1.95x 57.9 85.4 89.9 89.7 90.3 76.9 91.8 LeeBERT 12M 1.96x 57.8 85.4 89.7 89.7 90.2 76.8 91.8\nTest set ALBERT-base 12M 1.00x 54.1 84.3 87.0 88.3 71.1 73.4 92.8\nPABEE 12M 1.89x 53.5 83.6 86.5 88.1 69.8 72.8 92.0 FastBERT 12M 1.95x 54.0 84.4 86.7 88.3 70.5 73.7 92.5 LeeBERT 12M 1.96x 54.6∗ 84.8∗ 87.2 88.6 71.4∗ 74.6∗ 93.1∗\nTable 1: Experimental results of models with ALBERT backbone on the development set and GLUE test set. If not specified, LeeBERT and its variants (e.g., LeeBERT-LLE) are optimized using CLO-v2. The mean performance scores of 5 runs are reported. The speed-up ratio is averaged across 7 tasks. Best performances are bolded, ”*” indicates the performance gains are statistically significant.\ninclude the results of FastBERT when it adopts the PABEE’s exiting strategy."
+    }, {
+      "heading" : "4.4 Experimental settings",
+      "text" : "We implement LeeBERT on the base of HuggingFace’s Transformers. We conduct our experiments on a single Nvidia V100 16GB GPU.\nTraining. We add a linear output layer after each intermediate layer of the pre-trained BERT/ALBERT model as the internal classifier. The hyperparameter tuning is done in a crossvalidation fashion on the training set so that the dev set information of GLUE tasks are not revealed. We perform grid search over batch sizes of 16, 32, 128, and learning rates of {1e-5, 2e-5, 3e-5, 5e-5} for model parameters Θ, and learning rates of {1e-5, 1e-4, 1e-3, 5e-3} for learnable weights Ω. The cross-level cycle length C will be selected from 2, 4, 8. We will adopt the Adam optimizer. At each epoch, the training set is randomly split into D1 and D2 with a ratio 5 : 5. We apply an early stopping mechanism with patience 5 and evaluate the model on dev set at each epoch end. And we define the dev performance of our early\nexiting architecture as the average performance of all the exits. We will select the model with the best average performance in cross validation.\nWe set CLO-v2 as the main optimization algorithm of LeeBERT, and LAE as the main distillation strategy.4 To demonstrate LeeBERT’s ditillation objectives are beneficial, we train LeeBERT with the LLE strategy (LeeBERT-LLE). We also let the loss term weights in FastBERT to be learnable and train with our CLO-v2 algorithm, i.e., FastBERT-CLO-v2.\nTo compare our LeeBERT’s CLO optimization procedure with baselines, we also train LeeBERT with (1) single level algorithm (LeeBERT-SLO); (2) bi-level algorithm (LeeBERT-BLO). To compare CLO-v1 and CLO-v2, we also train the LeeBERT with CLO-v1, i.e., LeeBERT-CLO-v1. Besides, we also include LeeBERT with randomly assigned discrete weights (LeeBERT-rand) and uniform weights (LeeBERT-uniform) as baselines, which will serve to demonstrate that our optimization procedure is beneficial. The discrete weights\n4Henceforth, unless otherwise specified, our LeeBERT method will be the one with LAE and CLO-v2.\nare randomly selected from {1, 2, ..., 50}, and are normalized so that the loss terms at each exit have weights summed to 1.\nInference. Following prior work, inference with early exiting is on a per-instance basis, i.e., the batch size for inference is set to 1. We believe this setting mimics the common latency-sensitive production scenario when processing individual requests from different users. We report the mean performance over 5 runs with different random seeds. For DeeBERT and Shallow-deep, we set the threshold for entropy or score, such that the speedup ratio is between 1.80x to 2.1x. For FastBERT and our LeeBERT, we mainly adopt the PABEE’s patience based exiting strategy, and we compare the results when the patience is set at 4. How the patience parameter affects the inference efficiency is also investigated for PABEE, FastBERT, and LeeBERT."
+    }, {
+      "heading" : "4.5 Overall Comparison",
+      "text" : "Table 1 reports the main results on GLUE with ALBERT as the backbone model. ALBERT is parameter and memory-efficient due to its cross-layer parameter sharing strategy, however, it still has high inference latency. From Table 1 we can see that our approach outperforms all compared methods to improve inference efficiency while maintaining good performances, demonstrating the proposed LeeBERT framework’s effectiveness. Note that our system can effectively enhance the original ALBERT and PABEE by a relatively large margin when speeding-up inference by 1.97x. We also conduct experiments on the BERT backbone with the MNLI, MRPC, and SST-2 tasks, which can be found in the Appendix. To give more insight into how early exits perform under different efficiency settings, we illustrate how the patience parameter affect the average number of inference layers (which is directly related to speed-up ratios) (Figure 2), and prediction performances (Figure 3). We also show that one can easily apply our LeeBERT framework to image classification tasks in the Appendix."
+    }, {
+      "heading" : "4.6 Analysis",
+      "text" : "We now analyze more deeply the main take-aways from Table 1 and our experiments.\nOur LeeBERT can speed up inference. Figure 2 shows that on the MRPC task, with the same patience parameter, LeeBERT usually goes through fewer layers (on average) than PABEE and Fast-\nBERT, showing the LeeBERT can improve the efficiency of PLMs’ early exiting.\nOur knowledge distillation strategies are beneficial. Table 1 reveals that our LAE setting provides the best overall performances on GLUE in terms of distillation strategies. LeeBERT outperforms FastBERT-CLO-v2 on all tasks and exceeds LeeBERT-LLE on 6 of the seven tasks, and the scores on QNLI the results are comparable. This result proves that exits learning from each other are generally beneficial.\nOur CLO algorithm brings performance gains. As a sanity check, LeeBERT-rand performs worse than all optimized LeeBERT models. Table 1 also shows that the SLO and BLO algorithms perform worse than our CLO. And we can see that CLO-v1 and CLO-v2 have comparable results. CLO-v1 seems to have slight advantages on tasks with few samples, but the performance gaps seem to be marginal. Since CLO-v2 is more efficient, we will use CLO-v2 as our main optimization algorithm.\nThe patience-score curves are different for different PLMs. Figures 3(a) and 3(b) show that differnt PLMs have quite different patience-score curves. For ALBERT, early exiting with PABEE’s strategy can improve upon the ALBERT-base finetuning, and the best performance is obtained with patience 6. With patience 6, the average number of inference layers is 8.11. This phenomenon shows that ALBERT base may suffer from the overthinking problem. With the help of our distillation strategy and CLO optimization, the performance gain is considerable. Note that: (a) Without distilla-\ntion, shallow exits’ performances are significantly worse, and our distillation can help these exits to improve; (b) with LeeBERT, the performances of the later exits are comparable to the earlier ones, since the over-thinking problem is alleviated by distillation. However, the patience-score curve for BERT is quite monotonic, suggesting that overthinking problem is less severe. Note that BERT’s shallow exits are significantly worse than that of ALBERT, and with LeeBERT, the shallow exits’ performances are improved.\nTraining time costs. Table 2 presents the parameter numbers and time costs of training for LeeBERT compared with the original (AL)BERT, and PABEE, FastBERT. We can see that although exits need extra time for training, early exiting architectures actually can reduce the training time. Intuitively, additional loss objectives can be regarded as additional parameter updating steps for lower layers, thus speeding up the model convergence. LeeBERT-CLO-v1 requires a longer time for training. Notably, our LeeBERT’s time costs are comparable with PABEE and FastBERT, even though it has more complicated gradient updating steps.\nWorking with different exiting strategies. Recall that our results are mainly obtained by adopting the PABEE’s patience based exiting strategies. However, our LeeBERT framework is quite offthe-shelf, and can be integrated with many other exiting strategies. Our framework can work under different exiting strategies.5 When using entropybased strategy, LeeBERT outperforms DeeBERT\n5Due to length limitation, we will leave the detailed results of this ablation study in the Appendix.\nby a large margin. When using Shallow-Deep’s max probability strategy, LeeBERT outperforms Shallow-Deep on all GLUE tasks."
+    }, {
+      "heading" : "5 Conclusion and discussions",
+      "text" : "In this work, we propose a new framework for improving PLMs’ early exiting. Our main contributions lie in two aspects. First, we argue that exits should learn and distill knowledge from each other during training. Second, we propose that early exiting networks’ training objectives be weighted differently, where the weights are learnable. The learnable weights are optimized with the cross-level optimization we propose. Experiments on the GLUE benchmark datasets show that our framework can improve PLMs’ early exiting performances, especially under high latency requirements. Our framework is easy to implement and can be adapted to various early exiting strategies. We want to explore novel exiting strategies that better guarantee exiting performances in the future."
+    }, {
+      "heading" : "A Derivation of our cross-level optimization algorithm.",
+      "text" : "We now derive our cross-level optimization (CLO) methods. Our objective is\nminΩLD2(Θ∗(Ω),Ω), (15) s.t.,Θ∗(Ω) = arg min\nΘ LD1(Θ,Ω)\nAssume the optimal solution is Θ∗ and Ω∗. The objective in Eq 16 can be viewed as minimizing the gap between LD1(Θ,Ω) and LD1(Θ\n∗,Ω∗), and minimizing the gap between LD2(Θ\n∗,Ω) and LD2(Θ\n∗,Ω∗). Thus, introducing slack variables δ1 and δ2, Eq 16 can be reformulated as\nminΘ,Ωδ 2 1 + δ 2 2 , (16)\ns.t.,LD1(Θ,Ω) <= LD1(Θ ∗,Ω∗) + δ1,\nLD2(Θ ∗,Ω) <= LD2(Θ ∗,Ω∗) + δ2,\nδ1 >= 0, δ2 >= 0.\nUsing the Lagrangian multiplier method, the Lagrangian function is\nLg(δ1, δ2,Θ,Ω,Λ) = δ 2 1 + δ 2 2 (17)\n− λ1(LD1(Θ,Ω)− LD1(Θ∗,Ω∗)− δ1) − λ2(LD2(Θ∗,Ω)− LD2(Θ∗,Ω∗)− δ2) − λ3δ1 − λ4δ2.\nTo solve this Lagrangian function, the gradient descent updating of Θ and Ω becomes\nΘ = Θ− λ1∇ΘLD1 , (18) Ω = Ω− λ1∇ΩLD1 − λ2∇ΩLD2 .\nNow we formally illustrate the CLO-v1 algorithm, which is in Algorithm 1. We also officially give the CLO-v2 algorithm in Algorithm 2."
+    }, {
+      "heading" : "B Hyper-parameters for each tasks",
+      "text" : "Table 3 reports the important hyper-parameters of LeeBERT for each task. Note that our hyperparameter search was done on the training set with cross-validation so that the GLUE benchmarks’ dev set information was not revealed during training."
+    }, {
+      "heading" : "C Results with BERT backbone",
+      "text" : "We conduct experiments with the BERT backbone on three representative tasks of GLUE, MNLI, MRPC, and SST-2. The results are reported in Table 5. The results show that our LeeBERT framework works well with different types of PLMs."
+    }, {
+      "heading" : "D Patience-performance curves on sst-2",
+      "text" : "We also provide the patience-performance curves (Figure 4) on the SST-2 task, with ALBERT and BERT backbones."
+    }, {
+      "heading" : "E Working with different exiting strategies",
+      "text" : "Our results are mainly obtained by adopting the PABEE’s patience based exiting strategies. Now we demonstrate that LeeBERT can work with other exiting strategies. Table 4 shows that LeeBERT can help improve DeeBERT with its entropy-based exiting method and outperforms Shallow-deep with its max-prediction-based approach."
+    }, {
+      "heading" : "F LeeBERT are effective for image classification",
+      "text" : "To demonstrate the effectiveness of LeeBERT on the image classification task, we follow the experimental settings in Shallow-Deep (Kaya et al., 2019). We conduct experiments on two image classification datasets, CIFAR-10 and CIFAR-100 (Krizhevsky, 2009). And ResNet-56 (He et al., 2016) serves as the backbone and we compare LeeBERT with PABEE, DBT from Phuong and Lampert (2019). After every two convolutional layers, an exiting classifier is added. We set the batch size to 128 and use SGD optimizer with learning rate of 0.1. We set the cross level sycle to be 4, and learning rate of the learnable weights Ω are 0.01.\nTable 6 reports the results. LeeBERT outperforms the full ResNet-56 on both tasks even when it provides 1.3x speed-up. Besides, it outperforms PABEE and DBT.\nAlgorithm 1: LeeBERT-CLO-v1 Parameters: Θ,Ω; Return: the converged early exiting model; while not converge do\nfor t=1, ..., T do sample batch B1 and B2 from D1 and D2, respectively update Θ with\nΘ = Θ− λ1∇ΘLB1 , (10)\ncalculate LB1 and LB2 with the updated Θ, and update Ω with:\nΩ = Ω− λ1∇ΩLB1 − λ2∇ΩLB2 , (11)\nend end\nAlgorithm 2: LeeBERT-CLO-v2 Parameters: Θ,Ω, C; Return: the converged early exiting model; while not converge do\nfor t=1, ..., T do for c = 1, 2, ..., C do\nif c != C then sample batch B1 from D1, respectively update Θ and with\nΘ = Θ− λ1∇ΘLB1 , (12) Ω = Ω− λ1∇ΩLB1 ,\nend else\nsample batch B1 and B2 from D1 and D2, respectively update Θ with\nΘ = Θ− λ1∇ΘLB1 , (13)\ncalculate LB1 and LB2 with the updated Θ, and update Ω with:\nΩ = Ω− λ1∇ΩLB1 − λ2∇ΩLB2 , (14)\nend end\nend end"
+    } ],
+    "references" : [ {
+      "title" : "Binarybert: Pushing the limit of bert quantization",
+      "author" : [ "Haoli Bai", "Wei Zhang", "L. Hou", "L. Shang", "Jing Jin", "X. Jiang", "Qun Liu", "Michael R. Lyu", "Irwin King." ],
+      "venue" : "ArXiv, abs/2012.15701.",
+      "citeRegEx" : "Bai et al\\.,? 2020",
+      "shortCiteRegEx" : "Bai et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Adaptive neural networks for efficient inference",
+      "author" : [ "Tolga Bolukbasi", "J. Wang", "O. Dekel", "Venkatesh Saligrama." ],
+      "venue" : "ICML.",
+      "citeRegEx" : "Bolukbasi et al\\.,? 2017",
+      "shortCiteRegEx" : "Bolukbasi et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Bert: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "arXiv preprint arXiv:1810.04805.",
+      "citeRegEx" : "Devlin et al\\.,? 2018",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Reducing transformer depth on demand with structured dropout",
+      "author" : [ "Angela Fan", "E. Grave", "Armand Joulin." ],
+      "venue" : "ArXiv, abs/1909.11556.",
+      "citeRegEx" : "Fan et al\\.,? 2020",
+      "shortCiteRegEx" : "Fan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Romebert: Robust training of multi-exit bert",
+      "author" : [ "Shijie Geng", "Peng Gao", "Z. Fu", "Yongfeng Zhang" ],
+      "venue" : null,
+      "citeRegEx" : "Geng et al\\.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Geng et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Deep residual learning for image recognition",
+      "author" : [ "Kaiming He", "X. Zhang", "Shaoqing Ren", "Jian Sun." ],
+      "venue" : "2016 IEEE Conference on Computer Vision and Pattern Recognition (CVPR), pages 770–778.",
+      "citeRegEx" : "He et al\\.,? 2016",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Distilling the knowledge in a neural network",
+      "author" : [ "Geoffrey E. Hinton", "Oriol Vinyals", "J. Dean." ],
+      "venue" : "ArXiv, abs/1503.02531.",
+      "citeRegEx" : "Hinton et al\\.,? 2015",
+      "shortCiteRegEx" : "Hinton et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Tinybert: Distilling bert for natural language understanding",
+      "author" : [ "Xiaoqi Jiao", "Y. Yin", "L. Shang", "Xin Jiang", "X. Chen", "Linlin Li", "F. Wang", "Qun Liu." ],
+      "venue" : "ArXiv, abs/1909.10351.",
+      "citeRegEx" : "Jiao et al\\.,? 2020",
+      "shortCiteRegEx" : "Jiao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Shallow-deep networks: Understanding and mitigating network overthinking",
+      "author" : [ "Y. Kaya", "Sanghyun Hong", "T. Dumitras." ],
+      "venue" : "ICML.",
+      "citeRegEx" : "Kaya et al\\.,? 2019",
+      "shortCiteRegEx" : "Kaya et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "I-bert: Integer-only bert quantization",
+      "author" : [ "Se-Hoon Kim", "Amir Gholami", "Zhewei Yao", "M.W. Mahoney", "K. Keutzer." ],
+      "venue" : "ArXiv, abs/2101.01321.",
+      "citeRegEx" : "Kim et al\\.,? 2021",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Learning multiple layers of features from tiny images",
+      "author" : [ "A. Krizhevsky" ],
+      "venue" : null,
+      "citeRegEx" : "Krizhevsky.,? \\Q2009\\E",
+      "shortCiteRegEx" : "Krizhevsky.",
+      "year" : 2009
+    }, {
+      "title" : "Albert: A lite bert for self-supervised learning of language representations",
+      "author" : [ "Zhenzhong Lan", "Mingda Chen", "Sebastian Goodman", "Kevin Gimpel", "Piyush Sharma", "Radu Soricut." ],
+      "venue" : "ArXiv, abs/1909.11942.",
+      "citeRegEx" : "Lan et al\\.,? 2020",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Darts: Differentiable architecture search",
+      "author" : [ "Hanxiao Liu", "K. Simonyan", "Yiming Yang." ],
+      "venue" : "ArXiv, abs/1806.09055.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Fastbert: a self-distilling bert with adaptive inference time",
+      "author" : [ "Weijie Liu", "P. Zhou", "Zhe Zhao", "Zhiruo Wang", "Haotang Deng", "Q. Ju." ],
+      "venue" : "ArXiv, abs/2004.02178.",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Are sixteen heads really better than one? In NeurIPS",
+      "author" : [ "Paul Michel", "Omer Levy", "Graham Neubig" ],
+      "venue" : null,
+      "citeRegEx" : "Michel et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Michel et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Distillation-based training for multi-exit architectures",
+      "author" : [ "Mary Phuong", "Christoph H. Lampert." ],
+      "venue" : "2019 IEEE/CVF International Conference on Computer Vision (ICCV), pages 1355–1364.",
+      "citeRegEx" : "Phuong and Lampert.,? 2019",
+      "shortCiteRegEx" : "Phuong and Lampert.",
+      "year" : 2019
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "Alec Radford", "Jeff Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever" ],
+      "venue" : null,
+      "citeRegEx" : "Radford et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter",
+      "author" : [ "Victor Sanh", "Lysandre Debut", "Julien Chaumond", "Thomas Wolf." ],
+      "venue" : "ArXiv, abs/1910.01108.",
+      "citeRegEx" : "Sanh et al\\.,? 2019",
+      "shortCiteRegEx" : "Sanh et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The right tool for the job: Matching model and instance complexities",
+      "author" : [ "Roy Schwartz", "Gabi Stanovsky", "Swabha Swayamdipta", "Jesse Dodge", "N.A. Smith." ],
+      "venue" : "ACL.",
+      "citeRegEx" : "Schwartz et al\\.,? 2020",
+      "shortCiteRegEx" : "Schwartz et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Patient knowledge distillation for bert model compression",
+      "author" : [ "S. Sun", "Yu Cheng", "Zhe Gan", "Jingjing Liu." ],
+      "venue" : "EMNLP/IJCNLP.",
+      "citeRegEx" : "Sun et al\\.,? 2019",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Branchynet: Fast inference via early exiting from deep neural networks",
+      "author" : [ "Surat Teerapittayanon", "Bradley McDanel", "H.T. Kung." ],
+      "venue" : "2016 23rd International Conference on Pattern Recognition (ICPR), pages 2464–2469.",
+      "citeRegEx" : "Teerapittayanon et al\\.,? 2016",
+      "shortCiteRegEx" : "Teerapittayanon et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Well-read students learn better: On the importance of pre-training compact models",
+      "author" : [ "Iulia Turc", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "arXiv: Computation and Language.",
+      "citeRegEx" : "Turc et al\\.,? 2019",
+      "shortCiteRegEx" : "Turc et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "L. Kaiser", "Illia Polosukhin." ],
+      "venue" : "ArXiv, abs/1706.03762.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Glue: A multi-task benchmark and analysis platform for natural language understanding",
+      "author" : [ "Alex Wang", "Amanpreet Singh", "Julian Michael", "Felix Hill", "Omer Levy", "Samuel R. Bowman." ],
+      "venue" : "BlackboxNLP@EMNLP.",
+      "citeRegEx" : "Wang et al\\.,? 2018",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Transformers: State-of-the-art natural language processing",
+      "author" : [ "Teven Le Scao", "Sylvain Gugger", "Mariama Drame", "Quentin Lhoest", "Alexander Rush." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing:",
+      "citeRegEx" : "Scao et al\\.,? 2020",
+      "shortCiteRegEx" : "Scao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deebert: Dynamic early exiting for accelerating bert inference",
+      "author" : [ "J. Xin", "Raphael Tang", "J. Lee", "Y. Yu", "Jimmy Lin." ],
+      "venue" : "ArXiv, abs/2004.12993.",
+      "citeRegEx" : "Xin et al\\.,? 2020",
+      "shortCiteRegEx" : "Xin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bert-of-theseus: Compressing bert by progressive module replacing",
+      "author" : [ "Canwen Xu", "Wangchunshu Zhou", "Tao Ge", "Furu Wei", "M. Zhou." ],
+      "venue" : "EMNLP.",
+      "citeRegEx" : "Xu et al\\.,? 2020",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Xlnet: Generalized autoregressive pretraining for language understanding",
+      "author" : [ "Z. Yang", "Zihang Dai", "Yiming Yang", "J. Carbonell", "R. Salakhutdinov", "Quoc V. Le." ],
+      "venue" : "NeurIPS.",
+      "citeRegEx" : "Yang et al\\.,? 2019",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Gradient surgery for multi-task learning",
+      "author" : [ "Tianhe Yu", "Saurabh Kumar", "A. Gupta", "S. Levine", "Karol Hausman", "Chelsea Finn." ],
+      "venue" : "ArXiv, abs/2001.06782.",
+      "citeRegEx" : "Yu et al\\.,? 2020",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Ternarybert: Distillation-aware ultra-low bit bert",
+      "author" : [ "W. Zhang", "L. Hou", "Y. Yin", "L. Shang", "X. Chen", "X. Jiang", "Qun Liu." ],
+      "venue" : "ArXiv, abs/2009.12812.",
+      "citeRegEx" : "Zhang et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bert loses patience: Fast and robust inference with early exit",
+      "author" : [ "Wangchunshu Zhou", "Canwen Xu", "Tao Ge", "Julian McAuley", "Ke Xu", "Furu Wei." ],
+      "venue" : "ArXiv, abs/2006.04152.",
+      "citeRegEx" : "Zhou et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "To prune, or not to prune: exploring the efficacy of pruning for model compression",
+      "author" : [ "M. Zhu", "S. Gupta." ],
+      "venue" : "ArXiv, abs/1710.01878.",
+      "citeRegEx" : "Zhu and Gupta.,? 2018",
+      "shortCiteRegEx" : "Zhu and Gupta.",
+      "year" : 2018
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 2,
+      "context" : "The last couple of years have witnessed the rise of pre-trained language models (PLMs), such as BERT (Devlin et al., 2018), GPT (Radford et al.",
+      "startOffset" : 101,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 27,
+      "context" : ", 2019), XLNet (Yang et al., 2019), and ALBERT (Lan et al.",
+      "startOffset" : 15,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 3,
+      "context" : "Second, previous literature (Fan et al., 2020; Michel et al., 2019; Zhou et al., 2020) pointed out that large PLMs with dozens of stacked Transformer layers are over-parameterized and could suffer from the “overthinking” problem (Kaya et al.",
+      "startOffset" : 28,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 14,
+      "context" : "Second, previous literature (Fan et al., 2020; Michel et al., 2019; Zhou et al., 2020) pointed out that large PLMs with dozens of stacked Transformer layers are over-parameterized and could suffer from the “overthinking” problem (Kaya et al.",
+      "startOffset" : 28,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 30,
+      "context" : "Second, previous literature (Fan et al., 2020; Michel et al., 2019; Zhou et al., 2020) pointed out that large PLMs with dozens of stacked Transformer layers are over-parameterized and could suffer from the “overthinking” problem (Kaya et al.",
+      "startOffset" : 28,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2020) pointed out that large PLMs with dozens of stacked Transformer layers are over-parameterized and could suffer from the “overthinking” problem (Kaya et al., 2019).",
+      "startOffset" : 150,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 31,
+      "context" : "Standard methods include direct network pruning (Zhu and Gupta, 2018; Xu et al., 2020; Fan et al., 2020; Michel et al., 2019), knowledge distillation (Sun et al.",
+      "startOffset" : 48,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 26,
+      "context" : "Standard methods include direct network pruning (Zhu and Gupta, 2018; Xu et al., 2020; Fan et al., 2020; Michel et al., 2019), knowledge distillation (Sun et al.",
+      "startOffset" : 48,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 3,
+      "context" : "Standard methods include direct network pruning (Zhu and Gupta, 2018; Xu et al., 2020; Fan et al., 2020; Michel et al., 2019), knowledge distillation (Sun et al.",
+      "startOffset" : 48,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 14,
+      "context" : "Standard methods include direct network pruning (Zhu and Gupta, 2018; Xu et al., 2020; Fan et al., 2020; Michel et al., 2019), knowledge distillation (Sun et al.",
+      "startOffset" : 48,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 19,
+      "context" : ", 2019), knowledge distillation (Sun et al., 2019; Sanh et al., 2019; Jiao et al., 2020), weight quantization (Zhang et al.",
+      "startOffset" : 32,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 17,
+      "context" : ", 2019), knowledge distillation (Sun et al., 2019; Sanh et al., 2019; Jiao et al., 2020), weight quantization (Zhang et al.",
+      "startOffset" : 32,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 7,
+      "context" : ", 2019), knowledge distillation (Sun et al., 2019; Sanh et al., 2019; Jiao et al., 2020), weight quantization (Zhang et al.",
+      "startOffset" : 32,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 29,
+      "context" : ", 2020), weight quantization (Zhang et al., 2020; Bai et al., 2020; Kim et al., 2021) and adaptive inference (Zhou et al.",
+      "startOffset" : 29,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2020), weight quantization (Zhang et al., 2020; Bai et al., 2020; Kim et al., 2021) and adaptive inference (Zhou et al.",
+      "startOffset" : 29,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2020), weight quantization (Zhang et al., 2020; Bai et al., 2020; Kim et al., 2021) and adaptive inference (Zhou et al.",
+      "startOffset" : 29,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 1,
+      "context" : "Early exiting is one of the most crucial adaptive inference methods (Bolukbasi et al., 2017).",
+      "startOffset" : 68,
+      "endOffset" : 92
+    }, {
+      "referenceID" : 20,
+      "context" : "Strategies for early exiting are designed (Teerapittayanon et al., 2016; Kaya et al., 2019; Xin et al., 2020; Zhou et al., 2020), which decides when to exit given the current obtained predictions (from previous and current layers).",
+      "startOffset" : 42,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 8,
+      "context" : "Strategies for early exiting are designed (Teerapittayanon et al., 2016; Kaya et al., 2019; Xin et al., 2020; Zhou et al., 2020), which decides when to exit given the current obtained predictions (from previous and current layers).",
+      "startOffset" : 42,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 25,
+      "context" : "Strategies for early exiting are designed (Teerapittayanon et al., 2016; Kaya et al., 2019; Xin et al., 2020; Zhou et al., 2020), which decides when to exit given the current obtained predictions (from previous and current layers).",
+      "startOffset" : 42,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 30,
+      "context" : "Strategies for early exiting are designed (Teerapittayanon et al., 2016; Kaya et al., 2019; Xin et al., 2020; Zhou et al., 2020), which decides when to exit given the current obtained predictions (from previous and current layers).",
+      "startOffset" : 42,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 15,
+      "context" : "Different objectives from different classifiers may conflict and interfere with one-another (Phuong and Lampert, 2019; Yu et al., 2020).",
+      "startOffset" : 92,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 28,
+      "context" : "Different objectives from different classifiers may conflict and interfere with one-another (Phuong and Lampert, 2019; Yu et al., 2020).",
+      "startOffset" : 92,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 12,
+      "context" : "Built upon previous literature (Liu et al., 2019), we propose a novel cross-level optimization (CLO) algorithm to solve the bilevel optimization better.",
+      "startOffset" : 31,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 23,
+      "context" : "Extensive experiments are conducted on the GLUE benchmark (Wang et al., 2018), and show that LeeBERT outperforms existing SOTA BERT early exiting methods, sometimes by a large margin.",
+      "startOffset" : 58,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 22,
+      "context" : "BERT is a multi-layer Transformer (Vaswani et al., 2017) network, which is pre-trained in a self-supervised manner on a large corpus.",
+      "startOffset" : 34,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2016), FastBERT (Liu et al., 2020) and DeeBERT (Xin et al.",
+      "startOffset" : 18,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2020) and DeeBERT (Xin et al., 2020) calculated the entropy of the prediction probability distribution as a proxy for the confidence of exiting classifiers to enable early exiting.",
+      "startOffset" : 20,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 8,
+      "context" : "Shallow-Deep Nets (Kaya et al., 2019) and RightTool (Schwartz et al.",
+      "startOffset" : 18,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 18,
+      "context" : ", 2019) and RightTool (Schwartz et al., 2020) leveraged the softmax scores of predictions of exiting classifiers, that is, if the score of a particular class is dominant and large enough, the model will exit.",
+      "startOffset" : 22,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 30,
+      "context" : "Recently, PABEE (Zhou et al., 2020) propose a patience based exiting strategy analogous to early stopping model training, that is, if the exits’ predictions remain unchanged for a pre-defined number of times (patience), the model will stop inference and exit.",
+      "startOffset" : 16,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 15,
+      "context" : "(4) Previous work (Phuong and Lampert, 2019; Liu et al., 2020) considers using only the last exit as as the teacher and all exits learn from it.",
+      "startOffset" : 18,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 13,
+      "context" : "(4) Previous work (Phuong and Lampert, 2019; Liu et al., 2020) considers using only the last exit as as the teacher and all exits learn from it.",
+      "startOffset" : 18,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 2,
+      "context" : "We only exclude the STS-B task since it is a regression task, and we exclude the WNLI task following previous work (Devlin et al., 2018; Jiao et al., 2020; Xu et al., 2020).",
+      "startOffset" : 115,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 7,
+      "context" : "We only exclude the STS-B task since it is a regression task, and we exclude the WNLI task following previous work (Devlin et al., 2018; Jiao et al., 2020; Xu et al., 2020).",
+      "startOffset" : 115,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 26,
+      "context" : "We only exclude the STS-B task since it is a regression task, and we exclude the WNLI task following previous work (Devlin et al., 2018; Jiao et al., 2020; Xu et al., 2020).",
+      "startOffset" : 115,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 3,
+      "context" : "For model parameter pruning, we include the results of LayerDrop (Fan et al., 2020) and attention head pruning (Michel et al.",
+      "startOffset" : 65,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2020) and attention head pruning (Michel et al., 2019) on ALBERT.",
+      "startOffset" : 35,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 17,
+      "context" : "For knowledge distillation, we include DistillBERT (Sanh et al., 2019), BERT-PKD (Sun et al.",
+      "startOffset" : 51,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 26,
+      "context" : "3 For module replacing, we include BERT-ofTheseus (Xu et al., 2020).",
+      "startOffset" : 50,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 7,
+      "context" : "Note that the two methods consider knowledge distillation on the fine-tuning stage, whereas TinyBERT (Jiao et al., 2020) and Turc et al.",
+      "startOffset" : 101,
+      "endOffset" : 120
+    } ],
+    "year" : 2021,
+    "abstractText" : "Pre-trained language models like BERT are performant in a wide range of natural language tasks. However, they are resource exhaustive and computationally expensive for industrial scenarios. Thus, early exits are adopted at each layer of BERT to perform adaptive computation by predicting easier samples with the first few layers to speed up the inference. In this work, to improve efficiency without performance drop, we propose a novel training scheme called Learned Early Exiting for BERT (LeeBERT). First, we ask each exit to learn from each other, rather than learning only from the last layer. Second, the weights of different loss terms are learned, thus balancing off different objectives. We formulate the optimization of LeeBERT as a bi-level optimization problem, and we propose a novel cross-level optimization (CLO) algorithm to improve the optimization results. Experiments on the GLUE benchmark show that our proposed methods improve the performance of the state-of-the-art (SOTA) early exiting methods for pre-trained models.",
+    "creator" : "LaTeX with hyperref package"
+  }
+}

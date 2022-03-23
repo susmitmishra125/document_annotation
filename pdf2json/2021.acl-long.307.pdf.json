@@ -1,0 +1,462 @@
+{
+  "name" : "2021.acl-long.307.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Point, Disambiguate and Copy: Incorporating Bilingual Dictionaries for Neural Machine Translation",
+    "authors" : [ "Tong Zhang", "Long Zhang", "Wei Ye", "Bo Li", "Jinan Sun", "Xiaoyu Zhu", "Wen Zhao", "Shikun Zhang" ],
+    "emails" : [ "zhangsk}@pku.edu.cn" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 3970–3979\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n3970"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "The past several years have witnessed the remarkable success of Neural machine translation (NMT), due to the development of sequence-to-sequence methods (Sutskever et al., 2014; Bahdanau et al., 2015; Vaswani et al., 2017). Since bilingual dictionaries cover rich prior knowledge, especially of low-frequency words, many efforts have been dedicated to incorporating bilingual dictionaries into NMT systems. These explorations can be roughly categorized into two broad paradigms. The first one transforms the bilingual dictionaries into pseudo parallel sentence pairs for training (Zhang\n†Corresponding authors.\nand Zong, 2016; Zhao et al., 2020). The second one utilizes the bilingual dictionaries as external resources fed into neural architectures (Luong et al., 2015; Gulcehre et al., 2016; Arthur et al., 2016; Zhang et al., 2017b; Zhao et al., 2018a,b, 2019b), which is more widely used and the focus of this paper.\nIn practice, bilingual dictionaries usually contain more than one translation for a word. From a highlevel perspective, we believe there are three critical steps to incorporate bilingual dictionaries into NMT models as shown in Figure 1: (1) pointing to a source word whose translation in dictionaries will be used at a decoding step, (2) disambiguating multiple translation candidates of the source word from dictionaries, and (3) copying the selected translation into the target side if necessary. Note that some works assume that only one translation exists for each word in dictionaries (Luong et al., 2015; Gulcehre et al., 2016). In this simplified scenario, the disambiguating step is unnecessary, hence the pointing and copying step can be merged into a single step similar to the classic copying mechanism (Gu et al., 2016). In more practical scenarios, however, this process suffers from the following bottlenecks corresponding to each step.\n(1) In the pointing step, semantic information of translations in dictionaries is underutilized. To locate source words whose translation in dictionaries may be used, some works (Luong et al., 2015; Gulcehre et al., 2016) use a classic copy mechanism, but in an oversimplified scenario mentioned above. More recent efforts further leverage statistics-based pre-processing methods (Zhao et al., 2018b, 2019b) to help identify, e.g., rare or troublesome source words. Note that the goal of locating a source word is to further use its translation in dictionaries. Intuitively, by exploring rich information of a source word’s translations in dictionaries, we can better understand the semantic meaning of the source word and distinguish whether we can its translation candidate. Unfortunately, this information is underutilized by most works, which could have boosted NMT performance, as shown in Section 5.2.\n(2) In the disambiguating step, the distinguishing information is from static prior knowledge or coarse-grained context information. To select the proper translation of one source word from multiple candidates in dictionaries, in addition to works that merely use the first-rank one (Luong et al., 2015; Gulcehre et al., 2016), existing explorations mainly involve exploiting prior probabilities, e.g., to adjust the distribution over the decoding vocabulary (Arthur et al., 2016; Zhao et al., 2018a). As a representative context-based disambiguation method, Zhao et al. (2019b) distinguish candidates by matching their embeddings with a decoder-oriented context embedding. Intuitively, an optimal translation candidate should not only accurately reflect the content of the source sentence, but also be consistent with the context of the current partial target sentence. Our observation is that both source information and target information is critical and complementary to distinguish candidates. Taking the source word “摩擦” in Figure 1 for example, the source context of “花 纹/pattern”, “轮胎/tire” and “地面/ground” helps to identify the candidates of “rub” and “friction” in the dictionary, and the target context of “these patterns increase brake” further makes “friction” the best choice. This observation inspires us to synthesize source information and target information in a more fine-grained manner to improve previous straightforward disambiguation methods.\n(3) A copying step is required to facilitate the collaboration between the pointing step and dis-\nambiguating step. Existing models usually do not explicitly emphasize a separate copying step 1, since it is a trivial task in their simplified or pipeline scenario. However, to deliver a sophisticated endto-end architecture that avoids error propagation problems, the pointing and disambiguating step must be appropriately connected as well as integrated into mature NMT models. The proposed copying step is the right place to complete this job.\nTo address the above problems, we propose a novel neural architecture consisting of three novel components: Pointer, Disambiguator, and Copier, to effectively incorporate bilingual dictionaries into NMT models in an end-to-end manner. Pointer is a pioneering research effort on exploiting the semantic information from bilingual dictionaries to better locate source words whose translation in dictionaries may be used. Disambiguator synthesizes complementary contextual information from the source and target via a bi-view disambiguation mechanism, accurately distinguishing the proper translation of a specific source word from multiple candidates in dictionaries. Copier couples Pointer and Disambiguator based on a hierarchical copy mechanism seamlessly integrated with Transformer, thereby building a sophisticated endto-end architecture. Last but not least, we design a simple and effective method to integrate byte-pair encoding (BPE) with bilingual dictionaries in our architecture. Extensive experiments are performed on Chinese-English and English-Japanese benchmarks, and the results verify the PDC’s overall performance and effectiveness of each component."
+    }, {
+      "heading" : "2 Background: Transformer",
+      "text" : "Transformer (Vaswani et al., 2017) is the most popular NMT architecture, which adopts the standard encoder-decoder framework and relies solely on stacked attention mechanisms. Specifically, given a source sequence x = {x1, x2..., xn}, the model is supposed to generate the target sequence y = {y1, y2..., ym} in an auto-regressive paradigm. Transformer Encoder. A Transformer encoder is constituted by a stack ofN identical layers, each of which contains two sub-layers. The first is a multihead self-attention mechanism (SelfAtt), and the second is a fully connected feed-forward network (FFN). Layer normalization (LN) (Ba et al., 2016) and residual connection (He et al., 2016) is em-\n1Note that previous works involve copy mechanism mainly correspond to the Pointing step.\nployed around the two sub-layers in both encoder and decoder.\nh̃l = LN(SelfAtt(hl−1) + hl−1), hl = LN(FFN(h̃l) + h̃l), (1)\nwhere hl = {hl1, hl2..., hln} is the output of the l-th layer. The final output hN of the last encoder layer serves as the encoder state h. Transformer Decoder. Similarly, the decoder employs the stack structure with N layers. Besides the two sub-layers, an additional cross attention (CrossAtt) sub-layer is inserted to capture the information from the encoder.\ns̃l = LN(SelfAtt(sl−1) + sl−1),\nŝl = LN(CrossAtt(s̃l,h,h) + s̃l),\nsl = LN(FFN(ŝl) + ŝl),\n(2)\nwhere sl is the output of the l-th decoder layer and the final output sN is taken as the decoder state s.\nThen, the translation probability p(yt|y<t,x) of the t-th target word is produced with a softmax layer:\np(yt|y<t,x) ∝ exp(Wost), (3)\nwhere y<t is the proceeding tokens before yt."
+    }, {
+      "heading" : "3 Methodology",
+      "text" : "In this section, we mathematically describe our model in detail. We follow the notations in Section 2. ci = {c (1) i , ..., c (k) i } denotes the translation candidates of a source word xi, derived from a bilingual dictionary D."
+    }, {
+      "heading" : "3.1 Overview",
+      "text" : "An overview of the proposed PDC model is shown in Figure 2. PDC aims to copy the correct translation candidate of the correct source word at a decoding step. Following the classic CopyNet (Gu et al., 2016), our model consists of two parts, an\nencoder-decoder translator to produce the generating probability and a copy mechanism to produce the copying probability. The above two probabilities will collaborate to emit the final probability.\nThe procedure of our copy mechanism involves three critical components: (1) a Pointer that selects a source word whose translation candidates will potentially be copied, (2) a Disambiguator which distinguishes multiple translation candidates of the source word to find the optimal candidate to copy, and (3) a Copier that generates copying probability by combining the outputs from the above two components hierarchically. We will describe the details of each component in the following subsection."
+    }, {
+      "heading" : "3.2 Pointer",
+      "text" : "The pointer aims to point which source word should be translated at a decoding step. We utilize the carefully extracted semantic information of translation candidates to promote pointing accuracy. Specifically, pointer first extracts the semantic information of candidates with candidate-wise encoding. Then the candidate representations of each source word are fused and interacted with the source representations from transformer encoder. An attention mechanism is applied on the refined source representations to point which word to be translated. Candidate Encoding. We first construct the candidate representations di = {d(1)i , ..., d (k) i } for the candidates of xi, through an candidate embedding matrix and a single layer candidate encoder.\nd̃i = LN(SelfAtt(Emb(ci)) + Emb(ci)), di = LN(FFN(d̃i) + d̃i). (4)\nNote that this candidate-wise encoder exploits the same structure as a source encoder layer. Pointing with candidate semantics. Previous dictionary-enhanced NMT systems usually directly utilize encoder state h and the decoder state st at tth decoding step to point whose translation should be copied in the source sentence. Intuitively, translation candidates’ information contributes to pointing the right source word, while it is underutilized previously. Accordingly, we propose to explore the semantic information of translation candidates in our pointer. First, we fuse multiple translation candidates’ representations of each word by an attention mechanism between hi and di.\nd′i = k∑ j=1 αsrci,j ·d (j) i ;α src i,j = exp(hiWd (j) i )∑k j′=1 exp(hiWd (j′) i ) ,\n(5)\nwhere d′i ∈ d′ is the fused representation for all candidates of the source word xi. Next, the encoder state h and d′ are interacted to refine the representations of source words with the carefully-extracted candidate information. The refined encoder state h′ can be formalized as:\nh̃′ = LN(CrossAtt(h′,d′,d′) + h′), h′ = LN(FFN(h̃′) + h̃′). (6)\nThen, we calculate the attention score to point which source word to be translated:\ns′t = n∑ i=1 βi · h′i; βi = exp(stWh ′ i)∑n i′=1 exp(stWh ′ i′) , (7)\nwhere βi is the pointing probability for xi. s′t denotes the refined decoder state."
+    }, {
+      "heading" : "3.3 Disambiguator",
+      "text" : "When translating a specific word, our model has the whole source sentence and the partial target sentence as inputs. An optimal translation candidate should not only accurately reflect the content of source sentence, but also be consistent with the context of the partial target sentence. Thus, we propose a bi-view disambiguation module to select the optimal translation candidate in both source view and target view. Source-view Disambiguation. Source-view disambiguation chooses the optimal candidate for each word with the context information stored in source sentence. The attention score αsrci = {αsrci,1 , ..., αsrci,k}, which has been calculated in Equation 5, is employed as the source-view disambiguating distribution for the k translation candidates of xi. This disambiguating distribution is decodingagnostic, which means it serve as global information during decoding. Target-view Diambiguation. As analyzed in Section 1, translation candidates that seem proper from the source view may not well fit in the target context. Thus, we also perform a target view disambiguation to narrow down which candidates fit the partial target sentence’s context. Specifically, we leverage the refined decoder state s′t to disambiguate the multiple candidates:\nαtgti,j = exp(s′tWdtd (j) i )∑k\nj′=1 exp(s ′ tWdtd (j′) i )\n, (8)\nwhere αtgti,j is the target-view disambiguating probability for c(j)i . In contrast to the decoding-agnostic\nsource-view disambiguating probability, this targetview disambiguating probability varies during decoding steps."
+    }, {
+      "heading" : "3.4 Copier",
+      "text" : "Finally, we combine the pointing distribution and the bi-view disambiguating distributions in a hierarchical way to constitute the copying distribution as follows:\nαi,j = [ρ× αsrci,j + (1− ρ)× α tgt i,j ]× βi, (9)\nwhere ρ is a scaling factor to adjust the contribution from source-view and target-view disambiguating probabilities. αi,j indicates the probability to copy c\n(j) i , the j-th translation candidate of the i-th source word. We transform this positional probability into word-level copying probability pcopy:\npcopy = p(yt|y<t,x, c), (10)\nwhere c is the entire translation candidates for all source word in an instance.\nThe final probability pfinal is constituted by a linear interpolation of pgen and pcopy:\npfinal(yt|y<t,x, c) = γt×pcopy +(1−γt)×pgen, (11) where pgen denotes the the generating probability from Transformer, calculated in Equation 3. γt is the dynamic weight at step t, formalized by:\nγt = sigmoid(Ws ′ t). (12)"
+    }, {
+      "heading" : "3.5 Selective BPE",
+      "text" : "BPE (Sennrich et al., 2016) is commonly used in NMT to deal with the rare words by separating them into frequent subwords. However, it is nontrivial to incorporate BPE into NMT systems with copy mechanism, because the split subwords may not match the original word appearing in dictionaries, either in source side or target side. Simply applying BPE on dictionary words will complicates the scenario to disambiguate and copy, since the model needs to aggregate the representations of these subwords for disambiguation and copy the subwords sequentially. As revealed in Section 5.4, the experimental results demonstrate that whether applying original BPE on dictionary words or not will not yield promising results.\nIn this paper, we present a simple and effective strategy named selective BPE, which only performs BPE on all source words and a portion of\ntarget words. All of the translation candidates from the dictionary remain intact. Concretely, in the target side, we keep the target word from being separated into subwords if we can copy it from the translation candidate set c of the source sentence. Such case is formalized as:\nItgt(i) = { 1, if yi ∈ c 0, if yi /∈ c , (13)\nwhere Itgt(i) is the BPE indicator for yi. A target word yi will be split by selective BPE only if Itgt(i) = 0. Note that selective BPE is only used in training, since the reference of validation sets and testing sets do not need BPE.\nBy applying selective BPE, our model can implicitly exploit the information of which dictionary candidates are likely to be copied. Thus, rare words will be more inclined to be copied directly as a whole from the dictionary."
+    }, {
+      "heading" : "4 Experimental Settings",
+      "text" : "In this section, we elaborate on the experiment setup to evaluate our proposed model."
+    }, {
+      "heading" : "4.1 Datasets",
+      "text" : "We test our model on Chinese-to-Engish (Zh-En) and English-Japanese (En-Ja) translation tasks.\nFor Zh-En translation, we carry out experiments on two datesets. We use 1.25M sentence pairs from news corpora LDC as the training set 1. We adopt NIST 2006 (MT06) as validation set. NIST 2002, 2003, 2004, 2005, 2008 datasets are used for testing. Besides, we use the Ted talks corpus from IWSLT 2014 and 2015 (Cettolo et al., 2012) including 0.22M sentence pairs for training. We use dev2010 with 0.9K sentence pairs for development and tst2010-2013 with 5.5K sentence pairs for testing.\nFor En-Ja translation, we adopt Wikipedia article dataset KFTT2, which contains 0.44M sentence pairs for training, 1.2K sentence pairs for validation and 1.2K sentence pairs for testing.\nThe bilingual dictionary we used is constructed by the open-source cross-lingual word translate dataset word2word (Choe et al., 2020). We limit the maximum number of translation candidates to 5 for each source word.\n1The training set includes LDC2002E18, LDC2003E07, LDC2003E14, Hansards portion of LDC2004T07, LDC2004T08 and LDC2005T06.\n2http://www.phontron.com/kftt/"
+    }, {
+      "heading" : "4.2 Details for Training and Evaluation",
+      "text" : "We implement our model on top of THUMT (Zhang et al., 2017a) toolkit. The dropout rate is set to be 0.1. The size of a mini-batch is 4096. We share the parameters in target embeddings and the output matrix of the Transformer decoder. The other hyper-parameters are the same as the default settings in Vaswani et al. (2017). The optimal value scaling factor ρ in bi-view disambiguation is 0.4. All these hyper-parameters are tuned on the validation set. We apply BPE (Sennrich et al., 2016) with 32K merge operations. The best single model in validation is used for testing. We use multi−bleu.perl3 to calculate the case-insensitive 4-gram BLEU."
+    }, {
+      "heading" : "4.3 Baselines",
+      "text" : "Our models and the baselines use BPE in experiments by default. We compare our PDC with the following baselines:\n• Transformer is the most widely-used NMT system with self-attention (Vaswani et al., 2017).\n• Single-Copy is a Transformer-based copy mechanism that select a source word’s firstrank translation candidate exactly following Luong et al. (2015); Gulcehre et al. (2016).\n• Flat-Copy is a novel copy mechanism to perform automatic post-editing (APE) proposed\n3https://github.com/moses-smt/mosesdecoder/blob/ master/scripts/generic/multi-bleu.perl\nby Huang et al. (2019). Note that APE focuses on copying from a draft generated by a pre-trained NMT system. We first arrange candidates of all source words into a sequence as a draft and then copy this flattened “draft” following Huang et al. (2019)."
+    }, {
+      "heading" : "5 Experiment Results",
+      "text" : ""
+    }, {
+      "heading" : "5.1 Main Results",
+      "text" : "Table 1 shows the performance of the baseline models and our method variants. We also list several existing robust NMT systems reported in previous work to validate PDC’s effectiveness. By investigating the results in Table 1, we have the following four observations.\nFirst, compared with existing state-of-the-art NMT systems, PDC achieves very competitive results, e.g., the best BLEU scores in 4 of the 5 test sets.\nSecond, Single-Copy outperforms Transformer, indicating that even incorporating only the firstrank translation candidate can improve NMT models. However, since Single-Copy disregards many translation candidates in dictionaries, which could have been copied, the improvement is relatively small (e.g., +0.93 of average BLEU score on the test sets).\nThird, the performance of Flat-Copy is even worse than Single-Copy, though it considers all translation candidates in dictionaries. The reason lies in that Flat-Copy ignores the hierarchy formed by a source sentence and the corresponding translation candidates of its each word, making it much\nmore challenging to identify the proper candidate to be copied.\nFinally, PDC substantially outperforms SingleCopy and Flat-Copy, with improvements of 1.66 and 2.20 average BLEU points, due to our effective hierarchical copy mechanism that connects the Pointer and the Disambiguator, which will be further analyzed in the next sections."
+    }, {
+      "heading" : "5.2 Effectiveness of Pointer",
+      "text" : "What distinguishes our Pointer from its counterparts of other NMT models is the utilization of semantic information of translation candidates in dictionaries. To verify the effectiveness of this technical design, we implement a PDC variant named PDC(w/o Dict-Pointer) whose Pointer locates source words based on the encoder state (h) of the vanilla Transformer instead of the dictionaryenhanced encoder state (h′). So the semantic information from dictionaries is not incorporated into the pointing step.\nAs expected, the performance of PDC(w/o DictPointer) demonstrates a decrement of nearly 1.0 average BLEU score on the test sets compared with PDC, verifying the promising effect of Pointer. The results also justify our intuition that the rich information of source words’ translations in dictionaries helps to point the proper source word."
+    }, {
+      "heading" : "5.3 Effectiveness of Disambiguator",
+      "text" : "To investigate the effectiveness of our bi-view Disambiguator, we implement another two model variants: PDC(w/o Src-View) that is removed sourceview disambiguation and PDC(w/o Tgt-View) that is removed target-view disambiguation. As Table 1 shows, the performance of both models significantly decrease.\nTo further investigate the collaboration between\nthe source-view and target-view disambiguation, we analyze the impact of the hyper-parameter ρ, which denotes how to weight the disambiguation distribution generated from source-view and targetview. In Figure 3, the orange polyline shows the BLEU scores on the development set (MT06), and the blue polyline shows average BLEU scores on another five test sets. By looking into these two polylines’ trends, we find that PDC is bestperformed when ρ is 0.4, indicating neither the source view nor the target view can be ignored or overly dependent.\nThese findings prove that both views’ contextual information is critical and complementary to identify a specific source word’s proper translation, and our Disambiguator synthesizes them effectively."
+    }, {
+      "heading" : "5.4 Effectiveness of Selective BPE",
+      "text" : "We demonstrate the effects of different BPE strategies in Table 2, where None does not use BPE at all, Standard adopts the same BPE strategy as dictionary-independent NMT models, Dict simply apply BPE to dictionary candidates in addition to standard BPE, and Selective is our Selective BPE. More detailed settings of each strategy can be found in Table 2, from which we can also clearly observe the superiority of our selective BPE strategy. We attribute this superiority to the fine-grained collaboration between selective BPE and dictionaries, which implicitly yet effectively leveraging the information of which dictionary candidate are likely to be copied.\nIt is worth mentioning that selective BPE on the target side will not prevent overcoming morphological variance compared with standard BPE. A morphologically inflected target word can be generated in two ways in our system. Firstly, if the target word is not in the candidate set, we will perform standard BPE decomposition. In this scenario, se-\nlective BPE is the same as standard BPE, and the target word will be generated in a standard way. Otherwise, if the target word is in the candidate set, it will not be decomposed and our method will encourage the model to copy this word directly. Thus, the morphological variance problem can be simply solved by copying."
+    }, {
+      "heading" : "5.5 Alleviation of the Rare Words Problem",
+      "text" : "We notice that most dictionary-based NMT works aim to address the rare words problem. Though our work focuses on improving the overall process of incorporating dictionary information as external knowledge, we also conduct a rough experiment to see how our method alleviates the rare words problem.\nSpecifically, we treat a source word as a rare word if it appears less than ten times in the training set. Then we split the test set into subsets according to the rare word proportions of source sentences. The performance on the subsets is shown in Figure 4. We find that PDC outperforms Transformer by a larger gap on the test subsets with more rare words (e.g., 7.18 for the proportion greater than 0.15), demonstrating that PDC can well alleviate the rare words issue. This observation is also consistent with previous investigations (Luong et al., 2015)."
+    }, {
+      "heading" : "5.6 Results on IWSLT and KFTT",
+      "text" : "To verify PDC’s generalization capability, we further conduct experiments on the IWSLT Zh-En translation task and KFTT En-Ja translation task. Due to space limitations, here we only report the performance of PDC and Transformer. PDC’s superiority can be easily observed from the results in Table 3, indicating that PDC can be effectively applied in translation tasks of different language\npairs and domains (e.g., news, speech and Wiki)."
+    }, {
+      "heading" : "6 Related Work",
+      "text" : ""
+    }, {
+      "heading" : "6.1 Dictionary-enhanced NMT",
+      "text" : "Due to the rich prior information of parallel word pairs in bilingual dictionaries, many researchers have dedicated efforts to incorporating bilingual dictionaries into NMT systems. They either generate pseudo parallel sentence pairs based on bilingual dictionaries to boost training (Zhang and Zong, 2016; Zhao et al., 2020), or exploit the bilingual dictionaries as external resources fed into neural networks (Luong et al., 2015; Gulcehre et al., 2016; Arthur et al., 2016; Zhang et al., 2017b; Zhao et al., 2018a,b, 2019b). Our work can be categorized into the second direction, and focus on improving the overall process of incorporating bilingual dictionaries as external knowledge into the latest NMT systems.\nIn particular, Luong et al. (2015); Gulcehre et al. (2016) first employed copy mechanism (Gu et al., 2016) into NMT to address rare words problem with one-to-one external bilingual dictionaries. Arthur et al. (2016); Zhao et al. (2018a) exploited the prior probabilities from external resource to adjust the distribution over the decoding vocabulary. (Zhao et al., 2018b, 2019b) leverage statisticsbased pre-processing method to filter out troublesome words and perform disambiguation on multiple candidates. Our work extends the above ideas and reforms the overall process into a novel end-toend framework consisting of three steps: pointing, disambiguating, and copying."
+    }, {
+      "heading" : "6.2 CopyNet",
+      "text" : "CopyNet is also widely used in text summarization (See et al., 2017; Zhu et al., 2020), automatic postediting (Huang et al., 2019), grammar correction (Zhao et al., 2019a) and so on.\nFrom a high-level perspective, our methods share a similar Transformer-based architecture with Huang et al. (2019) and Zhu et al. (2020). Huang et al. (2019) employed CopyNet to copy from a draft generated by a pre-trained NMT system. Zhu\net al. (2020) proposed a method that integrates the operation of attending, translating, and summarizing to do cross-lingual summarization. What distinguishes our PDC from other copy-based architectures lies in that the three novel components (Pointer, Disambiguator and Copier) and the selective BPE strategy can make full and effective use of dictionary knowledge."
+    }, {
+      "heading" : "7 Conclusion",
+      "text" : "We have presented PDC, a new method to incorporate bilingual dictionaries into NMT models, mainly involving four techniques. (1) By integrating semantic information of dictionaries, the enhanced context representations help to locate source words whose dictionary translations will potentially be used. (2) The source and target information is well synthesized and contribute to identifying the optimal translation of a source word among multiple dictionary candidates, in a complementary way. (3) The above two steps are then systematically integrated based on a hierarchical copy mechanism. (4) We finally equip the architecture with a novel selective BPE strategy carefullydesigned for dictionary-enhanced NMT.\nExperiments show that we achieve competitive results on the Chinese-English and EnglishJapanese translation tasks, verifying that our approach favorably incorporates prior knowledge of bilingual dictionaries."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "We thank anonymous reviewers for valuable comments. This research was supported by the National Key Research And Development Program of China under Grant No.2019YFB1405802 and the central government guided local science and technology development fund projects (science and technology innovation base projects) under Grant No.206Z0302G."
+    } ],
+    "references" : [ {
+      "title" : "Incorporating discrete translation lexicons into neural machine translation",
+      "author" : [ "Philip Arthur", "Graham Neubig", "Satoshi Nakamura." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 1557–1567.",
+      "citeRegEx" : "Arthur et al\\.,? 2016",
+      "shortCiteRegEx" : "Arthur et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Layer normalization",
+      "author" : [ "Lei Jimmy Ba", "Jamie Ryan Kiros", "Geoffrey E. Hinton." ],
+      "venue" : "CoRR, abs/1607.06450.",
+      "citeRegEx" : "Ba et al\\.,? 2016",
+      "shortCiteRegEx" : "Ba et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Neural machine translation by jointly learning to align and translate",
+      "author" : [ "Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio." ],
+      "venue" : "3rd International Conference on Learning Representations, ICLR 2015.",
+      "citeRegEx" : "Bahdanau et al\\.,? 2015",
+      "shortCiteRegEx" : "Bahdanau et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Wit3: Web inventory of transcribed and translated talks",
+      "author" : [ "Mauro Cettolo", "Christian Girardi", "Marcello Federico." ],
+      "venue" : "Proceedings of the 16th Annual conference of the European Association for Machine Translation, pages 261–268.",
+      "citeRegEx" : "Cettolo et al\\.,? 2012",
+      "shortCiteRegEx" : "Cettolo et al\\.",
+      "year" : 2012
+    }, {
+      "title" : "Robust neural machine translation with doubly adversarial inputs",
+      "author" : [ "Yong Cheng", "Lu Jiang", "Wolfgang Macherey." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 4324–4333.",
+      "citeRegEx" : "Cheng et al\\.,? 2019",
+      "shortCiteRegEx" : "Cheng et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "word2word: A collection of bilingual lexicons for 3,564 language pairs",
+      "author" : [ "Yo Joong Choe", "Kyubyong Park", "Dongwoo Kim." ],
+      "venue" : "Proceedings of The 12th Language Resources and Evaluation Conference, pages 3036–3045.",
+      "citeRegEx" : "Choe et al\\.,? 2020",
+      "shortCiteRegEx" : "Choe et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Incorporating copying mechanism in sequence-to-sequence learning",
+      "author" : [ "Jiatao Gu", "Zhengdong Lu", "Hang Li", "Victor OK Li." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers),",
+      "citeRegEx" : "Gu et al\\.,? 2016",
+      "shortCiteRegEx" : "Gu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Pointing the unknown words",
+      "author" : [ "Caglar Gulcehre", "Sungjin Ahn", "Ramesh Nallapati", "Bowen Zhou", "Yoshua Bengio." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 140–",
+      "citeRegEx" : "Gulcehre et al\\.,? 2016",
+      "shortCiteRegEx" : "Gulcehre et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Deep residual learning for image recognition",
+      "author" : [ "Kaiming He", "Xiangyu Zhang", "Shaoqing Ren", "Jian Sun." ],
+      "venue" : "Proceedings of the IEEE conference on computer vision and pattern recognition, pages 770– 778.",
+      "citeRegEx" : "He et al\\.,? 2016",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Learning to copy for automatic post-editing",
+      "author" : [ "Xuancheng Huang", "Yang Liu", "Huanbo Luan", "Jingfang Xu", "Maosong Sun." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International",
+      "citeRegEx" : "Huang et al\\.,? 2019",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Addressing the rare word problem in neural machine translation",
+      "author" : [ "Minh-Thang Luong", "Ilya Sutskever", "Quoc Le", "Oriol Vinyals", "Wojciech Zaremba." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the",
+      "citeRegEx" : "Luong et al\\.,? 2015",
+      "shortCiteRegEx" : "Luong et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Get to the point: Summarization with pointergenerator networks",
+      "author" : [ "Abigail See", "Peter J Liu", "Christopher D Manning." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational",
+      "citeRegEx" : "See et al\\.,? 2017",
+      "shortCiteRegEx" : "See et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Neural machine translation of rare words with subword units",
+      "author" : [ "Rico Sennrich", "Barry Haddow", "Alexandra Birch." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1715–",
+      "citeRegEx" : "Sennrich et al\\.,? 2016",
+      "shortCiteRegEx" : "Sennrich et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Sequence to sequence learning with neural networks",
+      "author" : [ "Ilya Sutskever", "Oriol Vinyals", "Quoc V Le." ],
+      "venue" : "Advances in neural information processing systems, 27:3104–3112.",
+      "citeRegEx" : "Sutskever et al\\.,? 2014",
+      "shortCiteRegEx" : "Sutskever et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Łukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in neural information processing systems, pages 5998–6008.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Multi-unit transformers for neural machine translation",
+      "author" : [ "Jianhao Yan", "Fandong Meng", "Jie Zhou." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1047–1059.",
+      "citeRegEx" : "Yan et al\\.,? 2020",
+      "shortCiteRegEx" : "Yan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Improving neural machine translation with soft template prediction",
+      "author" : [ "Jian Yang", "Shuming Ma", "Dongdong Zhang", "Zhoujun Li", "Ming Zhou." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 5979–",
+      "citeRegEx" : "Yang et al\\.,? 2020",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Thumt: An open source toolkit for neural machine translation",
+      "author" : [ "Jiacheng Zhang", "Yanzhuo Ding", "Shiqi Shen", "Yong Cheng", "Maosong Sun", "Huanbo Luan", "Yang Liu." ],
+      "venue" : "arXiv preprint arXiv:1706.06415.",
+      "citeRegEx" : "Zhang et al\\.,? 2017a",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Prior knowledge integration for neural machine translation using posterior regularization",
+      "author" : [ "Jiacheng Zhang", "Yang Liu", "Huanbo Luan", "Jingfang Xu", "Maosong Sun." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational",
+      "citeRegEx" : "Zhang et al\\.,? 2017b",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Bridging neural machine translation and bilingual dictionaries",
+      "author" : [ "Jiajun Zhang", "Chengqing Zong." ],
+      "venue" : "CoRR, abs/1610.07272.",
+      "citeRegEx" : "Zhang and Zong.,? 2016",
+      "shortCiteRegEx" : "Zhang and Zong.",
+      "year" : 2016
+    }, {
+      "title" : "Improving grammatical error correction via pre-training a copy-augmented architecture with unlabeled data",
+      "author" : [ "Wei Zhao", "Liang Wang", "Kewei Shen", "Ruoyu Jia", "Jingming Liu." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of",
+      "citeRegEx" : "Zhao et al\\.,? 2019a",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Phrase table as recommendation memory for neural machine translation",
+      "author" : [ "Yang Zhao", "Yining Wang", "Jiajun Zhang", "Chengqing Zong." ],
+      "venue" : "Proceedings of the 27th International Joint Conference on Artificial Intelligence, pages 4609–4615.",
+      "citeRegEx" : "Zhao et al\\.,? 2018a",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Addressing troublesome words in neural machine translation",
+      "author" : [ "Yang Zhao", "Jiajun Zhang", "Zhongjun He", "Chengqing Zong", "Hua Wu." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 391–400.",
+      "citeRegEx" : "Zhao et al\\.,? 2018b",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Knowledge graphs enhanced neural machine translation",
+      "author" : [ "Yang Zhao", "Jiajun Zhang", "Yu Zhou", "Chengqing Zong." ],
+      "venue" : "Proceedings of the TwentyNinth International Joint Conference on Artificial Intelligence, IJCAI 2020, pages 4039–4045. ijcai.org.",
+      "citeRegEx" : "Zhao et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Addressing the undertranslation problem from the entropy perspective",
+      "author" : [ "Yang Zhao", "Jiajun Zhang", "Chengqing Zong", "Zhongjun He", "Hua Wu." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, volume 33, pages 451–458.",
+      "citeRegEx" : "Zhao et al\\.,? 2019b",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Attend, translate and summarize: An efficient method for neural cross-lingual summarization",
+      "author" : [ "Junnan Zhu", "Yu Zhou", "Jiajun Zhang", "Chengqing Zong." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Zhu et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhu et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 13,
+      "context" : "The past several years have witnessed the remarkable success of Neural machine translation (NMT), due to the development of sequence-to-sequence methods (Sutskever et al., 2014; Bahdanau et al., 2015; Vaswani et al., 2017).",
+      "startOffset" : 153,
+      "endOffset" : 222
+    }, {
+      "referenceID" : 2,
+      "context" : "The past several years have witnessed the remarkable success of Neural machine translation (NMT), due to the development of sequence-to-sequence methods (Sutskever et al., 2014; Bahdanau et al., 2015; Vaswani et al., 2017).",
+      "startOffset" : 153,
+      "endOffset" : 222
+    }, {
+      "referenceID" : 14,
+      "context" : "The past several years have witnessed the remarkable success of Neural machine translation (NMT), due to the development of sequence-to-sequence methods (Sutskever et al., 2014; Bahdanau et al., 2015; Vaswani et al., 2017).",
+      "startOffset" : 153,
+      "endOffset" : 222
+    }, {
+      "referenceID" : 10,
+      "context" : "The second one utilizes the bilingual dictionaries as external resources fed into neural architectures (Luong et al., 2015; Gulcehre et al., 2016; Arthur et al., 2016; Zhang et al., 2017b; Zhao et al., 2018a,b, 2019b), which is more widely used and the focus of this paper.",
+      "startOffset" : 103,
+      "endOffset" : 217
+    }, {
+      "referenceID" : 7,
+      "context" : "The second one utilizes the bilingual dictionaries as external resources fed into neural architectures (Luong et al., 2015; Gulcehre et al., 2016; Arthur et al., 2016; Zhang et al., 2017b; Zhao et al., 2018a,b, 2019b), which is more widely used and the focus of this paper.",
+      "startOffset" : 103,
+      "endOffset" : 217
+    }, {
+      "referenceID" : 0,
+      "context" : "The second one utilizes the bilingual dictionaries as external resources fed into neural architectures (Luong et al., 2015; Gulcehre et al., 2016; Arthur et al., 2016; Zhang et al., 2017b; Zhao et al., 2018a,b, 2019b), which is more widely used and the focus of this paper.",
+      "startOffset" : 103,
+      "endOffset" : 217
+    }, {
+      "referenceID" : 18,
+      "context" : "The second one utilizes the bilingual dictionaries as external resources fed into neural architectures (Luong et al., 2015; Gulcehre et al., 2016; Arthur et al., 2016; Zhang et al., 2017b; Zhao et al., 2018a,b, 2019b), which is more widely used and the focus of this paper.",
+      "startOffset" : 103,
+      "endOffset" : 217
+    }, {
+      "referenceID" : 10,
+      "context" : "Note that some works assume that only one translation exists for each word in dictionaries (Luong et al., 2015; Gulcehre et al., 2016).",
+      "startOffset" : 91,
+      "endOffset" : 134
+    }, {
+      "referenceID" : 7,
+      "context" : "Note that some works assume that only one translation exists for each word in dictionaries (Luong et al., 2015; Gulcehre et al., 2016).",
+      "startOffset" : 91,
+      "endOffset" : 134
+    }, {
+      "referenceID" : 6,
+      "context" : "In this simplified scenario, the disambiguating step is unnecessary, hence the pointing and copying step can be merged into a single step similar to the classic copying mechanism (Gu et al., 2016).",
+      "startOffset" : 179,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 10,
+      "context" : "To locate source words whose translation in dictionaries may be used, some works (Luong et al., 2015; Gulcehre et al., 2016) use a classic copy mechanism, but in an oversimplified scenario mentioned above.",
+      "startOffset" : 81,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 7,
+      "context" : "To locate source words whose translation in dictionaries may be used, some works (Luong et al., 2015; Gulcehre et al., 2016) use a classic copy mechanism, but in an oversimplified scenario mentioned above.",
+      "startOffset" : 81,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 10,
+      "context" : "To select the proper translation of one source word from multiple candidates in dictionaries, in addition to works that merely use the first-rank one (Luong et al., 2015; Gulcehre et al., 2016), existing explorations mainly involve exploiting prior probabilities, e.",
+      "startOffset" : 150,
+      "endOffset" : 193
+    }, {
+      "referenceID" : 7,
+      "context" : "To select the proper translation of one source word from multiple candidates in dictionaries, in addition to works that merely use the first-rank one (Luong et al., 2015; Gulcehre et al., 2016), existing explorations mainly involve exploiting prior probabilities, e.",
+      "startOffset" : 150,
+      "endOffset" : 193
+    }, {
+      "referenceID" : 0,
+      "context" : ", to adjust the distribution over the decoding vocabulary (Arthur et al., 2016; Zhao et al., 2018a).",
+      "startOffset" : 58,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 21,
+      "context" : ", to adjust the distribution over the decoding vocabulary (Arthur et al., 2016; Zhao et al., 2018a).",
+      "startOffset" : 58,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 14,
+      "context" : "Transformer (Vaswani et al., 2017) is the most popular NMT architecture, which adopts the standard encoder-decoder framework and relies solely on stacked attention mechanisms.",
+      "startOffset" : 12,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 1,
+      "context" : "Layer normalization (LN) (Ba et al., 2016) and residual connection (He et al.",
+      "startOffset" : 25,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2016) and residual connection (He et al., 2016) is em-",
+      "startOffset" : 32,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 6,
+      "context" : "Following the classic CopyNet (Gu et al., 2016), our model consists of two parts, an",
+      "startOffset" : 30,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 12,
+      "context" : "BPE (Sennrich et al., 2016) is commonly used in NMT to deal with the rare words by separating them into frequent subwords.",
+      "startOffset" : 4,
+      "endOffset" : 27
+    }, {
+      "referenceID" : 3,
+      "context" : "Besides, we use the Ted talks corpus from IWSLT 2014 and 2015 (Cettolo et al., 2012) including 0.",
+      "startOffset" : 62,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 5,
+      "context" : "The bilingual dictionary we used is constructed by the open-source cross-lingual word translate dataset word2word (Choe et al., 2020).",
+      "startOffset" : 114,
+      "endOffset" : 133
+    }, {
+      "referenceID" : 17,
+      "context" : "We implement our model on top of THUMT (Zhang et al., 2017a) toolkit.",
+      "startOffset" : 39,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 12,
+      "context" : "We apply BPE (Sennrich et al., 2016) with 32K merge operations.",
+      "startOffset" : 13,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 14,
+      "context" : "• Transformer is the most widely-used NMT system with self-attention (Vaswani et al., 2017).",
+      "startOffset" : 69,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 10,
+      "context" : "This observation is also consistent with previous investigations (Luong et al., 2015).",
+      "startOffset" : 65,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 19,
+      "context" : "They either generate pseudo parallel sentence pairs based on bilingual dictionaries to boost training (Zhang and Zong, 2016; Zhao et al., 2020), or exploit the bilingual dictionaries as external resources fed into neural networks (Luong et al.",
+      "startOffset" : 102,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 23,
+      "context" : "They either generate pseudo parallel sentence pairs based on bilingual dictionaries to boost training (Zhang and Zong, 2016; Zhao et al., 2020), or exploit the bilingual dictionaries as external resources fed into neural networks (Luong et al.",
+      "startOffset" : 102,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2020), or exploit the bilingual dictionaries as external resources fed into neural networks (Luong et al., 2015; Gulcehre et al., 2016; Arthur et al., 2016; Zhang et al., 2017b; Zhao et al., 2018a,b, 2019b).",
+      "startOffset" : 94,
+      "endOffset" : 208
+    }, {
+      "referenceID" : 7,
+      "context" : ", 2020), or exploit the bilingual dictionaries as external resources fed into neural networks (Luong et al., 2015; Gulcehre et al., 2016; Arthur et al., 2016; Zhang et al., 2017b; Zhao et al., 2018a,b, 2019b).",
+      "startOffset" : 94,
+      "endOffset" : 208
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2020), or exploit the bilingual dictionaries as external resources fed into neural networks (Luong et al., 2015; Gulcehre et al., 2016; Arthur et al., 2016; Zhang et al., 2017b; Zhao et al., 2018a,b, 2019b).",
+      "startOffset" : 94,
+      "endOffset" : 208
+    }, {
+      "referenceID" : 18,
+      "context" : ", 2020), or exploit the bilingual dictionaries as external resources fed into neural networks (Luong et al., 2015; Gulcehre et al., 2016; Arthur et al., 2016; Zhang et al., 2017b; Zhao et al., 2018a,b, 2019b).",
+      "startOffset" : 94,
+      "endOffset" : 208
+    }, {
+      "referenceID" : 6,
+      "context" : "(2016) first employed copy mechanism (Gu et al., 2016) into NMT to address rare words problem with one-to-one external bilingual dictionaries.",
+      "startOffset" : 37,
+      "endOffset" : 54
+    }, {
+      "referenceID" : 11,
+      "context" : "CopyNet is also widely used in text summarization (See et al., 2017; Zhu et al., 2020), automatic postediting (Huang et al.",
+      "startOffset" : 50,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 25,
+      "context" : "CopyNet is also widely used in text summarization (See et al., 2017; Zhu et al., 2020), automatic postediting (Huang et al.",
+      "startOffset" : 50,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2020), automatic postediting (Huang et al., 2019), grammar correction (Zhao et al.",
+      "startOffset" : 31,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 20,
+      "context" : ", 2019), grammar correction (Zhao et al., 2019a) and so on.",
+      "startOffset" : 28,
+      "endOffset" : 48
+    } ],
+    "year" : 2021,
+    "abstractText" : "This paper proposes a sophisticated neural architecture to incorporate bilingual dictionaries into Neural Machine Translation (NMT) models. By introducing three novel components: Pointer, Disambiguator, and Copier, our method PDC achieves the following merits inherently compared with previous efforts: (1) Pointer leverages the semantic information from bilingual dictionaries, for the first time, to better locate source words whose translation in dictionaries can potentially be used; (2) Disambiguator synthesizes contextual information from the source view and the target view, both of which contribute to distinguishing the proper translation of a specific source word from multiple candidates in dictionaries; (3) Copier systematically connects Pointer and Disambiguator based on a hierarchical copy mechanism seamlessly integrated with Transformer, thereby building an end-to-end architecture that could avoid error propagation problems in alternative pipeline methods. The experimental results on Chinese-English and English-Japanese benchmarks demonstrate the PDC’s overall superiority and effectiveness of each component.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

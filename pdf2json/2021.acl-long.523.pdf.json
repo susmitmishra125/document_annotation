@@ -1,0 +1,940 @@
+{
+  "name" : "2021.acl-long.523.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Polyjuice: Generating Counterfactuals for Explaining, Evaluating, and Improving Models",
+    "authors" : [ "Tongshuang Wu", "Marco Tulio Ribeiro", "Jeffrey Heer", "Daniel S. Weld" ],
+    "emails" : [ "wtshuang@cs.uw.edu", "marcotcr@microsoft.com", "jheer@cs.uw.edu", "weld@cs.uw.edu" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 6707–6723\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n6707"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Counterfactual reasoning — mentally simulating what would have happened if conditions were different — is a common tool for making causality assessments (Kahneman and Tversky, 1981), which in turn are crucial for model evaluation, error analysis, and explanation (Miller, 2019). For example, in Figure 1, “It is great for kids” is perturbed into multiple variations, each providing unique insights by simulating what would have happened if the sentence was different.\nApplications of counterfactual reasoning to NLP generally specify the relationship x ) x̂, and then create x̂ according to the relationship. As a result, prior work has tailored counterfactual generators for different applications, only collecting subsets of x̂ that are useful for the specific task. For example, to support model training and evaluation, human annotators create counterfactuals\nthat change the groundtruth labels by manually rewriting instances (Gardner et al., 2020; Qin et al., 2019) or defining perturbation functions (Ribeiro et al., 2020). Manual rewrites are costly (e.g., 4–5 minutes per counterfactual (Kaushik et al., 2020)) and susceptible to systematic omissions (e.g., human annotators may cover great ) not great, but miss kids ) no one in Figure 1B). Meanwhile, automated generators for model analysis and explanation usually focus on other relationships, e.g., generating x̂ that have different model predictions than x (Ross et al., 2020; Zhang et al., 2019a). As a result, they neglect prediction-preserving counterfactuals that are equally important for understanding or shaping model behaviors, like kids ) no one and great ) scary linked to Figure 1D.\nHowever, counterfactual generation does not have to be task-specific. The same set of counterfactuals in Figure 1 can support a variety of applica-\n1We open source Polyjuice at https://github.com/ tongshuangwu/polyjuice.\ntions. Moreover, for cases like model explanation and analysis, a general-purpose pool of counterfactuals may be preferable, as the relationship of interest can be more exploratory and user-oriented (Wu et al., 2019). In this work, we formalize the task of counterfactual generation, disentangling generation from the application of counterfactuals. Given an input x (Figure 1A), our generator produces a set of counterfactuals X̂ = {x̂1, x̂2, ...} with applicationagnostic relationships x ) x̂i (Figure 1B). Afterwards, we use application-specific selection methods to find subsets of x̂ that are most effective for a given use case (Figure 1C).\nWe frame the generation step as conditional text generation, and finetune GPT-2 (Radford et al., 2019) into a generator called Polyjuice using (x, x̂) pairs. To allow for targeted counterfactuals, we also design control codes like negation or delete (Figure 1B), and adopt fill-in-the-blank structures (Donahue et al., 2020) to specify where the perturbation occurs and how. Intrinsic evaluation shows that Polyjuice generates x̂ that are fluent, diverse, and close to x, and that the control mechanisms retrieve perturbations that would likely not be sampled from off-the-shelf language models.\nWith simple selection heuristics, we show that a single Polyjuice model can significantly aid humans in diverse downstream applications.2 For counterfactual training and evaluation (§3), humans label Polyjuice counterfactuals rather than creating them from scratch. They produce training data that significantly improve model generalization, as well as contrast sets that help identify model vulnerabilities (Gardner et al., 2020), with around 70% less annotation effort. In another application, Polyjuice produces counterfactual explanations (§4), providing significant insight on top of state-of-the-art explanation techniques. Finally, Polyjuice supports counterfactual error analysis (§5). It allows users to explore related counterfactuals (e.g., the model responds differently to different negation forms in Figure 1B), and to aggregate individual counterfactuals into patterns in order to gain systematic understanding of model behavior."
+    }, {
+      "heading" : "2 General-Purpose Counterfactuals",
+      "text" : ""
+    }, {
+      "heading" : "2.1 Definition and Desiderata",
+      "text" : "Given an instance x, a generator g produces a set of counterfactuals X̂ = {x̂1, x̂2, ...} with various re-\n2We demonstrate Polyjuice in semi-automatic settings, but as discussed in §2.2, it can also work automatically.\nlationships x ) x̂i. For example, great ) not great, kids ) no one in Figure 1B are both instances of the negation relationship. Each (x, x̂) pair shares multiple relationships — these two are also instances of the label flipping relationship if the task is sentiment analysis (but might not be for other tasks). As illustrated in §1, knowing which relationships apply aids selection for downstream applications.\nWe expect g to produce counterfactuals x̂ that are (1) close to x, preferably only involving the minimal changes necessary to establish a certain effect (Pearl, 2018), allowing users to make causality assessments. The generated x̂ should also be (2) fluent, i.e., grammatically correct (Morris et al., 2020) and semantically meaningful (e.g.,“Colorless green ideas sleep furiously” is not meaningful (Chomsky, 2002)). Fluency operationalizes “probable” counterfactuals in the context of NLP; as Kahneman and Tversky (1981) stated, humans strongly favor counterfactuals that are close to the original instance, but also prefer those that could have easily happened without assuming rare events or strange coincidences. Further, as a general-purpose generator, g should produce counterfactuals with a measure of (3) control over relationships x ) x̂, such that the counterfactuals can vary with the object-of-attention in each application (the “focus rule” (Kahneman and Tversky, 1981)). Finally, we expect g to output a (4) diverse set of x̂ in terms of relationships, covering a large variety of “what-ifs” for different applications (Pearl, 2018).\nControl code Definitions and Polyjuice-generated Examples Training Datasets\nnegation A dog is not embraced by the woman. (Kaushik et al., 2020)\nquantifier A dog is ) Three dogs are embraced by the woman. (Gardner et al., 2020)\nshuffle To move (or swap) key phrases or entities around the sentence. A dog ) woman is embraced by the woman ) dog.\n(Zhang et al., 2019b)\nlexical To change just one word or noun chunk without altering the POS tags. A dog is embraced ) attacked by the woman.\n(Sakaguchi et al., 2020)\nresemantic To replace short phrases without altering the remaining dependency tree. A dog is embraced by the woman ) wrapped in a blanket.\n(Wieting and Gimpel, 2018)\ninsert To add short phrases without altering the remaining dependency tree. A dog is embraced by the little woman.\n(McCoy et al., 2019)"
+    }, {
+      "heading" : "2.2 Conditional Counterfactual Generation",
+      "text" : "We frame counterfactual generation as a conditional text generation task using language models (LMs), and train Polyjuice by finetuning GPT2 (Radford et al., 2019) using the following prompt design (alternative LMs could also have been used).\nPrompt format design. To ensure that x̂ is close to x rather than arbitrary text, we condition the generation on x, followed by a special token (Line 1 in Figure 2A). In Line 2, we have control codes (Keskar et al., 2019) such as negation. We design them to specify types of perturbation from among lexical, syntactic, or semantic aspects (see Table 1), inspired by prior work that categorizes manually created counterfactuals (Kaushik et al., 2020; Gardner et al., 2020). As an additional layer of control over x ) x̂, we allow users to specify where changes happen by having the LM infill [BLANK] tokens (Donahue et al., 2020), rather than generating arbitrary counterfactuals (Lines 3–4).\nFinetuning GPT-2 — a causal LM for predicting next tokens — additionally allows us to exercise control at various levels of granularity. At generation time, if the user provides only the original example, Polyjuice will generate the control code, the blank locations, and the infilling (Lines 2–4). Alternatively, the user can specify the control code, or the control code and the blanks, to exercise different degrees of control depending on the application. As later shown in §4 and §5, such control is important for different use cases.\nTraining data. To train a conditional model, we combine six existing sentence-pair datasets, each containing a subset of the desired phenomena in Table 1. Further, we find naturally occurring sentence pairs (filtered by edit distance to guarantee closeness) in non-paired datasets including CommonGen (Lin et al., 2020), Natural Questions (Kwiatkowski et al., 2019), and SQuAD (Rajpurkar et al., 2016), such that the resulting dataset contains diverse counterfactuals.3\nWe translate these sentence pairs into the format given in Figure 2A. For each (x, x̂), we compute its primary control code using part-of-speech tags and dependency trees. For example, negation occurs when we observe changes to negation modifiers or specific words like “supposedly”, and shuffle occurs when we have overlap between tokens deleted and added. When multiple changes occur, we label it with the control code which most significantly changes the semantics of the corresponding subphrase as computed by SBERT (Reimers and Gurevych, 2019). For example, in Figure 2A, negation (great ) not great) is more significant than lexical (kids ) children). To balance the distribution (Table 7 in Appendix A), for each dataset, we extract control codes from all the (x, x̂),4 and randomly sample up to 10,000 instances per codes.\nIn order to allow for flexible blanking at generation time, we generate multiple training prompts per pair, covering different dependency tree struc-\n3We exclude data related to our applications, e.g., PAWSQQP (Zhang et al., 2019b).\n4We use sentences in a pair interchangeably as x and x̂ to learn the control codes both ways.\ntures related to the perturbed spans (Figure 2B), including (1) just the changed tokens, (2) the associated parsing structures, (3) the merged changes, and (4) the entire sentence. We eventually obtain 657, 144 prompts from 186, 451 pairs.\nFluency filtering. While the original GPT-2 produces fluent text, some combinations of control codes and blanks cause Polyjuice to generate nonsensical results. Following Morris et al. (2020), we score both x and x̂ with GPT-2, and filter x̂ when the log-probability (on the full sentence or the perturbed chunks) decreases by more than 10 points relative to x. Fully automated uses of Polyjuice (e.g., adversarial attacks) may benefit from stricter constraints, at the cost of diversity (as surprising changes may be filtered even if they are fluent)."
+    }, {
+      "heading" : "2.3 Intrinsic Evaluation",
+      "text" : "We evaluate Polyjuice on closeness and diversity by comparing its perturbations on 300 randomly selected sentences with baselines that use more or less context from x: (1) non-finetuned GPT-2, (2) token-infilling RoBERTa (Liu et al., 2019) and (3) span-infilling T5 (Raffel et al., 2020).\nAs shown in Table 2, Polyjuice generates counterfactuals that are close to the original instance, measured by syntactic tree (Zhang and Shasha, 1989) and Levenshtein edit distance (Levenshtein, 1966). In contrast, non-finetuned GPT-2 generates arbitrary text instead of perturbations when given the starting tokens of a sentence, as it only leverages context in a single direction. As for infilling models, Polyjuice counterfactuals are more diverse (measured by self-BLEU (Zhu et al., 2018)) than RoBERTa ones, which is restricted to word substitution. Meanwhile, T5 displays higher diversity but less closeness, probably due to the fact that it does not consider the original masked tokens when generating x̂. For example, in Figure 1 “It is great for kids,” T5 replaces “for kids” with “idea”, “to\nmeet you,” whereas Polyjuice generates “for kids yet adults can enjoy,” “for any audience.”\nWe evaluate controllability by comparing Polyjuice with T5 as well as with GPT-2 finetuned on prompts without codes. We verify that the codes improve the success rate of generating counterfactuals with the desired perturbation types set out in Table 1 by as much as 42% for perturbations such as negation and insert. For example, given “It is [BLANK] great for kids,” baselines generate “also,” “fun and,” rather than “not” (negation).\nWe further verify the fluency for Polyjuice counterfactuals in three tasks/datasets: (1) Sentiment Analysis, SST-2 (Socher et al., 2013), (2) Natural Language Inference (NLI), SNLI (Bowman et al., 2015), and (3) Duplicate Question Detection (QQP) (Wang et al., 2019). We randomly select 100 sentences per dataset, generate 3 x̂ per x, and ask crowd workers to rate whether they are “likely written by native speakers.” The workers rated most counterfactuals as fluent: 78% in SST-2, 76% in QQP, and 86% in SNLI. In subsequent sections, we show these rates are suitable for applications where people “team up” with Polyjuice."
+    }, {
+      "heading" : "3 Counterfactual Evaluation & Training",
+      "text" : "We ask crowdworkers to label Polyjuice-generated counterfactuals for Sentiment, NLI, and QQP, for the purposes of evaluation and training.5 In each labeling round, the worker is presented with an original x and its label, and asked to annotate the groundtruth for three x̂, rejecting non-fluent ones (details and interface in Appendix B.1).\nWe use a simple heuristic to select which counterfactuals are presented for labeling, aimed at increasing diversity. Representing each x̂ by its token changes, control code, and dependency tree structure, we greedily select the ones that are least similar to those already selected for labeling. This avoids redundancy in the labeling set, e.g., common perturbation patterns such as black ) white."
+    }, {
+      "heading" : "3.1 Evaluation with Contrast Sets",
+      "text" : "We verify whether Polyjuice counterfactuals can be used to create contrast sets (Gardner et al., 2020), i.e., evaluation sets where each instance has a nearby counterfactual with a different groundtruth, to better evaluate model decision boundaries. We\n5We collect asymmetric counterfactuals (Garg et al., 2019) by sampling more Duplicate and Entailment examples in QQP and NLI to perturb, due to the difficulty of flipping other labels.\nconstruct these sets by simply filtering out counterfactuals that are labeled the same as their original instances (40%–63% depending on the task).\nFor each task, we test multiple classifers opensourced by Huggingface (Wolf et al., 2020), and report the best performing model for each6 in Table 3 (results for other models are analogous). Polyjuice contrast sets display performance gaps consistent with those of Gardner et al. (2020), where the sets are constructed manually by NLP researchers, even though we use non-expert annotators who only label examples rather than creating them."
+    }, {
+      "heading" : "3.2 Training with Counterfactuals",
+      "text" : "Following Kaushik et al. (2020), we augment training sets with counterfactual examples. In all experiments, we finetune roberta-base on datasets of n original examples and m counterfactuals, which are generated by Polyjuice (m-polyjuice) or crafted from scratch by humans (m-CAD from Kaushik et al. (2020), only available for NLI). To distinguish the benefit of counterfactuals from that of just adding more data, we further add a baseline that uses n+m original examples (m-baseline). In addition to in-domain test set accuracy, we measure models’ generalization on out-of-domain datasets, as well as contrast sets and challenge sets. We also evaluate model capabilities with CheckList (Ribeiro et al., 2020) for Sentiment and QQP. Reported model performances are averaged across multiple data samples and random seeds (Appendix B.2).\nFor Sentiment, we select random Polyjuice counterfactuals regardless of their labels, as long as an original x has at least one x̂ that flips the label. For NLI and QQP, we observed in a pilot study that\n6huggingface.co/{roberta-large-mnli, textattack/roberta-base-SST-2, ji-xin/roberta_base-QQP-two_stage}\nrandomly chosen counterfactuals may not be more effective than the same amount of additional data. We suspect that Polyjuice lacks domain knowledge and context for identifying critical perturbations, and therefore brings benefits redundant with pretraining (Longpre et al., 2020). Thus, we use the slicing functions of Chen et al. (2019) to find patterns of interest (e.g., prepositions in NLI), and perturb those patterns by placing [BLANK]s on the matched spans. For example, “His surfboard is beneath him” becomes “His surfboard is [BLANK] him”, and Polyjuice generates counterfactuals such as “His surfboard is beneath ) next to him.”\nResults. Tables 4–6 indicate that Polyjuice augmentation is effective in all tasks: m-polyjuice maintains in-domain accuracy while consistently improving or maintaining generalization accuracy in various out-of-domain and challenge sets. On NLI, Polyjuice counterfactuals are as effective or more effective than counterfactuals created from scratch (m-CAD). Notably, we obtain the largest gains on challenge and contrast sets (e.g., Break and DNC in Table 5) or when the out-of-domain dataset is sufficiently different from the training domain (e.g., Senti140 and SemEval in Table 4). Polyjuice also improves results on CheckList tests that previously had high error rates: it significantly lowers the error rates on 11 out of 27 QQP tests,7 making 2/27 tests worse. For Sentiment, it improves the model on 5 out of 15 tests, hurting 1. Here, we only report a low m/n ratio (<10% for NLI and QQP) to show that a small amount of augmentation is already beneficial. The results are similar for other combinations we explored (see Appendix B.2), except when the ratio of counterfactual to original data was too high (e.g.,, m = n may decrease vocabulary diversity or induce additional data bias, echoing (Khashabi et al., 2020))."
+    }, {
+      "heading" : "3.3 Discussion",
+      "text" : "We show that Polyjuice counterfactuals are useful for evaluation, and more effective than additional (non-counterfactual) data for training in a variety of tasks. In contrast to prior work where humans generate counterfactuals from scratch, we only ask them to label automatically generated ones, while still achieving similar or better results.\nWe believe our approach is more effective than manual creation (although both are beneficial): in\n7The absolute error rate drops for at least 5 points, with a relative difference of more than 10%.\nments. m-polyjuice maintains the in-domain and out-of-domain accuracies on reviews (SST-2, Amzbook, Yelp, IMDb Movie Review (Ni et al., 2019; Asghar, 2016; Maas et al., 2011)), improving it on Twitter data (Senti140 and SemEval 2017 (Go et al., 2009; Nakov et al., 2013)) and contrast sets (Gardner et al., 2020; Kaushik et al., 2020), likely because their distributions are less similar to the original SST-2 training data.\nchallenge sets (Kim et al., 2019; Naik et al., 2018; Glockner et al., 2018; Wang et al., 2019); it exhibits comparable (or better) gains than m-CAD (manual counterfactuals) with less implementation and annotation effort.\nproves accuracy on PAWS-QQP (Zhang et al., 2019b).\nterms of implementation effort, the process of just labeling counterfactuals is the same as labeling original examples, such that no additional annotator training or separate pipelines are required; in contrast, Kaushik et al. (2020) set up two separate crowdsourcing tasks for creating and labeling the counterfactuals. Further, annotator effort is much lower, as evaluating examples is easier than creating them — Kaushik et al. (2020) report an average of ≈2 minutes per NLI counterfactual prior to quality validation, while our median time was 10 seconds per counterfactual. Even after our quality validation (removing noisy annotators, disregarding non-fluent counterfactuals), our rate for NLI is ≈36 seconds per counterfactual (used in Table 5).\nIn terms of the utility per counterfactual, manual creation and Polyjuice may be complementary. Manual annotation may be unreliable or incomplete for certain forms of counterfactuals (Ribeiro et al., 2018), whereas Polyjuice can miss more complex or context-dependent changes, and could benefit from target perturbations that compensate for its lack of domain knowledge (targeted guidance is also helpful for human annotators (Huang et al., 2020)). Thus, it may be important to mix both approaches (Khashabi et al., 2020). Polyjuice’s flexibility opens up possibilities for hybrids between human creation and human verification of targeted, machine-generated counterfactuals.\nfriend ) woman surprisingly flips the prediction to NonDuplicate (,), despite the low weight on “friend.”"
+    }, {
+      "heading" : "4 Counterfactual Explanations",
+      "text" : "A popular way of explaining NLP models is to attribute importance weights to the input tokens, either using attention scores (Wiegreffe and Pinter, 2019) or by summarizing the model behavior on perturbed instances (e.g., LIME (Ribeiro et al., 2016) and SHAP (Lundberg and Lee, 2017)). Though ubiquitous, token scores may not always reflect their real importance (Pruthi et al., 2020). Popular packages like LIME or SHAP estimate scores by masking words, and therefore may not reflect model behavior on natural counterfactual cases. For example, the token “friend” in Figure 3A is not considered important even though a natural substitution in Figure 3B flips the prediction. The opposite happens to “in depression,” where a significant change makes no difference to the model’s prediction (Figure 3C). Even perfect importance\nscores may be too abstract for users to gain real understanding (Miller, 2019), e.g., users may not grasp the significance of a low importance score for the token “help” without concrete examples such as the one in Figure 3D.\nSince presenting a large number of concrete counterfactuals would be overwhelming, we propose a hybrid approach, displaying feature attributions as a high-level summary, together with a judicious selection of Polyjuice counterfactuals that make behaviors concrete and highlight potential limitations. Following Miller (2019)’s observation that people look for explanations revealing unexpected behavior, we select surprising counterfactuals.8 That is, we estimate the expected change in prediction with feature attributions, and select counterfactuals that violate these expectations, i.e., examples where the real change in prediction is large even though importance scores are low (Figure 3B), and examples where the change is small but importance scores are high (Figure 3C). Of course, users can also view additional counterfactuals that perturb tokens of particular interest, a technique that we explore in the next section.\nUser evaluation. We study the scenario where an expert has access to a model and local explanations, and evaluate the additional benefit of showing counterfactuals, i.e., whether they bring new insights. We evaluate three ways of generating counterfactuals: (1) Polyjuice-random, a baseline where we show random Polyjuice counterfactuals, (2) Expert-surprise, where two graduate students (non-participants) were given access to the model and instructed to create counterfactuals that are surprising given the associated SHAP scores, and (3) Polyjuice-surprise, which uses the selection procedure described in the previous paragraph.\nWe recruited 13 participants (graduate students with experience in model explanation), and had them analyze the aforementioned QQP model. In each round, users were shown an example, the model prediction, and a SHAP explanation, as in Figure 3A. Users were instructed to create up to 10 counterfactuals in order to better understand model behavior around the example, for which model predictions were given (users created 6 on average). Finally, users simulated what the model would do on six counterfactuals (Hase and Bansal, 2020), two from each condition (in random order). Counterfactuals where users make mistakes are prefer-\n8Details in Appendix C.1.\nable, as displaying these would add information that users do not already have.\nAs shown in Figure 4, humans simulated model behavior on Polyjuice-surprise counterfactuals only slightly better than random guessing (45% ± 6%), i.e., these examples display model behavior that is surprising to users even after seeing explanations and creating their own counterfactuals. Expert-surprise also had a high error rate, but at a much higher cost: generating these for just 20 original instances took 1.5–2 hours of expert labor.\nWhile high error rates could be achieved with unrelated or nonsensical examples, all counterfactuals under evaluation were close to the original examples, when measured by syntactic tree edit (≈1.0) or Levenshtein distance (≈0.2), Polyjuicesurprise being the closest on both. An independent rater labeled 95% of Polyjuice-surprise counterfactuals as “likely written by a native speaker,” in contrast to 85% for Expert-surprise, indicating that experts sometimes resorted to ungrammatical or nonsensical sentences to find surprising behaviors.\nQualitatively, the study participants tended to create counterfactuals by perturbing the token with the highest weights (84% of their x̂ perturbed tokens in the top 15% quantile of weights), not gaining a real understanding of how the other tokens impact predictions. Participants also made a significant number of mistakes even for tokens they had inspected, e.g., a participant perturbed the example in Figure 3A by replacing help ) play with, yielding a Non-Duplicate model prediction. When faced with help ) find in Figure 3D, they incorrectly assumed the behavior would be the same.\nThese results indicate that Polyjuice counterfactuals complement feature attribution explanations by displaying information that users often miss, even after they have manually explored the model behavior beyond explanations. Moreover, Polyjuice counterfactuals for this application were more surprising and fluent than Expert-surprise, despite being computed automatically.\n, perturbed H through [negation]̂x\nP: A woman is holding a baby by a window. H: This woman is looking out the window.\nH: ●No woman is looking out the window. H: This woman isn’t looking out the window. H: This woman is not looking out the window. f( ̂x) Contradiction Contradiction Neutral\nx f(x)\nAUX → AUX not * → * not * → * n’t * → * PART DET → No …is not looking… …aren’t playing… The→No girls like… A→No man in…\nCoverage (%N→C)\n412 (42.3%) 434 (43.5%)\n180 (92.8%)\nNeutral\n→ x f( ̂x) Template\nA\nB\n, perturbed H with [BLANK]̂x\nH: ●Two women are looking out the window. H: ●Ten women are looking out the window. H: ●More than one person…window.\nf( ̂x)\nNeutral Contradiction Entailment [BLANK] looking out the window. Figure 5: (A) An NLI case with a Neutral prediction (underlined f (x̂) are correct). Polyjuice generates counterfactual hypotheses conditioned on the negation control code. (B) Generalizi g perturbatio s into patterns (Wu et al., 2020). The change DET ) no flips 92.8% of predictions from Neutral ) Contradiction."
+    }, {
+      "heading" : "5 Interactive Analysis",
+      "text" : "While our use of Polyjuice has so far relied on automatic selection of counterfactuals, we show in this section how an analyst can benefit from multiple counterfactuals per x, make use of controlled generation for more advanced analysis, and extract general patterns from individual observations. Our use case is counterfactual error analysis (Wu et al., 2019) of RoBERTa finetuned on NLI (used in §3.1), although the techniques are generally applicable.\nThere is a known correlation between the label Contradiction and hypotheses with negation in NLI datasets (Gururangan et al., 2018), which may cause models to fail on non-contradiction negations. We explore this in Figure 5A by generating counterfactual hypotheses for a random Neutral instance, conditioning only on the original x and the negation control code. While the first two counterfactuals display this failure mode, there is a surprising inconsistency in model behavior between “not” and “n’t”. We note that manual analysis may not explore these three negation forms, and thus not surface this puzzling behavior.\nTo verify if the pattern is widespread, we generate counterfactuals with the negation control code for a random set of instances correctly predicted as Neutral (n = 895). To generalize individual changes into patterns, we extract frequent counterfactual templates with Tempura (Wu et al., 2020) (details in Appendix D.2), shown in Figure 5B. The top templates (in bold) show that the model flips"
+    }, {
+      "heading" : "H: ●Two women are looking out the window.",
+      "text" : ""
+    }, {
+      "heading" : "H: ●Ten women are looking out the window.",
+      "text" : "its prediction from Neutral to Contradiction with roughly the same frequency (≈43%) whether the negation word is “not” or “n’t”, but flips much more frequently with a different negation pattern where a determiner is replaced with “no” (92.8%). While these behaviors may be correct in some instances, they often are not (e.g., Figure 5A), and thus would warrant further exploration, and potential mitigation strategies (e.g., counterfactual training, §3). Tangentially, the impact of DET ) no might lead the analyst to explore the impact of perturbing the subject of hypotheses, which we do in Figure 6 by placing a [BLANK] on the subject rather than using a control code. This leads to the discovery of unstable and erroneous behaviors regarding quantifiers, which we analyze in more detail in Appendix D.1.\nDiscussion. Polyjuice is a powerful tool for interactive analysis. Generating multiple counterfactuals per instance leads to insights that might be missed by manual analysis, and the steering provided by control codes and [BLANK]s allow for analyses that would be non-trivial to do manually (Wu et al., 2019) or with masked language models (e.g., Figure 5B places negations in various parts of sentences, and Figure 6 replaces spans with other spans of varying lengths). Besides error analysis, an analogous interactive use of Polyjuice may be suitable for test creation (Ribeiro et al., 2020) and forms of data augmentation that are more controlled than what we presented in §3."
+    }, {
+      "heading" : "6 Related Work",
+      "text" : "Some prior work in training and evaluation relies on humans to generate counterfactuals from scratch (Gardner et al., 2020; Teney et al., 2020; Kaushik et al., 2020). Our experiments in §3 indicate that asking humans to label Polyjuice counterfactuals yields similar or better results at a lower cost, which motivates an exploration of a mixture of manual and semi-automated generation. Similarly, prior work on analysis relies on experts to\ncreate individual counterfactuals or perturbation functions (Wu et al., 2019; Ribeiro et al., 2020). In §5, we show that Polyjuice enhances current practice by generating multiple counterfactuals that might have been overlooked, and by providing abstractions that allow for new kinds of analyses.\nPrior work on automatically generating counterfactuals typically has a narrower scope in terms of the relationships x ) x̂. For example, adversarial generators aim to maintain semantics while changing model predictions (Ribeiro et al., 2018; Iyyer et al., 2018; Li et al., 2021), whereas concurrent work to our own (Madaan et al., 2021; Ross et al., 2020) automatically generates x̂ that change predictions for explanation or analysis, with no constraints on semantics. However, as shown in §3–§5, a mix of label-preserving and label-flipping counterfactuals generated by Polyjuice is quite useful for training, evaluation, explanation, and analysis. Further, general-purpose counterfactuals may lead to serendipitous discoveries (§5), especially as Polyjuice is not fine-tuned to the target domain (and thus less liable to merely replicate what is already there). Finally, by allowing control through control codes and [BLANK]s, Polyjuice supports humangenerator collaboration, where a person specifies desired changes (e.g., perturb the sentence subject). Such collaboration is hard to imagine using automatic generators with no control, or with coarser control through predefined style attributes or labels (Madaan et al., 2020; Malmi et al., 2020). To our knowledge, prior work on controlled generation (Keskar et al., 2019; Dathathri et al., 2020) does not address counterfactual generation."
+    }, {
+      "heading" : "7 Conclusion and Future Work",
+      "text" : "We propose Polyjuice, a general-purpose generator that produces fluent and diverse counterfactuals, allowing for control over the kinds and locations of perturbations. With simple, task-specific selection heuristics, Polyjuice supports various downstream tasks on different domains, including counterfactual data augmentation, contrast set generation, counterfactual explanation, and error analysis.\nWhile Polyjuice is broadly applicable, it is not bias-free: control codes are pre-defined and certainly not exhaustive, and the model is fine-tuned on a collection of paired datasets where certain perturbations are more or less likely (e.g., we observe that words with negative sentiment tend to be slightly more likely than positive ones in some\ncontexts). Collecting naturally occurring counterfactuals is an important area of future research, as is the development of generators that allow for control even without a-priori control codes.\nBesides improving the generators, further work is needed to improve the value of counterfactuals. For example, while Polyjuice shows consistent gains across tasks in data augmentation, the improvements on some datasets are not as significant. This aligns with observations in prior work that even manual counterfactuals can be marginally beneficial (Kaushik et al., 2020; Huang et al., 2020), possibly because the original data is already diverse enough, or the perturbed signal in counterfactuals is too subtle to affect the model (e.g., when only a single word is changed in a long sentence.) We hope to perform more thorough experiments on tuning the amount and the distribution of counterfactual augmentation, as well as other ways of incorporating counterfactuals, such as having explicit terms in the loss function for contrasting counterfactuals with original data (Teney et al., 2020), or other forms of contrastive learning.\nAlthough our applications all involved people, the human-Polyjuice collaboration in labeling and explanations could benefit from richer interaction mechanisms. We believe Polyjuice motivates future research on more expressive forms of counterfactual training, where users generate counterfactuals together with Polyjuice, and label counterfactual patterns rather than individual instances. Similarly, interactive explanations and analysis are exciting directions, especially as we develop new ways of selecting, presenting, and aggregating counterfactuals for various analysis objectives. Having noted these opportunities, we believe Polyjuice is already a powerful tool for counterfactual reasoning, in particular for tasks where people are directly involved. Polyjuice is opensource, and available at https://github.com/tongshuangwu/polyjuice."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "The work was supported by ONR grant N0001418-1-2193, NSF RAPID grant 2040196, NSF award IIS-1901386, the University of Washington WRF/Cable Professorship, and the Allen Institute for Artificial Intelligence (AI2). We thank Jim Chen, Dianqi Li, Scott Lundberg, Hao Peng, Sameer Singh, Jiao Sun, Victor Zhong, and Sitong Zhou for their helpful comments, as well as our user study participants for their valuable input."
+    }, {
+      "heading" : "Ethical Considerations",
+      "text" : "Our work includes labeling counterfactuals on crowdsourcing platforms, as well as conducting user studies with graduate students. As detailed in Appendix B.1 and C.2, we compensated the MTurk workers $2.5 for ≈15 minutes of labeling, and the graduate students $20 for the user study (one hour), above the U.S. federal minimum wage. The studies are with IRB approval.\nWe only finetune GPT-2 rather than training it from scratch, such that our compute costs are relatively low (around 8 hours for finetuning, Appendix A). All of our finetuning experiments involved finetuning RoBERTa on smaller datasets.\nMore critically, with most of our demonstrated applications using a human-generator hybrid mechanism, we stress that the interaction between the two deserves careful consideration. It has long been reported that algorithms interacting with humans can negatively impact the human.9 In our case, the concern might be that users can develop an over-reliance on Polyjuice (Bansal et al., 2021) and hastily accept its generations. Not only can this decrease users’ creativity (Green et al., 2014), but it may bias their analysis process: as discussed in §7, Polyjuice generation is not exhaustive, and may favor some perturbation patterns over others in unpredictable ways. In the short term, we plan to highlight these limitations as part of the model documentation, while future research should identify interaction mechanisms, so as to ensure that Polyjuice or other counterfactual generators support humans, rather than hindering their performance."
+    }, {
+      "heading" : "A GPT-2 as Counterfactual Generator",
+      "text" : ""
+    }, {
+      "heading" : "A.1 Training Data and Parameters",
+      "text" : "We combine several datasets to finetune Polyjuice. Contrast set. Authors of 10 existing NLP dataset each manually perturbed 100–1,000 instances to change the gold label, so to inspect a model’s local decision boundary (Gardner et al., 2020). The perturbation patterns vary based on the tasks and the annotators, allowing us to learn diverse strategies. To make sure we can use the contrast set to evaluate the Sentiment model, we excluded the IMDb movie review from the training.\nCounterfactually-augmented data (CAD). Kaushik et al. (2020) crowdsourced counterfactuals for IMDb movie review (1.7k), which we split into paired sentences to match the text length of other datasets. CAD’s perturbation patterns also vary based on the task, but can especially contribute to negation. As NLI is in our demonstrating applications, we did not use their 6.6k SNLI counterfactuals.10\nWinoGrande is a large-scale dataset of 44k instances for testing common sense problems (Sakaguchi et al., 2020). It contains sentences that differ only by one trigger word (e.g., one noun), making it most suitable for learning lexical exchanges.\nParaNMT-50M contains 50 million EnglishEnglish sentential paraphrase pairs, covering various domains and styles of text, as well as different sentence structures (Wieting and Gimpel, 2018).\nPAWS (Zhang et al., 2019b) contains pairs with high text overlaps, created through controlled word swapping, best demonstrating shuffle and restructure. We used its 49k Wikipedia parts.\nHANS (McCoy et al., 2019), a challenge set for NLI, contains 10k pairs of premises and hypotheses created based on 10 heavily fallible syntactic templates, and therefore compensates rarer structural changes that may be missed by PAWS.\n10Similarly, though QQP is suitable for training Polyjuice, we omitted it so QQP can be used in our evaluation.\nCrawled We additionally crawl naturally occurring sentence pairs from non-paired datasets boost some specific patterns and increase lexical diversity. This include (1) CommonGen (Lin et al., 2020), sentences with common sense concepts; (2) Natural Questions (Kwiatkowski et al., 2019), collections of queries issued to Google Engines (and therefore involve various paraphrases of similar user intents), and (3) SQuAD (Rajpurkar et al., 2016), whose paragraphs involve Wikipedia knowledge. We estimate close pairs using edit distance, and broadly accept those with less than 60% editing. To exclude tricky cases (e.g.,“how do I not be” can be incorrectly regarded as negation for “how do I recover it”), we only augment the most determined patterns: lexical, insert, delete, and shuffle.\nTo balance the distribution (Table 7), for each dataset, we extract control codes from all the (x, x̂), and randomly sample up to 10,000 instances per codes. Still, quantifier and negation have less training data compared to other codes. Fortunately, these codes tend to be limited to more specific patterns (“more than”, “not”, “never”) when compared to “broad” codes like lexical, and thus even a small sample is enough to learn them. We finetuned an off-the-shelf GPT-2 model from Wolf et al. (2020) for 10 epochs with an initial learning rate 5e-5, a batch size of 8, and a sequence length of 120 (but any LM can potentially be used). We select the best epoch based on the evaluation loss on a holdout set of size 5,000. The training took around 8 hours on two Titan RTXs.\nA.2 Intrinsic Evaluation Details"
+    }, {
+      "heading" : "A.2.1 Closeness and Diversity",
+      "text" : "Similar to Madaan et al. (2021), we compare the diversity and closeness of Polyjuice with alternative generators, i.e., RoBERTa and T5, representing masked language models that prioritize word and span substitution, and original GPT-2, representing the standard generative model not conditioned on x. For a given x and its counterfactuals X̂, we approx-\nimate diversity using self-BLEU (Zhu et al., 2018) within X̂. Meanwhile, closeness is the average distance between x and every x̂ ∈ X̂, both with the normalized word level Levenshtein edit distance ((Levenshtein, 1966), used in MiCE (Ross et al., 2020)), and syntactic tree edit distance ((Zhang and Shasha, 1989) in GYC (Madaan et al., 2021)).\nWe run the three generators on 300 sentences in total. In GPT-2, we take the first two words of an x as the input context (prompt), limit the length of the generation to be similar to x, and collect 10 counterfactuals. As for RoBERTa and T5, we repeatedly perturb x for three times, each time randomly placing up to three [MASK] tokens, and ask the generator to generate 5 counterfactuals through beam search, following Ribeiro et al. (2020). Polyjuice uses the same blank (mask) placement as in RoBERTa and T5, but we additionally enumerate through all control codes. For each x, we randomly sample 5 counterfactuals to form X̂ per generator.\nAs shown in Table 2, Polyjuice achieves a balance between diversity and closeness. Ideally, we would also like to compare Polyjuice with concurrent work (Madaan et al., 2021; Ross et al., 2020), but these are yet to be open-sourced and require extensive implementation or finetuning."
+    }, {
+      "heading" : "A.2.2 Controllability",
+      "text" : "To evaluate controllability, we compare Polyjuice with T5, and GPT-2 finetuned on prompts without codes (called Polyjuice -a), such that both baselines consider sufficient context. For each control code, we compare the control success rate of Polyjuice and Polyjuice-a on 300 prompts. For each prompt, we generate counterfactuals through beam search (beam = 5), and recompute the codes on the top three generated x̂. We deem the control successful if at least one of the three recomputed codes matches the desired control code (though in Polyjuice-a, we only measure whether the code naturally occurs in the uncontrolled generation.) The success rate increases by 26%±13% across all control codes, ranging from quantifier (increasing 6%, from 50% to 56%) to negation (42%, from 5% to 47%). Non-finetuned T5 also achieves less control (success rate decreases by 33% on average.)\nCommon failure cases include (1) The control codes conflict with the blanks, e.g.,“a dog is embraced by a [BLANK]” would not respond to negation. (2) x does not have a corresponding pattern, e.g., shuffle is not applicable to “the movie\nis good.” (3) certain salient patterns dominate the generation probability, e.g., the model tends to perturb the quantifier “two” in “two dogs are running,” regardless of the code."
+    }, {
+      "heading" : "B Additional Train & Eval Details, §3",
+      "text" : ""
+    }, {
+      "heading" : "B.1 MTurk Labeling Details",
+      "text" : "Procedure The study started with an introduction that explained the context and tasks. To familiarize crowdworkers with the task, we asked them to complete 1-2 training rounds, and explained the expected labels. Each annotator then completed 22 tasks, labeling 3 counterfactuals of a single example in each round, as in Figure 7. The 22 rounds consisted of 20 actual labeling tasks and 2 extra “gold rounds” with known correct labels. The gold cases later served to filter low-quality crowdworkers. The median annotation time was around 15 minutes, and participants received $2.5.\nParticipants. We recruited participants from MTurk, limiting the pool to subjects from within the US with a prior task approval rating of at least 97% and a minimum of 1,000 approved tasks.\nData quality. We applied two filtering strategies: (1) High-quality worker. We only kept data from participants whose median labeling time per round was more than 18 seconds and correctly labeled at least 4 gold counterfactuals (out of 6), or who correctly labeled all gold ones. (2) Majority vote labeling. We collected two annotations per counterfactual, and only kept those that at least one annotator deemed valid, and both annotators agreed on a particular class label. One of the authors la-\nbeled a subset of 100 x̂ on 100 x in Sentiment, and reached high agreement with the majority-voted results (κ = 0.77, raw labeling agreement 88%).\nB.2 Training Details & m/n Ratios, for §3.2 For each (m, n), we created three samples of training data. Each sample was further averaged over four random seeds. For each run, we heuristically picked the initial learning rates 1e-5, 2e-5, 2e-5 for Sentiment, NLI and QQP, and trained 20 epochs with a dropout rate of 0.1 and a batch size of 16. We selected the epoch that had the highest accuracy on the corresponding validation set, which takes 1/5 of the training data size, with the same ratio of m/n counterfactual and original examples.\nWe further explore ratios of added counterfactuals. Take Sentiment as an example: while the counterfactual remains effective on most datasets, it hurts the model performance on Amzbook when the counterfactual takes a large proportion (Figure 8, Yelp followed a similar but more mild trend). We suspect that flipping out too much original data affects the data diversity, and in turn decreases the model performance. Similarly, Huang et al. (2020) asserted that augmenting n = 1.7k NLI data with m = 6.6k counterfactuals did not improve model generalization accuracy."
+    }, {
+      "heading" : "C Additional Explanation Details §4",
+      "text" : ""
+    }, {
+      "heading" : "C.1 Selection Methods",
+      "text" : "Because SHAP weights reflect the average effect of masking a token t, we also focus on word features that are abnormal on average.\nMore concretely, we define the expected changein-prediction for perturbing a token t to be the SHAP importance on it, H[Df(t, x)] = s(t). In Figure 3, s(t=depression) = 0.276. The actual\nprediction change Df(t, x) is the weighted average of | fp(x) − fp(x̂)| for all the x̂ that affect t (depression ) trouble, depression ) a mood), where fp(x) is the prediction probability of f on x. The weight corresponds to the number of words modified in x̂: If e(x̂) denotes the set of edited words in x, then w(x̂) = 1/|e(x̂)|. Intuitively, the more words changed in x̂, the less impact each word has; In Figure 3D, we regard “depression” to be responsible for half of the impact in in depression ) suicidal. We group x̂ based on their affected words Gt = {x̂ | t ∈ e(x̂)}. Df(t, x) then becomes:\nDf(t, x) = 1\n|Gt| + 1 s(t) +∑ x̂∈Gt w(t) · | fp(x) − fp(x̂)| \nThe additional SHAP weight s(t) acts as a smoothing factor to penalize outliers. Then the gap between the expectation and reality is:\n∆ Df(t, x) = Df(t, x) −H[Df(t, x)]\nWe first find the abnormal tokens: (1) t with small SHAP weight, but x̂ that change t experience large prediction change on average: tL = arg maxt∈x ∆ Df(t, x), and (2) t with large SHAP weight, but x̂ with t changed usually have intact prediction: tU = arg maxt∈x −∆ Df(t, x).\nThen, we use the most extreme cases within the groups of GtL and GtU as the concrete counterfactual explanations, based on their prediction change | fp(x) − fp(x̂)|, and the aggregated SHAP weights of all the changed tokens:\nx̂L = arg max x̂∈GtL | fp(x) − fp(x̂)| − ∑ u∈r(x̂) s(u) "
+    }, {
+      "heading" : "C.2 User Study Details",
+      "text" : "Figure 9 shows the sample interface. Participants started by just seeing the reference example and the model query box on the left hand side. When they chose to start the task or after they had exhausted their ten query chances, the query box was disabled, the tasks on the right were displayed, and the participants completed the tasks. We compensated participants $20 for the one hour study."
+    }, {
+      "heading" : "D Additional Err. Analysis Details §5",
+      "text" : ""
+    }, {
+      "heading" : "D.1 Additional Case Study: Quantifiers",
+      "text" : "As a follow-up to Figure 6, we slice the data to find entailment instances that have numbers in the hypothesis sentence, and perturb their quantifiers.\nThe extracted templates show that the model does not perform actual counting. When changing one number to another (NUM ) NUM), the model only flips the label in 64.7% cases, while we would expect all cases to be like in Figure 10A. An inspection of instances indicates the model gets confused when the premise does not contain the same number explicitly. Indeed, when we filter for such instances (e.g. Figure 10B), the label flip rate of NUM ) NUM is lowered to 30.2%.\nFurther, the model only reacts to some quantifier phrase modifiers. +at least (“at least two women are at a bar”) will always still result in entailment, prediction, +only and +exactly flip the predicted label to neutral 90% of the time (“exactly two women are at a bar”), but the model only changes the prediction 52.6% of the time when we add +more than (“more than two women are at a bar”)."
+    }, {
+      "heading" : "D.2 Representative Perturbation Templates",
+      "text" : "Similar to Wu et al. (2020), the process of finding representative perturbation patterns takes two steps:\nExtract template. For each x̂, we compare it with its x, and translate the perturbed spans into templates using different combinations of texts, lemmas, sparse and fine-grained part-ofspeech tags. We optionally include surround-\ning contexts determined by the dependency tree structure (tokens that share the same parents as the perturbed span). For example, “is not reading” can result in templates t as fine-grained as is reading ) is not reading, or as sparse as +PART. Meanwhile, “are not playing” also translates to +PART or +not, but not is reading ) is not reading. As such, the x̂ and templates form a many-to-many relationship: each x̂ generates multiple templates, and each template covers a different group of x̂.\nSelect Representative Templates. To find representative changes, we prefer (1) templates that cover a large number of x̂. Meanwhile, to avoid overfitting to one instance (e.g., extracting a template red ) ADJ only because “red” is repeatedly perturbed in one x), we prefer (2) templates that perturb various unique x. We also prefer (3) finergrained templates, to avoid being unnecessarily abstract (e.g., to avoid abstracting “not” when it is the only PART changed.)\nWith these intuitions, we form the template selection as a weighted set coverage problem. We see the union of counterfactuals for each x, X̂, as the entire set of elements. Then, each template t ∈ T = t1, ..., tm represents a subset of X̂ that contains a number of counterfactuals |t|. We define the weight as w(t) = g(t)/|t|x, where |t|x quantifies the unique original x covered by t, and g(t) represents the sparsity of t (heuristically decreasing from text to POS). This way, templates that are too abstract or too focused on a certain x are penalized by having a high weight. We use a classic greedy algorithm (Vazirani, 2013) to select a subset of T ∗ ⊂ T , such that the aggregated coverage is maximized, and the weight is minimized."
+    } ],
+    "references" : [ {
+      "title" : "Yelp dataset challenge: Review rating prediction",
+      "author" : [ "Nabiha Asghar." ],
+      "venue" : "arXiv preprint arXiv:1605.05362.",
+      "citeRegEx" : "Asghar.,? 2016",
+      "shortCiteRegEx" : "Asghar.",
+      "year" : 2016
+    }, {
+      "title" : "Does the whole exceed its parts? the effect of ai explanations on complementary team performance",
+      "author" : [ "Gagan Bansal", "Tongshuang Wu", "Joyce Zhou", "Raymond Fok", "Besmira Nushi", "Ece Kamar", "Marco Tulio Ribeiro", "Daniel Weld." ],
+      "venue" : "Proceedings",
+      "citeRegEx" : "Bansal et al\\.,? 2021",
+      "shortCiteRegEx" : "Bansal et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "A large annotated corpus for learning natural language inference",
+      "author" : [ "Samuel R. Bowman", "Gabor Angeli", "Christopher Potts", "Christopher D. Manning." ],
+      "venue" : "9https://www.nytimes.com/",
+      "citeRegEx" : "Bowman et al\\.,? 2015",
+      "shortCiteRegEx" : "Bowman et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Slice-based learning: A programming model for residual learning in critical data slices",
+      "author" : [ "Vincent S. Chen", "Sen Wu", "Alexander J. Ratner", "Jen Weng", "Christopher Ré." ],
+      "venue" : "Advances in Neural Information Processing Systems 32: Annual Conference",
+      "citeRegEx" : "Chen et al\\.,? 2019",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Syntactic structures",
+      "author" : [ "Noam Chomsky." ],
+      "venue" : "Walter de Gruyter.",
+      "citeRegEx" : "Chomsky.,? 2002",
+      "shortCiteRegEx" : "Chomsky.",
+      "year" : 2002
+    }, {
+      "title" : "Plug and play language models: A simple approach to controlled text generation",
+      "author" : [ "Sumanth Dathathri", "Andrea Madotto", "Janice Lan", "Jane Hung", "Eric Frank", "Piero Molino", "Jason Yosinski", "Rosanne Liu." ],
+      "venue" : "8th International Conference on Learning Represen-",
+      "citeRegEx" : "Dathathri et al\\.,? 2020",
+      "shortCiteRegEx" : "Dathathri et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Enabling language models to fill in the blanks",
+      "author" : [ "Chris Donahue", "Mina Lee", "Percy Liang." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 2492– 2501, Online. Association for Computational Lin-",
+      "citeRegEx" : "Donahue et al\\.,? 2020",
+      "shortCiteRegEx" : "Donahue et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Evaluating models’ local decision boundaries via contrast sets",
+      "author" : [ "F. Liu", "Phoebe Mulcaire", "Qiang Ning", "Sameer Singh", "Noah A. Smith", "Sanjay Subramanian", "Reut Tsarfaty", "Eric Wallace", "Ally Zhang", "Ben Zhou" ],
+      "venue" : "In Findings of the Association",
+      "citeRegEx" : "Liu et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Counterfactual fairness in text classification through robustness",
+      "author" : [ "Sahaj Garg", "Vincent Perot", "Nicole Limtiaco", "Ankur Taly", "Ed H Chi", "Alex Beutel." ],
+      "venue" : "Proceedings of the 2019 AAAI/ACM Conference on AI, Ethics, and Society, pages 219–226.",
+      "citeRegEx" : "Garg et al\\.,? 2019",
+      "shortCiteRegEx" : "Garg et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Breaking NLI systems with sentences that require simple lexical inferences",
+      "author" : [ "Max Glockner", "Vered Shwartz", "Yoav Goldberg." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers),",
+      "citeRegEx" : "Glockner et al\\.,? 2018",
+      "shortCiteRegEx" : "Glockner et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Twitter sentiment classification using distant supervision",
+      "author" : [ "Alec Go", "Richa Bhayani", "Lei Huang." ],
+      "venue" : "CS224N project report, Stanford, 1(12):2009.",
+      "citeRegEx" : "Go et al\\.,? 2009",
+      "shortCiteRegEx" : "Go et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Human effort and machine learnability in computer aided translation",
+      "author" : [ "Spence Green", "Sida I. Wang", "Jason Chuang", "Jeffrey Heer", "Sebastian Schuster", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2014 Conference on Empirical Methods in Nat-",
+      "citeRegEx" : "Green et al\\.,? 2014",
+      "shortCiteRegEx" : "Green et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Annotation artifacts in natural language inference data",
+      "author" : [ "Suchin Gururangan", "Swabha Swayamdipta", "Omer Levy", "Roy Schwartz", "Samuel Bowman", "Noah A. Smith." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the",
+      "citeRegEx" : "Gururangan et al\\.,? 2018",
+      "shortCiteRegEx" : "Gururangan et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Evaluating explainable AI: Which algorithmic explanations help users predict model behavior? In Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 5540–5552, Online",
+      "author" : [ "Peter Hase", "Mohit Bansal." ],
+      "venue" : "As-",
+      "citeRegEx" : "Hase and Bansal.,? 2020",
+      "shortCiteRegEx" : "Hase and Bansal.",
+      "year" : 2020
+    }, {
+      "title" : "Counterfactually-augmented SNLI training data does not yield better generalization than unaugmented data",
+      "author" : [ "William Huang", "Haokun Liu", "Samuel R. Bowman." ],
+      "venue" : "Proceedings of the First Workshop on Insights from Negative Results in NLP, pages 82–",
+      "citeRegEx" : "Huang et al\\.,? 2020",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Adversarial example generation with syntactically controlled paraphrase networks",
+      "author" : [ "Mohit Iyyer", "John Wieting", "Kevin Gimpel", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computa-",
+      "citeRegEx" : "Iyyer et al\\.,? 2018",
+      "shortCiteRegEx" : "Iyyer et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "The simulation heuristic",
+      "author" : [ "Daniel Kahneman", "Amos Tversky." ],
+      "venue" : "Technical report, Stanford Univ CA Dept of Psychology.",
+      "citeRegEx" : "Kahneman and Tversky.,? 1981",
+      "shortCiteRegEx" : "Kahneman and Tversky.",
+      "year" : 1981
+    }, {
+      "title" : "Learning the difference that makes A difference with counterfactuallyaugmented data",
+      "author" : [ "Divyansh Kaushik", "Eduard H. Hovy", "Zachary Chase Lipton." ],
+      "venue" : "8th International Conference on Learning Representations, ICLR 2020, Addis Ababa,",
+      "citeRegEx" : "Kaushik et al\\.,? 2020",
+      "shortCiteRegEx" : "Kaushik et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "CTRL - A Conditional Transformer Language Model for Controllable Generation",
+      "author" : [ "Nitish Shirish Keskar", "Bryan McCann", "Lav Varshney", "Caiming Xiong", "Richard Socher." ],
+      "venue" : "arXiv preprint arXiv:1909.05858.",
+      "citeRegEx" : "Keskar et al\\.,? 2019",
+      "shortCiteRegEx" : "Keskar et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "More bang for your buck: Natural perturbation for robust question answering",
+      "author" : [ "Daniel Khashabi", "Tushar Khot", "Ashish Sabharwal." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in",
+      "citeRegEx" : "Khashabi et al\\.,? 2020",
+      "shortCiteRegEx" : "Khashabi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Probing what different NLP tasks teach machines about function word",
+      "author" : [ "Najoung Kim", "Roma Patel", "Adam Poliak", "Patrick Xia", "Alex Wang", "Tom McCoy", "Ian Tenney", "Alexis Ross", "Tal Linzen", "Benjamin Van Durme", "Samuel R. Bowman", "Ellie Pavlick" ],
+      "venue" : null,
+      "citeRegEx" : "Kim et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Kim et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Natural questions: A benchmark for question answering research",
+      "author" : [ "Jakob Uszkoreit", "Quoc Le", "Slav Petrov." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 7:452–466.",
+      "citeRegEx" : "Uszkoreit et al\\.,? 2019",
+      "shortCiteRegEx" : "Uszkoreit et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Binary Codes Capable of Correcting Deletions, Insertions and Reversals",
+      "author" : [ "VI Levenshtein." ],
+      "venue" : "Soviet Physics Doklady, 10:707.",
+      "citeRegEx" : "Levenshtein.,? 1966",
+      "shortCiteRegEx" : "Levenshtein.",
+      "year" : 1966
+    }, {
+      "title" : "Contextualized perturbation for textual adversarial attack",
+      "author" : [ "Dianqi Li", "Yizhe Zhang", "Hao Peng", "Liqun Chen", "Chris Brockett", "Ming-Ting Sun", "Bill Dolan." ],
+      "venue" : "Proceedings of the 2021 Conference of the North American Chapter of the Association for",
+      "citeRegEx" : "Li et al\\.,? 2021",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "CommonGen: A constrained text generation challenge for generative commonsense reasoning",
+      "author" : [ "Bill Yuchen Lin", "Wangchunshu Zhou", "Ming Shen", "Pei Zhou", "Chandra Bhagavatula", "Yejin Choi", "Xiang Ren." ],
+      "venue" : "Findings of the Association for Computa-",
+      "citeRegEx" : "Lin et al\\.,? 2020",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Roberta: A robustly optimized bert pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "arXiv preprint arXiv:1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "How effective is task-agnostic data augmentation for pretrained transformers? In Findings of the Association for Computational Linguistics: EMNLP 2020, pages 4401–4411, Online",
+      "author" : [ "Shayne Longpre", "Yu Wang", "Chris DuBois." ],
+      "venue" : "Association for Computa-",
+      "citeRegEx" : "Longpre et al\\.,? 2020",
+      "shortCiteRegEx" : "Longpre et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A unified approach to interpreting model predictions",
+      "author" : [ "Scott M. Lundberg", "Su-In Lee." ],
+      "venue" : "Advances in Neural Information Processing Systems 30: Annual Conference on Neural Information Processing Systems 2017, December 4-9, 2017, Long",
+      "citeRegEx" : "Lundberg and Lee.,? 2017",
+      "shortCiteRegEx" : "Lundberg and Lee.",
+      "year" : 2017
+    }, {
+      "title" : "Learning word vectors for sentiment analysis",
+      "author" : [ "Andrew L. Maas", "Raymond E. Daly", "Peter T. Pham", "Dan Huang", "Andrew Y. Ng", "Christopher Potts." ],
+      "venue" : "Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: Hu-",
+      "citeRegEx" : "Maas et al\\.,? 2011",
+      "shortCiteRegEx" : "Maas et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "Politeness transfer: A tag and generate approach",
+      "author" : [ "Aman Madaan", "Amrith Setlur", "Tanmay Parekh", "Barnabas Poczos", "Graham Neubig", "Yiming Yang", "Ruslan Salakhutdinov", "Alan W Black", "Shrimai Prabhumoye." ],
+      "venue" : "Proceedings of the 58th Annual Meet-",
+      "citeRegEx" : "Madaan et al\\.,? 2020",
+      "shortCiteRegEx" : "Madaan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Generate your counterfactuals: Towards controlled counterfactual generation for text",
+      "author" : [ "Nishtha Madaan", "Inkit Padhi", "Naveen Panwar", "Diptikalyan Saha." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence.",
+      "citeRegEx" : "Madaan et al\\.,? 2021",
+      "shortCiteRegEx" : "Madaan et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Unsupervised text style transfer with padded masked language models",
+      "author" : [ "Eric Malmi", "Aliaksei Severyn", "Sascha Rothe." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 8671–8680, Online. As-",
+      "citeRegEx" : "Malmi et al\\.,? 2020",
+      "shortCiteRegEx" : "Malmi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Right for the wrong reasons: Diagnosing syntactic heuristics in natural language inference",
+      "author" : [ "Tom McCoy", "Ellie Pavlick", "Tal Linzen." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 3428–3448,",
+      "citeRegEx" : "McCoy et al\\.,? 2019",
+      "shortCiteRegEx" : "McCoy et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Explanation in artificial intelligence: Insights from the social sciences",
+      "author" : [ "Tim Miller." ],
+      "venue" : "Artificial Intelligence, 267:1 – 38.",
+      "citeRegEx" : "Miller.,? 2019",
+      "shortCiteRegEx" : "Miller.",
+      "year" : 2019
+    }, {
+      "title" : "TextAttack: A framework for adversarial attacks, data augmentation, and adversarial training in NLP",
+      "author" : [ "John Morris", "Eli Lifland", "Jin Yong Yoo", "Jake Grigsby", "Di Jin", "Yanjun Qi." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natu-",
+      "citeRegEx" : "Morris et al\\.,? 2020",
+      "shortCiteRegEx" : "Morris et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Stress test evaluation for natural language inference",
+      "author" : [ "Aakanksha Naik", "Abhilasha Ravichander", "Norman Sadeh", "Carolyn Rose", "Graham Neubig." ],
+      "venue" : "Proceedings of the 27th International Conference on Computational Linguistics, pages 2340–2353,",
+      "citeRegEx" : "Naik et al\\.,? 2018",
+      "shortCiteRegEx" : "Naik et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "SemEval-2013 task 2: Sentiment analysis in Twitter",
+      "author" : [ "Preslav Nakov", "Sara Rosenthal", "Zornitsa Kozareva", "Veselin Stoyanov", "Alan Ritter", "Theresa Wilson." ],
+      "venue" : "Second Joint Conference on Lexical and Computational Semantics (*SEM), Volume 2: Pro-",
+      "citeRegEx" : "Nakov et al\\.,? 2013",
+      "shortCiteRegEx" : "Nakov et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Justifying recommendations using distantly-labeled reviews and fine-grained aspects",
+      "author" : [ "Jianmo Ni", "Jiacheng Li", "Julian McAuley." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th Interna-",
+      "citeRegEx" : "Ni et al\\.,? 2019",
+      "shortCiteRegEx" : "Ni et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Causal and counterfactual inference",
+      "author" : [ "Judea Pearl." ],
+      "venue" : "The Handbook of Rationality, pages 1–41.",
+      "citeRegEx" : "Pearl.,? 2018",
+      "shortCiteRegEx" : "Pearl.",
+      "year" : 2018
+    }, {
+      "title" : "Learning to deceive with attention-based explanations",
+      "author" : [ "Danish Pruthi", "Mansi Gupta", "Bhuwan Dhingra", "Graham Neubig", "Zachary C. Lipton." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 4782–",
+      "citeRegEx" : "Pruthi et al\\.,? 2020",
+      "shortCiteRegEx" : "Pruthi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Counterfactual story reasoning and generation",
+      "author" : [ "Lianhui Qin", "Antoine Bosselut", "Ari Holtzman", "Chandra Bhagavatula", "Elizabeth Clark", "Yejin Choi." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Qin et al\\.,? 2019",
+      "shortCiteRegEx" : "Qin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "Alec Radford", "Jeffrey Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever." ],
+      "venue" : "OpenAI blog, 1(8):9.",
+      "citeRegEx" : "Radford et al\\.,? 2019",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Exploring the limits of transfer learning with a unified text-totext transformer",
+      "author" : [ "Colin Raffel", "Noam Shazeer", "Adam Roberts", "Katherine Lee", "Sharan Narang", "Michael Matena", "Yanqi Zhou", "Wei Li", "Peter J. Liu." ],
+      "venue" : "Journal of Machine Learning Re-",
+      "citeRegEx" : "Raffel et al\\.,? 2020",
+      "shortCiteRegEx" : "Raffel et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "SQuAD: 100,000+ questions for machine comprehension of text",
+      "author" : [ "Pranav Rajpurkar", "Jian Zhang", "Konstantin Lopyrev", "Percy Liang." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 2383–2392, Austin,",
+      "citeRegEx" : "Rajpurkar et al\\.,? 2016",
+      "shortCiteRegEx" : "Rajpurkar et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "SentenceBERT: Sentence embeddings using Siamese BERTnetworks",
+      "author" : [ "Nils Reimers", "Iryna Gurevych." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natu-",
+      "citeRegEx" : "Reimers and Gurevych.,? 2019",
+      "shortCiteRegEx" : "Reimers and Gurevych.",
+      "year" : 2019
+    }, {
+      "title" : "why should I trust you?\": Explain",
+      "author" : [ "Marco Túlio Ribeiro", "Sameer Singh", "Carlos Guestrin" ],
+      "venue" : null,
+      "citeRegEx" : "Ribeiro et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Ribeiro et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Semantically equivalent adversarial rules for debugging NLP models",
+      "author" : [ "Marco Tulio Ribeiro", "Sameer Singh", "Carlos Guestrin." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers),",
+      "citeRegEx" : "Ribeiro et al\\.,? 2018",
+      "shortCiteRegEx" : "Ribeiro et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Beyond accuracy: Behavioral testing of NLP models with CheckList",
+      "author" : [ "Marco Tulio Ribeiro", "Tongshuang Wu", "Carlos Guestrin", "Sameer Singh." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 4902–",
+      "citeRegEx" : "Ribeiro et al\\.,? 2020",
+      "shortCiteRegEx" : "Ribeiro et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Explaining nlp models via minimal contrastive editing (mice)",
+      "author" : [ "Alexis Ross", "Ana Marasović", "Matthew E. Peters" ],
+      "venue" : null,
+      "citeRegEx" : "Ross et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Ross et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Winogrande: An adversarial winograd schema challenge at scale",
+      "author" : [ "Keisuke Sakaguchi", "Ronan Le Bras", "Chandra Bhagavatula", "Yejin Choi." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, 34(05):8732–8740.",
+      "citeRegEx" : "Sakaguchi et al\\.,? 2020",
+      "shortCiteRegEx" : "Sakaguchi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Recursive deep models for semantic compositionality over a sentiment treebank",
+      "author" : [ "Richard Socher", "Alex Perelygin", "Jean Wu", "Jason Chuang", "Christopher D. Manning", "Andrew Ng", "Christopher Potts." ],
+      "venue" : "Proceedings of the 2013 Conference on",
+      "citeRegEx" : "Socher et al\\.,? 2013",
+      "shortCiteRegEx" : "Socher et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Learning what makes a difference from counterfactual examples and gradient supervision",
+      "author" : [ "Damien Teney", "Ehsan Abbasnedjad", "Anton van den Hengel." ],
+      "venue" : "Computer Vision – ECCV 2020, pages 580– 599, Cham. Springer International Publishing.",
+      "citeRegEx" : "Teney et al\\.,? 2020",
+      "shortCiteRegEx" : "Teney et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Approximation algorithms",
+      "author" : [ "Vijay V Vazirani." ],
+      "venue" : "Springer Science & Business Media.",
+      "citeRegEx" : "Vazirani.,? 2013",
+      "shortCiteRegEx" : "Vazirani.",
+      "year" : 2013
+    }, {
+      "title" : "GLUE: A multi-task benchmark and analysis platform for natural language understanding",
+      "author" : [ "Alex Wang", "Amanpreet Singh", "Julian Michael", "Felix Hill", "Omer Levy", "Samuel R. Bowman." ],
+      "venue" : "7th International Conference on Learning Representa-",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Attention is not not explanation",
+      "author" : [ "Sarah Wiegreffe", "Yuval Pinter." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natural Language Processing (EMNLP-",
+      "citeRegEx" : "Wiegreffe and Pinter.,? 2019",
+      "shortCiteRegEx" : "Wiegreffe and Pinter.",
+      "year" : 2019
+    }, {
+      "title" : "ParaNMT50M: Pushing the limits of paraphrastic sentence embeddings with millions of machine translations",
+      "author" : [ "John Wieting", "Kevin Gimpel." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1:",
+      "citeRegEx" : "Wieting and Gimpel.,? 2018",
+      "shortCiteRegEx" : "Wieting and Gimpel.",
+      "year" : 2018
+    }, {
+      "title" : "Transformers: State-of-the-art natural language processing",
+      "author" : [ "Teven Le Scao", "Sylvain Gugger", "Mariama Drame", "Quentin Lhoest", "Alexander Rush." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing:",
+      "citeRegEx" : "Scao et al\\.,? 2020",
+      "shortCiteRegEx" : "Scao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Errudite: Scalable, reproducible, and testable error analysis",
+      "author" : [ "Tongshuang Wu", "Marco Tulio Ribeiro", "Jeffrey Heer", "Daniel Weld." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 747–763, Flo-",
+      "citeRegEx" : "Wu et al\\.,? 2019",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Tempura: Query analysis with structural templates",
+      "author" : [ "Tongshuang Wu", "Kanit Wongsuphasawat", "Donghao Ren", "Kayur Patel", "Chris DuBois." ],
+      "venue" : "CHI ’20: CHI Conference on Human Factors in Computing Systems, Honolulu, HI, USA, April 25-",
+      "citeRegEx" : "Wu et al\\.,? 2020",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Generating fluent adversarial examples for natural languages",
+      "author" : [ "Huangzhao Zhang", "Hao Zhou", "Ning Miao", "Lei Li." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 5564–5569, Florence, Italy. Asso-",
+      "citeRegEx" : "Zhang et al\\.,? 2019a",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Simple fast algorithms for the editing distance between trees and related problems",
+      "author" : [ "Kaizhong Zhang", "Dennis Shasha." ],
+      "venue" : "SIAM journal on computing, 18(6):1245–1262.",
+      "citeRegEx" : "Zhang and Shasha.,? 1989",
+      "shortCiteRegEx" : "Zhang and Shasha.",
+      "year" : 1989
+    }, {
+      "title" : "PAWS: Paraphrase adversaries from word scrambling",
+      "author" : [ "Yuan Zhang", "Jason Baldridge", "Luheng He." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-",
+      "citeRegEx" : "Zhang et al\\.,? 2019b",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Texygen: A benchmarking platform for text generation models",
+      "author" : [ "Yaoming Zhu", "Sidi Lu", "Lei Zheng", "Jiaxian Guo", "Weinan Zhang", "Jun Wang", "Yong Yu." ],
+      "venue" : "The 41st International ACM SIGIR Conference on Research & Development in Information",
+      "citeRegEx" : "Zhu et al\\.,? 2018",
+      "shortCiteRegEx" : "Zhu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "2020) crowdsourced counterfactuals for IMDb movie review (1.7k), which we split into paired sentences to match the text length of other datasets. CAD’s perturbation patterns",
+      "author" : [ ],
+      "venue" : null,
+      "citeRegEx" : "Kaushik,? \\Q2020\\E",
+      "shortCiteRegEx" : "Kaushik",
+      "year" : 2020
+    }, {
+      "title" : "2019), a challenge set for NLI, contains 10k pairs of premises and hypotheses created based on 10 heavily fallible syntactic templates, and therefore compensates rarer structural changes that may be missed by PAWS",
+      "author" : [ "HANS (McCoy" ],
+      "venue" : null,
+      "citeRegEx" : ".McCoy,? \\Q2019\\E",
+      "shortCiteRegEx" : ".McCoy",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 16,
+      "context" : "Counterfactual reasoning — mentally simulating what would have happened if conditions were different — is a common tool for making causality assessments (Kahneman and Tversky, 1981), which in turn are crucial for model evaluation, error analysis, and explanation (Miller, 2019).",
+      "startOffset" : 153,
+      "endOffset" : 181
+    }, {
+      "referenceID" : 33,
+      "context" : "Counterfactual reasoning — mentally simulating what would have happened if conditions were different — is a common tool for making causality assessments (Kahneman and Tversky, 1981), which in turn are crucial for model evaluation, error analysis, and explanation (Miller, 2019).",
+      "startOffset" : 263,
+      "endOffset" : 277
+    }, {
+      "referenceID" : 40,
+      "context" : "that change the groundtruth labels by manually rewriting instances (Gardner et al., 2020; Qin et al., 2019) or defining perturbation functions (Ribeiro et al.",
+      "startOffset" : 67,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 47,
+      "context" : ", 2019) or defining perturbation functions (Ribeiro et al., 2020).",
+      "startOffset" : 43,
+      "endOffset" : 65
+    }, {
+      "referenceID" : 17,
+      "context" : ", 4–5 minutes per counterfactual (Kaushik et al., 2020)) and susceptible to systematic omissions (e.",
+      "startOffset" : 33,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 48,
+      "context" : ", generating x̂ that have different model predictions than x (Ross et al., 2020; Zhang et al., 2019a).",
+      "startOffset" : 61,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 59,
+      "context" : ", generating x̂ that have different model predictions than x (Ross et al., 2020; Zhang et al., 2019a).",
+      "startOffset" : 61,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 57,
+      "context" : "Moreover, for cases like model explanation and analysis, a general-purpose pool of counterfactuals may be preferable, as the relationship of interest can be more exploratory and user-oriented (Wu et al., 2019).",
+      "startOffset" : 192,
+      "endOffset" : 209
+    }, {
+      "referenceID" : 41,
+      "context" : "We frame the generation step as conditional text generation, and finetune GPT-2 (Radford et al., 2019) into a generator called Polyjuice using",
+      "startOffset" : 80,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 6,
+      "context" : "To allow for targeted counterfactuals, we also design control codes like negation or delete (Figure 1B), and adopt fill-in-the-blank structures (Donahue et al., 2020) to specify where the perturbation occurs and how.",
+      "startOffset" : 144,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 38,
+      "context" : "We expect g to produce counterfactuals x̂ that are (1) close to x, preferably only involving the minimal changes necessary to establish a certain effect (Pearl, 2018), allowing users to make causality assessments.",
+      "startOffset" : 153,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 34,
+      "context" : ", grammatically correct (Morris et al., 2020) and semantically meaningful (e.",
+      "startOffset" : 24,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 4,
+      "context" : ",“Colorless green ideas sleep furiously” is not meaningful (Chomsky, 2002)).",
+      "startOffset" : 59,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 16,
+      "context" : "Further, as a general-purpose generator, g should produce counterfactuals with a measure of (3) control over relationships x ) x̂, such that the counterfactuals can vary with the object-of-attention in each application (the “focus rule” (Kahneman and Tversky, 1981)).",
+      "startOffset" : 237,
+      "endOffset" : 265
+    }, {
+      "referenceID" : 38,
+      "context" : "Finally, we expect g to output a (4) diverse set of x̂ in terms of relationships, covering a large variety of “what-ifs” for different applications (Pearl, 2018).",
+      "startOffset" : 148,
+      "endOffset" : 161
+    }, {
+      "referenceID" : 41,
+      "context" : "We frame counterfactual generation as a conditional text generation task using language models (LMs), and train Polyjuice by finetuning GPT2 (Radford et al., 2019) using the following prompt design (alternative LMs could also have been used).",
+      "startOffset" : 141,
+      "endOffset" : 163
+    }, {
+      "referenceID" : 18,
+      "context" : "In Line 2, we have control codes (Keskar et al., 2019) such as negation.",
+      "startOffset" : 33,
+      "endOffset" : 54
+    }, {
+      "referenceID" : 17,
+      "context" : "lexical, syntactic, or semantic aspects (see Table 1), inspired by prior work that categorizes manually created counterfactuals (Kaushik et al., 2020; Gardner et al., 2020).",
+      "startOffset" : 128,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 6,
+      "context" : "As an additional layer of control over x ) x̂, we allow users to specify where changes happen by having the LM infill [BLANK] tokens (Donahue et al., 2020), rather than generating arbitrary counterfactuals (Lines 3–4).",
+      "startOffset" : 133,
+      "endOffset" : 155
+    }, {
+      "referenceID" : 24,
+      "context" : "tence pairs (filtered by edit distance to guarantee closeness) in non-paired datasets including CommonGen (Lin et al., 2020), Natural Questions (Kwiatkowski et al.",
+      "startOffset" : 106,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 43,
+      "context" : ", 2019), and SQuAD (Rajpurkar et al., 2016), such that the resulting dataset contains diverse counterfactuals.",
+      "startOffset" : 19,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 44,
+      "context" : "When multiple changes occur, we label it with the control code which most significantly changes the semantics of the corresponding subphrase as computed by SBERT (Reimers and Gurevych, 2019).",
+      "startOffset" : 162,
+      "endOffset" : 190
+    }, {
+      "referenceID" : 25,
+      "context" : "token-infilling RoBERTa (Liu et al., 2019) and (3) span-infilling T5 (Raffel et al.",
+      "startOffset" : 24,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 42,
+      "context" : ", 2019) and (3) span-infilling T5 (Raffel et al., 2020).",
+      "startOffset" : 34,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 60,
+      "context" : "As shown in Table 2, Polyjuice generates counterfactuals that are close to the original instance, measured by syntactic tree (Zhang and Shasha, 1989) and Levenshtein edit distance (Levenshtein, 1966).",
+      "startOffset" : 125,
+      "endOffset" : 149
+    }, {
+      "referenceID" : 22,
+      "context" : "As shown in Table 2, Polyjuice generates counterfactuals that are close to the original instance, measured by syntactic tree (Zhang and Shasha, 1989) and Levenshtein edit distance (Levenshtein, 1966).",
+      "startOffset" : 180,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 62,
+      "context" : "As for infilling models, Polyjuice counterfactuals are more diverse (measured by self-BLEU (Zhu et al., 2018)) than RoBERTa ones, which is restricted to word substitution.",
+      "startOffset" : 91,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 50,
+      "context" : "We further verify the fluency for Polyjuice counterfactuals in three tasks/datasets: (1) Sentiment Analysis, SST-2 (Socher et al., 2013), (2) Natural Language Inference (NLI), SNLI (Bowman et al.",
+      "startOffset" : 115,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 2,
+      "context" : ", 2013), (2) Natural Language Inference (NLI), SNLI (Bowman et al., 2015), and (3) Duplicate Question Detection",
+      "startOffset" : 52,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 8,
+      "context" : "5We collect asymmetric counterfactuals (Garg et al., 2019) by sampling more Duplicate and Entailment examples in QQP and NLI to perturb, due to the difficulty of flipping other labels.",
+      "startOffset" : 39,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 47,
+      "context" : "We also evaluate model capabilities with CheckList (Ribeiro et al., 2020) for Sentiment and QQP.",
+      "startOffset" : 51,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 26,
+      "context" : "We suspect that Polyjuice lacks domain knowledge and context for identifying critical perturbations, and therefore brings benefits redundant with pretraining (Longpre et al., 2020).",
+      "startOffset" : 158,
+      "endOffset" : 180
+    }, {
+      "referenceID" : 19,
+      "context" : ",, m = n may decrease vocabulary diversity or induce additional data bias, echoing (Khashabi et al., 2020)).",
+      "startOffset" : 83,
+      "endOffset" : 106
+    }, {
+      "referenceID" : 37,
+      "context" : "m-polyjuice maintains the in-domain and out-of-domain accuracies on reviews (SST-2, Amzbook, Yelp, IMDb Movie Review (Ni et al., 2019; Asghar, 2016; Maas et al., 2011)), improving it on Twitter data (Senti140 and SemEval 2017 (Go et al.",
+      "startOffset" : 117,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 0,
+      "context" : "m-polyjuice maintains the in-domain and out-of-domain accuracies on reviews (SST-2, Amzbook, Yelp, IMDb Movie Review (Ni et al., 2019; Asghar, 2016; Maas et al., 2011)), improving it on Twitter data (Senti140 and SemEval 2017 (Go et al.",
+      "startOffset" : 117,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 28,
+      "context" : "m-polyjuice maintains the in-domain and out-of-domain accuracies on reviews (SST-2, Amzbook, Yelp, IMDb Movie Review (Ni et al., 2019; Asghar, 2016; Maas et al., 2011)), improving it on Twitter data (Senti140 and SemEval 2017 (Go et al.",
+      "startOffset" : 117,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2011)), improving it on Twitter data (Senti140 and SemEval 2017 (Go et al., 2009; Nakov et al., 2013)) and contrast sets (Gardner et al.",
+      "startOffset" : 66,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 36,
+      "context" : ", 2011)), improving it on Twitter data (Senti140 and SemEval 2017 (Go et al., 2009; Nakov et al., 2013)) and contrast sets (Gardner et al.",
+      "startOffset" : 66,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 17,
+      "context" : ", 2013)) and contrast sets (Gardner et al., 2020; Kaushik et al., 2020), likely because their distributions are less similar to the original SST-2 training data.",
+      "startOffset" : 27,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 20,
+      "context" : "m-polyjuice improves accuracy on contrast and challenge sets (Kim et al., 2019; Naik et al., 2018; Glockner et al., 2018; Wang et al., 2019); it exhibits comparable (or better) gains than m-CAD (manual counterfactuals) with less implementation and annotation effort.",
+      "startOffset" : 61,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 35,
+      "context" : "m-polyjuice improves accuracy on contrast and challenge sets (Kim et al., 2019; Naik et al., 2018; Glockner et al., 2018; Wang et al., 2019); it exhibits comparable (or better) gains than m-CAD (manual counterfactuals) with less implementation and annotation effort.",
+      "startOffset" : 61,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 9,
+      "context" : "m-polyjuice improves accuracy on contrast and challenge sets (Kim et al., 2019; Naik et al., 2018; Glockner et al., 2018; Wang et al., 2019); it exhibits comparable (or better) gains than m-CAD (manual counterfactuals) with less implementation and annotation effort.",
+      "startOffset" : 61,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 53,
+      "context" : "m-polyjuice improves accuracy on contrast and challenge sets (Kim et al., 2019; Naik et al., 2018; Glockner et al., 2018; Wang et al., 2019); it exhibits comparable (or better) gains than m-CAD (manual counterfactuals) with less implementation and annotation effort.",
+      "startOffset" : 61,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 61,
+      "context" : "Table 6: Polyjuice with n=20, 000 and m=1, 911 improves accuracy on PAWS-QQP (Zhang et al., 2019b).",
+      "startOffset" : 77,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 46,
+      "context" : "Manual annotation may be unreliable or incomplete for certain forms of counterfactuals (Ribeiro et al., 2018), whereas Polyjuice can miss more complex or context-dependent changes, and could benefit from target perturbations that compensate for its lack of domain knowledge (targeted guidance is also helpful for human annotators (Huang et al.",
+      "startOffset" : 87,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2018), whereas Polyjuice can miss more complex or context-dependent changes, and could benefit from target perturbations that compensate for its lack of domain knowledge (targeted guidance is also helpful for human annotators (Huang et al., 2020)).",
+      "startOffset" : 228,
+      "endOffset" : 248
+    }, {
+      "referenceID" : 19,
+      "context" : "Thus, it may be important to mix both approaches (Khashabi et al., 2020).",
+      "startOffset" : 49,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 54,
+      "context" : "A popular way of explaining NLP models is to attribute importance weights to the input tokens, either using attention scores (Wiegreffe and Pinter, 2019) or by summarizing the model behavior on perturbed instances (e.",
+      "startOffset" : 125,
+      "endOffset" : 153
+    }, {
+      "referenceID" : 45,
+      "context" : ", LIME (Ribeiro et al., 2016) and SHAP (Lundberg and Lee, 2017)).",
+      "startOffset" : 7,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 39,
+      "context" : "Though ubiquitous, token scores may not always reflect their real importance (Pruthi et al., 2020).",
+      "startOffset" : 77,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 33,
+      "context" : "6713 scores may be too abstract for users to gain real understanding (Miller, 2019), e.",
+      "startOffset" : 69,
+      "endOffset" : 83
+    }, {
+      "referenceID" : 13,
+      "context" : "Finally, users simulated what the model would do on six counterfactuals (Hase and Bansal, 2020), two from each condition (in random order).",
+      "startOffset" : 72,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 58,
+      "context" : "(B) Generalizi g perturbatio s into patterns (Wu et al., 2020).",
+      "startOffset" : 45,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 57,
+      "context" : "Our use case is counterfactual error analysis (Wu et al., 2019) of RoBERTa finetuned on NLI (used in §3.",
+      "startOffset" : 46,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 12,
+      "context" : "There is a known correlation between the label Contradiction and hypotheses with negation in NLI datasets (Gururangan et al., 2018), which may cause models to fail on non-contradiction negations.",
+      "startOffset" : 106,
+      "endOffset" : 131
+    }, {
+      "referenceID" : 58,
+      "context" : "To generalize individual changes into patterns, we extract frequent counterfactual templates with Tempura (Wu et al., 2020) (details in Appendix D.",
+      "startOffset" : 106,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 57,
+      "context" : "provided by control codes and [BLANK]s allow for analyses that would be non-trivial to do manually (Wu et al., 2019) or with masked language models (e.",
+      "startOffset" : 99,
+      "endOffset" : 116
+    }, {
+      "referenceID" : 47,
+      "context" : "Besides error analysis, an analogous interactive use of Polyjuice may be suitable for test creation (Ribeiro et al., 2020) and forms of data augmentation that are more controlled than what we presented in §3.",
+      "startOffset" : 100,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 51,
+      "context" : "Some prior work in training and evaluation relies on humans to generate counterfactuals from scratch (Gardner et al., 2020; Teney et al., 2020; Kaushik et al., 2020).",
+      "startOffset" : 101,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 17,
+      "context" : "Some prior work in training and evaluation relies on humans to generate counterfactuals from scratch (Gardner et al., 2020; Teney et al., 2020; Kaushik et al., 2020).",
+      "startOffset" : 101,
+      "endOffset" : 165
+    }, {
+      "referenceID" : 57,
+      "context" : "6715 create individual counterfactuals or perturbation functions (Wu et al., 2019; Ribeiro et al., 2020).",
+      "startOffset" : 65,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 47,
+      "context" : "6715 create individual counterfactuals or perturbation functions (Wu et al., 2019; Ribeiro et al., 2020).",
+      "startOffset" : 65,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 46,
+      "context" : "For example, adversarial generators aim to maintain semantics while changing model predictions (Ribeiro et al., 2018; Iyyer et al., 2018; Li et al., 2021), whereas concurrent work to our own (Madaan et al.",
+      "startOffset" : 95,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 15,
+      "context" : "For example, adversarial generators aim to maintain semantics while changing model predictions (Ribeiro et al., 2018; Iyyer et al., 2018; Li et al., 2021), whereas concurrent work to our own (Madaan et al.",
+      "startOffset" : 95,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 23,
+      "context" : "For example, adversarial generators aim to maintain semantics while changing model predictions (Ribeiro et al., 2018; Iyyer et al., 2018; Li et al., 2021), whereas concurrent work to our own (Madaan et al.",
+      "startOffset" : 95,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 30,
+      "context" : ", 2021), whereas concurrent work to our own (Madaan et al., 2021; Ross et al., 2020) automatically generates x̂ that change",
+      "startOffset" : 44,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 48,
+      "context" : ", 2021), whereas concurrent work to our own (Madaan et al., 2021; Ross et al., 2020) automatically generates x̂ that change",
+      "startOffset" : 44,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 29,
+      "context" : "control through predefined style attributes or labels (Madaan et al., 2020; Malmi et al., 2020).",
+      "startOffset" : 54,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 31,
+      "context" : "control through predefined style attributes or labels (Madaan et al., 2020; Malmi et al., 2020).",
+      "startOffset" : 54,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 18,
+      "context" : "To our knowledge, prior work on controlled generation (Keskar et al., 2019; Dathathri et al., 2020) does not address counterfactual generation.",
+      "startOffset" : 54,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 5,
+      "context" : "To our knowledge, prior work on controlled generation (Keskar et al., 2019; Dathathri et al., 2020) does not address counterfactual generation.",
+      "startOffset" : 54,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 17,
+      "context" : "This aligns with observations in prior work that even manual counterfactuals can be marginally beneficial (Kaushik et al., 2020; Huang et al., 2020), possibly because the original data is already diverse enough, or the perturbed signal in counterfactuals is too subtle to affect the model (e.",
+      "startOffset" : 106,
+      "endOffset" : 148
+    }, {
+      "referenceID" : 14,
+      "context" : "This aligns with observations in prior work that even manual counterfactuals can be marginally beneficial (Kaushik et al., 2020; Huang et al., 2020), possibly because the original data is already diverse enough, or the perturbed signal in counterfactuals is too subtle to affect the model (e.",
+      "startOffset" : 106,
+      "endOffset" : 148
+    }, {
+      "referenceID" : 51,
+      "context" : "the amount and the distribution of counterfactual augmentation, as well as other ways of incorporating counterfactuals, such as having explicit terms in the loss function for contrasting counterfactuals with original data (Teney et al., 2020), or other",
+      "startOffset" : 222,
+      "endOffset" : 242
+    }, {
+      "referenceID" : 1,
+      "context" : "9 In our case, the concern might be that users can develop an over-reliance on Polyjuice (Bansal et al., 2021) and hastily accept its generations.",
+      "startOffset" : 89,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 11,
+      "context" : "Not only can this decrease users’ creativity (Green et al., 2014),",
+      "startOffset" : 45,
+      "endOffset" : 65
+    } ],
+    "year" : 2021,
+    "abstractText" : "While counterfactual examples are useful for analysis and training of NLP models, current generation methods either rely on manual labor to create very few counterfactuals, or only instantiate limited types of perturbations such as paraphrases or word substitutions. We present Polyjuice, a general-purpose counterfactual generator that allows for control over perturbation types and locations, trained by finetuning GPT-2 on multiple datasets of paired sentences. We show that Polyjuice produces diverse sets of realistic counterfactuals, which in turn are useful in various distinct applications: improving training and evaluation on three different tasks (with around 70% less annotation effort than manual generation), augmenting state-of-the-art explanation techniques, and supporting systematic counterfactual error analysis by revealing behaviors easily missed by human experts.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

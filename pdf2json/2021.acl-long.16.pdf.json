@@ -1,0 +1,638 @@
+{
+  "name" : "2021.acl-long.16.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Accelerating BERT Inference for Sequence Labeling via Early-Exit",
+    "authors" : [ "Xiaonan Li", "Yunfan Shao", "Tianxiang Sun", "Hang Yan", "Xipeng Qiu", "Xuanjing Huang" ],
+    "emails" : [ "xjhuang}@fudan.edu.cn" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 189–199\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n189"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Sequence labeling plays an important role in natural language processing (NLP). Many NLP tasks can be converted to sequence labeling tasks, such as named entity recognition, part-of-speech tagging,\n∗Corresponding author. 1Our implementation is publicly available at https://\ngithub.com/LeeSureman/Sequence-Labeling-Early-Exit.\nChinese word segmentation and Semantic Role Labeling. These tasks are usually fundamental and highly time-demanding, therefore, apart from performance, their inference efficiency is also very important.\nThe past few years have witnessed the prevailing of pre-trained models (PTMs) (Qiu et al., 2020) on various sequence labeling tasks (Nguyen et al., 2020; Ke et al., 2020; Tian et al., 2020; Mengge et al., 2020). Despite their significant improvements on sequence labeling, they are notorious for enormous computational cost and slow inference speed, which hinders their utility in real-time scenarios or mobile-device scenarios.\nRecently, early-exit mechanism (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020) has been introduced to accelerate inference for large-scale PTMs. In their methods, each layer of the PTM is coupled with a classifier to predict the label for a given instance. At inference stage, if the prediction is confident 2 enough at an earlier time, it is allowed to exit without passing through the entire model. Figure 1(a) gives an illustration of early-exit mechanism for text classification. However, most existing early-exit methods are targeted at sequence-level prediction, such as text classification, in which the prediction and its confidence score are calculated over a sequence. Therefore, these methods cannot be directly applied to sequence labeling tasks, where the prediction is token-level and the confidence score is required for each token.\nIn this paper, we aim to extend the early-exit mechanism to sequence labeling tasks. First, we proposed the SENTence-level Early-Exit (SENTEE), which is a simple extension of existing earlyexit methods. SENTEE allows a sequence of tokens to exit together once the maximum uncertainty\n2In this paper, confident prediction indicates that the uncertainty of it is low.\nof the tokens is below a threshold. Despite its effectiveness, we find it redundant for most tokens to update the representation at each layer. Thus, we proposed a TOKen-level Early-Exit (TOKEE) that allows part of tokens that get confident predictions to exit earlier. Figure 1(b) and 1(c) illustrate our proposed SENTEE and TOKEE. Considering the local dependency inherent in sequence labeling tasks, we decide whether a token could exit based on the uncertainty of a window of its context instead of itself. For tokens that are already exited, we do not update their representation but just copy it to the upper layers. However, this will introduce a train-inference discrepancy. To tackle this prob-\nlem, we introduce an additional fine-tuning stage that samples the token’s halting layer based on its uncertainty and copies its representation to upper layers during training. We conduct extensive experiments on three sequence labeling tasks: NER, POS tagging, and CWS. Experimental results show that our approach can save up to 66% ∼75% inference cost with minimal performance degradation. Compared with competitive compressed models such as DistilBERT, our approach can achieve better performance under speed-up ratio of 2×, 3×, and 4×."
+    }, {
+      "heading" : "2 BERT for Sequence Labeling",
+      "text" : "Recently, PTMs (Qiu et al., 2020) have become the mainstream backbone model for various sequence labeling tasks. The typical framework consists of a backbone encoder and a task-specific decoder.\nEncoder In this paper, we use BERT (Devlin et al., 2019) as our backbone encoder . The architecture of BERT consists of multiple stacked Transformer layers (Vaswani et al., 2017).\nGiven a sequence of tokens x1, · · · , xN , the hidden state of l-th transformer layer is denoted by H(l) = [h\n(l) 1 , · · · ,h (l) N ], and H (0) is the BERT input embedding.\nDecoder Usually, we can predict the label for each token according to the hidden state of the top layer. The probability of labels is predicted by\nP = f(WH(L)) ∈ RN×C , (1)\nwhere N is the sequence length, C is the number of labels, L is the number of BERT layers, W is a learnable matrix, and f(·) is a simple softmax classifier or conditional random field (CRF) (Lafferty et al., 2001). Since we focus on inference acceleration and PTM performs well enough on sequence labeling without CRF (Devlin et al., 2019), we do not consider using such a recurrent structure."
+    }, {
+      "heading" : "3 Early-Exit for Sequence Labeling",
+      "text" : "The inference speed and computational costs of PTMs are crucial bottlenecks to hinder their application in many real-world scenarios. In many tasks, the representations at an earlier layer of PTMs are usually adequate to make a correct prediction. Therefore, early-exit mechanisms (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020) are proposed to dynamically stop inference\non the backbone model and make prediction with intermediate representation.\nHowever, these existing early-exit mechanisms are built on sentence-level prediction and unsuitable for token-level prediction in sequence labeling tasks. In this section, we propose two earlyexist mechanisms to accelerate the inference for sequence labeling tasks."
+    }, {
+      "heading" : "3.1 Token-Level Off-Ramps",
+      "text" : "To extend early-exit to sequence labeling, we couple each layer of the PTM with token-level s that can be simply implemented as a linear classifier. Once the off-ramps are trained with the golden labels, the instance has a chance to be predicted and exit at an earlier time instead of passing through the entire model.\nGiven a sequence of tokens X = x1, · · · , xN , we can make predictions by the injected off-ramps at each layer. For an off-ramp at l-th layer, the label distribution of all tokens is predicted by\nP(l) = f (l)(X; θ) (2)\n= softmax(WH(l)), (3)\nwhere W is a learnable matrix, f (l) is the tokenlevel off-ramp at l-th layer, P(l) = [p(l)1 , · · · ,p (l) N ], p (l) n ∈ RC , indicates the predicted label distribution at the l-th off-ramp for each token.\nUncertainty of the Off-Ramp With the prediction for each token at hand, we can calculate the uncertainty for each token as follows,\nu(l)n = −p(l)n · logp(l)n\nlog C , (4)\nwhere p(l)n is the label probability distribution for the n-th token."
+    }, {
+      "heading" : "3.2 Early-Exit Strategies",
+      "text" : "In the following sections, we will introduce two early-exit mechanisms for sequence labeling, at sentence-level and token-level."
+    }, {
+      "heading" : "3.2.1 SENTEE: Sentence-Level Early-Exit",
+      "text" : "Sentence-Level Early-Exit (SENTEE) is a simple extension for sequential labeling tasks based on existing early-exit approaches. SENTEE allows a sequence of tokens to exit together if their uncertainty is low enough. Therefore, SENTEE is to aggregate the uncertainty for each token to obtain\nan overall uncertainty for the whole sequence. Here we perform a straight-forward but effective method, i.e., conduct max-pooling3 over uncertainties of all the tokens,\nu(l) = max{u(l)1 , · · · , u (l) n }, (5)\nwhere u(l) represents the uncertainty for the whole sentence. If u(l) < δ where δ is a pre-defined threshold, we let the sentence exit at layer l. The intuition is that only when the model is confident of its prediction for the most difficult token, the whole sequence could exit."
+    }, {
+      "heading" : "3.2.2 TOKEE: Token-Level Early-Exit",
+      "text" : "Despite the effectiveness of SENTEE (see Table 1), we find it redundant for most simple tokens to be fed into the deep layers. The simple tokens that have been correctly predicted in the shallow layer can not exit (under SENTEE) because the uncertainty of a small number of difficult tokens is still above the threshold. Thus, to further accelerate the inference for sequence labeling tasks, we propose a token-level early-exit (TOKEE) method that allows simple tokens with confident predictions to exit early.\nWindow-Based Uncertainty Note that a prevalent problem in sequence labeling tasks is the local dependency (or label dependency). That is, the label of a token heavily depends on the tokens around it. To that end, the calculation of the uncertainty for a given token should not only be based on itself but also its context. Motivated by this, we proposed a window-based uncertainty criterion to decide for a token whether or not to exit at the current layer. In particular, the uncertainty for the token xn at l-th layer is defined as\nu′(l)n = max{u (l) n−k, · · · , u (l) n+k}, (6)\nwhere k is a pre-defined window size. Then we use u ′(l) n to decide whether the n th token can exit at layer l, instead of u(l)n . Note that window-based uncertainty is equivalent to sentence-level uncertainty when k equals to the sentence length.\nHalt-and-Copy For tokens that have exited, their representation would not be updated in the upper layers, i.e., the hidden states of exited tokens are\n3We also tried average-pooling, but it brings drastic performance drop. We find that the average uncertainty over the sequence is often overwhelmed by lots of easy tokens and this causes many wrong exits of difficult tokens.\ndirectly copied to the upper layers.4 Such a haltand-copy mechanism is rather intuitive in two-fold:\n• Halt. If the uncertainty of a token is very small, there are also few chances that its prediction will be changed in the following layers. So it is redundant to keep updating its representation.\n• Copy. If the representation of a token can be classified into a label with a high degree of confidence, then its representation already contains the label information. So we can directly copy its representation into the upper layers to help predict the labels of other tokens.\nThese exited tokens will not attend to other tokens at upper layers but can still be attended by other tokens thus part of the layer-specific query projections in upper layers can be omitted. By this, the computational complexity in self-attention is reduced fromO(N2d) toO(NMd), whereM N is the number of tokens that have not exited. Besides, the computational complexity of the pointwise FFN can also be reduced from O(Nd2) to O(Md2).\nThe halt-and-copy mechanism is also similar to multi-pass sequence labeling paradigm, in which the tokens are labeled their in order of difficulty (easiest first). However, the copy mechanism results in a train-inference discrepancy. That is, a layer never processed the representation from its non-adjacent previous layers during training. To alleviate the discrepancy, we further proposed an additional fine-tuning stage, which will be discussed in Section 3.3.2."
+    }, {
+      "heading" : "3.3 Model Training",
+      "text" : "In this section, we describe the training process of our proposed early-exit mechanisms."
+    }, {
+      "heading" : "3.3.1 Fine-Tuning for SENTEE",
+      "text" : "For sentence-level early-exit, we follow prior earlyexit work for text classification to jointly train the added off-ramps. For each off-ramp, the loss function is as follows,\nLl = N∑\nn=1\nH ( yn, f (l)(X; θ)n ) , (7)\n4For English sequence labeling, we use the first-pooling to get the representation of the word. If a word exits, we will halt-and-copy its all wordpieces.\nwhere H is the cross-entropy loss function, N is the sequence length. The total loss function for each sample is a weighted sum of the losses for all the off-ramps,\nLtotal = ∑L\nl=1wlLl∑L l=1wl , (8)\nwhere wl is the weight for the l-th off-ramp and L is the number of backbone layers. Following (Zhou et al., 2020), we simply set wl = l. In this way, The deeper an off-ramp is, the weight of its loss is bigger, thus each off-ramp can be trained jointly in a relatively balanced way."
+    }, {
+      "heading" : "3.3.2 Fine-Tuning for TOKEE",
+      "text" : "Since we equip halt-and-copy in TOKEE, the common joint training off-ramps are not enough. Because the model never conducts halt-and-copy in training but does in inference. In this stage, we aim to train the model to use the hidden state from different previous layers but not only the previous adjacent layer, just like in inference.\nRandom Sampling A direct way is to uniformly sample halting layers of tokens. However, halting layers at the inference are not random but depends on the difficulty of each token in the sequence. So random sampling halting layers also causes the gap between training and inference.\nSelf-Sampling Instead, we use the fine-tuned model itself to sample the halting layers. For every sample in each training epoch, we will randomly sample a window size and threshold for it, and then we can conduct TOKEE on the trained model, under the window size and threshold, without haltand-copy. Thus we get the exiting layer of each token, and we use it to re-forward the sample, by halting and copying each token in the corresponding layer. In this way, the exiting layer of a token can correspond to its difficulty. The deeper a token’s exiting layer is, the more difficult it is. Because we sample the exiting layer using the model itself, we think the gap between training and inference can be further shrunk. To avoid over-fitting during further training, we prevent the training loss from further reducing, similar with the flooding mechanism used by Ishida et al. (2020). We also employ the sandwich rule to stabilize this training stage (Yu and Huang, 2019). We compare self-sampling with random sampling in Section 4.4.4."
+    }, {
+      "heading" : "4 Experiment",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Computational Cost Measure",
+      "text" : "We use average floating-point operations (FLOPs) as the measure of computational cost, which denotes how many floating-point operations the model performs for a single sample. The FLOPs is\nuniversal enough since it is not involved with the model running environment (CPU, GPU or TPU) and it can measure the theoretical running time of the model. In general, the lower the model’s FLOPs is, the faster the model’s inference is."
+    }, {
+      "heading" : "4.2 Experimental Setup",
+      "text" : ""
+    }, {
+      "heading" : "4.2.1 Dataset",
+      "text" : "To verify the effectiveness of our methods, We conduct experiments on ten English and Chinese datasets of sequence labeling, covering NER: CoNLL2003 (Tjong Kim Sang and De Meulder, 2003), Twitter NER (Zhang et al., 2018), Ontonotes 4.0 (Chinese) (Weischedel et al., 2011), Weibo (Peng and Dredze, 2015; He and Sun, 2017) and CLUE NER (Xu et al., 2020), POS: ARK Twitter (Gimpel et al., 2011; Owoputi et al., 2013), CTB5 POS (Xue et al., 2005) and UD POS (Nivre et al., 2016), CWS: CTB5 Seg (Xue et al., 2005) and UD Seg (Nivre et al., 2016). Besides the standard benchmark dataset like CoNLL2003 and Ontonotes 4.0, we also choose some datasets closer to realworld application to verify the actual utility of our methods, such as Twitter NER and Weibo in social media domain. We use the same dataset prepro-\ncessing and split as in previous work (Huang et al., 2015; Mengge et al., 2020; Jia et al., 2020; Tian et al., 2020; Nguyen et al., 2020)."
+    }, {
+      "heading" : "4.2.2 Baseline",
+      "text" : "We compare our methods with three baselines:\n• BiLSTM-CRF (Huang et al., 2015; Ma and Hovy, 2016) The most widely used model in sequence labeling tasks before the pre-trained language model prevails in NLP.\n• BERT The powerful stacked Transformer encoder model, pre-trained on large-scale corpus, which we use as the backbone of our methods.\n• DistilBERT The most well-known distillation method of BERT. Huggingface released 6 layers DistilBERT for English (Sanh et al., 2019). For comparison, we distill {3, 4} and {3, 4, 6} layers DistilBERT for English and Chinese using the same method."
+    }, {
+      "heading" : "4.2.3 Hyper-Parameters",
+      "text" : "For all datasets, We use batch size=10. We perform grid search over learning rate in {5e-6,1e-5,2e-5}. We choose learning rate and the model based on the development set. We use the AdamW optimizer (Loshchilov and Hutter, 2019). The warmup step, weight decay is set to 0.05, 0.01, respectively."
+    }, {
+      "heading" : "4.3 Main Results",
+      "text" : "For English Datasets, we use the ‘BERT-basecased’ released by Google (Devlin et al., 2019) as backbone. For Chinese Datasets, we use ‘BERTwwm’ released by (Cui et al., 2019). The DistilBERT is distilled from the backbone BERT.\nTo fairly compare our methods with baselines, we turn the speedup ratio of our methods to be consistent with the corresponding static baseline. We report the average performance over 5 times under different random seeds. The overall results are shown in Table 1, where the speedup is based on the backbone. We can see both SENTEE and TOKEE brings little performance drop and outperforms DistilBERT in speedup ratio of 2, which has achieved similar effect like existing early-exit for text classification. Under higher speedup, 3× and 4×, SENTEE shows its weakness but TOKEE can still keep a certain performance. And under 2∼4× speedup ratio, TOKEE has a lower performance drop than DistilBERT. What’s more, for datasets where BERT can show its power than LSTM-CRF,\ne.g., Chinese NER, TOKEE (4×) on BERT can still outperform LSTM-CRF significantly. This indicates the potential utility of it in complicated real-world scenario.\nTo explore the fine-grained performance change under different speedup ratio, We visualize the speedup-performance trade-off curve on 6 datasets, in Figure2. We observe that,\n• Before the speedup ratio rises to a certain turning point, there is almost no drop on performance. After that, the performance will drop gradually. This shows our methods keep the superiority of existing early-exit methods (Xin et al., 2020).\n• As the speedup rises, TOKEE will encounter the speedup turning point later than SENTEE. After both methods reach the turning point, SENTEE’s performance degradation is more drastic than TOKEE. These both indicate the higher speedup ceiling of TOKEE.\n• On some datasets, such as CoNLL2003, we observe a little performance improvement under low speedup ratio, we attribute this to the potential regularization brought by early-exit, such as alleviating overthinking (Kaya et al., 2019).\nTo verify the versatility of our method over different PTMs, we also conduct experiments on two well-known BERT variants, RoBERTa (Liu et al., 2019)5 and ALBERT (Lan et al., 2020)6, as shown in Table 2. We can see that SENTEE and TOKEE also significantly outperform static backbone internal layer on three Representative datasets of corresponding tasks. For RoBERTa and ALBERT, we also observe the TOKEE can have a better performance than SENTEE under high speedup ratio."
+    }, {
+      "heading" : "4.4 Analysis",
+      "text" : "In this section, we conduct a set of detailed analysis on our methods."
+    }, {
+      "heading" : "4.4.1 The Effect of Window Size",
+      "text" : "We show the performance change under different k in Figure 3, keeping the speedup ratio consistent. We observe that: (1) when k is 0, in other words, not using window-based uncertainty but token-independent uncertainty, the performance is the almost lowest across different speedup ratio, because it does not consider local dependency\n5https://github.com/ymcui/Chinese-BERT-wwm. 6https://github.com/brightmart/albert zh.\nat all. This shows the necessity of the windowbased uncertainty. (2) When k is relatively large, it will bring significant performance drop under high speedup ratio (3× and 4×), like SENTEE. (3) It is necessary to choose an appropriate k under high speedup ratio, where the effect of different k has a high variance."
+    }, {
+      "heading" : "4.4.2 Accuracy V.S. Uncertainty",
+      "text" : "Liu et al. (2020) verified ‘the lower the uncertainty, the higher the accuracy’ on text classification. Here, we’d like to verify our window-based uncertainty\non sequence labeling. In detail, we verify the entire window-based uncertainty and its specific hyperparameter, k, on CoNLL2003, shown in Figure 4. For the uncertainty, we intercept the 4 th and 8 th off-ramps and calculate their accuracy in each uncertainty interval, when k=2. The result shown in Figure 4(a) indicates that ‘the lower the windowbased uncertainty, the higher the accuracy’, similar as in text classification. For k, we set a certain threshold = 0.3, and calculate accuracy of tokens whose window-based uncertainty is small than the threshold under different k, shown in Figure 4(b). The result shows that, as k increases: (1) The accuracy of screened tokens is higher. This shows that the wider of a token’s low-uncertainty neighborhood, the more accurate the token’s prediction is. This also verifies the validity of window-based uncertainty strategy. (2) The accuracy improvement slows down. This shows the low relevance of distant tokens’ uncertainty and explains why large k performs not well under high speedup ratio: it does not help improving more accurate exiting but slowing down exiting."
+    }, {
+      "heading" : "4.4.3 Influence of Sequence Length",
+      "text" : "Transformer-based PTMs, e.g. BERT, face a challenge in processing long text, due to the O(N2d) computational complexity brought by self-\nattention. Since the TOKEE reduces the layer-wise computational complexity from O(N2d + Nd2) to O(NMd+Md2) and SENTEE does not, we’d like to explore their effect over different sentence length. We compare the highest speedup ratio of TOKEE and SENTEE when performance drop < 1 on Ontonotes 4.0, shown in Figure 5. We observe that TOKEE has a stable computational cost saving as the sentence length increases, but SENTEE’s speedup ratio will gradually reduce. For this, we give an intuitive explanation. In general, a longer sentence has more tokens, it is more difficult for the model to give them all confident prediction at the same layer. This comparison reveals the potential of TOKEE on accelerating long text inference."
+    }, {
+      "heading" : "4.4.4 Effects of Self-Sampling Fine-Tuning",
+      "text" : "To verify the effect of self-sampling fine-tuning in Section 3.3.2, we compare it with random sampling and no extra fine-tuning on CoNLL2003. The performance-speedup trade-off curve of TOKEE is shown in Figure 6, which shows self-sampling is always better than random sampling for TOKEE. As speedup ratio rises, this trend is more significant. This shows the self-sampling can help more in reducing the gap of training and inference. As for no extra fine-tuning, it will deteriorate drastically at high speedup ratio. But it can roughly keep a certain capability at low speedup ratio, which we attribute to the residual-connection of PTM and similar results were reported by Veit et al. (2016)."
+    }, {
+      "heading" : "4.4.5 Layer Distribution of Early-Exit",
+      "text" : "In TOKEE, by halt-and-copy mechanism, each token goes through a different number of PTM layers according to the difficulty. We show the average distribution of a sentence’s tokens exiting layers under different speedup ratio on CoNLL2003, in Figure 7. We also draw the average exiting layer number of SENTEE under the same speedup ratio. We observe that as speedup ratio rises, more tokens will exit at the earlier layer but a bit of tokens can still go through the deeper layer even when 4×, meanwhile, the SENTEE’s average exiting layer number reduces to 2.5, where the PTM’s encoding power is severely cut down. This gives an intuitive explanation of why TOKEE is more effective than SENTEE under high speedup ratio: although both SENTEE and TOKEE can dynamically adjust computational cost on the sample-level, TOKEE can adjust do it in a more fine-grained way."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "PTMs are powerful but have high computational cost. To accelerate them, many attempts have been made. A kind of methods is to reduce its size, such as distillation (Sanh et al., 2019; Jiao et al., 2020), structural pruning (Michel et al., 2019; Fan et al., 2020) and quantization (Shen et al., 2020).\nAnother kind of methods is early-exit, which dynamically adjusts the encoding layer number of different samples (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020; Li et al., 2020). While they introduced early-exit mecha-\nnism in simple classification tasks, our methods are proposed for the more complicated scenario: sequence labeling, where it has not only one prediction probability and it’s necessary to consider the dependency of token exitings. Elbayad et al. (2020) proposed Depth-Adaptive Transformer to accelerate machine translation. However, their earlyexit mechanism is designed for auto-regressive sequence generation, in which the exit of tokens must be in left-to-right order. Therefore, it is unsuitable for language understanding tasks. Different from their method, our early-exit mechanism can consider the exit of all tokens simultaneously."
+    }, {
+      "heading" : "6 Conclusion and Future Work",
+      "text" : "In this work, we propose two early-exit mechanisms for sequence labeling: SENTEE and TOKEE. The former is a simple extension of sequencelevel early-exit while the latter is specially designed for sequence labeling, which can conduct more finegrained computational cost allocation. We equip TOKEE with window-based uncertainty and selfsampling finetuning to make it more robust and faster. The detailed analysis verifies their effectiveness. SENTEE and TOKEE can achieve 2× and 3∼4× speedup with minimal performance drop.\nFor future work, we wish to explore: (1) leveraging the exited token’s label information to help the exiting of remained tokens; (2) introducing CRF or other global decoding methods into early-exit for sequence labeling."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We thank anonymous reviewers for their detailed reviews and great suggestions. This work was supported by the National Key Research and Development Program of China (No. 2020AAA0106700), National Natural Science Foundation of China (No. 62022027) and Major Scientific Research Project of Zhejiang Lab (No. 2019KD0AD01)."
+    } ],
+    "references" : [ {
+      "title" : "Pre-training with whole word masking for chinese bert",
+      "author" : [ "Yiming Cui", "Wanxiang Che", "Ting Liu", "Bing Qin", "Ziqing Yang", "Shijin Wang", "Guoping Hu." ],
+      "venue" : "arXiv preprint arXiv:1906.08101.",
+      "citeRegEx" : "Cui et al\\.,? 2019",
+      "shortCiteRegEx" : "Cui et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Depth-adaptive transformer",
+      "author" : [ "Maha Elbayad", "Jiatao Gu", "Edouard Grave", "Michael Auli." ],
+      "venue" : "8th International Conference on Learning Representations, ICLR 2020, Addis Ababa, Ethiopia, April 2630, 2020. OpenReview.net.",
+      "citeRegEx" : "Elbayad et al\\.,? 2020",
+      "shortCiteRegEx" : "Elbayad et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Reducing transformer depth on demand with structured dropout",
+      "author" : [ "Angela Fan", "Edouard Grave", "Armand Joulin." ],
+      "venue" : "8th International Conference on Learning Representations, ICLR 2020, Addis Ababa, Ethiopia, April 26-30, 2020. OpenReview.net.",
+      "citeRegEx" : "Fan et al\\.,? 2020",
+      "shortCiteRegEx" : "Fan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Part-of-speech tagging for twitter: Annotation, features, and experiments",
+      "author" : [ "Kevin Gimpel", "Nathan Schneider", "Brendan O’Connor", "Dipanjan Das", "Daniel Mills", "Jacob Eisenstein", "Michael Heilman", "Dani Yogatama", "Jeffrey Flanigan", "Noah A. Smith" ],
+      "venue" : null,
+      "citeRegEx" : "Gimpel et al\\.,? \\Q2011\\E",
+      "shortCiteRegEx" : "Gimpel et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "Transferring from formal newswire domain with hypernet for Twitter POS tagging",
+      "author" : [ "Tao Gui", "Qi Zhang", "Jingjing Gong", "Minlong Peng", "Di Liang", "Keyu Ding", "Xuanjing Huang." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Nat-",
+      "citeRegEx" : "Gui et al\\.,? 2018",
+      "shortCiteRegEx" : "Gui et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "F-score driven max margin neural network for named entity recognition in chinese social media",
+      "author" : [ "Hangfeng He", "Xu Sun." ],
+      "venue" : "Proceedings of the 15th Conference of the European Chapter of the Association for Computational Linguistics, EACL 2017, Va-",
+      "citeRegEx" : "He and Sun.,? 2017",
+      "shortCiteRegEx" : "He and Sun.",
+      "year" : 2017
+    }, {
+      "title" : "Volume 2: Short Papers, pages 713–718",
+      "author" : [ "lencia", "Spain", "April" ],
+      "venue" : "Association for Computational Linguistics",
+      "citeRegEx" : "lencia et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "lencia et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Bidirectional LSTM-CRF models for sequence tagging",
+      "author" : [ "Zhiheng Huang", "Wei Xu", "Kai Yu." ],
+      "venue" : "CoRR, abs/1508.01991.",
+      "citeRegEx" : "Huang et al\\.,? 2015",
+      "shortCiteRegEx" : "Huang et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Do we need zero training loss after achieving zero training error",
+      "author" : [ "Takashi Ishida", "Ikko Yamane", "Tomoya Sakai", "Gang Niu", "Masashi Sugiyama" ],
+      "venue" : "In Proceedings of the 37th International Conference on Machine Learning,",
+      "citeRegEx" : "Ishida et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Ishida et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Entity enhanced BERT pre-training for Chinese NER",
+      "author" : [ "Chen Jia", "Yuefeng Shi", "Qinrong Yang", "Yue Zhang." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 6384–6396, Online. Associa-",
+      "citeRegEx" : "Jia et al\\.,? 2020",
+      "shortCiteRegEx" : "Jia et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Tinybert: Distilling BERT for natural language understanding",
+      "author" : [ "Xiaoqi Jiao", "Yichun Yin", "Lifeng Shang", "Xin Jiang", "Xiao Chen", "Linlin Li", "Fang Wang", "Qun Liu." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Lan-",
+      "citeRegEx" : "Jiao et al\\.,? 2020",
+      "shortCiteRegEx" : "Jiao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Shallow-deep networks: Understanding and mitigating network overthinking",
+      "author" : [ "Yigitcan Kaya", "Sanghyun Hong", "Tudor Dumitras." ],
+      "venue" : "Proceedings of the 36th International Conference on Machine Learning, volume 97 of Proceedings of Machine",
+      "citeRegEx" : "Kaya et al\\.,? 2019",
+      "shortCiteRegEx" : "Kaya et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unified multi-criteria chinese word segmentation with bert",
+      "author" : [ "Zhen Ke", "Liang Shi", "Erli Meng", "Bin Wang", "Xipeng Qiu", "Xuanjing Huang" ],
+      "venue" : null,
+      "citeRegEx" : "Ke et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Ke et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Conditional random fields: Probabilistic models for segmenting and labeling sequence data",
+      "author" : [ "John D. Lafferty", "Andrew McCallum", "Fernando C.N. Pereira." ],
+      "venue" : "Proceedings of the Eighteenth International Conference on Machine Learning, ICML",
+      "citeRegEx" : "Lafferty et al\\.,? 2001",
+      "shortCiteRegEx" : "Lafferty et al\\.",
+      "year" : 2001
+    }, {
+      "title" : "Albert: A lite bert for self-supervised learning of language representations",
+      "author" : [ "Zhenzhong Lan", "Mingda Chen", "Sebastian Goodman", "Kevin Gimpel", "Piyush Sharma", "Radu Soricut." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Lan et al\\.,? 2020",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Accelerating pre-trained language models via calibrated cascade",
+      "author" : [ "Lei Li", "Yankai Lin", "Shuhuai Ren", "Deli Chen", "Xuancheng Ren", "Peng Li", "Jie Zhou", "Xu Sun." ],
+      "venue" : "CoRR, abs/2012.14682.",
+      "citeRegEx" : "Li et al\\.,? 2020",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "FastBERT: a selfdistilling BERT with adaptive inference time",
+      "author" : [ "Weijie Liu", "Peng Zhou", "Zhiruo Wang", "Zhe Zhao", "Haotang Deng", "Qi Ju." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 6035–",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Roberta: A robustly optimized bert pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov" ],
+      "venue" : null,
+      "citeRegEx" : "Liu et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Decoupled weight decay regularization",
+      "author" : [ "Ilya Loshchilov", "Frank Hutter." ],
+      "venue" : "7th International Conference on Learning Representations, ICLR 2019, New Orleans, LA, USA, May 6-9, 2019. OpenReview.net.",
+      "citeRegEx" : "Loshchilov and Hutter.,? 2019",
+      "shortCiteRegEx" : "Loshchilov and Hutter.",
+      "year" : 2019
+    }, {
+      "title" : "End-to-end sequence labeling via bi-directional LSTM-CNNsCRF",
+      "author" : [ "Xuezhe Ma", "Eduard Hovy." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1064–1074, Berlin, Ger-",
+      "citeRegEx" : "Ma and Hovy.,? 2016",
+      "shortCiteRegEx" : "Ma and Hovy.",
+      "year" : 2016
+    }, {
+      "title" : "Coarse-toFine Pre-training for Named Entity Recognition",
+      "author" : [ "Xue Mengge", "Bowen Yu", "Zhenyu Zhang", "Tingwen Liu", "Yue Zhang", "Bin Wang." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP),",
+      "citeRegEx" : "Mengge et al\\.,? 2020",
+      "shortCiteRegEx" : "Mengge et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Are sixteen heads really better than one? In Advances in Neural Information Processing Systems",
+      "author" : [ "Paul Michel", "Omer Levy", "Graham Neubig" ],
+      "venue" : "Annual Conference on Neural Information Processing Systems",
+      "citeRegEx" : "Michel et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Michel et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "BERTweet: A pre-trained language model for English tweets",
+      "author" : [ "Dat Quoc Nguyen", "Thanh Vu", "Anh Tuan Nguyen." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing: System Demonstrations, pages 9–",
+      "citeRegEx" : "Nguyen et al\\.,? 2020",
+      "shortCiteRegEx" : "Nguyen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Universal dependencies v1",
+      "author" : [ "Joakim Nivre", "Marie-Catherine de Marneffe", "Filip Ginter", "Yoav Goldberg", "Jan Hajic", "Christopher D. Manning", "Ryan T. McDonald", "Slav Petrov", "Sampo Pyysalo", "Natalia Silveira", "Reut Tsarfaty", "Daniel Zeman" ],
+      "venue" : null,
+      "citeRegEx" : "Nivre et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Nivre et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Improved part-of-speech tagging for online conversational text with word clusters",
+      "author" : [ "Olutobi Owoputi", "Brendan O’Connor", "Chris Dyer", "Kevin Gimpel", "Nathan Schneider", "Noah A. Smith" ],
+      "venue" : "In Human Language Technologies:",
+      "citeRegEx" : "Owoputi et al\\.,? \\Q2013\\E",
+      "shortCiteRegEx" : "Owoputi et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Named entity recognition for Chinese social media with jointly trained embeddings",
+      "author" : [ "Nanyun Peng", "Mark Dredze." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 548–554, Lisbon, Portugal.",
+      "citeRegEx" : "Peng and Dredze.,? 2015",
+      "shortCiteRegEx" : "Peng and Dredze.",
+      "year" : 2015
+    }, {
+      "title" : "Pre-trained models for natural language processing: A survey",
+      "author" : [ "Xipeng Qiu", "TianXiang Sun", "Yige Xu", "Yunfan Shao", "Ning Dai", "Xuanjing Huang." ],
+      "venue" : "SCIENCE CHINA Technological Sciences, 63(10):1872–1897.",
+      "citeRegEx" : "Qiu et al\\.,? 2020",
+      "shortCiteRegEx" : "Qiu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "DistilBERT, a distilled version of bert: smaller, faster, cheaper and lighter",
+      "author" : [ "Victor Sanh", "Lysandre Debut", "Julien Chaumond", "Thomas Wolf." ],
+      "venue" : "NeurIPS EMC2 Workshop.",
+      "citeRegEx" : "Sanh et al\\.,? 2019",
+      "shortCiteRegEx" : "Sanh et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Q-bert: Hessian based ultra low precision quantization of bert",
+      "author" : [ "Sheng Shen", "Zhen Dong", "Jiayu Ye", "Linjian Ma", "Zhewei Yao", "Amir Gholami", "Michael W. Mahoney", "Kurt Keutzer." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, 34(05):8815–",
+      "citeRegEx" : "Shen et al\\.,? 2020",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Joint Chinese word segmentation and part-of-speech tagging via two-way attentions of auto-analyzed knowledge",
+      "author" : [ "Yuanhe Tian", "Yan Song", "Xiang Ao", "Fei Xia", "Xiaojun Quan", "Tong Zhang", "Yonggang Wang." ],
+      "venue" : "Proceedings of the 58th Annual Meet-",
+      "citeRegEx" : "Tian et al\\.,? 2020",
+      "shortCiteRegEx" : "Tian et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Introduction to the CoNLL-2003 shared task: Language-independent named entity recognition",
+      "author" : [ "Erik F. Tjong Kim Sang", "Fien De Meulder." ],
+      "venue" : "Proceedings of the Seventh Conference on Natural Language Learning at HLT-NAACL 2003, pages",
+      "citeRegEx" : "Sang and Meulder.,? 2003",
+      "shortCiteRegEx" : "Sang and Meulder.",
+      "year" : 2003
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Ł ukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 30, pages 5998–6008. Cur-",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Residual networks behave like ensembles of relatively shallow networks",
+      "author" : [ "Andreas Veit", "Michael J. Wilber", "Serge J. Belongie." ],
+      "venue" : "Advances in Neural Information Processing Systems 29: Annual Conference on Neural Information Processing Sys-",
+      "citeRegEx" : "Veit et al\\.,? 2016",
+      "shortCiteRegEx" : "Veit et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "DeeBERT: Dynamic early exiting for accelerating BERT inference",
+      "author" : [ "Ji Xin", "Raphael Tang", "Jaejun Lee", "Yaoliang Yu", "Jimmy Lin." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 2246–2251, On-",
+      "citeRegEx" : "Xin et al\\.,? 2020",
+      "shortCiteRegEx" : "Xin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "CLUE: A Chinese language understanding evaluation benchmark",
+      "author" : [ "Zhang", "Zhengliang Yang", "Kyle Richardson", "Zhenzhong Lan." ],
+      "venue" : "Proceedings of the 28th International Conference on Computational Linguistics, pages 4762–4772, Barcelona,",
+      "citeRegEx" : "Zhang et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "The penn chinese treebank: Phrase structure annotation of a large corpus",
+      "author" : [ "Naiwen Xue", "Fei Xia", "Fu-Dong Chiou", "Martha Palmer." ],
+      "venue" : "Nat. Lang. Eng., 11(2):207–238.",
+      "citeRegEx" : "Xue et al\\.,? 2005",
+      "shortCiteRegEx" : "Xue et al\\.",
+      "year" : 2005
+    }, {
+      "title" : "TENER: adapting transformer encoder for named entity recognition",
+      "author" : [ "Hang Yan", "Bocao Deng", "Xiaonan Li", "Xipeng Qiu." ],
+      "venue" : "CoRR, abs/1911.04474.",
+      "citeRegEx" : "Yan et al\\.,? 2019",
+      "shortCiteRegEx" : "Yan et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Universally slimmable networks and improved training techniques",
+      "author" : [ "Jiahui Yu", "Thomas S. Huang." ],
+      "venue" : "2019 IEEE/CVF International Conference on Computer Vision, ICCV 2019, Seoul, Korea (South), October 27 - November 2, 2019, pages",
+      "citeRegEx" : "Yu and Huang.,? 2019",
+      "shortCiteRegEx" : "Yu and Huang.",
+      "year" : 2019
+    }, {
+      "title" : "Adaptive co-attention network for named entity recognition in tweets",
+      "author" : [ "Qi Zhang", "Jinlan Fu", "Xiaoyu Liu", "Xuanjing Huang" ],
+      "venue" : null,
+      "citeRegEx" : "Zhang et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "BERT loses patience: Fast and robust inference with early exit",
+      "author" : [ "Wangchunshu Zhou", "Canwen Xu", "Tao Ge", "Julian J. McAuley", "Ke Xu", "Furu Wei." ],
+      "venue" : "Advances in Neural Information Processing Systems 33: Annual Conference on Neural Information",
+      "citeRegEx" : "Zhou et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhou et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 27,
+      "context" : "The past few years have witnessed the prevailing of pre-trained models (PTMs) (Qiu et al., 2020) on various sequence labeling tasks (Nguyen et al.",
+      "startOffset" : 78,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 23,
+      "context" : ", 2020) on various sequence labeling tasks (Nguyen et al., 2020; Ke et al., 2020; Tian et al., 2020; Mengge et al., 2020).",
+      "startOffset" : 43,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2020) on various sequence labeling tasks (Nguyen et al., 2020; Ke et al., 2020; Tian et al., 2020; Mengge et al., 2020).",
+      "startOffset" : 43,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 30,
+      "context" : ", 2020) on various sequence labeling tasks (Nguyen et al., 2020; Ke et al., 2020; Tian et al., 2020; Mengge et al., 2020).",
+      "startOffset" : 43,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2020) on various sequence labeling tasks (Nguyen et al., 2020; Ke et al., 2020; Tian et al., 2020; Mengge et al., 2020).",
+      "startOffset" : 43,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 17,
+      "context" : "Recently, early-exit mechanism (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020) has been introduced to accelerate inference for large-scale PTMs.",
+      "startOffset" : 31,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 34,
+      "context" : "Recently, early-exit mechanism (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020) has been introduced to accelerate inference for large-scale PTMs.",
+      "startOffset" : 31,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 40,
+      "context" : "Recently, early-exit mechanism (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020) has been introduced to accelerate inference for large-scale PTMs.",
+      "startOffset" : 31,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 27,
+      "context" : "Recently, PTMs (Qiu et al., 2020) have become the mainstream backbone model for various sequence labeling tasks.",
+      "startOffset" : 15,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 1,
+      "context" : "Encoder In this paper, we use BERT (Devlin et al., 2019) as our backbone encoder .",
+      "startOffset" : 35,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 32,
+      "context" : "The architecture of BERT consists of multiple stacked Transformer layers (Vaswani et al., 2017).",
+      "startOffset" : 73,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 14,
+      "context" : "where N is the sequence length, C is the number of labels, L is the number of BERT layers, W is a learnable matrix, and f(·) is a simple softmax classifier or conditional random field (CRF) (Lafferty et al., 2001).",
+      "startOffset" : 190,
+      "endOffset" : 213
+    }, {
+      "referenceID" : 1,
+      "context" : "Since we focus on inference acceleration and PTM performs well enough on sequence labeling without CRF (Devlin et al., 2019), we do not consider using such a recurrent structure.",
+      "startOffset" : 103,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 17,
+      "context" : "Therefore, early-exit mechanisms (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020) are proposed to dynamically stop inference",
+      "startOffset" : 33,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 34,
+      "context" : "Therefore, early-exit mechanisms (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020) are proposed to dynamically stop inference",
+      "startOffset" : 33,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 40,
+      "context" : "Therefore, early-exit mechanisms (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020) are proposed to dynamically stop inference",
+      "startOffset" : 33,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 38,
+      "context" : "We also employ the sandwich rule to stabilize this training stage (Yu and Huang, 2019).",
+      "startOffset" : 66,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 30,
+      "context" : "The performance of LSTM-CRF is from previous paper (Tian et al., 2020; Mengge et al., 2020; Yan et al., 2019; Gui et al., 2018), and others are implemented by ourselves.",
+      "startOffset" : 51,
+      "endOffset" : 127
+    }, {
+      "referenceID" : 21,
+      "context" : "The performance of LSTM-CRF is from previous paper (Tian et al., 2020; Mengge et al., 2020; Yan et al., 2019; Gui et al., 2018), and others are implemented by ourselves.",
+      "startOffset" : 51,
+      "endOffset" : 127
+    }, {
+      "referenceID" : 37,
+      "context" : "The performance of LSTM-CRF is from previous paper (Tian et al., 2020; Mengge et al., 2020; Yan et al., 2019; Gui et al., 2018), and others are implemented by ourselves.",
+      "startOffset" : 51,
+      "endOffset" : 127
+    }, {
+      "referenceID" : 5,
+      "context" : "The performance of LSTM-CRF is from previous paper (Tian et al., 2020; Mengge et al., 2020; Yan et al., 2019; Gui et al., 2018), and others are implemented by ourselves.",
+      "startOffset" : 51,
+      "endOffset" : 127
+    }, {
+      "referenceID" : 39,
+      "context" : "To verify the effectiveness of our methods, We conduct experiments on ten English and Chinese datasets of sequence labeling, covering NER: CoNLL2003 (Tjong Kim Sang and De Meulder, 2003), Twitter NER (Zhang et al., 2018), Ontonotes 4.",
+      "startOffset" : 200,
+      "endOffset" : 220
+    }, {
+      "referenceID" : 26,
+      "context" : ", 2011), Weibo (Peng and Dredze, 2015; He and Sun, 2017) and CLUE NER (Xu et al.",
+      "startOffset" : 15,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 6,
+      "context" : ", 2011), Weibo (Peng and Dredze, 2015; He and Sun, 2017) and CLUE NER (Xu et al.",
+      "startOffset" : 15,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2020), POS: ARK Twitter (Gimpel et al., 2011; Owoputi et al., 2013), CTB5 POS (Xue et al.",
+      "startOffset" : 26,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2020), POS: ARK Twitter (Gimpel et al., 2011; Owoputi et al., 2013), CTB5 POS (Xue et al.",
+      "startOffset" : 26,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 36,
+      "context" : ", 2013), CTB5 POS (Xue et al., 2005) and UD POS (Nivre et al.",
+      "startOffset" : 18,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 24,
+      "context" : ", 2005) and UD POS (Nivre et al., 2016), CWS: CTB5 Seg (Xue et al.",
+      "startOffset" : 19,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 36,
+      "context" : ", 2016), CWS: CTB5 Seg (Xue et al., 2005) and UD Seg (Nivre et al.",
+      "startOffset" : 23,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 8,
+      "context" : "194 cessing and split as in previous work (Huang et al., 2015; Mengge et al., 2020; Jia et al., 2020; Tian et al., 2020; Nguyen et al., 2020).",
+      "startOffset" : 42,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 21,
+      "context" : "194 cessing and split as in previous work (Huang et al., 2015; Mengge et al., 2020; Jia et al., 2020; Tian et al., 2020; Nguyen et al., 2020).",
+      "startOffset" : 42,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 10,
+      "context" : "194 cessing and split as in previous work (Huang et al., 2015; Mengge et al., 2020; Jia et al., 2020; Tian et al., 2020; Nguyen et al., 2020).",
+      "startOffset" : 42,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 30,
+      "context" : "194 cessing and split as in previous work (Huang et al., 2015; Mengge et al., 2020; Jia et al., 2020; Tian et al., 2020; Nguyen et al., 2020).",
+      "startOffset" : 42,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 23,
+      "context" : "194 cessing and split as in previous work (Huang et al., 2015; Mengge et al., 2020; Jia et al., 2020; Tian et al., 2020; Nguyen et al., 2020).",
+      "startOffset" : 42,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 8,
+      "context" : "• BiLSTM-CRF (Huang et al., 2015; Ma and Hovy, 2016) The most widely used model in sequence labeling tasks before the pre-trained language model prevails in NLP.",
+      "startOffset" : 13,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 20,
+      "context" : "• BiLSTM-CRF (Huang et al., 2015; Ma and Hovy, 2016) The most widely used model in sequence labeling tasks before the pre-trained language model prevails in NLP.",
+      "startOffset" : 13,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 28,
+      "context" : "Huggingface released 6 layers DistilBERT for English (Sanh et al., 2019).",
+      "startOffset" : 53,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 1,
+      "context" : "For English Datasets, we use the ‘BERT-basecased’ released by Google (Devlin et al., 2019) as backbone.",
+      "startOffset" : 69,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 0,
+      "context" : "For Chinese Datasets, we use ‘BERTwwm’ released by (Cui et al., 2019).",
+      "startOffset" : 51,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 34,
+      "context" : "This shows our methods keep the superiority of existing early-exit methods (Xin et al., 2020).",
+      "startOffset" : 75,
+      "endOffset" : 93
+    }, {
+      "referenceID" : 12,
+      "context" : "• On some datasets, such as CoNLL2003, we observe a little performance improvement under low speedup ratio, we attribute this to the potential regularization brought by early-exit, such as alleviating overthinking (Kaya et al., 2019).",
+      "startOffset" : 214,
+      "endOffset" : 233
+    }, {
+      "referenceID" : 18,
+      "context" : "To verify the versatility of our method over different PTMs, we also conduct experiments on two well-known BERT variants, RoBERTa (Liu et al., 2019)5 and ALBERT (Lan et al.",
+      "startOffset" : 130,
+      "endOffset" : 148
+    }, {
+      "referenceID" : 15,
+      "context" : ", 2019)5 and ALBERT (Lan et al., 2020)6, as shown in Table 2.",
+      "startOffset" : 20,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 28,
+      "context" : "A kind of methods is to reduce its size, such as distillation (Sanh et al., 2019; Jiao et al., 2020), structural pruning (Michel et al.",
+      "startOffset" : 62,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 11,
+      "context" : "A kind of methods is to reduce its size, such as distillation (Sanh et al., 2019; Jiao et al., 2020), structural pruning (Michel et al.",
+      "startOffset" : 62,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2020), structural pruning (Michel et al., 2019; Fan et al., 2020) and quantization (Shen et al.",
+      "startOffset" : 28,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 3,
+      "context" : ", 2020), structural pruning (Michel et al., 2019; Fan et al., 2020) and quantization (Shen et al.",
+      "startOffset" : 28,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 17,
+      "context" : "Another kind of methods is early-exit, which dynamically adjusts the encoding layer number of different samples (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020; Li et al., 2020).",
+      "startOffset" : 112,
+      "endOffset" : 207
+    }, {
+      "referenceID" : 34,
+      "context" : "Another kind of methods is early-exit, which dynamically adjusts the encoding layer number of different samples (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020; Li et al., 2020).",
+      "startOffset" : 112,
+      "endOffset" : 207
+    }, {
+      "referenceID" : 40,
+      "context" : "Another kind of methods is early-exit, which dynamically adjusts the encoding layer number of different samples (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020; Li et al., 2020).",
+      "startOffset" : 112,
+      "endOffset" : 207
+    }, {
+      "referenceID" : 16,
+      "context" : "Another kind of methods is early-exit, which dynamically adjusts the encoding layer number of different samples (Liu et al., 2020; Xin et al., 2020; Schwartz et al., 2020; Zhou et al., 2020; Li et al., 2020).",
+      "startOffset" : 112,
+      "endOffset" : 207
+    } ],
+    "year" : 2021,
+    "abstractText" : "Both performance and efficiency are crucial factors for sequence labeling tasks in many real-world scenarios. Although the pre-trained models (PTMs) have significantly improved the performance of various sequence labeling tasks, their computational cost is expensive. To alleviate this problem, we extend the recent successful early-exit mechanism to accelerate the inference of PTMs for sequence labeling tasks. However, existing early-exit mechanisms are specifically designed for sequencelevel tasks, rather than sequence labeling. In this paper, we first propose SENTEE: a simple extension of SENTence-level Early-Exit for sequence labeling tasks. To further reduce computational cost, we also propose TOKEE: a TOKen-level Early-Exit mechanism that allows partial tokens to exit early at different layers. Considering the local dependency inherent in sequence labeling, we employed a window-based criterion to decide for a token whether or not to exit. The token-level earlyexit brings the gap between training and inference, so we introduce an extra self-sampling fine-tuning stage to alleviate it. The extensive experiments on three popular sequence labeling tasks show that our approach can save up to 66%∼75% inference cost with minimal performance degradation. Compared with competitive compressed models such as DistilBERT, our approach can achieve better performance under the same speed-up ratios of 2×, 3×, and 4×.1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

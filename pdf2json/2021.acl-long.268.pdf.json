@@ -1,0 +1,648 @@
+{
+  "name" : "2021.acl-long.268.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Prevent the Language Model from being Overconfident in Neural Machine Translation",
+    "authors" : [ "Mengqi Miao", "Fandong Meng", "Yijin Liu", "Xiao-Hua Zhou", "Jie Zhou" ],
+    "emails" : [ "miaomq@pku.edu.cn,", "yijinliu}@tencent.com", "azhou@math.pku.edu.cn,", "withtomzhou@tencent.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 3456–3468\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n3456"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Neural Machine Translation (NMT) has achieved great success in recent years (Sutskever et al., 2014;\n∗Equal contribution. This work was done when Mengqi Miao was interning at Pattern Recognition Center, WeChat AI, Tencent Inc, China.\n†Corresponding author. 1Code is available at https://github.com/Mlair\n77/nmt adequacy\nCho et al., 2014; Bahdanau et al., 2014; Luong et al., 2015; Vaswani et al., 2017; Meng and Zhang, 2019; Zhang et al., 2019a; Yan et al., 2020b), which generates accurate and fluent translation through modeling the next word conditioned on both the source sentence and partial translation. However, NMT faces the hallucination problem, i.e., translations are fluent but inadequate to the source sentences. One important reason is that the NMT model pays excessive attention to the partial translation to ensure fluency while failing to translate some segments of the source sentence (Weng et al., 2020b), which is actually the overconfidence of the Language Model (LM). In the rest of this paper, the LM mentioned refers to the LM mechanism involved in NMT.\nMany recent studies attempt to deal with the inadequacy problem of NMT from two main aspects. One is to improve the architecture of NMT, such as adding a coverage vector to track the attention history (Tu et al., 2016), enhancing the crossattention module (Meng et al., 2016, 2018; Weng et al., 2020b), and dividing the source sentence into past and future parts (Zheng et al., 2019). The other aims to propose a heuristic adequacy metric or objective based on the output of NMT. Tu et al. (2017) and Kong et al. (2019) enhance the model’s reconstruction ability and increase the coverage ratio of the source sentences by translations, respectively. Although some researches (Tu et al., 2017; Kong et al., 2019; Weng et al., 2020b) point out that the lack of adequacy is due to the overconfidence of the LM, unfortunately, they do not propose effective solutions to the overconfidence problem.\nFrom the perspective of preventing the overconfidence of the LM, we first define an indicator of the overconfidence degree of the LM, called the Margin between the NMT and the LM, by subtracting the predicted probability of the LM from that of the NMT model for each token. A small Mar-\ngin implies that the NMT might concentrate on the partial translation and degrade into the LM, i.e., the LM is overconfident. Accordingly, we propose a Margin-based Token-level Objective (MTO) to maximize the Margin. Furthermore, we observe a phenomenon that if target sentences in the training data contain many words with negative Margin, they always do not correspond to the source sentences. These data are harmful to model performance. Therefore, based on the MTO, we further propose a Margin-based Sentence-level Objective (MSO) by adding a dynamic weight function to alleviate the negative effect of these “dirty data”.\nWe validate the effectiveness and superiority of our approaches on the Transformer (Vaswani et al., 2017), and conduct experiments on large-scale WMT14 English-to-German, WMT19 Chinese-toEnglish, and WMT14 English-to-French translation tasks. Our contributions are:\n• We explore the connection between inadequacy translation and the overconfidence of the LM in NMT, and thus propose an indicator of the overconfidence degree, i.e., the Margin between the NMT and the LM.\n• Furthermore, to prevent the LM from being overconfident, we propose two effective optimization objectives to maximize the Margin, i.e., the Margin-based Token-level Objective (MTO) and the Margin-based Sentence-level Objective (MSO).\n• Experiments on WMT14 English-to-German, WMT19 Chinese-to-English, and WMT14 English-to-French show that our approaches bring in significant improvements by +1.36, +1.50, +0.63 BLEU points, respectively. Additionally, the human evaluation verifies that our approaches can improve both translation adequacy and fluency."
+    }, {
+      "heading" : "2 Background",
+      "text" : "Given a source sentence x = {x1, x2, ..., xN }, the NMT model predicts the probability of a target sentence y = {y1, y2, ..., yT } word by word:\nP (y|x) = T∏ t=1 p(yt|y<t,x), (1)\nwhere y<t = {y1, y2, ..., yt−1} is the partial translation before yt. From Eq. 1, the source sentence x and partial translation y<t are considered in the meantime, suggesting that the NMT model is es-\nsentially a joint language model and the LM is instinctively involved in NMT.\nBased on the encoder-decoder architecture, the encoder of NMT maps the input sentence x to hidden states. At time step t, the decoder of NMT employs the output of the encoder and y<t to predict yt. The training objective of NMT is to minimize the negative log-likelihood, which is also known as the cross entropy loss function:\nLNMTce = − T∑ t=1 log p(yt|y<t,x). (2)\nThe LM measures the probability of a target sentence similar to NMT but without knowledge of the source sentence x:\nP (y) = T∏ t=1 p(yt|y<t). (3)\nThe LM can be regarded as the part of NMT decoder that is responsible for fluency, only takes y<t as input. The training objective of the LM is almost the same as NMT except for the source sentence x:\nLLMce = − T∑ t=1 log p(yt|y<t). (4)\nThe NMT model predicts the next word yt according to the source sentence x and meanwhile ensures that yt is fluent with the partial translation y<t. However, when NMT pays excessive attention to translation fluency, some source segments may be neglected, leading to inadequacy problem. This is exactly what we aim to address in this paper."
+    }, {
+      "heading" : "3 The Approach",
+      "text" : "In this section, we firstly define the Margin between the NMT and the LM (Section 3.1), which reflects the overconfidence degree of the LM. Then we put forward the token-level (Section 3.2) and sentencelevel (Section 3.3) optimization objectives to maximize the Margin. Finally, we elaborate our twostage training strategy (Section 3.4).\n3.1 Margin between the NMT and the LM\nWhen the NMT model excessively focuses on partial translation, i.e., the LM is overconfident, the NMT model degrades into the LM, resulting in hallucinated translations. To prevent the overconfidence problem, we expect that the NMT model outperforms the LM as much as possible in predicting golden tokens. Consequently, we define the Margin between the NMT and the LM at the\nt-th time step by the difference of the predicted probabilities of them:\n∆(t) = pNMT (yt|y<t,x)− pLM (yt|y<t), (5)\nwhere pNMT denotes the predicted probability of the NMT model, i.e., p(yt|y<t,x), and pLM denotes that of the LM, i.e., p(yt|y<t).\nThe Margin ∆(t) is negatively correlated to the overconfidence degree of the LM, and different values of the Margin indicate different cases:\n• If ∆(t) is big, the NMT model is apparently better than the LM, and yt is strongly related to the source sentence x. Hence the LM is not overconfident.\n• If ∆(t) is medium, the LM may be slightly overconfident and the NMT model has the potential to be enhanced.\n• If ∆(t) is small, the NMT model might degrade to the LM and not correctly translate the source sentence, i.e., the LM is overconfident.2\nNote that sometimes, the model needs to focus more on the partial translation such as the word to be predicted is a determiner in the target language. In this case, although small ∆(t) does not indicate the LM is overconfident, enlarging the ∆(t) can still enhance the NMT model.\n3.2 Margin-based Token-level Objective Based on the Margin, we firstly define the Margin loss LM and then fuse it into the cross entropy loss function to obtain the Margin-based Tokenevel Optimization Objective (MTO). Formally, we define the Margin loss LM to maximize the Margin as follow:\nLM = T∑ t=1 (1− pNMT (t))M(∆(t)), (6)\nwhere we abbreviate pNMT (yt|y<t,x) as pNMT (t). M(∆(t)) is a function of ∆(t), namely Margin function, which is monotonically decreasing (e.g., 1−∆(t)). Moreover, when some words have the same ∆(t) but different pNMT (t), their meanings are quite different: (1) If pNMT (t) is big, the NMT model learns the token well and does not need to focus on the Margin too much; (2) If pNMT (t) is\n2In addition, if pNMT (yt|y<t,x) is large, less attention will be paid to this data because yt has been learned well, which will be described in detail in Section 3.2.\nsmall, the NMT model is urgently to be optimized on the token thus the weight ofM(∆(t)) should be enlarged. Therefore, as the weight ofM(∆(t)), 1− pNMT (t) enables the model treat tokens wisely.\nVariations of M(∆). We abbreviate Margin function M(∆(t)) as M(∆) hereafter. A simple and intuitive definition is the Linear function: M(∆) = 1−∆, which has the same gradient for different ∆. However, as illustrated in Section 3.1, different ∆ has completely various meaning and needs to be treated differently. Therefore, we propose three non-linear Margin functionsM(∆) as follows:\n• Cube: (1−∆3)/2. • Quintic (fifth power): (1−∆5)/2. • Log: 1α log( 1−∆ 1+∆) + 0.5.\nwhere α is a hyperparamater for Log. As shown in Figure 1, the four variations3 have quite different slopes. Specifically, the three nonlinear functions are more stable around ∆ = 0 (e.g., ∆ ∈ [−0.5, 0.5]) than Linear, especially Quintic. We will report the performance of the fourM(∆) concretely and analyze why the three non-linear M(∆) perform better than Linear in Section 5.4.\nFinally, based on LM , we propose the Marginbased Token-level Objective (MTO):\nLT = LNMTce + λMLM , (7)\nwhere LNMTce is the cross-entropy loss of the NMT model defined in Eq. 2 and λM is the hyperparameter for the Margin loss LM .\n3In order to keep the range ofM(∆) roughly [0,1], we set Linear function to (1−∆)/2.\n3.3 Margin-based Sentence-level Objective\nFurthermore, through analyzing the Margin distribution of target sentences, we observe that the target sentences in the training data which have many tokens with negative Margin are almost “hallucinations” of the source sentences (i.e., dirty data), thus will harm the model performance. Therefore, based on MTO, we further propose the Marginbased Sentence-level Objective (MSO) to address this issue.\nCompared with the LM, the NMT model predicts the next word with more prior knowledge (i.e., the source sentence). Therefore, it is intuitive that when predicting yt, the NMT model should predict more accurately than the LM, as follow:\npNMT (yt|y<t,x) > pLM (yt|y<t). (8)\nActually, the above equation is equivalent to ∆(t) > 0. The larger ∆(t) is, the more the NMT model exceeds the LM. However, there are many tokens with negative Margin through analyzing the Margin distribution. We conjecture the reason is that the target sentence is not corresponding to the source sentence in the training corpus, i.e., the target sentence is a hallucination. Actually, we also observe that if a large proportion of tokens in a target sentence have negative Margin (e.g., 50%), the sentence is probably not corresponding to the source sentence, such as the case in Figure 2. These “dirty” data will harm the performance of the NMT model.\nTo measure the “dirty” degree of data, we define the Sentence-level Negative Margin Ratio of parallel sentences (x,y) as follow:\nR(x,y) = #{yt ∈ y : ∆(t) < 0} #{yt : yt ∈ y} , (9)\nwhere #{yt ∈ y : ∆(t) < 0} denotes the number of tokens with negative ∆(t) in y, and #{yt : yt ∈ y} is the length of the target sentence y.\nWhenR(x,y) is larger than a threshold k (e.g., k=50%), the target sentence may be desperately inadequate, or even completely unrelated to the source sentence, as shown in Figure 2. In order to eliminate the impact of these seriously inadequate sentences, we ignore their loss during training by the Margin-based Sentence-level Objective (MSO):\nLS = IR(x,y)<k · LT , (10) where IR(x,y)<k is a dynamic weight function in sentence level. The indicative function IR(x,y)<k equals to 1 if R(x,y) < k, else 0, where k is a hyperparameter. LT is MTO defined in Eq. 7. IR(x,y)<k is dynamic at the training stage. During training, as the model gets better, its ability to distinguish hallucinations improves thus IR(x,y)<k becomes more accurate. We will analyze the changes of IR(x,y)<k in Section 5.4."
+    }, {
+      "heading" : "3.4 Two-stage Training",
+      "text" : "We elaborate our two-stage training in this section, 1) jointly pretraining an NMT model and an auxiliary LM, and 2) finetuning the NMT model.\nJointly Pretraining. The language model mechanism in NMT cannot be directly evaluated, thus we train an auxiliary LM to represent it. We pretrain them together using a fusion loss function:\nLpre = LNMTce + λLMLLMce , (11) where LNMTce and LLMce are the cross entropy loss functions of the NMT model and the LM defined in Eq. 2 and Eq. 4, respectively. λLM is a hyperparameter. Specifically, we jointly train them through sharing their decoders’ embedding layers and their pre-softmax linear transformation layers (Vaswani et al., 2017). There are two reasons for joint training: (1) making the auxiliary LM as consistent as possible with the language model mechanism in NMT; (2) avoiding abundant extra parameters.\nFinetuning. We finetune the NMT model by minimizing the MTO (LT in Eq. 7) and MSO (LS in Eq. 10).4 Note that the LM is not involved at the inference stage.\n4The LM can be fixed or trained along with the NMT after pretraining. Our experimental results show that continuous training the LM and fixing the LM have analogous performance during the finetuning stage. Therefore, we only report the results of keeping the LM fixed in this paper."
+    }, {
+      "heading" : "4 Experimental Settings",
+      "text" : "We conduct experiments on three large-scale NMT tasks, i.e., WMT14 English-to-German (En→De), WMT14 English-to-French (En→Fr), and WMT19 Chinese-to-English (Zh→En).\nDatasets. For En→De, we use 4.5M training data. Following the same setting in (Vaswani et al., 2017), we use newstest2013 as validation set and newstest2014 as test set, which contain 3000 and 3003 sentences, respectively. For En→Fr, the training dataset contains about 36M sentence pairs, and we use newstest2013 with 3000 sentences as validation set and newstest2014 with 3003 sentences as test set. For Zh→En, we use 20.5M training data and use newstest2018 as validation set and newstest2019 as test set, which contain 3981 and 2000 sentences, respectively. For Zh→En, the number of merge operations in byte pair encoding (BPE) (Sennrich et al., 2016a) is set to 32K for both source and target languages. For En→De and En→Fr, we use a shared vocabulary generated by 32K BPEs.\nEvaluation. We measure the case-sensitive BLEU scores using multi-bleu.perl 5 for En→De and En→Fr. For Zh→En, case-sensitive BLEU scores are calculated by Moses mteval-v13a.pl script6. Moreover, we use the paired bootstrap resampling (Koehn, 2004) for significance test. We select the model which performs the best on the validation sets and report its performance on the test sets for evaluation.\nModel and Hyperparameters. We conduct experiments based on the Transformer (Vaswani et al., 2017) and implement our approaches with the opensource tooklit Opennmt-py (Klein et al., 2017). Following the Transformer-Base setting in (Vaswani et al., 2017), we set the hidden size to 512 and the encoder/decoder layers to 6. All three tasks are trained with 8 NVIDIA V100 GPUs, and the batch size for each GPU is 4096 tokens. The beam size is 5 and the length penalty is 0.6. Adam optimizer (Kingma and Ba, 2014) is used in all the models. The LM architecture is the decoder of the Transformer excluding the cross-attention layers, sharing the embedding layer and the pre-softmax\n5https://github.com/moses-smt/mosesde coder/blob/master/scripts/generic/multibleu.perl\n6https://github.com/moses-smt/mosesde coder/blob/mast-er/scripts/generic/mteva l-v13a.pl\nlinear transformation with the NMT model. For En→De, Zh→En, and En→Fr, the number of training steps is 150K for jointly pretraining stage and 150K for finetuning7. During pretraining, we set λLM to 0.01 for all three tasks8. Experimental results shown in Appendix A indicate that the LM has converged after pretraining for all the three tasks. During finetuning, the Margin functionM(∆) in Section 3.2 is set to Quintic, and we will analyze the fourM(∆) in Section 5.4. λM in Eq. 7 is set to 5, 8, and 8 on En→De, En→Fr and Zh→En, respectively. For MSO, the threshold k in Eq. 10 is set to 30% for En→De and Zh→En, 40% for En→Fr. The two hyperparameters (i.e., λM and k) are searched on validation sets, and the selection details are shown in Appendix B. The baseline model (i.e., vanilla Transformer) is trained for 300k steps for En→De, En→Fr and Zh→En. Moreover, we use a joint training model as our secondary baseline, namely NMT+LM, by jointly training the NMT model and the LM throughout the training stage with 300K steps. The training steps of all the models are consistent, thus the experiment results are strictly comparable."
+    }, {
+      "heading" : "5 Results and Analysis",
+      "text" : "We first evaluate the main performance of our approaches (Section 5.1 and 5.2). Then, the human evaluation further confirms the improvements of translation adequacy and fluency (Section 5.3). Finally, we analyze the positive impact of our models on the distribution of Margin and explore how each fragment of our method works (Section 5.4)."
+    }, {
+      "heading" : "5.1 Results on En→De",
+      "text" : "The results on WMT14 English-to-German (En→De) are summarized in Table 1. We list the results from (Vaswani et al., 2017) and several related competitive NMT systems by various methods, such as Minimum Risk Training (MRT) objective (Shen et al., 2016), Simple Fusion of NMT and LM (Stahlberg et al., 2018), optimizing adequacy metrics (Kong et al., 2019; Feng et al., 2019) and improving the Transformer architecture (Yang et al., 2018; Zheng et al., 2019; Yang et al., 2019; Weng et al., 2020b; Yan et al., 2020a). We re-\n7The LM does not need to be state-of-the-art. The previous study of (Baziotis et al., 2020) has shown that a more powerful LM does not lead to further improvements to NMT.\n8The experimental results show that the model is insensitive to λLM . Therefore we make λLM consistent for all the three tasks.\nimplement the Transformer model (Vaswani et al., 2017) as our baseline. Similarly, we re-implement the Simple Fusion (Stahlberg et al., 2018) model. 9 Finally, the results of the joint training model NMT+LM, and models with our MTO and MSO objectives are reported.\nCompared with the baseline, NMT+LM yields +0.75 BLEU improvement. Based on NMT+LM, our MTO achieves further improvement with +0.50 BLEU scores, indicating that preventing the LM from being overconfident could significantly enhance model performance. Moreover, MSO performs better than MTO by +0.11 BLEU scores, which implies that the “dirty data” in the training dataset indeed harm the model performance, and the dynamic weight function IR(x,y)<k in Eq. 10 could reduce the negative impact. In conclusion, our approaches improve up to +1.36 BLEU scores on En→De compared with the Transformer baseline and substantially outperforms the existing NMT systems. The results demonstrate the effectiveness and superiority of our approaches.\n9The architectures of the LM and NMT model in Simple Fusion are consistent with our MTO and MSO."
+    }, {
+      "heading" : "5.2 Results on En→Fr and Zh→En",
+      "text" : "The results on WMT14 English-to-French (En→Fr) and WMT19 Chinese-to-English (Zh→En) are shown in Table 2. We also list the results of (Vaswani et al., 2017) and our reimplemented Transformer as the baselines.\nOn En→Fr, our reimplemented result is higher than the result of (Vaswani et al., 2017), since we update 300K steps while Vaswani et al. (2017) only update 100K steps. Many studies obtain similar results to ours (e.g., 41.1 BLEU scores from (Ott et al., 2019)). Compared with the baseline, NMT+LM yields +0.07 and +0.15 BLEU improvements on En→Fr and Zh→En, respectively. The improvement of NMT+LM on En→De in Table 1 (i.e., +0.75) is greater than these two datasets. We conjecture the reason is that the amount of training data of En→De is much smaller than that of En→Fr and Zh→En, thus NMT+LM is more likely to improve the model performance on En→De.\nCompared with NMT+LM, our MTO achieves further improvements with +0.42 and +1.04 BLEU scores on En→Fr and Zh→En, respectively, which demonstrates the performance improvement is mainly due to our Margin-based objective rather than joint training. Moreover, based on MTO, our MSO further yields +0.14 and +0.31 BLEU improvements. In summary, our approaches improve up to +0.63 and +1.50 BLEU scores on En→Fr and Zh→En compared with the baselines, respectively, which demonstrates the effectiveness and generalizability of our approaches."
+    }, {
+      "heading" : "5.3 Human Evaluation",
+      "text" : "We conduct the human evaluation for translations in terms of adequacy and fluency. Firstly, we ran-\ndomly sample 100 sentences from the test set of WMT19 Zh→En. Then we invite three annotators to evaluate the translation adequacy and fluency. Five scales have been set up, i.e., 1, 2, 3, 4, 5. For adequacy, “1” means totally irrelevant to the source sentence, and “5” means equal to the source sentence semantically. For fluency, “1” represents not fluent and incomprehensible; “5” represents very “native”. Finally, we take the average of the scores from the three annotators as the final score.\nThe results of the baseline and our approaches are shown in Table 3. Compared with the NMT baseline, NMT+LM, MTO and MSO improve adequacy with 0.08, 0.22, and 0.37 scores, respectively. Most improvements come from our Margin-based methods MTO and MSO, and MSO performs the best. For fluency, NMT+LM achieves 0.2 improvement compared with NMT. Based on NMT+LM, MTO and MSO yield further improvements with 0.01 and 0.05 scores, respectively. Human evaluation indicates that our MTO and MSO approaches remarkably improve translation adequacy and slightly enhance translation fluency."
+    }, {
+      "heading" : "5.4 Analysis",
+      "text" : "Margin between the NMT and the LM. Firstly, we analyze the distribution of the Margin between the NMT and the LM (i.e., ∆ in Eq. 5). As shown in Figure 3, for the joint training model NMT+LM, although most of the Margins are positive, there are still many tokens with negative Margin and a large amount of Margins around 0. This indicates that the LM is probably overconfident for many tokens, and addressing the overconfidence problem is meaningful for NMT. By comparison, the Margin distribution of MSO is dramatically different with NMT+LM: the tokens with Margin around 0 are significantly reduced, and the tokens with Margin in [0.75, 1.0] are increased apparently.\nMore precisely, we list the percentage of tokens with negative Margin and the average Margin for each model in Table 4. Compared with NMT+LM, MTO and MSO reduce the percentage of negative Margin by 2.28 and 1.56 points, respectively. We notice MSO performs slightly worse than MTO, because MSO neglects the hallucinations during training. As there are many tokens with negative Margin in hallucinations, the ability of MSO to reduce the proportion of ∆ < 0 is weakened. We further analyze effects of MTO and MSO on the average of Margin. Both MTO and MSO improve the average of the Margin by 33% (from 0.33 to 0.44). In conclusion, MTO and MSO both indeed increase the Margin between the NMT and the LM.\nVariations of M(∆). We compare the performance of the four Margin functionsM(∆) defined in Section 3.2. We list the BLEU scores of the Transformer baseline, NMT+LM and our MTO approach with the four M(∆) in Table 5. All the four variations bring improvements over NMT and NMT+LM. The results of Log with different α are similar to Linear, while far lower than Cube and Quintic. And Quintic performs the best among all the four variations. We speculate the reason is that\n∆ ∈ [−0.5, 0.5] is the main range for improvement, and Quintic updates more careful on this range (i.e., with smaller slopes) as shown in Figure 1.\nEffects of the Weight of M(∆). In MTO, we propose the weight 1−pNMT (t) of the Margin functionM(∆) in Eq. 6. To validate the importance of it, we remove the weight and the Margin loss degrades to LM = ∑T t=1M(∆(t)). The results are listed in Table 6. Compared with NMT+LM, MTO without weight performs worse with 0.25 and 0.05 BLEU decreases on the validation set and test set, respectively. Compared with MTO with weight, it decreases 0.73 and 1.09 BLEU scores on the validation set and test set, respectively. This demonstrates that the weight 1− pNMT (t) is indispensable for our approach.\nChanges of IR(x,y)<k During Training. In MSO, we propose a dynamic weight function IR(x,y)<k in Eq. 10. Figure 4 shows the changes of IR(x,y)<k in MSO and the BLEU scores of MSO and MTO during finetuning. As the training continues, our model gets more competent, and the proportion of sentences judged to be “dirty data” by our model increases rapidly at first and then\nflattens out, which is consistent with the trend of BLEU of MSO. Moreover, by adding the dynamic weight function, MSO outperforms MTO at most steps.\nCase Study. To better illustrate the translation quality of our approach, we show several translation examples in Appendix C. Our approach grasps more segments of the source sentences, which are mistranslated or neglected by the Transformer."
+    }, {
+      "heading" : "6 Related Work",
+      "text" : "Translation Adequacy of NMT. NMT suffers from the hallucination and inadequacy problem for a long time (Tu et al., 2016; Müller et al., 2020; Wang and Sennrich, 2020; Lee et al., 2019). Many studies improve the architecture of NMT to alleviate the inadequacy issue, including tracking translation adequacy by coverage vectors (Tu et al., 2016; Mi et al., 2016), modeling a global representation of source side (Weng et al., 2020a), dividing the source sentence into past and future parts (Zheng et al., 2019), and multi-task learning to improve encoder and cross-attention modules in decoder (Meng et al., 2016, 2018; Weng et al., 2020b). They inductively increase the translation adequacy, while our approaches directly maximize the Margin between the NMT and the LM to prevent the LM from being overconfident. Other studies enhance the translation adequacy by adequacy metrics or additional optimization objectives. Tu et al. (2017) minimize the difference between the original source sentence and the reconstruction source sentence of NMT. Kong et al. (2019) pro-\npose a coverage ratio of the source sentence by the model translation. Feng et al. (2019) evaluate the fluency and adequacy of translations with an evaluation module. However, the metrics or objectives in the above approaches may not wholly represent adequacy. On the contrary, our approaches are derived from the criteria of the NMT model and the LM, thus credible.\nLanguage Model Augmented NMT. Language Models are always used to provide more information to improve NMT. For low-resource tasks, the LM trained on extra monolingual data can rerank the translations by fusion (Gülçehre et al., 2015; Sriram et al., 2017; Stahlberg et al., 2018), enhance NMT’s representations (Clinchant et al., 2019; Zhu et al., 2020), and provide prior knowledge for NMT (Baziotis et al., 2020). For data augmentation, LMs are used to replace words in sentences (Kobayashi, 2018; Wu et al., 2018; Gao et al., 2019). Differently, we mainly focus on the Margin between the NMT and the LM, and no additional data is required. Stahlberg et al. (2018) propose the Simple Fusion approach to model the difference between NMT and LM. Differently, it is trained to optimize the residual probability, positively correlated to pNMT /pLM which is hard to optimize and the LM is still required in inference, slowing down the inference speed largely.\nData Selection in NMT. Data selection and data filter methods have been widely used in NMT. To balance data domains or enhance the data quality generated by back-translation (Sennrich et al., 2016b), many approaches have been proposed, such as utilizing language models (Moore and Lewis, 2010; van der Wees et al., 2017; Zhang et al., 2020), translation models (JunczysDowmunt, 2018; Wang et al., 2019a), and curriculum learning (Zhang et al., 2019b; Wang et al., 2019b). Different from the above methods, our MSO dynamically combines language models with translation models for data selection during training, making full use of the models."
+    }, {
+      "heading" : "7 Conclusion",
+      "text" : "We alleviate the problem of inadequacy translation from the perspective of preventing the LM from being overconfident. Specifically, we firstly propose an indicator of the overconfidence degree of the LM in NMT, i.e., Margin between the NMT and the LM. Then we propose Margin-based Token-\nlevel and Sentence-level objectives to maximize the Margin. Experimental results on three large-scale translation tasks demonstrate the effectiveness and superiority of our approaches. The human evaluation further verifies that our methods can improve translation adequacy and fluency."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "The research work descried in this paper has been supported by the National Nature Science Foundation of China (No. 12026606). The authors would like to thank the anonymous reviewers for their valuable comments and suggestions to improve this paper."
+    }, {
+      "heading" : "A Loss of the Language Model",
+      "text" : "To validate whether the LM is converged or not after pretraining, we plot the loss of the LM as shown in Figure 5. The loss of the LM remains stable after training about 80K steps for En→De, Zh→En and En→Fr, indicating that the LM is converged during pretraining stage."
+    }, {
+      "heading" : "B Hyperparameters Selection",
+      "text" : "The results of our approaches with different λM (defined in Eq. 7) and k (defined in Eq. 10) on the validation sets of WMT14 En→De, WMT14 En→Fr and WMT19 Zh→En are shown in Figure 6. We firstly search the best λM based on MTO. All the three datasets achieve better performance for λM ∈ [5, 10]. The model reaches the peak when λM =5, 8, and 8 for the three tasks, respectively. Then, fixing the best λM for each dataset, we search the best threshold k. As shown in the right of Figure 6, the best k is 30% for En→De and Zh→En, 40% for En→Fr. This is consistent with our observations. When the proportion of tokens\nwith negative Margin in a target sentence is greater than 30% or 40%, the sentence is most likely to be a hallucination."
+    }, {
+      "heading" : "C Case Study",
+      "text" : "As shown in Figure 7, our approach outperforms the base model (i.e., the Transformer) in translation adequacy. In case 1, the base model generates “on Tuesday”, which is unrelated to the source sentence, i.e., hallucination, and under-translates “November 5” and “the website of the Chinese embassy in Mongolia” information in the source sentence. However, our approach translates the above two segments well. In Case 2, the base model reverses the chronological order of the source sentence, thus generates a mis-translation, while our model translates perfectly. In Case 3, the base model neglects two main segments of the source sentence (the text in bold blue font) and leads to the inadequacy problem. However, our model takes them into account. According to the three examples, we conclude that our approach alleviates the inadequacy problem which is extremely harmful to NMT."
+    } ],
+    "references" : [ {
+      "title" : "Neural machine translation by jointly learning to align and translate",
+      "author" : [ "Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio." ],
+      "venue" : "arXiv preprint arXiv:1409.0473.",
+      "citeRegEx" : "Bahdanau et al\\.,? 2014",
+      "shortCiteRegEx" : "Bahdanau et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Language model prior for low-resource neural machine translation",
+      "author" : [ "Christos Baziotis", "Barry Haddow", "Alexandra Birch." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 7622–7634, On-",
+      "citeRegEx" : "Baziotis et al\\.,? 2020",
+      "shortCiteRegEx" : "Baziotis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Learning phrase representations using RNN encoder–decoder for statistical machine translation",
+      "author" : [ "Kyunghyun Cho", "Bart van Merriënboer", "Caglar Gulcehre", "Dzmitry Bahdanau", "Fethi Bougares", "Holger Schwenk", "Yoshua Bengio." ],
+      "venue" : "Proceedings of",
+      "citeRegEx" : "Cho et al\\.,? 2014",
+      "shortCiteRegEx" : "Cho et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "On the use of BERT for neural machine translation",
+      "author" : [ "Stephane Clinchant", "Kweon Woo Jung", "Vassilina Nikoulina." ],
+      "venue" : "Proceedings of the 3rd Workshop on Neural Generation and Translation, pages 108–117, Hong Kong. Association for Com-",
+      "citeRegEx" : "Clinchant et al\\.,? 2019",
+      "shortCiteRegEx" : "Clinchant et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Modeling fluency and faithfulness for diverse neural machine translation",
+      "author" : [ "Yang Feng", "Wanying Xie", "Shuhao Gu", "Chenze Shao", "Wen Zhang", "Zhengxin Yang", "Dong Yu." ],
+      "venue" : "arXiv preprint arXiv:1912.00178.",
+      "citeRegEx" : "Feng et al\\.,? 2019",
+      "shortCiteRegEx" : "Feng et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Soft contextual data augmentation for neural machine translation",
+      "author" : [ "Fei Gao", "Jinhua Zhu", "Lijun Wu", "Yingce Xia", "Tao Qin", "Xueqi Cheng", "Wengang Zhou", "Tie-Yan Liu." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational",
+      "citeRegEx" : "Gao et al\\.,? 2019",
+      "shortCiteRegEx" : "Gao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "On using monolingual corpora in neural machine translation. CoRR, abs/1503.03535",
+      "author" : [ "Çaglar Gülçehre", "Orhan Firat", "Kelvin Xu", "Kyunghyun Cho", "Loı̈c Barrault", "Huei-Chi Lin", "Fethi Bougares", "Holger Schwenk", "Yoshua Bengio" ],
+      "venue" : null,
+      "citeRegEx" : "Gülçehre et al\\.,? \\Q2015\\E",
+      "shortCiteRegEx" : "Gülçehre et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Dual conditional cross-entropy filtering of noisy parallel corpora",
+      "author" : [ "Marcin Junczys-Dowmunt." ],
+      "venue" : "Proceedings of the Third Conference on Machine Translation: Shared Task Papers, pages 888–895, Belgium, Brussels. Association for Computational",
+      "citeRegEx" : "Junczys.Dowmunt.,? 2018",
+      "shortCiteRegEx" : "Junczys.Dowmunt.",
+      "year" : 2018
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P Kingma", "Jimmy Ba." ],
+      "venue" : "arXiv preprint arXiv:1412.6980.",
+      "citeRegEx" : "Kingma and Ba.,? 2014",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2014
+    }, {
+      "title" : "OpenNMT: Opensource toolkit for neural machine translation",
+      "author" : [ "Guillaume Klein", "Yoon Kim", "Yuntian Deng", "Jean Senellart", "Alexander Rush." ],
+      "venue" : "Proceedings of ACL 2017, System Demonstrations, pages 67–72, Vancouver, Canada. Association for",
+      "citeRegEx" : "Klein et al\\.,? 2017",
+      "shortCiteRegEx" : "Klein et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Contextual augmentation: Data augmentation by words with paradigmatic relations",
+      "author" : [ "Sosuke Kobayashi." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-",
+      "citeRegEx" : "Kobayashi.,? 2018",
+      "shortCiteRegEx" : "Kobayashi.",
+      "year" : 2018
+    }, {
+      "title" : "Statistical significance tests for machine translation evaluation",
+      "author" : [ "Philipp Koehn." ],
+      "venue" : "Proceedings of the 2004 Conference on Empirical Methods in Natural Language Processing, pages 388– 395, Barcelona, Spain. Association for Computa-",
+      "citeRegEx" : "Koehn.,? 2004",
+      "shortCiteRegEx" : "Koehn.",
+      "year" : 2004
+    }, {
+      "title" : "Neural machine translation with adequacy-oriented learning",
+      "author" : [ "Xiang Kong", "Zhaopeng Tu", "Shuming Shi", "Eduard Hovy", "Tong Zhang." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, 33(01):6618–6625.",
+      "citeRegEx" : "Kong et al\\.,? 2019",
+      "shortCiteRegEx" : "Kong et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Hallucinations in neural machine translation",
+      "author" : [ "Katherine Lee", "Orhan Firat", "Ashish Agarwal", "Clara Fannjiang", "David Sussillo" ],
+      "venue" : null,
+      "citeRegEx" : "Lee et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Effective approaches to attention-based neural machine translation",
+      "author" : [ "Thang Luong", "Hieu Pham", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 1412–1421, Lis-",
+      "citeRegEx" : "Luong et al\\.,? 2015",
+      "shortCiteRegEx" : "Luong et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Interactive attention for neural machine translation",
+      "author" : [ "Fandong Meng", "Zhengdong Lu", "Hang Li", "Qun Liu." ],
+      "venue" : "Proceedings of COLING 2016, the 26th International Conference on Computational Linguistics: Technical Papers, pages 2174–2185, Osaka,",
+      "citeRegEx" : "Meng et al\\.,? 2016",
+      "shortCiteRegEx" : "Meng et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Neural machine translation with key-value memoryaugmented attention",
+      "author" : [ "Fandong Meng", "Zhaopeng Tu", "Yong Cheng", "Haiyang Wu", "Junjie Zhai", "Yuekui Yang", "Di Wang." ],
+      "venue" : "Proceedings of IJCAI.",
+      "citeRegEx" : "Meng et al\\.,? 2018",
+      "shortCiteRegEx" : "Meng et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "DTMT: A novel deep transition architecture for neural machine translation",
+      "author" : [ "Fandong Meng", "Jinchao Zhang." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, volume 33, pages 224– 231.",
+      "citeRegEx" : "Meng and Zhang.,? 2019",
+      "shortCiteRegEx" : "Meng and Zhang.",
+      "year" : 2019
+    }, {
+      "title" : "Coverage embedding models for neural machine translation",
+      "author" : [ "Haitao Mi", "Baskaran Sankaran", "Zhiguo Wang", "Abe Ittycheriah." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 955–960, Austin,",
+      "citeRegEx" : "Mi et al\\.,? 2016",
+      "shortCiteRegEx" : "Mi et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Intelligent selection of language model training data",
+      "author" : [ "Robert C. Moore", "William Lewis." ],
+      "venue" : "Proceedings of the ACL 2010 Conference Short Papers, pages 220–224, Uppsala, Sweden. Association for Computational Linguistics.",
+      "citeRegEx" : "Moore and Lewis.,? 2010",
+      "shortCiteRegEx" : "Moore and Lewis.",
+      "year" : 2010
+    }, {
+      "title" : "Domain robustness in neural machine translation",
+      "author" : [ "Mathias Müller", "Annette Rios", "Rico Sennrich." ],
+      "venue" : "Proceedings of the 14th Conference of the Association for Machine Translation in the Americas (Volume 1: Research Track), pages 151–164, Virtual.",
+      "citeRegEx" : "Müller et al\\.,? 2020",
+      "shortCiteRegEx" : "Müller et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "fairseq: A fast, extensible toolkit for sequence modeling",
+      "author" : [ "Myle Ott", "Sergey Edunov", "Alexei Baevski", "Angela Fan", "Sam Gross", "Nathan Ng", "David Grangier", "Michael Auli." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chap-",
+      "citeRegEx" : "Ott et al\\.,? 2019",
+      "shortCiteRegEx" : "Ott et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Neural machine translation of rare words with subword units",
+      "author" : [ "Rico Sennrich", "Barry Haddow", "Alexandra Birch." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1715–",
+      "citeRegEx" : "Sennrich et al\\.,? 2016a",
+      "shortCiteRegEx" : "Sennrich et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Neural machine translation of rare words with subword units",
+      "author" : [ "Rico Sennrich", "Barry Haddow", "Alexandra Birch." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1715–",
+      "citeRegEx" : "Sennrich et al\\.,? 2016b",
+      "shortCiteRegEx" : "Sennrich et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Minimum risk training for neural machine translation",
+      "author" : [ "Shiqi Shen", "Yong Cheng", "Zhongjun He", "Wei He", "Hua Wu", "Maosong Sun", "Yang Liu." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long",
+      "citeRegEx" : "Shen et al\\.,? 2016",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Cold fusion: Training seq2seq models together with language models",
+      "author" : [ "Anuroop Sriram", "Heewoo Jun", "Sanjeev Satheesh", "Adam Coates." ],
+      "venue" : "CoRR, abs/1708.06426.",
+      "citeRegEx" : "Sriram et al\\.,? 2017",
+      "shortCiteRegEx" : "Sriram et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Simple fusion: Return of the language model",
+      "author" : [ "Felix Stahlberg", "James Cross", "Veselin Stoyanov." ],
+      "venue" : "Proceedings of the Third Conference on Machine Translation: Research Papers, pages 204–211, Brussels, Belgium. Association for Computational Lin-",
+      "citeRegEx" : "Stahlberg et al\\.,? 2018",
+      "shortCiteRegEx" : "Stahlberg et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Sequence to sequence learning with neural networks",
+      "author" : [ "Ilya Sutskever", "Oriol Vinyals", "Quoc V Le." ],
+      "venue" : "Advances in neural information processing systems, 27:3104–3112.",
+      "citeRegEx" : "Sutskever et al\\.,? 2014",
+      "shortCiteRegEx" : "Sutskever et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Neural machine translation with reconstruction",
+      "author" : [ "Zhaopeng Tu", "Yang Liu", "Lifeng Shang", "Xiaohua Liu", "Hang Li." ],
+      "venue" : "Proceedings of the 31st AAAI Conference on Artificial Intelligence.",
+      "citeRegEx" : "Tu et al\\.,? 2017",
+      "shortCiteRegEx" : "Tu et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Modeling coverage for neural machine translation",
+      "author" : [ "Zhaopeng Tu", "Zhengdong Lu", "Yang Liu", "Xiaohua Liu", "Hang Li." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 76–85.",
+      "citeRegEx" : "Tu et al\\.,? 2016",
+      "shortCiteRegEx" : "Tu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Ł ukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 30, pages 5998–6008. Cur-",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "On exposure bias, hallucination and domain shift in neural machine translation",
+      "author" : [ "Chaojun Wang", "Rico Sennrich." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 3544–3552, Online. Association for",
+      "citeRegEx" : "Wang and Sennrich.,? 2020",
+      "shortCiteRegEx" : "Wang and Sennrich.",
+      "year" : 2020
+    }, {
+      "title" : "Improving back-translation with uncertainty-based confidence estimation",
+      "author" : [ "Shuo Wang", "Yang Liu", "Chao Wang", "Huanbo Luan", "Maosong Sun." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Wang et al\\.,? 2019a",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Dynamically composing domain-data selection with clean-data selection by “co-curricular learning” for neural machine translation",
+      "author" : [ "Wei Wang", "Isaac Caswell", "Ciprian Chelba." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Compu-",
+      "citeRegEx" : "Wang et al\\.,? 2019b",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Dynamic data selection for neural machine translation",
+      "author" : [ "Marlies van der Wees", "Arianna Bisazza", "Christof Monz." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 1400–1410, Copenhagen, Den-",
+      "citeRegEx" : "Wees et al\\.,? 2017",
+      "shortCiteRegEx" : "Wees et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Gret: Global representation enhanced transformer",
+      "author" : [ "Rongxiang Weng", "Haoran Wei", "Shujian Huang", "Heng Yu", "Lidong Bing", "Weihua Luo", "Jiajun Chen." ],
+      "venue" : "AAAI.",
+      "citeRegEx" : "Weng et al\\.,? 2020a",
+      "shortCiteRegEx" : "Weng et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Towards enhancing faithfulness for neural machine translation",
+      "author" : [ "Rongxiang Weng", "Heng Yu", "Xiangpeng Wei", "Weihua Luo." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 2675–2684,",
+      "citeRegEx" : "Weng et al\\.,? 2020b",
+      "shortCiteRegEx" : "Weng et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Conditional bert contextual augmentation",
+      "author" : [ "Xing Wu", "Shangwen Lv", "Liangjun Zang", "Jizhong Han", "Songlin Hu" ],
+      "venue" : null,
+      "citeRegEx" : "Wu et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "2020a. Dual past and future for neural machine translation",
+      "author" : [ "Jianhao Yan", "Fandong Meng", "Jie Zhou" ],
+      "venue" : null,
+      "citeRegEx" : "Yan et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Yan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Multi-unit transformers for neural machine translation",
+      "author" : [ "Jianhao Yan", "Fandong Meng", "Jie Zhou." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1047–1059, Online.",
+      "citeRegEx" : "Yan et al\\.,? 2020b",
+      "shortCiteRegEx" : "Yan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Context-aware self-attention networks",
+      "author" : [ "Baosong Yang", "Jian Li", "Derek F Wong", "Lidia S Chao", "Xing Wang", "Zhaopeng Tu." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, pages 387– 394.",
+      "citeRegEx" : "Yang et al\\.,? 2019",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Modeling localness for self-attention networks",
+      "author" : [ "Baosong Yang", "Zhaopeng Tu", "Derek F. Wong", "Fandong Meng", "Lidia S. Chao", "Tong Zhang." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 4449–",
+      "citeRegEx" : "Yang et al\\.,? 2018",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Parallel corpus filtering via pre-trained language models",
+      "author" : [ "Boliang Zhang", "Ajay Nagesh", "Kevin Knight." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 8545–8554, Online. Association for Computa-",
+      "citeRegEx" : "Zhang et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bridging the gap between training and inference for neural machine translation",
+      "author" : [ "Wen Zhang", "Yang Feng", "Fandong Meng", "Di You", "Qun Liu." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 4334–",
+      "citeRegEx" : "Zhang et al\\.,? 2019a",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Curriculum learning for domain adaptation in neural machine translation",
+      "author" : [ "Xuan Zhang", "Pamela Shapiro", "Gaurav Kumar", "Paul McNamee", "Marine Carpuat", "Kevin Duh." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the",
+      "citeRegEx" : "Zhang et al\\.,? 2019b",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Incorporating bert into neural machine translation",
+      "author" : [ "Jinhua Zhu", "Yingce Xia", "Lijun Wu", "Di He", "Tao Qin", "Wengang Zhou", "Houqiang Li", "Tieyan Liu." ],
+      "venue" : "International Conference on Learning Representations.",
+      "citeRegEx" : "Zhu et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhu et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 36,
+      "context" : "One important reason is that the NMT model pays excessive attention to the partial translation to ensure fluency while failing to translate some segments of the source sentence (Weng et al., 2020b), which is actually the overconfidence of the Language Model (LM).",
+      "startOffset" : 177,
+      "endOffset" : 197
+    }, {
+      "referenceID" : 29,
+      "context" : "One is to improve the architecture of NMT, such as adding a coverage vector to track the attention history (Tu et al., 2016), enhancing the crossattention module (Meng et al.",
+      "startOffset" : 107,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 36,
+      "context" : ", 2016), enhancing the crossattention module (Meng et al., 2016, 2018; Weng et al., 2020b), and dividing the source sentence into past and future parts (Zheng et al.",
+      "startOffset" : 45,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 28,
+      "context" : "Although some researches (Tu et al., 2017; Kong et al., 2019; Weng et al., 2020b) point out that the lack of adequacy is due to the overconfidence of the LM, unfortunately, they do not propose effective solutions to the overconfidence problem.",
+      "startOffset" : 25,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 12,
+      "context" : "Although some researches (Tu et al., 2017; Kong et al., 2019; Weng et al., 2020b) point out that the lack of adequacy is due to the overconfidence of the LM, unfortunately, they do not propose effective solutions to the overconfidence problem.",
+      "startOffset" : 25,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 36,
+      "context" : "Although some researches (Tu et al., 2017; Kong et al., 2019; Weng et al., 2020b) point out that the lack of adequacy is due to the overconfidence of the LM, unfortunately, they do not propose effective solutions to the overconfidence problem.",
+      "startOffset" : 25,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 30,
+      "context" : "We validate the effectiveness and superiority of our approaches on the Transformer (Vaswani et al., 2017), and conduct experiments on large-scale WMT14 English-to-German, WMT19 Chinese-toEnglish, and WMT14 English-to-French translation tasks.",
+      "startOffset" : 83,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 30,
+      "context" : "Specifically, we jointly train them through sharing their decoders’ embedding layers and their pre-softmax linear transformation layers (Vaswani et al., 2017).",
+      "startOffset" : 136,
+      "endOffset" : 158
+    }, {
+      "referenceID" : 30,
+      "context" : "Following the same setting in (Vaswani et al., 2017), we use newstest2013 as validation set and newstest2014 as test set, which contain 3000 and 3003 sentences, respectively.",
+      "startOffset" : 30,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 22,
+      "context" : "For Zh→En, the number of merge operations in byte pair encoding (BPE) (Sennrich et al., 2016a) is set to 32K for both source and target languages.",
+      "startOffset" : 70,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 11,
+      "context" : "Moreover, we use the paired bootstrap resampling (Koehn, 2004) for significance test.",
+      "startOffset" : 49,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 30,
+      "context" : "We conduct experiments based on the Transformer (Vaswani et al., 2017) and implement our approaches with the opensource tooklit Opennmt-py (Klein et al.",
+      "startOffset" : 48,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2017) and implement our approaches with the opensource tooklit Opennmt-py (Klein et al., 2017).",
+      "startOffset" : 76,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 30,
+      "context" : "Following the Transformer-Base setting in (Vaswani et al., 2017), we set the hidden size to 512 and the encoder/decoder layers to 6.",
+      "startOffset" : 42,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 8,
+      "context" : "Adam optimizer (Kingma and Ba, 2014) is used in all the models.",
+      "startOffset" : 15,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 30,
+      "context" : "We list the results from (Vaswani et al., 2017) and several related competitive NMT systems by various methods, such as Minimum Risk Training (MRT) objective (Shen et al.",
+      "startOffset" : 25,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 24,
+      "context" : ", 2017) and several related competitive NMT systems by various methods, such as Minimum Risk Training (MRT) objective (Shen et al., 2016), Simple Fusion of NMT and LM (Stahlberg et al.",
+      "startOffset" : 118,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 26,
+      "context" : ", 2016), Simple Fusion of NMT and LM (Stahlberg et al., 2018), optimizing adequacy metrics (Kong et al.",
+      "startOffset" : 37,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2018), optimizing adequacy metrics (Kong et al., 2019; Feng et al., 2019) and improving the Transformer architecture (Yang et al.",
+      "startOffset" : 37,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2018), optimizing adequacy metrics (Kong et al., 2019; Feng et al., 2019) and improving the Transformer architecture (Yang et al.",
+      "startOffset" : 37,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 41,
+      "context" : ", 2019) and improving the Transformer architecture (Yang et al., 2018; Zheng et al., 2019; Yang et al., 2019; Weng et al., 2020b; Yan et al., 2020a).",
+      "startOffset" : 51,
+      "endOffset" : 148
+    }, {
+      "referenceID" : 40,
+      "context" : ", 2019) and improving the Transformer architecture (Yang et al., 2018; Zheng et al., 2019; Yang et al., 2019; Weng et al., 2020b; Yan et al., 2020a).",
+      "startOffset" : 51,
+      "endOffset" : 148
+    }, {
+      "referenceID" : 36,
+      "context" : ", 2019) and improving the Transformer architecture (Yang et al., 2018; Zheng et al., 2019; Yang et al., 2019; Weng et al., 2020b; Yan et al., 2020a).",
+      "startOffset" : 51,
+      "endOffset" : 148
+    }, {
+      "referenceID" : 1,
+      "context" : "The previous study of (Baziotis et al., 2020) has shown that a more powerful LM does not lead to further improvements to NMT.",
+      "startOffset" : 22,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 24,
+      "context" : "(MRT* in (Shen et al., 2016) is RNN-based, and the result reported here is implemented on Transformer by Weng et al.",
+      "startOffset" : 9,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 30,
+      "context" : "implement the Transformer model (Vaswani et al., 2017) as our baseline.",
+      "startOffset" : 32,
+      "endOffset" : 54
+    }, {
+      "referenceID" : 26,
+      "context" : "Similarly, we re-implement the Simple Fusion (Stahlberg et al., 2018) model.",
+      "startOffset" : 45,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 30,
+      "context" : "We also list the results of (Vaswani et al., 2017) and our reimplemented Transformer as the baselines.",
+      "startOffset" : 28,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 30,
+      "context" : "On En→Fr, our reimplemented result is higher than the result of (Vaswani et al., 2017), since we update 300K steps while Vaswani et al.",
+      "startOffset" : 64,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 29,
+      "context" : "NMT suffers from the hallucination and inadequacy problem for a long time (Tu et al., 2016; Müller et al., 2020; Wang and Sennrich, 2020; Lee et al., 2019).",
+      "startOffset" : 74,
+      "endOffset" : 155
+    }, {
+      "referenceID" : 20,
+      "context" : "NMT suffers from the hallucination and inadequacy problem for a long time (Tu et al., 2016; Müller et al., 2020; Wang and Sennrich, 2020; Lee et al., 2019).",
+      "startOffset" : 74,
+      "endOffset" : 155
+    }, {
+      "referenceID" : 31,
+      "context" : "NMT suffers from the hallucination and inadequacy problem for a long time (Tu et al., 2016; Müller et al., 2020; Wang and Sennrich, 2020; Lee et al., 2019).",
+      "startOffset" : 74,
+      "endOffset" : 155
+    }, {
+      "referenceID" : 13,
+      "context" : "NMT suffers from the hallucination and inadequacy problem for a long time (Tu et al., 2016; Müller et al., 2020; Wang and Sennrich, 2020; Lee et al., 2019).",
+      "startOffset" : 74,
+      "endOffset" : 155
+    }, {
+      "referenceID" : 29,
+      "context" : "Many studies improve the architecture of NMT to alleviate the inadequacy issue, including tracking translation adequacy by coverage vectors (Tu et al., 2016; Mi et al., 2016), modeling a global representation of source side (Weng et al.",
+      "startOffset" : 140,
+      "endOffset" : 174
+    }, {
+      "referenceID" : 18,
+      "context" : "Many studies improve the architecture of NMT to alleviate the inadequacy issue, including tracking translation adequacy by coverage vectors (Tu et al., 2016; Mi et al., 2016), modeling a global representation of source side (Weng et al.",
+      "startOffset" : 140,
+      "endOffset" : 174
+    }, {
+      "referenceID" : 35,
+      "context" : ", 2016), modeling a global representation of source side (Weng et al., 2020a), dividing the source sentence into past and future parts (Zheng et al.",
+      "startOffset" : 57,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 36,
+      "context" : ", 2019), and multi-task learning to improve encoder and cross-attention modules in decoder (Meng et al., 2016, 2018; Weng et al., 2020b).",
+      "startOffset" : 91,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 6,
+      "context" : "For low-resource tasks, the LM trained on extra monolingual data can rerank the translations by fusion (Gülçehre et al., 2015; Sriram et al., 2017; Stahlberg et al., 2018), enhance NMT’s representations (Clinchant et al.",
+      "startOffset" : 103,
+      "endOffset" : 171
+    }, {
+      "referenceID" : 25,
+      "context" : "For low-resource tasks, the LM trained on extra monolingual data can rerank the translations by fusion (Gülçehre et al., 2015; Sriram et al., 2017; Stahlberg et al., 2018), enhance NMT’s representations (Clinchant et al.",
+      "startOffset" : 103,
+      "endOffset" : 171
+    }, {
+      "referenceID" : 26,
+      "context" : "For low-resource tasks, the LM trained on extra monolingual data can rerank the translations by fusion (Gülçehre et al., 2015; Sriram et al., 2017; Stahlberg et al., 2018), enhance NMT’s representations (Clinchant et al.",
+      "startOffset" : 103,
+      "endOffset" : 171
+    }, {
+      "referenceID" : 3,
+      "context" : ", 2018), enhance NMT’s representations (Clinchant et al., 2019; Zhu et al., 2020), and provide prior knowledge for NMT (Baziotis et al.",
+      "startOffset" : 39,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 45,
+      "context" : ", 2018), enhance NMT’s representations (Clinchant et al., 2019; Zhu et al., 2020), and provide prior knowledge for NMT (Baziotis et al.",
+      "startOffset" : 39,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2020), and provide prior knowledge for NMT (Baziotis et al., 2020).",
+      "startOffset" : 45,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 10,
+      "context" : "augmentation, LMs are used to replace words in sentences (Kobayashi, 2018; Wu et al., 2018; Gao et al., 2019).",
+      "startOffset" : 57,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 37,
+      "context" : "augmentation, LMs are used to replace words in sentences (Kobayashi, 2018; Wu et al., 2018; Gao et al., 2019).",
+      "startOffset" : 57,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 5,
+      "context" : "augmentation, LMs are used to replace words in sentences (Kobayashi, 2018; Wu et al., 2018; Gao et al., 2019).",
+      "startOffset" : 57,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 23,
+      "context" : "To balance data domains or enhance the data quality generated by back-translation (Sennrich et al., 2016b), many approaches have been proposed, such as utilizing language models (Moore and Lewis, 2010; van der Wees et al.",
+      "startOffset" : 82,
+      "endOffset" : 106
+    }, {
+      "referenceID" : 19,
+      "context" : ", 2016b), many approaches have been proposed, such as utilizing language models (Moore and Lewis, 2010; van der Wees et al., 2017; Zhang et al., 2020), translation models (JunczysDowmunt, 2018; Wang et al.",
+      "startOffset" : 80,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 42,
+      "context" : ", 2016b), many approaches have been proposed, such as utilizing language models (Moore and Lewis, 2010; van der Wees et al., 2017; Zhang et al., 2020), translation models (JunczysDowmunt, 2018; Wang et al.",
+      "startOffset" : 80,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 32,
+      "context" : ", 2020), translation models (JunczysDowmunt, 2018; Wang et al., 2019a), and curriculum learning (Zhang et al.",
+      "startOffset" : 28,
+      "endOffset" : 70
+    }, {
+      "referenceID" : 44,
+      "context" : ", 2019a), and curriculum learning (Zhang et al., 2019b; Wang et al., 2019b).",
+      "startOffset" : 34,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 33,
+      "context" : ", 2019a), and curriculum learning (Zhang et al., 2019b; Wang et al., 2019b).",
+      "startOffset" : 34,
+      "endOffset" : 75
+    } ],
+    "year" : 2021,
+    "abstractText" : "The Neural Machine Translation (NMT) model is essentially a joint language model conditioned on both the source sentence and partial translation. Therefore, the NMT model naturally involves the mechanism of the Language Model (LM) that predicts the next token only based on partial translation. Despite its success, NMT still suffers from the hallucination problem, generating fluent but inadequate translations. The main reason is that NMT pays excessive attention to the partial translation while neglecting the source sentence to some extent, namely overconfidence of the LM. Accordingly, we define the Margin between the NMT and the LM, calculated by subtracting the predicted probability of the LM from that of the NMT model for each token. The Margin is negatively correlated to the overconfidence degree of the LM. Based on the property, we propose a Margin-based Token-level Objective (MTO) and a Margin-based Sentencelevel Objective (MSO) to maximize the Margin for preventing the LM from being overconfident. Experiments on WMT14 Englishto-German, WMT19 Chinese-to-English, and WMT14 English-to-French translation tasks demonstrate the effectiveness of our approach, with 1.36, 1.50, and 0.63 BLEU improvements, respectively, compared to the Transformer baseline. The human evaluation further verifies that our approaches improve translation adequacy as well as fluency. 1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

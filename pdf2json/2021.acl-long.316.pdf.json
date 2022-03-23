@@ -1,0 +1,718 @@
+{
+  "name" : "2021.acl-long.316.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Generation-Augmented Retrieval for Open-Domain Question Answering",
+    "authors" : [ "Yuning Mao", "Pengcheng He", "Xiaodong Liu", "Yelong Shen", "Jianfeng Gao", "Jiawei Han", "Weizhu Chen" ],
+    "emails" : [ "hanj}@illinois.edu", "jfgao@microsoft.com", "wzchen@microsoft.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 4089–4100\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n4089"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Open-domain question answering (OpenQA) aims to answer factoid questions without a pre-specified domain and has numerous real-world applications. In OpenQA, a large collection of documents (e.g., Wikipedia) are often used to seek information pertaining to the questions. One of the most common approaches uses a retriever-reader architecture (Chen et al., 2017), which first retrieves a small subset of documents using the question as the query and then reads the retrieved documents to extract (or generate) an answer. The retriever is crucial as it is infeasible to examine every piece of information in the entire document collection (e.g., millions of Wikipedia passages) and the retrieval accuracy bounds the performance of the (extractive) reader.\n∗Work was done during internship at Microsoft Azure AI. 1Our code is available at https://github.com/\nmorningmoni/GAR.\nEarly OpenQA systems (Chen et al., 2017) use classic retrieval methods such as TF-IDF and BM25 with sparse representations. Sparse methods are lightweight and efficient, but unable to perform semantic matching and fail to retrieve relevant passages without lexical overlap. More recently, methods based on dense representations (Guu et al., 2020; Karpukhin et al., 2020) learn to embed queries and passages into a latent vector space, in which text similarity beyond lexical overlap can be measured. Dense retrieval methods can retrieve semantically relevant but lexically different passages and often achieve better performance than sparse methods. However, the dense models are more computationally expensive and suffer from information loss as they condense the entire text sequence into a fixed-size vector that does not guarantee exact matching (Luan et al., 2020).\nThere have been some recent studies on query reformulation with text generation for other retrieval tasks, which, for example, rewrite the queries to context-independent (Yu et al., 2020; Lin et al., 2020; Vakulenko et al., 2020) or well-formed (Liu et al., 2019) ones. However, these methods require either task-specific data (e.g., conversational contexts, ill-formed queries) or external resources such as paraphrase data (Zaiem and Sadat, 2019; Wang et al., 2020) that cannot or do not transfer well to OpenQA. Also, some rely on timeconsuming training process like reinforcement learning (RL) (Nogueira and Cho, 2017; Liu et al., 2019; Wang et al., 2020) that is not efficient enough for OpenQA (more discussions in Sec. 2).\nIn this paper, we propose GenerationAugmented Retrieval (GAR), which augments a query through text generation of a pre-trained language model (PLM). Different from prior studies that reformulate queries, GAR does not require external resources or downstream feedback via RL as supervision, because it does not rewrite the query but expands it with heuristically discov-\nered relevant contexts, which are fetched from PLMs and provide richer background information (Table 2). For example, by prompting a PLM to generate the title of a relevant passage given a query and appending the generated title to the query, it becomes easier to retrieve that relevant passage. Intuitively, the generated contexts explicitly express the search intent not presented in the original query. As a result, GAR with sparse representations achieves comparable or even better performance than state-of-the-art approaches (Karpukhin et al., 2020; Guu et al., 2020) with dense representations of the original queries, while being more lightweight and efficient in terms of both training and inference (including the cost of the generation model) (Sec. 6.4).\nSpecifically, we expand the query (question) by adding relevant contexts as follows. We conduct seq2seq learning with the question as the input and various freely accessible in-domain contexts as the output such as the answer, the sentence where the answer belongs to, and the title of a passage that contains the answer. We then append the generated contexts to the question as the generationaugmented query for retrieval. We demonstrate that using multiple contexts from diverse generation targets is beneficial as fusing the retrieval results of different generation-augmented queries consistently yields better retrieval accuracy.\nWe conduct extensive experiments on the Natural Questions (NQ) (Kwiatkowski et al., 2019) and TriviaQA (Trivia) (Joshi et al., 2017) datasets. The results reveal four major advantages of GAR: (1) GAR, combined with BM25, achieves significant gains over the same BM25 model that uses the original queries or existing unsupervised query expansion (QE) methods. (2) GAR with sparse representations (BM25) achieves comparable or even better performance than the current state-of-the-art retrieval methods, such as DPR (Karpukhin et al., 2020), that use dense representations. (3) Since GAR uses sparse representations to measure lexical overlap2, it is complementary to dense representations: by fusing the retrieval results of GAR and DPR, we obtain consistently better performance than either method used individually. (4) GAR outperforms DPR in the end-to-end QA performance (EM) when the same extractive reader is used: EM=41.8 (43.8 when combining with DPR)\n2Strictly speaking, GAR with sparse representations handles semantics before retrieval by enriching the queries, while maintaining the advantage of exact matching.\non NQ and 62.7 on Trivia, creating new state-ofthe-art results for extractive OpenQA. GAR also outperforms other retrieval methods under the generative setup when the same generative reader is used: EM=38.1 (45.3 when combining with DPR) on NQ and 62.2 on Trivia. Contributions. (1) We propose GenerationAugmented Retrieval (GAR), which augments queries with heuristically discovered relevant contexts through text generation without external supervision or time-consuming downstream feedback. (2) We show that using generation-augmented queries achieves significantly better retrieval and QA results than using the original queries or existing unsupervised QE methods. (3) We show that GAR, combined with a simple BM25 model, achieves new state-of-the-art performance on two benchmark datasets in extractive OpenQA and competitive results in the generative setting."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "Conventional Query Expansion. GAR shares some merits with query expansion (QE) methods based on pseudo relevance feedback (Rocchio, 1971; Abdul-Jaleel et al., 2004; Lv and Zhai, 2010) in that they both expand the queries with relevant contexts (terms) without the use of external supervision. GAR is superior as it expands the queries with knowledge stored in the PLMs rather than the retrieved passages and its expanded terms are learned through text generation. Recent Query Reformulation. There are recent or concurrent studies (Nogueira and Cho, 2017; Zaiem and Sadat, 2019; Yu et al., 2020; Vakulenko et al., 2020; Lin et al., 2020) that reformulate queries with generation models for other retrieval tasks. However, these studies are not easily applicable or efficient enough for OpenQA because: (1) They require external resources such as paraphrase data (Zaiem and Sadat, 2019), search sessions (Yu et al., 2020), or conversational contexts (Lin et al., 2020; Vakulenko et al., 2020) to form the reformulated queries, which are not available or showed inferior domain-transfer performance in OpenQA (Zaiem and Sadat, 2019); (2) They involve time-consuming training process such as RL. For example, Nogueira and Cho (2017) reported a training time of 8 to 10 days as it uses retrieval performance in the reward function and conducts retrieval at each iteration. In contrast, GAR uses freely accessible in-domain contexts like\npassage titles as the generation targets and standard seq2seq learning, which, despite its simplicity, is not only more efficient but effective for OpenQA. Retrieval for OpenQA. Existing sparse retrieval methods for OpenQA (Chen et al., 2017) solely rely on the information of the questions. GAR extends to contexts relevant to the questions by extracting information inside PLMs and helps sparse methods achieve comparable or better performance than dense methods (Guu et al., 2020; Karpukhin et al., 2020), while enjoying the simplicity and efficiency of sparse representations. GAR can also be used with dense representations to seek for even better performance, which we leave as future work. Generative QA. Generative QA generates answers through seq2seq learning instead of extracting answer spans. Recent studies on generative OpenQA (Lewis et al., 2020a; Min et al., 2020; Izacard and Grave, 2020) are orthogonal to GAR in that they focus on improving the reading stage and directly reuse DPR (Karpukhin et al., 2020) as the retriever. Unlike generative QA, the goal of GAR is not to generate perfect answers to the questions but pertinent contexts that are helpful for retrieval. Another line in generative QA learns to generate answers without relevant passages as the evidence but solely the question itself using PLMs (Roberts et al., 2020; Brown et al., 2020). GAR further confirms that one can extract factual knowledge from PLMs, which is not limited to the answers as in prior studies but also other relevant contexts."
+    }, {
+      "heading" : "3 Generation-Augmented Retrieval",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Task Formulation",
+      "text" : "OpenQA aims to answer factoid questions without pre-specified domains. We assume that a large collection of documents C (i.e., Wikipedia) are given as the resource to answer the questions and a retriever-reader architecture is used to tackle the task, where the retriever retrieves a small subset of the documents D ⊂ C and the reader reads the documents D to extract (or generate) an answer. Our goal is to improve the effectiveness and efficiency of the retriever and consequently improve the performance of the reader."
+    }, {
+      "heading" : "3.2 Generation of Query Contexts",
+      "text" : "In GAR, queries are augmented with various heuristically discovered relevant contexts in order to retrieve more relevant passages in terms of both quantity and quality. For the task of OpenQA where the\nquery is a question, we take the following three freely accessible contexts as the generation targets. We show in Sec. 6.2 that having multiple generation targets is helpful in that fusing their results consistently brings better retrieval accuracy.\nContext 1: The default target (answer). The default target is the label in the task of interest, which is the answer in OpenQA. The answer to the question is apparently useful for the retrieval of relevant passages that contain the answer itself. As shown in previous work (Roberts et al., 2020; Brown et al., 2020), PLMs are able to answer certain questions solely by taking the questions as input (i.e., closedbook QA). Instead of using the generated answers directly as in closed-book QA, GAR treats them as contexts of the question for retrieval. The advantage is that even if the generated answers are partially correct (or even incorrect), they may still benefit retrieval as long as they are relevant to the passages that contain the correct answers (e.g., cooccur with the correct answers).\nContext 2: Sentence containing the default target. The sentence in a passage that contains the answer is used as another generation target. Similar to using answers as the generation target, the generated sentences are still beneficial for retrieving relevant passages even if they do not contain the answers, as their semantics is highly related to the questions/answers (examples in Sec. 6.1). One can take the relevant sentences in the ground-truth passages (if any) or those in the positive passages of a retriever as the reference, depending on the trade-off between reference quality and diversity.\nContext 3: Title of passage containing the default target. One can also use the titles of relevant passages as the generation target if available. Specifically, we retrieve Wikipedia passages using BM25 with the question as the query, and take the page titles of positive passages that contain the answers as the generation target. We observe that the page titles of positive passages are often entity names of interest, and sometimes (but not always) the answers to the questions. Intuitively, if GAR learns which Wikipedia pages the question is related to, the queries augmented by the generated titles would naturally have a better chance of retrieving those relevant passages.\nWhile it is likely that some of the generated query contexts involve unfaithful or nonfactual information due to hallucination in text generation (Mao et al., 2020) and introduce noise during re-\ntrieval, they are beneficial rather than harmful overall, as our experiments show that GAR improve both retrieval and QA performance over BM25 significantly. Also, since we generate 3 different (complementary) query contexts and fuse their retrieval results, the distraction of hallucinated content is further alleviated."
+    }, {
+      "heading" : "3.3 Retrieval with Generation-Augmented Queries",
+      "text" : "After generating the contexts of a query, we append them to the query to form a generation-augmented query.3 We observe that conducting retrieval with the generated contexts (e.g., answers) alone as queries instead of concatenation is ineffective because (1) some of the generated answers are rather irrelevant, and (2) a query consisting of the correct answer alone (without the question) may retrieve false positive passages with unrelated contexts that happen to contain the answer. Such low-quality passages may lead to potential issues in the following passage reading stage.\nIf there are multiple query contexts, we conduct retrieval using queries with different generated contexts separately and then fuse their results. The performance of one-time retrieval with all the contexts appended is slightly but not significantly worse. For simplicity, we fuse the retrieval results in a straightforward way: an equal number of passages are taken from the top-retrieved passages of each source. One may also use weighted or more sophisticated fusion strategies such as reciprocal rank fusion (Cormack et al., 2009), the results of which are slightly better according to our experiments.4\nNext, one can use any off-the-shelf retriever for passage retrieval. Here, we use a simple BM25 model to demonstrate that GAR with sparse representations can already achieve comparable or better performance than state-of-the-art dense methods while being more lightweight and efficient (including the cost of the generation model), closing the gap between sparse and dense retrieval methods."
+    }, {
+      "heading" : "4 OpenQA with GAR",
+      "text" : "To further verify the effectiveness of GAR, we equip it with both extractive and generative readers for end-to-end QA evaluation. We follow the\n3One may create a title field during document indexing and conduct multi-field retrieval but here we append the titles to the questions as other query contexts for generalizability.\n4We use the fusion tools at https://github.com/ joaopalotti/trectools.\nreader design of the major baselines for a fair comparison, while virtually any existing QA reader can be used with GAR."
+    }, {
+      "heading" : "4.1 Extractive Reader",
+      "text" : "For the extractive setup, we largely follow the design of the extractive reader in DPR (Karpukhin et al., 2020). Let D = [d1, d2, ..., dk] denote the list of retrieved passages with passage relevance scores D. Let Si = [s1, s2, ..., sN ] denote the top N text spans in passage di ranked by span relevance scores Si. Briefly, the DPR reader uses BERT-base (Devlin et al., 2019) for representation learning, where it estimates the passage relevance score Dk for each retrieved passage dk based on the [CLS] tokens of all retrieved passages D, and assigns span relevance scores Si for each candidate span based on the representations of its start and end tokens. Finally, the span with the highest span relevance score from the passage with the highest passage relevance score is chosen as the answer. We refer the readers to Karpukhin et al. (2020) for more details. Passage-level Span Voting. Many extractive QA methods (Chen et al., 2017; Min et al., 2019b; Guu et al., 2020; Karpukhin et al., 2020) measure the probability of span extraction in different retrieved passages independently, despite that their collective signals may provide more evidence in determining the correct answer. We propose a simple yet effective passage-level span voting mechanism, which aggregates the predictions of the spans in the same surface form from different retrieved passages. Intuitively, if a text span is considered as the answer multiple times in different passages, it is more likely to be the correct answer. Specifically, GAR calculates a normalized score p(Si[j]) for the j-th span in passage di during inference as follows: p(Si[j]) = softmax(D)[i]× softmax(Si)[j]. GAR then aggregates the scores of the spans with the same surface string among all the retrieved passages as the collective passage-level score.5"
+    }, {
+      "heading" : "4.2 Generative Reader",
+      "text" : "For the generative setup, we use a seq2seq framework where the input is the concatenation of the question and top-retrieved passages and the target output is the desired answer. Such generative readers are adopted in recent methods such as SpanSe-\n5We find that the number of spans used for normalization in each passage does not have significant impact on the final performance (we take N = 5) and using the raw or normalized strings for aggregation also perform similarly.\nqGen (Min et al., 2020) and Longformer (Beltagy et al., 2020). Specifically, we use BART-large (Lewis et al., 2019) as the generative reader, which concatenates the question and top-retrieved passages up to its length limit (1,024 tokens, 7.8 passages on average). Generative GAR is directly comparable with SpanSeqGen (Min et al., 2020) that uses the retrieval results of DPR but not comparable with Fusion-in-Decoder (FID) (Izacard and Grave, 2020) since it encodes 100 passages rather than 1,024 tokens and involves more model parameters."
+    }, {
+      "heading" : "5 Experiment Setup",
+      "text" : ""
+    }, {
+      "heading" : "5.1 Datasets",
+      "text" : "We conduct experiments on the open-domain version of two popular QA benchmarks: Natural Questions (NQ) (Kwiatkowski et al., 2019) and TriviaQA (Trivia) (Joshi et al., 2017). The statistics of the datasets are listed in Table 1.\nDataset Train / Val / Test Q-len A-len #-A"
+    }, {
+      "heading" : "5.2 Evaluation Metrics",
+      "text" : "Following prior studies (Karpukhin et al., 2020), we use top-k retrieval accuracy to evaluate the performance of the retriever and the Exact Match (EM) score to measure the performance of the reader.\nTop-k retrieval accuracy is defined as the proportion of questions for which the top-k retrieved passages contain at least one answer span, which is an upper bound of how many questions are “answerable” by an extractive reader.\nExact Match (EM) is the proportion of the predicted answer spans being exactly the same as (one of) the ground-truth answer(s), after string normalization such as article and punctuation removal."
+    }, {
+      "heading" : "5.3 Compared Methods",
+      "text" : "For passage retrieval, we mainly compare with BM25 and DPR, which represent the most used state-of-the-art methods of sparse and dense retrieval for OpenQA, respectively. For query expansion, we re-emphasize that GAR is the first QE approach designed for OpenQA and most of the recent approaches are not applicable or efficient\nenough for OpenQA since they have task-specific objectives, require external supervision that was shown to transfer poorly to OpenQA, or take many days to train (Sec. 2). We thus compare with a classic unsupervised QE method RM3 (Abdul-Jaleel et al., 2004) that does not need external resources for a fair comparison. For passage reading, we compare with both extractive (Min et al., 2019a; Asai et al., 2019; Lee et al., 2019; Min et al., 2019b; Guu et al., 2020; Karpukhin et al., 2020) and generative (Brown et al., 2020; Roberts et al., 2020; Min et al., 2020; Lewis et al., 2020a; Izacard and Grave, 2020) methods when equipping GAR with the corresponding reader."
+    }, {
+      "heading" : "5.4 Implementation Details",
+      "text" : "Retriever. We use Anserini (Yang et al., 2017) for text retrieval of BM25 and GAR with its default parameters. We conduct grid search for the QE baseline RM3 (Abdul-Jaleel et al., 2004). Generator. We use BART-large (Lewis et al., 2019) to generate query contexts in GAR. When there are multiple desired targets (such as multiple answers or titles), we concatenate them with [SEP] tokens as the reference and remove the [SEP] tokens in the generation-augmented queries. For Trivia, in particular, we use the value field as the generation target of answer and observe better performance. We take the checkpoint with the best ROUGE-1 F1 score on the validation set, while observing that the retrieval accuracy of GAR is relatively stable to the checkpoint selection since we do not directly use the generated contexts but treat them as augmentation of queries for retrieval. Reader. Extractive GAR uses the reader of DPR with largely the same hyperparameters, which is initialized with BERT-base (Devlin et al., 2019) and takes 100 (500) retrieved passages during training (inference). Generative GAR concatenates the question and top-10 retrieved passages, and takes at most 1,024 tokens as input. Greedy decoding is adopted for all generation models, which appears to perform similarly to (more expensive) beam search."
+    }, {
+      "heading" : "6 Experiment Results",
+      "text" : "We evaluate the effectiveness of GAR in three stages: generation of query contexts (Sec. 6.1), retrieval of relevant passages (Sec. 6.2), and passage reading for OpenQA (Sec. 6.3). Ablation studies are mostly shown on the NQ dataset to understand the drawbacks of GAR since it achieves\nbetter performance on Trivia."
+    }, {
+      "heading" : "6.1 Query Context Generation",
+      "text" : "Automatic Evaluation. To evaluate the quality of the generated query contexts, we first measure their lexical overlap with the ground-truth query contexts. As suggested by the nontrivial ROUGE scores in Table 3, GAR does learn to generate meaningful query contexts that could help the retrieval stage. We next measure the lexical overlap between the query and the ground-truth passage. The ROUGE-1/2/L F1 scores between the original query and ground-truth passage are 6.00/2.36/5.01, and those for the generation-augmented query are 7.05/2.84/5.62 (answer), 13.21/6.99/10.27 (sentence), 7.13/2.85/5.76 (title) on NQ, respectively. Such results further demonstrate that the generated query contexts significantly increase the word overlap between the queries and the positive passages, and thus are likely to improve retrieval results.6\n6We use F1 instead of recall to avoid the unfair favor of (longer) generation-augmented query.\nCase Studies. In Table 2, we show several examples of the generated query contexts and their ground-truth references. In the first example, the correct album release date appears in both the generated answer and the generated sentence, and the generated title is the same as the Wikipedia page title of the album. In the last two examples, the generated answers are wrong but fortunately, the generated sentences contain the correct answer and (or) other relevant information and the generated titles are highly related to the question as well, which shows that different query contexts are complementary to each other and the noise during query context generation is thus reduced."
+    }, {
+      "heading" : "6.2 Generation-Augmented Retrieval",
+      "text" : "Comparison w. the state-of-the-art. We next evaluate the effectiveness of GAR for retrieval. In Table 4, we show the top-k retrieval accuracy of BM25, BM25 with query expansion (+RM3) (Abdul-Jaleel et al., 2004), DPR (Karpukhin et al., 2020), GAR, and GAR +DPR.\nOn the NQ dataset, while BM25 clearly underperforms DPR regardless of the number of retrieved passages, the gap between GAR and DPR is significantly smaller and negligible when k ≥ 100. When k ≥ 500, GAR is slightly better than DPR despite that it simply uses BM25 for retrieval. In contrast, the classic QE method RM3, while showing\nmarginal improvement over the vanilla BM25, does not achieve comparable performance with GAR or DPR. By fusing the results of GAR and DPR in the same way as described in Sec. 3.3, we further obtain consistently higher performance than both methods, with top-100 accuracy 88.9% and top1000 accuracy 93.2%.\nOn the Trivia dataset, the results are even more encouraging – GAR achieves consistently better retrieval accuracy than DPR when k ≥ 5. On the other hand, the difference between BM25 and BM25 +RM3 is negligible, which suggests that naively considering top-ranked passages as relevant (i.e., pseudo relevance feedback) for QE does not always work for OpenQA. Results on more cutoffs of k can be found in App. A. Effectiveness of diverse query contexts. In Fig. 1, we show the performance of GAR when different query contexts are used to augment the queries. Although the individual performance when using each query context is somewhat similar, fusing their retrieved passages consistently leads to better performance, confirming that different generation-augmented queries are complementary to each other (recall examples in Table 2). Performance breakdown by question type. In Table 5, we show the top-100 accuracy of the compared retrieval methods per question type on the NQ test set. Again, GAR outperforms BM25 on all types of questions significantly and GAR +DPR achieves the best performance across the board, which further verifies the effectiveness of GAR."
+    }, {
+      "heading" : "6.3 Passage Reading with GAR",
+      "text" : "Comparison w. the state-of-the-art. We show the comparison of end-to-end QA performance of extractive and generative methods in Table 6. Extractive GAR achieves state-of-the-art performance among extractive methods on both NQ and Trivia datasets, despite that it is more lightweight and computationally efficient. Generative GAR outper-\nType Percentage BM25 DPR GAR GAR +DPR\nforms most of the generative methods on Trivia but does not perform as well on NQ, which is somewhat expected and consistent with the performance at the retrieval stage, as the generative reader only takes a few passages as input and GAR does not outperform dense retrieval methods on NQ when k is very small. However, combining GAR with DPR achieves significantly better performance than both methods or baselines that use DPR as input such as SpanSeqGen (Min et al., 2020) and RAG (Lewis et al., 2020a). Also, GAR outperforms BM25 significantly under both extractive and generative se-\ntups, which again shows the effectiveness of the generated query contexts, even if they are heuristically discovered without any external supervision.\nThe best performing generative method FID (Izacard and Grave, 2020) is not directly comparable as it takes more (100) passages as input. As an indirect comparison, GAR performs better than FID when FID encodes 10 passages (cf. Fig. 2 in Izacard and Grave (2020)). Moreover, since FID relies on the retrieval results of DPR as well, we believe that it is a low-hanging fruit to replace its input with GAR or GAR +DPR and further boost the performance.7 We also observe that, perhaps surprisingly, extractive BM25 performs reasonably well, especially on the Trivia dataset, outperforming many recent state-of-the-art methods.8 Generative BM25 also performs competitively in our experiments. Model Generalizability. Recent studies (Lewis et al., 2020b) show that there are significant question and answer overlaps between the training and test sets of popular OpenQA datasets. Specifically, 60% to 70% test-time answers also appear in the training set and roughly 30% test-set questions have a near-duplicate paraphrase in the training set. Such observations suggest that many questions might have been answered by simple question or\n7This claim is later verified by the best systems in the NeurIPS 2020 EfficientQA competition (Min et al., 2021).\n8We find that taking 500 passages during reader inference instead of 100 as in Karpukhin et al. (2020) improves the performance of BM25 but not DPR.\nanswer memorization. To further examine model generalizability, we study the per-category performance of different methods using the annotations in Lewis et al. (2020b).\nAs listed in Table 7, for the No Overlap category, GAR +DPR (E) outperforms DPR on the extractive setup and GAR +DPR (G) outperforms RAG on the generative setup, which indicates that better endto-end model generalizability can be achieved by adding GAR for retrieval. GAR +DPR also achieves the best EM under the Answer Overlap Only category. In addition, we observe that a closed-book BART model that only takes the question as input performs much worse than additionally taking topretrieved passages, i.e., GAR +DPR (G), especially on the questions that require generalizability. Notably, all methods perform significantly better on the Question Overlap category, which suggests that the high Total EM is mostly contributed by question memorization. That said, GAR +DPR appears to be less dependent on question memorization given its lower EM for this category.9"
+    }, {
+      "heading" : "6.4 Efficiency of GAR",
+      "text" : "GAR is efficient and scalable since it uses sparse representations for retrieval and does not involve time-consuming training process such as RL (Nogueira and Cho, 2017; Liu et al., 2019). The only overhead of GAR is on the generation of query contexts and the retrieval with generationaugmented (thus longer) queries, whose computational complexity is significantly lower than other methods with comparable retrieval accuracy.\nWe use Nvidia V100 GPUs and Intel Xeon Platinum 8168 CPUs in our experiments. As listed in\n9The same ablation study is also conducted on the retrieval stage and similar results are observed. More detailed discussions can be found in App. A.\nTable 8, the training time of GAR is 3 to 6 hours on 1 GPU depending on the generation target. As a comparison, REALM (Guu et al., 2020) uses 64 TPUs to train for 200k steps during pre-training alone and DPR (Karpukhin et al., 2020) takes about 24 hours to train with 8 GPUs. To build the indices of Wikipedia passages, GAR only takes around 30 min with 35 CPUs, while DPR takes 8.8 hours on 8 GPUs to generate dense representations and another 8.5 hours to build the FAISS index (Johnson et al., 2017). For retrieval, GAR takes about 1 min to generate one query context with 1 GPU, 1 min to retrieve 1,000 passages for the NQ test set with answer/title-augmented queries and 2 min with sentence-augmented queries using 35 CPUs. In contrast, DPR takes about 30 min on 1 GPU."
+    }, {
+      "heading" : "7 Conclusion",
+      "text" : "In this work, we propose Generation-Augmented Retrieval and demonstrate that the relevant contexts generated by PLMs without external supervision can significantly enrich query semantics and improve retrieval accuracy. Remarkably, GAR with sparse representations performs similarly or better than state-of-the-art methods based on the dense representations of the original queries. GAR can also be easily combined with dense representations to produce even better results. Furthermore, GAR achieves state-of-the-art end-to-end performance on extractive OpenQA and competitive performance under the generative setup."
+    }, {
+      "heading" : "8 Future Extensions",
+      "text" : "Potential improvements. There is still much space to explore and improve for GAR in future work. For query context generation, one can explore multi-task learning to further reduce computational cost and examine whether different contexts can mutually enhance each other when generated by the same generator. One may also sample multiple contexts instead of greedy decoding to enrich a query. For retrieval, one can adopt more advanced fusion techniques based on both the ranking and\nscore of the passages. As the generator and retriever are largely independent now, it is also interesting to study how to jointly or iteratively optimize generation and retrieval such that the generator is aware of the retriever and generates query contexts more beneficial for the retrieval stage. Last but not least, it is very likely that better results can be obtained by more extensive hyper-parameter tuning. Applicability to other tasks. Beyond OpenQA, GAR also has great potentials for other tasks that involve text matching such as conversation utterance selection (Lowe et al., 2015; Dinan et al., 2020) or information retrieval (Nguyen et al., 2016; Craswell et al., 2020). The default generation target is always available for supervised tasks. For example, for conversation utterance selection one can use the reference utterance as the default target and then match the concatenation of the conversation history and the generated utterance with the provided utterance candidates. For article search, the default target could be (part of) the ground-truth article itself. Other generation targets are more taskspecific and can be designed as long as they can be fetched from the latent knowledge inside PLMs and are helpful for further text retrieval (matching). Note that by augmenting (expanding) the queries with heuristically discovered relevant contexts extracted from PLMs instead of reformulating them, GAR bypasses the need for external supervision to form the original-reformulated query pairs."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We thank Vladimir Karpukhin, Sewon Min, Gautier Izacard, Wenda Qiu, Revanth Reddy, and Hao Cheng for helpful discussions. We thank the anonymous reviewers for valuable comments."
+    }, {
+      "heading" : "A More Analysis of Retrieval Performance",
+      "text" : "We show the detailed results of top-k retrieval accuracy of the compared methods in Figs. 2 and 3. GAR performs comparably or better than DPR when k ≥ 100 on NQ and k ≥ 5 on Trivia.\nWe show in Table 9 the retrieval accuracy breakdown using the question-answer overlap categories. The most significant gap between BM25 and other methods is on the Question Overlap category, which coincides with the fact that BM25 is unable to conduct question paraphrasing (semantic matching). GAR helps BM25 to bridge the gap by providing the query contexts and even outperform DPR in this category. Moreover, GAR consistently improves over BM25 on other categories and GAR +DPR outperforms DPR as well."
+    } ],
+    "references" : [ {
+      "title" : "Umass at trec 2004: Novelty and hard",
+      "author" : [ "Nasreen Abdul-Jaleel", "James Allan", "W Bruce Croft", "Fernando Diaz", "Leah Larkey", "Xiaoyan Li", "Mark D Smucker", "Courtney Wade." ],
+      "venue" : "Computer Science Department Faculty Publication Series, page 189.",
+      "citeRegEx" : "Abdul.Jaleel et al\\.,? 2004",
+      "shortCiteRegEx" : "Abdul.Jaleel et al\\.",
+      "year" : 2004
+    }, {
+      "title" : "Learning to retrieve reasoning paths over wikipedia graph for question answering",
+      "author" : [ "Akari Asai", "Kazuma Hashimoto", "Hannaneh Hajishirzi", "Richard Socher", "Caiming Xiong." ],
+      "venue" : "arXiv preprint arXiv:1911.10470.",
+      "citeRegEx" : "Asai et al\\.,? 2019",
+      "shortCiteRegEx" : "Asai et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Longformer: The long-document transformer",
+      "author" : [ "Iz Beltagy", "Matthew E Peters", "Arman Cohan." ],
+      "venue" : "arXiv preprint arXiv:2004.05150.",
+      "citeRegEx" : "Beltagy et al\\.,? 2020",
+      "shortCiteRegEx" : "Beltagy et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Language models are few-shot learners. arXiv preprint arXiv:2005.14165",
+      "author" : [ "Tom B Brown", "Benjamin Mann", "Nick Ryder", "Melanie Subbiah", "Jared Kaplan", "Prafulla Dhariwal", "Arvind Neelakantan", "Pranav Shyam", "Girish Sastry", "Amanda Askell" ],
+      "venue" : null,
+      "citeRegEx" : "Brown et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Brown et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Reading Wikipedia to answer opendomain questions",
+      "author" : [ "Danqi Chen", "Adam Fisch", "Jason Weston", "Antoine Bordes." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1870–",
+      "citeRegEx" : "Chen et al\\.,? 2017",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Reciprocal rank fusion outperforms condorcet and individual rank learning methods",
+      "author" : [ "Gordon V Cormack", "Charles LA Clarke", "Stefan Buettcher." ],
+      "venue" : "Proceedings of the 32nd international ACM SIGIR conference on Research and development in",
+      "citeRegEx" : "Cormack et al\\.,? 2009",
+      "shortCiteRegEx" : "Cormack et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "Overview of the trec 2019 deep learning track",
+      "author" : [ "Nick Craswell", "Bhaskar Mitra", "Emine Yilmaz", "Daniel Campos", "Ellen M Voorhees." ],
+      "venue" : "arXiv preprint arXiv:2003.07820.",
+      "citeRegEx" : "Craswell et al\\.,? 2020",
+      "shortCiteRegEx" : "Craswell et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The second conversational intelligence challenge (convai2)",
+      "author" : [ "Emily Dinan", "Varvara Logacheva", "Valentin Malykh", "Alexander Miller", "Kurt Shuster", "Jack Urbanek", "Douwe Kiela", "Arthur Szlam", "Iulian Serban", "Ryan Lowe" ],
+      "venue" : null,
+      "citeRegEx" : "Dinan et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Dinan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Realm: Retrievalaugmented language model pre-training",
+      "author" : [ "Kelvin Guu", "Kenton Lee", "Zora Tung", "Panupong Pasupat", "Ming-Wei Chang." ],
+      "venue" : "arXiv preprint arXiv:2002.08909.",
+      "citeRegEx" : "Guu et al\\.,? 2020",
+      "shortCiteRegEx" : "Guu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Leveraging passage retrieval with generative models for open domain question answering",
+      "author" : [ "Gautier Izacard", "Edouard Grave." ],
+      "venue" : "arXiv preprint arXiv:2007.01282.",
+      "citeRegEx" : "Izacard and Grave.,? 2020",
+      "shortCiteRegEx" : "Izacard and Grave.",
+      "year" : 2020
+    }, {
+      "title" : "Billion-scale similarity search with gpus",
+      "author" : [ "Jeff Johnson", "Matthijs Douze", "Hervé Jégou." ],
+      "venue" : "arXiv preprint arXiv:1702.08734.",
+      "citeRegEx" : "Johnson et al\\.,? 2017",
+      "shortCiteRegEx" : "Johnson et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "TriviaQA: A large scale distantly supervised challenge dataset for reading comprehension",
+      "author" : [ "Mandar Joshi", "Eunsol Choi", "Daniel Weld", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Joshi et al\\.,? 2017",
+      "shortCiteRegEx" : "Joshi et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Dense passage retrieval for open-domain question answering",
+      "author" : [ "Vladimir Karpukhin", "Barlas Oğuz", "Sewon Min", "Ledell Wu", "Sergey Edunov", "Danqi Chen", "Wentau Yih." ],
+      "venue" : "arXiv preprint arXiv:2004.04906.",
+      "citeRegEx" : "Karpukhin et al\\.,? 2020",
+      "shortCiteRegEx" : "Karpukhin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Natural questions: A benchmark for question answering research",
+      "author" : [ "Jakob Uszkoreit", "Quoc Le", "Slav Petrov." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 7:452–466.",
+      "citeRegEx" : "Uszkoreit et al\\.,? 2019",
+      "shortCiteRegEx" : "Uszkoreit et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Latent retrieval for weakly supervised open domain question answering",
+      "author" : [ "Kenton Lee", "Ming-Wei Chang", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 6086–6096, Florence,",
+      "citeRegEx" : "Lee et al\\.,? 2019",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Bart: Denoising sequence-to-sequence pre-training for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Ves Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Retrieval-augmented generation for knowledge-intensive nlp",
+      "author" : [ "Patrick Lewis", "Ethan Perez", "Aleksandara Piktus", "Fabio Petroni", "Vladimir Karpukhin", "Naman Goyal", "Heinrich Küttler", "Mike Lewis", "Wen-tau Yih", "Tim Rocktäschel" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Question and answer test-train overlap in open-domain question answering datasets",
+      "author" : [ "Patrick Lewis", "Pontus Stenetorp", "Sebastian Riedel." ],
+      "venue" : "arXiv preprint arXiv:2008.02637.",
+      "citeRegEx" : "Lewis et al\\.,? 2020b",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Query reformulation using query history for passage retrieval in conversational search",
+      "author" : [ "Sheng-Chieh Lin", "Jheng-Hong Yang", "Rodrigo Nogueira", "Ming-Feng Tsai", "Chuan-Ju Wang", "Jimmy Lin." ],
+      "venue" : "arXiv preprint arXiv:2005.02230.",
+      "citeRegEx" : "Lin et al\\.,? 2020",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Generative question refinement with deep reinforcement learning in retrieval-based qa system",
+      "author" : [ "Ye Liu", "Chenwei Zhang", "Xiaohui Yan", "Yi Chang", "Philip S Yu." ],
+      "venue" : "Proceedings of the 28th ACM International Conference on Information and Knowledge",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "The ubuntu dialogue corpus: A large dataset for research in unstructured multi-turn dialogue systems",
+      "author" : [ "Ryan Lowe", "Nissan Pow", "Iulian Serban", "Joelle Pineau." ],
+      "venue" : "arXiv preprint arXiv:1506.08909.",
+      "citeRegEx" : "Lowe et al\\.,? 2015",
+      "shortCiteRegEx" : "Lowe et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Sparse, dense, and attentional representations for text retrieval",
+      "author" : [ "Yi Luan", "Jacob Eisenstein", "Kristina Toutanova", "Michael Collins." ],
+      "venue" : "arXiv preprint arXiv:2005.00181.",
+      "citeRegEx" : "Luan et al\\.,? 2020",
+      "shortCiteRegEx" : "Luan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Positional relevance model for pseudo-relevance feedback",
+      "author" : [ "Yuanhua Lv", "ChengXiang Zhai." ],
+      "venue" : "Proceedings of the 33rd international ACM SIGIR conference on Research and development in information retrieval, pages 579–586.",
+      "citeRegEx" : "Lv and Zhai.,? 2010",
+      "shortCiteRegEx" : "Lv and Zhai.",
+      "year" : 2010
+    }, {
+      "title" : "Constrained abstractive summarization: Preserving factual consistency with constrained generation",
+      "author" : [ "Yuning Mao", "Xiang Ren", "Heng Ji", "Jiawei Han." ],
+      "venue" : "arXiv preprint arXiv:2010.12723.",
+      "citeRegEx" : "Mao et al\\.,? 2020",
+      "shortCiteRegEx" : "Mao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Neurips 2020 efficientqa competition: Systems, analyses and lessons learned",
+      "author" : [ "Sewon Min", "Jordan Boyd-Graber", "Chris Alberti", "Danqi Chen", "Eunsol Choi", "Michael Collins", "Kelvin Guu", "Hannaneh Hajishirzi", "Kenton Lee", "Jennimaria Palomaki" ],
+      "venue" : null,
+      "citeRegEx" : "Min et al\\.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Min et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "A discrete hard EM approach for weakly supervised question answering",
+      "author" : [ "Sewon Min", "Danqi Chen", "Hannaneh Hajishirzi", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Min et al\\.,? 2019a",
+      "shortCiteRegEx" : "Min et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Knowledge guided text retrieval and reading for open domain question answering",
+      "author" : [ "Sewon Min", "Danqi Chen", "Luke Zettlemoyer", "Hannaneh Hajishirzi." ],
+      "venue" : "arXiv preprint arXiv:1911.03868.",
+      "citeRegEx" : "Min et al\\.,? 2019b",
+      "shortCiteRegEx" : "Min et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Ambigqa: Answering ambiguous open-domain questions",
+      "author" : [ "Sewon Min", "Julian Michael", "Hannaneh Hajishirzi", "Luke Zettlemoyer." ],
+      "venue" : "arXiv preprint arXiv:2004.10645.",
+      "citeRegEx" : "Min et al\\.,? 2020",
+      "shortCiteRegEx" : "Min et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "2016. Ms marco: A human-generated machine reading comprehension",
+      "author" : [ "Tri Nguyen", "Mir Rosenberg", "Xia Song", "Jianfeng Gao", "Saurabh Tiwary", "Rangan Majumder", "Li Deng" ],
+      "venue" : null,
+      "citeRegEx" : "Nguyen et al\\.,? \\Q2016\\E",
+      "shortCiteRegEx" : "Nguyen et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Taskoriented query reformulation with reinforcement learning",
+      "author" : [ "Rodrigo Nogueira", "Kyunghyun Cho." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 574–583, Copenhagen, Denmark. Association",
+      "citeRegEx" : "Nogueira and Cho.,? 2017",
+      "shortCiteRegEx" : "Nogueira and Cho.",
+      "year" : 2017
+    }, {
+      "title" : "How much knowledge can you pack into the parameters of a language model? arXiv preprint arXiv:2002.08910",
+      "author" : [ "Adam Roberts", "Colin Raffel", "Noam Shazeer" ],
+      "venue" : null,
+      "citeRegEx" : "Roberts et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Roberts et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Relevance feedback in information retrieval",
+      "author" : [ "Joseph Rocchio." ],
+      "venue" : "The Smart retrieval systemexperiments in automatic document processing, pages 313–323.",
+      "citeRegEx" : "Rocchio.,? 1971",
+      "shortCiteRegEx" : "Rocchio.",
+      "year" : 1971
+    }, {
+      "title" : "Question rewriting for conversational question answering",
+      "author" : [ "Svitlana Vakulenko", "Shayne Longpre", "Zhucheng Tu", "Raviteja Anantha." ],
+      "venue" : "arXiv preprint arXiv:2004.14652.",
+      "citeRegEx" : "Vakulenko et al\\.,? 2020",
+      "shortCiteRegEx" : "Vakulenko et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deep reinforced query reformulation for information retrieval",
+      "author" : [ "Xiao Wang", "Craig Macdonald", "Iadh Ounis." ],
+      "venue" : "arXiv preprint arXiv:2007.07987.",
+      "citeRegEx" : "Wang et al\\.,? 2020",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Anserini: Enabling the use of lucene for information retrieval research",
+      "author" : [ "Peilin Yang", "Hui Fang", "Jimmy Lin." ],
+      "venue" : "Proceedings of the 40th International ACM SIGIR Conference on Research and Development in Information Retrieval, pages 1253–1256.",
+      "citeRegEx" : "Yang et al\\.,? 2017",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Few-shot generative conversational query rewriting",
+      "author" : [ "Shi Yu", "Jiahua Liu", "Jingqin Yang", "Chenyan Xiong", "Paul Bennett", "Jianfeng Gao", "Zhiyuan Liu." ],
+      "venue" : "arXiv preprint arXiv:2006.05009.",
+      "citeRegEx" : "Yu et al\\.,? 2020",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Sequence to sequence learning for query expansion",
+      "author" : [ "Salah Zaiem", "Fatiha Sadat." ],
+      "venue" : "Proceedings of the AAAI Conference on Artificial Intelligence, Student Abstract Track, volume 33, pages 10075–10076.",
+      "citeRegEx" : "Zaiem and Sadat.,? 2019",
+      "shortCiteRegEx" : "Zaiem and Sadat.",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 13,
+      "context" : "We demonstrate that the generated contexts substantially enrich the semantics of the queries and GAR with sparse representations (BM25) achieves comparable or better performance than state-of-the-art dense retrieval methods such as DPR (Karpukhin et al., 2020).",
+      "startOffset" : 236,
+      "endOffset" : 260
+    }, {
+      "referenceID" : 4,
+      "context" : "One of the most common approaches uses a retriever-reader architecture (Chen et al., 2017), which first retrieves a small subset of documents using the question as the query and then reads the retrieved documents to extract",
+      "startOffset" : 71,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 4,
+      "context" : "Early OpenQA systems (Chen et al., 2017) use classic retrieval methods such as TF-IDF and BM25 with sparse representations.",
+      "startOffset" : 21,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 9,
+      "context" : "More recently, methods based on dense representations (Guu et al., 2020; Karpukhin et al., 2020) learn to embed queries and passages into a latent vector space, in which text similarity beyond lexical over-",
+      "startOffset" : 54,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 13,
+      "context" : "More recently, methods based on dense representations (Guu et al., 2020; Karpukhin et al., 2020) learn to embed queries and passages into a latent vector space, in which text similarity beyond lexical over-",
+      "startOffset" : 54,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 22,
+      "context" : "from information loss as they condense the entire text sequence into a fixed-size vector that does not guarantee exact matching (Luan et al., 2020).",
+      "startOffset" : 128,
+      "endOffset" : 147
+    }, {
+      "referenceID" : 36,
+      "context" : "formulation with text generation for other retrieval tasks, which, for example, rewrite the queries to context-independent (Yu et al., 2020; Lin et al., 2020; Vakulenko et al., 2020) or well-formed (Liu et al.",
+      "startOffset" : 123,
+      "endOffset" : 182
+    }, {
+      "referenceID" : 19,
+      "context" : "formulation with text generation for other retrieval tasks, which, for example, rewrite the queries to context-independent (Yu et al., 2020; Lin et al., 2020; Vakulenko et al., 2020) or well-formed (Liu et al.",
+      "startOffset" : 123,
+      "endOffset" : 182
+    }, {
+      "referenceID" : 33,
+      "context" : "formulation with text generation for other retrieval tasks, which, for example, rewrite the queries to context-independent (Yu et al., 2020; Lin et al., 2020; Vakulenko et al., 2020) or well-formed (Liu et al.",
+      "startOffset" : 123,
+      "endOffset" : 182
+    }, {
+      "referenceID" : 37,
+      "context" : ", conversational contexts, ill-formed queries) or external resources such as paraphrase data (Zaiem and Sadat, 2019; Wang et al., 2020) that cannot or do not transfer well to OpenQA.",
+      "startOffset" : 93,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 34,
+      "context" : ", conversational contexts, ill-formed queries) or external resources such as paraphrase data (Zaiem and Sadat, 2019; Wang et al., 2020) that cannot or do not transfer well to OpenQA.",
+      "startOffset" : 93,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 30,
+      "context" : "Also, some rely on timeconsuming training process like reinforcement learning (RL) (Nogueira and Cho, 2017; Liu et al., 2019; Wang et al., 2020) that is not efficient enough for OpenQA (more discussions in Sec.",
+      "startOffset" : 83,
+      "endOffset" : 144
+    }, {
+      "referenceID" : 20,
+      "context" : "Also, some rely on timeconsuming training process like reinforcement learning (RL) (Nogueira and Cho, 2017; Liu et al., 2019; Wang et al., 2020) that is not efficient enough for OpenQA (more discussions in Sec.",
+      "startOffset" : 83,
+      "endOffset" : 144
+    }, {
+      "referenceID" : 34,
+      "context" : "Also, some rely on timeconsuming training process like reinforcement learning (RL) (Nogueira and Cho, 2017; Liu et al., 2019; Wang et al., 2020) that is not efficient enough for OpenQA (more discussions in Sec.",
+      "startOffset" : 83,
+      "endOffset" : 144
+    }, {
+      "referenceID" : 13,
+      "context" : "As a result, GAR with sparse representations achieves comparable or even better performance than state-of-the-art approaches (Karpukhin et al., 2020; Guu et al., 2020) with dense representations of the original queries, while being more lightweight and efficient in terms of both training and inference (including the cost of the generation model) (Sec.",
+      "startOffset" : 125,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 9,
+      "context" : "As a result, GAR with sparse representations achieves comparable or even better performance than state-of-the-art approaches (Karpukhin et al., 2020; Guu et al., 2020) with dense representations of the original queries, while being more lightweight and efficient in terms of both training and inference (including the cost of the generation model) (Sec.",
+      "startOffset" : 125,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2019) and TriviaQA (Trivia) (Joshi et al., 2017) datasets.",
+      "startOffset" : 30,
+      "endOffset" : 50
+    }, {
+      "referenceID" : 13,
+      "context" : "(2) GAR with sparse representations (BM25) achieves comparable or even better performance than the current state-of-the-art retrieval methods, such as DPR (Karpukhin et al., 2020), that use dense representations.",
+      "startOffset" : 155,
+      "endOffset" : 179
+    }, {
+      "referenceID" : 30,
+      "context" : "There are recent or concurrent studies (Nogueira and Cho, 2017; Zaiem and Sadat, 2019; Yu et al., 2020; Vakulenko et al., 2020; Lin et al., 2020) that reformulate queries with generation models for other retrieval tasks.",
+      "startOffset" : 39,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 37,
+      "context" : "There are recent or concurrent studies (Nogueira and Cho, 2017; Zaiem and Sadat, 2019; Yu et al., 2020; Vakulenko et al., 2020; Lin et al., 2020) that reformulate queries with generation models for other retrieval tasks.",
+      "startOffset" : 39,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 36,
+      "context" : "There are recent or concurrent studies (Nogueira and Cho, 2017; Zaiem and Sadat, 2019; Yu et al., 2020; Vakulenko et al., 2020; Lin et al., 2020) that reformulate queries with generation models for other retrieval tasks.",
+      "startOffset" : 39,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 33,
+      "context" : "There are recent or concurrent studies (Nogueira and Cho, 2017; Zaiem and Sadat, 2019; Yu et al., 2020; Vakulenko et al., 2020; Lin et al., 2020) that reformulate queries with generation models for other retrieval tasks.",
+      "startOffset" : 39,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 19,
+      "context" : "There are recent or concurrent studies (Nogueira and Cho, 2017; Zaiem and Sadat, 2019; Yu et al., 2020; Vakulenko et al., 2020; Lin et al., 2020) that reformulate queries with generation models for other retrieval tasks.",
+      "startOffset" : 39,
+      "endOffset" : 145
+    }, {
+      "referenceID" : 37,
+      "context" : "paraphrase data (Zaiem and Sadat, 2019), search sessions (Yu et al.",
+      "startOffset" : 16,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 36,
+      "context" : "paraphrase data (Zaiem and Sadat, 2019), search sessions (Yu et al., 2020), or conversational contexts (Lin et al.",
+      "startOffset" : 57,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 19,
+      "context" : ", 2020), or conversational contexts (Lin et al., 2020; Vakulenko et al., 2020) to form the reformulated queries, which are not available or showed inferior domain-transfer performance in OpenQA (Zaiem and Sadat, 2019); (2) They involve time-consuming training process such as RL.",
+      "startOffset" : 36,
+      "endOffset" : 78
+    }, {
+      "referenceID" : 33,
+      "context" : ", 2020), or conversational contexts (Lin et al., 2020; Vakulenko et al., 2020) to form the reformulated queries, which are not available or showed inferior domain-transfer performance in OpenQA (Zaiem and Sadat, 2019); (2) They involve time-consuming training process such as RL.",
+      "startOffset" : 36,
+      "endOffset" : 78
+    }, {
+      "referenceID" : 37,
+      "context" : ", 2020) to form the reformulated queries, which are not available or showed inferior domain-transfer performance in OpenQA (Zaiem and Sadat, 2019); (2) They involve time-consuming training process such as RL.",
+      "startOffset" : 123,
+      "endOffset" : 146
+    }, {
+      "referenceID" : 4,
+      "context" : "Existing sparse retrieval methods for OpenQA (Chen et al., 2017) solely rely on the information of the questions.",
+      "startOffset" : 45,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 9,
+      "context" : "GAR extends to contexts relevant to the questions by extracting information inside PLMs and helps sparse methods achieve comparable or better performance than dense methods (Guu et al., 2020; Karpukhin et al., 2020), while enjoying the simplicity and efficiency of sparse representations.",
+      "startOffset" : 173,
+      "endOffset" : 215
+    }, {
+      "referenceID" : 13,
+      "context" : "GAR extends to contexts relevant to the questions by extracting information inside PLMs and helps sparse methods achieve comparable or better performance than dense methods (Guu et al., 2020; Karpukhin et al., 2020), while enjoying the simplicity and efficiency of sparse representations.",
+      "startOffset" : 173,
+      "endOffset" : 215
+    }, {
+      "referenceID" : 28,
+      "context" : "Recent studies on generative OpenQA (Lewis et al., 2020a; Min et al., 2020; Izacard and Grave, 2020) are orthogonal to GAR in that they",
+      "startOffset" : 36,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 10,
+      "context" : "Recent studies on generative OpenQA (Lewis et al., 2020a; Min et al., 2020; Izacard and Grave, 2020) are orthogonal to GAR in that they",
+      "startOffset" : 36,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 13,
+      "context" : "focus on improving the reading stage and directly reuse DPR (Karpukhin et al., 2020) as the retriever.",
+      "startOffset" : 60,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 31,
+      "context" : "line in generative QA learns to generate answers without relevant passages as the evidence but solely the question itself using PLMs (Roberts et al., 2020; Brown et al., 2020).",
+      "startOffset" : 133,
+      "endOffset" : 175
+    }, {
+      "referenceID" : 3,
+      "context" : "line in generative QA learns to generate answers without relevant passages as the evidence but solely the question itself using PLMs (Roberts et al., 2020; Brown et al., 2020).",
+      "startOffset" : 133,
+      "endOffset" : 175
+    }, {
+      "referenceID" : 24,
+      "context" : "While it is likely that some of the generated query contexts involve unfaithful or nonfactual information due to hallucination in text generation (Mao et al., 2020) and introduce noise during re-",
+      "startOffset" : 146,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 5,
+      "context" : "One may also use weighted or more sophisticated fusion strategies such as reciprocal rank fusion (Cormack et al., 2009), the results of which are slightly better according to our experiments.",
+      "startOffset" : 97,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 13,
+      "context" : "sign of the extractive reader in DPR (Karpukhin et al., 2020).",
+      "startOffset" : 37,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 7,
+      "context" : "Briefly, the DPR reader uses BERT-base (Devlin et al., 2019) for representation learning, where it estimates the passage relevance score Dk for each retrieved passage dk based on the [CLS] tokens of all retrieved passages D, and assigns span",
+      "startOffset" : 39,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 4,
+      "context" : "Many extractive QA methods (Chen et al., 2017; Min et al., 2019b; Guu et al., 2020; Karpukhin et al., 2020) measure the probability of span extraction in different retrieved passages independently, despite that their collec-",
+      "startOffset" : 27,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 27,
+      "context" : "Many extractive QA methods (Chen et al., 2017; Min et al., 2019b; Guu et al., 2020; Karpukhin et al., 2020) measure the probability of span extraction in different retrieved passages independently, despite that their collec-",
+      "startOffset" : 27,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 9,
+      "context" : "Many extractive QA methods (Chen et al., 2017; Min et al., 2019b; Guu et al., 2020; Karpukhin et al., 2020) measure the probability of span extraction in different retrieved passages independently, despite that their collec-",
+      "startOffset" : 27,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 13,
+      "context" : "Many extractive QA methods (Chen et al., 2017; Min et al., 2019b; Guu et al., 2020; Karpukhin et al., 2020) measure the probability of span extraction in different retrieved passages independently, despite that their collec-",
+      "startOffset" : 27,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 28,
+      "context" : "4093 qGen (Min et al., 2020) and Longformer (Beltagy et al.",
+      "startOffset" : 10,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 16,
+      "context" : "Specifically, we use BART-large (Lewis et al., 2019) as the generative reader, which concatenates the question and top-retrieved passages up to its length limit (1,024 tokens, 7.",
+      "startOffset" : 32,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 28,
+      "context" : "Generative GAR is directly comparable with SpanSeqGen (Min et al., 2020) that uses the retrieval results of DPR but not comparable with Fusion-in-Decoder (FID) (Izacard and Grave, 2020) since it encodes 100 passages rather than 1,024 tokens and involves more model parameters.",
+      "startOffset" : 54,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2020) that uses the retrieval results of DPR but not comparable with Fusion-in-Decoder (FID) (Izacard and Grave, 2020) since it encodes 100 passages rather than 1,024 tokens and involves more model parameters.",
+      "startOffset" : 95,
+      "endOffset" : 120
+    }, {
+      "referenceID" : 13,
+      "context" : "Following prior studies (Karpukhin et al., 2020), we use top-k retrieval accuracy to evaluate the performance of the retriever and the Exact Match (EM) score to measure the performance of the reader.",
+      "startOffset" : 24,
+      "endOffset" : 48
+    }, {
+      "referenceID" : 0,
+      "context" : "We thus compare with a classic unsupervised QE method RM3 (Abdul-Jaleel et al., 2004) that does not need external resources for a fair comparison.",
+      "startOffset" : 58,
+      "endOffset" : 85
+    }, {
+      "referenceID" : 26,
+      "context" : "For passage reading, we compare with both extractive (Min et al., 2019a; Asai et al., 2019; Lee et al., 2019; Min et al., 2019b; Guu et al., 2020; Karpukhin et al., 2020) and generative (Brown et al.",
+      "startOffset" : 53,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 1,
+      "context" : "For passage reading, we compare with both extractive (Min et al., 2019a; Asai et al., 2019; Lee et al., 2019; Min et al., 2019b; Guu et al., 2020; Karpukhin et al., 2020) and generative (Brown et al.",
+      "startOffset" : 53,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 15,
+      "context" : "For passage reading, we compare with both extractive (Min et al., 2019a; Asai et al., 2019; Lee et al., 2019; Min et al., 2019b; Guu et al., 2020; Karpukhin et al., 2020) and generative (Brown et al.",
+      "startOffset" : 53,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 27,
+      "context" : "For passage reading, we compare with both extractive (Min et al., 2019a; Asai et al., 2019; Lee et al., 2019; Min et al., 2019b; Guu et al., 2020; Karpukhin et al., 2020) and generative (Brown et al.",
+      "startOffset" : 53,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 9,
+      "context" : "For passage reading, we compare with both extractive (Min et al., 2019a; Asai et al., 2019; Lee et al., 2019; Min et al., 2019b; Guu et al., 2020; Karpukhin et al., 2020) and generative (Brown et al.",
+      "startOffset" : 53,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 13,
+      "context" : "For passage reading, we compare with both extractive (Min et al., 2019a; Asai et al., 2019; Lee et al., 2019; Min et al., 2019b; Guu et al., 2020; Karpukhin et al., 2020) and generative (Brown et al.",
+      "startOffset" : 53,
+      "endOffset" : 170
+    }, {
+      "referenceID" : 3,
+      "context" : ", 2020) and generative (Brown et al., 2020; Roberts et al., 2020; Min et al., 2020; Lewis et al., 2020a; Izacard and Grave, 2020) methods when equipping GAR with the corresponding reader.",
+      "startOffset" : 23,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 31,
+      "context" : ", 2020) and generative (Brown et al., 2020; Roberts et al., 2020; Min et al., 2020; Lewis et al., 2020a; Izacard and Grave, 2020) methods when equipping GAR with the corresponding reader.",
+      "startOffset" : 23,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 28,
+      "context" : ", 2020) and generative (Brown et al., 2020; Roberts et al., 2020; Min et al., 2020; Lewis et al., 2020a; Izacard and Grave, 2020) methods when equipping GAR with the corresponding reader.",
+      "startOffset" : 23,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2020) and generative (Brown et al., 2020; Roberts et al., 2020; Min et al., 2020; Lewis et al., 2020a; Izacard and Grave, 2020) methods when equipping GAR with the corresponding reader.",
+      "startOffset" : 23,
+      "endOffset" : 129
+    }, {
+      "referenceID" : 35,
+      "context" : "We use Anserini (Yang et al., 2017) for text retrieval of BM25 and GAR with its default parameters.",
+      "startOffset" : 16,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 0,
+      "context" : "We conduct grid search for the QE baseline RM3 (Abdul-Jaleel et al., 2004).",
+      "startOffset" : 47,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 16,
+      "context" : "We use BART-large (Lewis et al., 2019) to generate query contexts in GAR.",
+      "startOffset" : 18,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 7,
+      "context" : "Extractive GAR uses the reader of DPR with largely the same hyperparameters, which is initialized with BERT-base (Devlin et al., 2019) and takes 100 (500) retrieved passages during training (inference).",
+      "startOffset" : 113,
+      "endOffset" : 134
+    }, {
+      "referenceID" : 0,
+      "context" : "In Table 4, we show the top-k retrieval accuracy of BM25, BM25 with query expansion (+RM3) (Abdul-Jaleel et al., 2004), DPR (Karpukhin et al.",
+      "startOffset" : 91,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 28,
+      "context" : "However, combining GAR with DPR achieves significantly better performance than both methods or baselines that use DPR as input such as SpanSeqGen (Min et al., 2020) and RAG (Lewis et al.",
+      "startOffset" : 146,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 10,
+      "context" : "The best performing generative method FID (Izacard and Grave, 2020) is not directly comparable as it takes more (100) passages as input.",
+      "startOffset" : 42,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 18,
+      "context" : "Recent studies (Lewis et al., 2020b) show that there are significant question and answer overlaps between the training and test sets of popular OpenQA datasets.",
+      "startOffset" : 15,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 25,
+      "context" : "This claim is later verified by the best systems in the NeurIPS 2020 EfficientQA competition (Min et al., 2021).",
+      "startOffset" : 93,
+      "endOffset" : 111
+    }, {
+      "referenceID" : 30,
+      "context" : "GAR is efficient and scalable since it uses sparse representations for retrieval and does not involve time-consuming training process such as RL (Nogueira and Cho, 2017; Liu et al., 2019).",
+      "startOffset" : 145,
+      "endOffset" : 187
+    }, {
+      "referenceID" : 20,
+      "context" : "GAR is efficient and scalable since it uses sparse representations for retrieval and does not involve time-consuming training process such as RL (Nogueira and Cho, 2017; Liu et al., 2019).",
+      "startOffset" : 145,
+      "endOffset" : 187
+    }, {
+      "referenceID" : 9,
+      "context" : "As a comparison, REALM (Guu et al., 2020) uses 64 TPUs to train for 200k steps during pre-training alone and DPR (Karpukhin et al.",
+      "startOffset" : 23,
+      "endOffset" : 41
+    }, {
+      "referenceID" : 13,
+      "context" : ", 2020) uses 64 TPUs to train for 200k steps during pre-training alone and DPR (Karpukhin et al., 2020) takes about 24 hours to train with 8 GPUs.",
+      "startOffset" : 79,
+      "endOffset" : 103
+    } ],
+    "year" : 2021,
+    "abstractText" : "We propose Generation-Augmented Retrieval (GAR) for answering open-domain questions, which augments a query through text generation of heuristically discovered relevant contexts without external resources as supervision. We demonstrate that the generated contexts substantially enrich the semantics of the queries and GAR with sparse representations (BM25) achieves comparable or better performance than state-of-the-art dense retrieval methods such as DPR (Karpukhin et al., 2020). We show that generating diverse contexts for a query is beneficial as fusing their results consistently yields better retrieval accuracy. Moreover, as sparse and dense representations are often complementary, GAR can be easily combined with DPR to achieve even better performance. GAR achieves state-of-the-art performance on Natural Questions and TriviaQA datasets under the extractive QA setup when equipped with an extractive reader, and consistently outperforms other retrieval methods when the same generative reader is used.1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

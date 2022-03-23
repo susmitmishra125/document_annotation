@@ -1,0 +1,560 @@
+{
+  "name" : "2021.acl-long.318.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "A Mutual Information Maximization Approach for the Spurious Solution Problem in Weakly Supervised Question Answering",
+    "authors" : [ "Zhihong Shao", "Lifeng Shang", "Qun Liu", "Minlie Huang" ],
+    "emails" : [ "szh19@mails.tsinghua.edu.cn,", "aihuang@tsinghua.edu.cn", "qun.liu}@huawei.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 4111–4124\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n4111"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Weakly supervised question answering is a common setting of question answering (QA) where only final answers are provided as supervision signals while the correct solutions to derive them are not. This setting simplifies data collection, but exposes model learning to the spurious solution problem: there may exist many spurious ways to derive the correct answer, and training a model with spurious solutions can hurt model performance (e.g., misleading the model to produce unreasonable solutions or wrong answers). As shown in Fig 1,\n∗*Corresponding author: Minlie Huang.\nfor multi-mention reading comprehension, many mentions of an answer in the document(s) are irrelevant to the question; for discrete reasoning tasks or text2SQL tasks, an answer can be produced by the equations or SQL queries that do not correctly match the question in logic.\nSome previous works heuristically selected one possible solution per question for training, e.g., the first answer span in the document (Joshi et al., 2017; Tay et al., 2018; Talmor and Berant, 2019); some treated all possible solutions equally and maximized the sum of their likelihood (maximum marginal likelihood, or MML) (Swayamdipta et al., 2018; Clark and Gardner, 2018; Lee et al., 2019); many others selected solutions according to model confidence (Liang et al., 2018; Min et al., 2019),\ni.e., the likelihood of the solutions being derived by the model. A drawback of these methods is that they do not explicitly consider the mutual semantic correlations between a question and its solution when selecting solutions for training.\nIntuitively speaking, a question often contains vital clues about how to derive the answer, and a wrong solution together with its context often fails to align well with the question. Take the discrete reasoning case in Fig 1 as an example. To answer the question, we need to know the start year of the Battle of Powder River, which is answered by the first 1876; the second 1876 is irrelevant as it is the year of an event that happened during the battle.\nTo exploit the semantic correlations between a question and its solution, we propose to maximize the mutual information between question-answer pairs and model-predicted solutions. As demonstrated by Min et al. (2019), for many QA tasks, it is feasible to precompute a modestly-sized, taskspecific set of possible solutions containing the correct one. Therefore, we focus on handling the spurious solution problem under this circumstance. Specifically, we pair a task-specific model with a question reconstructor and repeat the following training cycle (Fig 2): (1) sample a solution from the solution set according to model confidence, train the question reconstructor to reconstruct the question from that solution, and then (2) train the task-specific model on the most likely solution according to the question reconstructor. During training, the question reconstructor guides the taskspecific model to predict those solutions consistent with the questions. For the question reconstructor, we devise an effective and unified way to encode solutions in different tasks, so that solutions with subtle differences (e.g., different spans with the same surface form) can be easily discriminated.\nOur contributions are as follows: (1) We propose a mutual information maximization approach for the spurious solution problem in weakly supervised QA, which exploits the semantic correlations between a question and its solution; (2) We conducted extensive experiments on four QA datasets. Our approach significantly outperforms strong baselines in terms of task performance and is more effective in training models to produce correct solutions."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "Question answering has raised prevalent attention and has achieved great progress these years. A lot\nof challenging datasets have been constructed to advance models’ reasoning abilities, such as (1) reading comprehension datasets with extractive answer spans (Joshi et al., 2017; Dhingra et al., 2017), with free-form answers (Kociský et al., 2018), for multi-hop reasoning (Yang et al., 2018), or for discrete reasoning over paragraphs (Dua et al., 2019), and (2) datasets for semantic parsing (Pasupat and Liang, 2015; Zhong et al., 2017; Yu et al., 2018). Under the weakly supervised setting, the specific solutions to derive the final answers (e.g., the correct location of an answer text, or the correct logic executing an answer) are not provided. This setting is worth exploration as it simplifies annotation and makes it easier to collect large-scale corpora. However, this setting introduces the spurious solution problem, and thus complicates model learning.\nMost existing approaches for this learning challenge include heuristically selecting one possible solution per question for training (Joshi et al., 2017; Tay et al., 2018; Talmor and Berant, 2019), training on all possible solutions with MML (Swayamdipta et al., 2018; Clark and Gardner, 2018; Lee et al., 2019; Wang et al., 2019), reinforcement learning (Liang et al., 2017, 2018), and hard EM (Min et al., 2019; Chen et al., 2020). All these approaches either use heuristics to select possibly reasonable solutions, rely on model architectures to bias towards correct solutions, or use model confidence to filter out spurious solutions in a soft or hard way. They do not explicitly exploit the semantic correlations between a question and its solution.\nMost relevantly, Cheng and Lapata (2018) focused on text2SQL tasks; they modeled SQL queries as the latent variables for question generation, and maximized the evidence lower bound of log likelihood of questions. A few works treated solution prediction and question generation as dual tasks and introduced dual learning losses to regularize learning under the fully-supervised or the semi-supervised setting (Tang et al., 2017; Cao et al., 2019; Ye et al., 2019). In dual learning, a model generates intermediate outputs (e.g., the task-specific model predicts solutions from a question) while the dual model gives feedback signals (e.g., the question reconstructor computes the likelihood of the question conditioned on predicted solutions). This method is featured in three aspects. First, both models need training on fully-annotated data so that they can produce reasonable intermediate outputs. Second, the intermediate outputs can\nintroduce noise during learning as they are sampled from models but not restricted to solutions with correct answer or valid questions. Third, this method typically updates both models with reinforcement learning while the rewards provided by a dual model can be unstable or of high variance. By contrast, we focus on the spurious solution problem under the weakly supervised setting and propose a mutual information maximization approach. Solutions used for training are restricted to those with correct answer. What’s more, though a taskspecific model and a question reconstructor interact with each other, they do not use the likelihood from each other as rewards, which can stabilize learning."
+    }, {
+      "heading" : "3 Method",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Task Definition",
+      "text" : "For a QA task, each instance is a tuple 〈d, q, a〉, where q denotes a question, a is the answer, and d is reference information such as documents for reading comprehension, or table headers for semantic parsing. A solution z is a task-specific derivation of the answer, e.g., a particular span in a document, an equation, or a SQL query (as shown in Fig 1). Let f(·) be the task-specific function that maps a solution to its execution result, e.g., by returning a particular span, solving an equation, or executing a SQL query. Our goal is to train a task-specific model Pθ(z|d, q) that takes 〈d, q〉 as input and predicts a solution z satisfying f(z) = a.\nUnder the weakly supervised setting, only the answer a is provided for training while the groundtruth solution z̄ is not. We denote the set of possible solutions as Z = {z|f(z) = a}. In cases where the search space of solution is large, we can usually approximate Z so that it contains the ground-truth solution z̄ with a high probability (Min et al., 2019; Wang et al., 2019). Note that Z is task-specific, which will be instantiated in section 4.\nDuring training, we pair the task-specific model Pθ(z|d, q) with a question reconstructor Pφ(q|d, z) and maximize the mutual information between 〈q, a〉 and z. During test, given 〈d, q〉, we use the taskspecific model to predict a solution and return the execution result."
+    }, {
+      "heading" : "3.2 Learning Method",
+      "text" : "Given an instance 〈d, q, a〉, the solution set Z usually contains only one solution that best fits the instance while the rest are spurious. We propose to exploit the semantic correlations between a ques-"
+    }, {
+      "heading" : "A Case of Discrete Reasoning over Paragraphs",
+      "text" : "tion and its solution to alleviate the spurious solution problem via mutual information maximization.\nOur objective is to obtain the optimal taskspecific model θ∗ that maximizes the following conditional mutual information: θ∗ = argmax\nθ Iθ(〈q, a〉; z|d)\n= argmax θ H(〈q, a〉|d)−Hθ(〈q, a〉|d, z) = argmax θ −Hθ(〈q, a〉|d, z) = argmax θ EP (d,q,a)EPθ(z|d,q,a) logPθ(q, a|d, z) (1)\nwhere Iθ(〈q, a〉; z|d) denotes conditional mutual information between 〈q, a〉 and z over P (d, q, a)Pθ(z|d, q, a). H(·|·) is conditional entropy of random variable(s). P (d, q, a) is the probability of an instance from the training distribution. Pθ(z|d, q, a) is the posterior prediction probability of z (∈ Z) which is the prediction probability Pθ(z|d, q) normalized over Z:\nPθ(z|d, q, a) = { Pθ(z|d,q)∑ z ′∈Z Pθ(z ′ |d,q) z ∈ Z\n0 z /∈ Z (2)\nNote that computing Pθ(q, a|d, z) is intractable. We therefore introduce a question reconstructor Pφ(q|d, z) and approximate Pθ(q, a|d, z) with I(f(z) = a)Pφ(q|d, z) where I(·) denotes indicator function. Eq. 1 now becomes:\nθ∗ = argmax θ L1 + L2 L1 = EP (d,q,a)EPθ(z|d,q,a) logPφ(q|d, z) L2 = EP (d,q,a)EPθ(z|d,q,a) log Pθ(q, a|d, z) Pφ(q|d, z)\n(3)\nTo optimize Eq. 3 is to repeat the following training cycle, which is analogous to the EM algorithm:\n1. Minimize L2 w.r.t. the question reconstructor φ to draw Pφ(q|d, z) close to Pθ(q, a|d, z), by sampling a solution z\n′ ∈ Z according to its posterior prediction probability Pθ(z|d, q, a) (see Eq. 2) and maximizing logPφ(q|d, z ′ ).\n2. Maximize L1 w.r.t. the task-specific model θ. L1 can be seen as a reinforcement learning objective with logPφ(q|d, z) being the reward function. During training, the reward function is dynamically changing and may be of high variance. As we can compute the reward for all z ∈ Z, we therefore adopt a greedy but more stable update method, i.e., to maximize logPθ(z\n′′ |d, q) where z′′ = arg maxz∈Z logPφ(q|d, z) is the best solution according to the question reconstructor.\nWe illustrate the above training cycle in Fig 2."
+    }, {
+      "heading" : "3.3 Question Reconstructor",
+      "text" : "The question reconstructor Pφ(q|d, z) takes reference information d and a solution z as input, and reconstructs the question q. We use BARTbase, a pre-trained Seq2Seq model, as the question reconstructor so that semantic correlations between questions and solutions can be better captured.\nA solution typically consists of task-specific operation token(s) (e.g., COUNT for discrete reasoning or semantic parsing), literal(s) (e.g., numeric constants for discrete reasoning or semantic parsing), or span(s) from a question or reference information (e.g., for most QA tasks). It is problematic\nto just feed the concatenation of d and the surface form of z to the BART encoder; otherwise, different spans with the same surface form can no longer be discriminated as their contextual semantics are lost. To effectively encode d and z, we devise a unified solution encoding as in Fig 3 which is applicable to solutions of various types. Specifically, we leave most of the surface form of z unchanged, except that we replace any span from reference information with a placeholder 〈span〉. The representation of 〈span〉 is computed by forcing it to only attend to the contextual representation(s) of the referred span. To obtain disentangled and robust representations of reference information and a solution, we keep reference information and the solution (except for the token 〈span〉) from attending to each other. Intuitively speaking, semantics of reference information should not be affected by a solution, and the representations of a solution should largely determined by its internal logic."
+    }, {
+      "heading" : "3.4 Solution Set",
+      "text" : "While our learning method and question reconstructor are task-agnostic, solutions are usually taskspecific. Precomputing solution sets needs formal definitions of solutions which define the search space of solutions. A possible search method is to exhaustively enumerate all solutions that produce the correct answer. We will introduce the definitions of solutions for different tasks in section 4."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : "Following Min et al. (2019), we conducted experiments on three QA tasks, namely multi-mention reading comprehension, discrete reasoning over paragraphs, and semantic parsing. This section introduces baselines, the definitions of solutions in different tasks, how the solution set can be precomputed, and our experimental results. Statistics of the datasets we used are presented in Table 1.\nFor convenience, we denote reference information as d = [d1, d2, ..., d|d|] and denote a question as q = [q1, q2, ..., q|q|] where di and qj are a token of d and q respectively. A span from reference information and a question span is represented as (s, e)d and (s, e)q respectively, where s and e are start and end index of the span respectively."
+    }, {
+      "heading" : "4.1 Baselines",
+      "text" : "First Only (Joshi et al., 2017) which trains a reading comprehension model by maximizing logPθ(z|d, q) where z is the first answer span in d. MML (Min et al., 2019) which maximizes log ∑ z∈Z Pθ(z|d, q). HardEM (Min et al., 2019) which maximizes logmaxz∈ZPθ(z|d, q). HardEM-thres (Chen et al., 2020): a variant of HardEM that optimizes only on confident solutions, i.e., to maximize maxz∈ZI(Pθ(z|d, q) > γ) logPθ(z|d, q) where γ is an exponentially decaying threshold. γ is initialized such that a model is trained on no less than half of training data at the first epoch. We halve γ after each epoch. VAE (Cheng and Lapata, 2018): a method that views a solution as the latent variable for question generation and adopts the training objective of Variational Auto-Encoder (VAE) (Kingma and Welling, 2014) to regularize the task-specific model. The overall training objective is given by:\nθ∗, φ∗ = argmax θ,φ L(θ, φ)\nL(θ, φ) = Lmle(θ) + λLvae(θ, φ)\n= ∑ z∈B logPθ(z|d, q) + λEPθ(z|d,q) log Pφ(q|d, z) Pθ(z|d, q)\nwhere θ denotes a task-specific model and φ is our question reconstructor. Lmle(θ) is the total log likelihood of the set of model-predicted solutions (denoted by B) which derive the correct answer. Lvae(θ, φ) is the evidence lower bound of the log likelihood of questions. λ is the coefficient of Lvae(θ, φ). This method needs pre-training both θ and φ before optimizing the overall objective L(θ, φ). Notably, model θ optimizes on Lvae(θ, φ) via reinforcement learning. We tried stabilizing training by reducing the variance of rewards and setting a small λ."
+    }, {
+      "heading" : "4.2 Multi-Mention Reading Comprehension",
+      "text" : "Multi-mention reading comprehension is a natural feature of many QA tasks. Given a document d and a question q, a task-specific model is required\nto locate the answer text a which is usually mentioned many times in the document(s). A solution is defined as a document span. The solution set Z is computed by finding exact match of a:\nZ = {z = (s, e)d|[ds, ..., de] = a}\nWe experimented on two open domain QA datasets, i.e., Quasar-T (Dhingra et al., 2017) and WebQuestions (Berant et al., 2013). For Quasar-T, we retrieved 50 reference sentences from ClueWeb09 for each question; for WebQuestions, we used the 2016-12-21 dump of Wikipedia as the knowledge source and retrieved 50 reference paragraphs for each question using a Lucene index system. We used the same BERTbase (Devlin et al., 2019) reading comprehension model and data preprocessing from (Min et al., 2019).\nResults: Our method outperforms all baselines on both datasets (Table 2). The improvements can be attributed to the effectiveness of solution encoding, as solutions for this task are typically different spans with the same surface form, e.g., in Qusart-T, all z ∈ Z share the same surface form."
+    }, {
+      "heading" : "4.3 Discrete Reasoning over Paragraphs",
+      "text" : "Some reading comprehension tasks pose the challenge of comprehensive analysis of texts by requiring discrete reasoning (e.g., arithmetic calculation, sorting, and counting) (Dua et al., 2019). In this task, given a paragraph d and a question q, an answer a can be one of the four types: numeric value, a paragraph span or a question span, a sequence of paragraph spans, and a date from the paragraph. The definitions of z depend on answer types (Table 4). These solutions can be searched by following Chen et al. (2020). Note that some solutions involve numbers in d. We treated those numbers as spans while reconstructing q from z.\nWe experimented on DROP (Dua et al., 2019). As the original test set is hidden, for convenience of\nanalysis, we used the public development set as our test set, and split the public train set into 90%/10% for training and development. We used Neural Symbolic Reader (NeRd) (Chen et al., 2020) as the taskspecific model. NeRd is a Seq2Seq model which encodes a question and a paragraph, and decodes a solution (e.g., count (paragraph span(s1, e1), paragraph span(s2, e2)) where paragraph span(si, ei) means a paragraph span starting at si and ending at ei). We used the precomputed solution sets provided by Chen et al. (2020)1. Data preprocessing\n1Our implementation of NeRd has four major differences from that of (Chen et al., 2020). (1) Instead of choosing BERTlarge as encoder, we chose the discriminator of Electrabase (Clark et al., 2020) which is of a smaller size. (2) We did not use moving averages of trained parameters. (3) We did not use the full public train set for training but used 10% of it for development. (4) For some questions, it is hard to guarantee that a precomputed solution set covers the ground-truth solution. For example, the question How many touchdowns did\nwas also kept the same. Results: As shown in Table 3, our method significantly outperforms all baselines in terms of F1 score on our test set.\nWe also compared our method with the baseline VAE which uses a question reconstructor φ to adjust the task-specific model θ via maximizing a variational lower bound of logP (q|d) as the regularization term Lvae(θ, φ). To pre-train the task-specific model for this method, we simply obtained the best task-specific model trained with HardEM-thres. VAE optimizes the task-specific model on Lvae(θ, φ) with reinforcement learning where Pφ(q|d, z) is used as learning signals for the task-specific model. Despite our efforts to stabilize training, the F1 score still dropped to 36.28 after optimizing the overall objective L(θ, φ) for 1,000 steps. By contrast, our method does not use Pφ(q|d, z) to compute learning signals for the taskspecific model but rather uses it to select solutions to train the task-specific model, which makes a better use of the question reconstructor."
+    }, {
+      "heading" : "4.4 Semantic Parsing",
+      "text" : "Text2SQL is a popular semantic parsing task. Given a question q and a table header d = [h1, ..., hL] where hl is a multi-token column, a parser is required to parse q into a SQL query z and return the execution results. Under the weakly supervised setting, only the final answer is provided while the SQL query is not. Following Min et al. (2019), Z is approximated as a set of non-nested SQL queries with no more than three conditions:\nZ = {z = (zsel, zagg, {zcondk }3k=1)|f(z) = a,\nzsel ∈ {h1, ..., hL}, zcondk ∈ {none} ∪ C, zagg ∈ {none, sum,mean,max,min, count}}\nBrady throw? needs counting, but the related mentions are not known. (Chen et al., 2020) partly solved this problem by adding model-predicted solutions (with correct answer) into the initial solution sets as learning proceeds. In this paper, we kept the initial solution sets unchanged during training, so that different QA tasks share the same experimental setting.\nwhere zagg is an aggregating operator and zsel is the operated column (a span of d). C = {(h, o, v)} is the set of all possible conditions, where h is a column, o ∈ {=, <,>}, and v is a question span.\nWe experimented on WikiSQL (Zhong et al., 2017) under the weakly supervised setting2. We chose SQLova (Hwang et al., 2019) as the taskspecific model which is a competitive text2SQL parser on WikiSQL. Hyperparameters were kept the same as in (Hwang et al., 2019). We used the solution sets provided by Min et al. (2019). Results: All models in Table 5 do not apply execution-guided decoding during inference. Our method achieves new state-of-the-art results under the weakly supervised setting. Though without supervision of ground-truth solutions, our execution accuracy (i.e., accuracy of execution results) on the test set is close to that of the fully supervised SQLova. Notably, GRAPPA focused on representation learning and used a stronger task-specific model while we focus on the learning method and outperform GRAPPA with a weaker model."
+    }, {
+      "heading" : "5 Ablation Study",
+      "text" : ""
+    }, {
+      "heading" : "5.1 Performance on Test Data with Different Size of Solution Set",
+      "text" : "Fig 4 shows the performance on test data with different size of solution set3. Our method consistently outperforms HardEM-thres and by a large margin when test examples have a large solution set.\n5.2 Effect of |Z| at Training\nThe more complex a question is, the larger the set of possible solutions tends to be, the more likely a model will suffer from the spurious solution problem. We therefore investigated whether our learning method can deal with extremely noisy solution sets. Specifically, we extracted a hard train set from the original train set of WikiSQL. The hard train set consists of 10K training data with the largest Z. The average size of Z on the hard train set is 1,554.6, much larger than that of the original train set (315.4). We then compared models trained on the original train set and the hard train set using different learning methods.\n2WikiSQL has annotated ground-truth SQL queries. We only used them for evaluation but not for training.\n3In this experiment, |Z| is only seen as a property of an example. Evaluated solutions are predicted by the task-specific model but not from Z.\n0\n20\n40\n60\n80\n100\n62\n65\n68\n71\n74\n77\n[0,3) [3,5) [5,7) [7,9) [9,+∞)\n% o\nf D at\na\nF1 S\nco re\n|Z|\n% of Data HardEM-thres Ours\nAs shown in Fig 5, models trained with our method consistently outperform baselines in terms of logical form accuracy (i.e., accuracy of predicted solutions) and execution accuracy. When using the hard train set, the logical form accuracy of models trained with HardEM or HardEM-thres drop to below 14%. Compared with HardEM, HardEM-thres is better when trained on the original train set but is worse when trained on the hard train set. These indicate that model confidence can be unreliable and thus insufficient to filter out spurious solutions. By contrast, our method explicitly exploits the semantic correlations between a question and a solution, thus much more resistant to spurious solutions."
+    }, {
+      "heading" : "5.3 Effect of the Question Reconstructor",
+      "text" : "As we used BARTbase as the question resconstructor, we investigated how our question reconstructor contributes to performance improvements.\nWe first investigated whether BARTbase itself is less affected by the spurious solution problem than the task-specific models. Specifically, we viewed text2SQL as a sequence generation task and finetuned a BARTbase on the hard train set of WikiSQL with HardEM. The input of BART shares the same format as that of SQLova, which is the concatenation of a question and a table header. The output of BART is a SQL query. Without constraints on decoding, BART might not produce valid SQL queries. We therefore evaluated models on a SQL selection task instead: for each question in the development set of WikiSQL, a model picks out the correct SQL from at most 10 candidates by selecting the one with the highest prediction probability. As shown in Table 6, when trained with HardEM, both BARTbase parser and SQLova perform similarly, and underperform our method by a large margin. This indicates that using BARTbase as a task-specific model can not avoid the spurious solution problem. It is our mutual information maximization objective that makes a difference.\nWe further investigated the effect of the choice of question reconstructor. We compared BARTbase with two alternatives: (1) T-scratch: a three-layer Transformer (Vaswani et al., 2017) without pre-\ntraining and (2) T-DAE: a three-layer Transformer pre-trained as a denoising auto-encoder of questions on the train set; the text infilling pre-training task for BART was used. As shown in Table 7, our method with either of the three question reconstructors outperforms or is at least competitive with baselines, which verifies the effectiveness of our mutual information maximization objective. What’s more, using T-DAE is competitive with BARTbase, indicating that our training objective is compatible with other choices of question reconstructor besides BART, and that using a denoising auto-encoder to initialize the question reconstructor may be beneficial to exploit the semantic correlations between a question and its solution."
+    }, {
+      "heading" : "6 Evaluation of Solution Prediction",
+      "text" : "As solutions with correct answer can be spurious, we further analyzed the quality of predicted solutions. We randomly sampled 50 test examples from DROP for which our method produced the correct answer, and found that our method also produced the correct solution for 92% of them.\nTo investigate the effect of different learning methods on models’ ability to produce correct solutions, we manually analyzed another 50 test samples for which HardEM, HardEM-thres, and our method produced the correct answer with different solutions. The percentage of samples for which our method produced the correct solution is 58%, much higher than that of HardEM (10%) and HardEMthres (30%). For experimental details, please refer to the appendix."
+    }, {
+      "heading" : "7 Case Study",
+      "text" : "Fig 6 compares NeRd predictions on four types of questions from DROP when using different learning methods. An observation is that NeRd using our method shows more comprehensive understanding of questions, e.g., in the Arithmetic case, NeRd using our method is aware of the two key elements in the question including the year when missionaries arrived in Ayutthaya and the year when the Seminary of Saint Joseph was built, while NeRd using HardEM-thres misses the first element. What’s more, NeRd using our method is more precise in locating relevant information, e.g., in the first Sorting case, NeRd with our method locates the second appearance of 2 whose contextual semantics matches the question, while NeRd using HardEM-thres locates the first appearance of 2 which is irrelevant.\nThese two observations can be attributed to our mutual information maximization objective which biases a task-specific model towards those solutions that align well with the questions.\nHowever, we also observed that when there are multiple mentions of relevant information of the same type, NeRd trained with HardEM-thres or our method has difficulty in recalling them all, e.g., in the second Sorting case, the correct solution should locate all four mentions of Sebastian Janikowski’s field goals while NeRd using either method locates only two of them. We conjecture that this is because the solution sets provided by Chen et al. (2020) are noisy. For example, all precomputed solutions of sorting type for numeric answers involve up to two numbers from reference information, which makes it hard for a model to learn to sort more than two numbers."
+    }, {
+      "heading" : "8 Conclusion",
+      "text" : "To alleviate the spurious solution problem in weakly supervised QA, we propose to explicitly\nexploit the semantic correlations between a question and its solution via mutual information maximization. During training, we pair a task-specific model with a question reconstructor which guides the task-specific model to predict solutions that are consistent with the questions. Experiments on four QA datasets demonstrate the effectiveness of our learning method. As shown by automatic and manual analyses, models trained with our method are more resistant to spurious solutions during training, and are more precise in locating information that is relevant to the questions during inference, leading to higher accuracy of both answers and solutions."
+    }, {
+      "heading" : "9 Acknowledgements",
+      "text" : "This work was partly supported by the NSFC projects (Key project with No. 61936010 and regular project with No. 61876096). This work was also supported by the Guoqiang Institute of Tsinghua University, with Grant No. 2019GQG1 and 2020GQG0005."
+    }, {
+      "heading" : "B Details of Ablation Study",
+      "text" : "B.1 SQL Selection Task We defined a SQL selection task on the development set of WikiSQL. Specifically, for each question, we randomly sampled min(10, |Z|) solution candidates from the solution set Z without replacement while ensuring the ground-truth solution was one of the candidates. A model was required to pick out the ground-truth solution by selecting the candidate with the highest prediction probability.\nIn section 5.3, we only show model accuracy in the first 10 training epochs because for BARTbase w/ HardEM, SQLova w/ HardEM, and SQLova w/ Ours, model confidence (computed as the average log likelihood of selected SQLs) showed a downward trend after the 2nd, 4th, and ≥ 10th epoch, respectively.\nB.2 Choice of Question Reconstructor We investigated how the choice of the question reconstructor affects results. One alternative choice is a Transformer pre-trained as a denoising autoencoder of questions on the train set. This question reconstructor is the same as BARTbase except that the number of encoder layers and the number of decoder layers are 3 respectively. We pre-trained the question reconstructor for one epoch to reconstruct original questions from corrupted ones. For 50% of the time, the input question is the original question; otherwise, we followed Lewis et al. (2020) to corrupt the original question by randomly masking a number of text spans with span lengths drawn from a Poisson distribution (λ = 3). Batch size is 4. AdamW optimizer was used with learning rate set to 5e-5."
+    } ],
+    "references" : [ {
+      "title" : "Learning to generalize from sparse and underspecified rewards",
+      "author" : [ "Rishabh Agarwal", "Chen Liang", "Dale Schuurmans", "Mohammad Norouzi." ],
+      "venue" : "Proceedings of the 36th International Conference on Machine Learning, ICML 2019, 9-15 June 2019,",
+      "citeRegEx" : "Agarwal et al\\.,? 2019",
+      "shortCiteRegEx" : "Agarwal et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Semantic parsing on freebase from question-answer pairs",
+      "author" : [ "Jonathan Berant", "Andrew Chou", "Roy Frostig", "Percy Liang." ],
+      "venue" : "Proceedings of the 2013 Conference on Empirical Methods in Natural Language Processing, EMNLP 2013, 18-21 Octo-",
+      "citeRegEx" : "Berant et al\\.,? 2013",
+      "shortCiteRegEx" : "Berant et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Semantic parsing with dual learning",
+      "author" : [ "Ruisheng Cao", "Su Zhu", "Chen Liu", "Jieyu Li", "Kai Yu." ],
+      "venue" : "Proceedings of the 57th Conference of the Association for Computational Linguistics, ACL 2019, Florence, Italy, July 28- August 2, 2019, Volume 1: Long Pa-",
+      "citeRegEx" : "Cao et al\\.,? 2019",
+      "shortCiteRegEx" : "Cao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Neural symbolic reader: Scalable integration of distributed and symbolic representations for reading comprehension",
+      "author" : [ "Xinyun Chen", "Chen Liang", "Adams Wei Yu", "Denny Zhou", "Dawn Song", "Quoc V. Le." ],
+      "venue" : "8th International Conference on",
+      "citeRegEx" : "Chen et al\\.,? 2020",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Weaklysupervised neural semantic parsing with a generative ranker",
+      "author" : [ "Jianpeng Cheng", "Mirella Lapata." ],
+      "venue" : "Proceedings of the 22nd Conference on Computational Natural Language Learning, CoNLL 2018, Brussels, Belgium, October 31 - November",
+      "citeRegEx" : "Cheng and Lapata.,? 2018",
+      "shortCiteRegEx" : "Cheng and Lapata.",
+      "year" : 2018
+    }, {
+      "title" : "Simple and effective multi-paragraph reading comprehension",
+      "author" : [ "Christopher Clark", "Matt Gardner." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics, ACL 2018, Melbourne, Australia, July 15-20, 2018, Vol-",
+      "citeRegEx" : "Clark and Gardner.,? 2018",
+      "shortCiteRegEx" : "Clark and Gardner.",
+      "year" : 2018
+    }, {
+      "title" : "ELECTRA: pretraining text encoders as discriminators rather than generators",
+      "author" : [ "Kevin Clark", "Minh-Thang Luong", "Quoc V. Le", "Christopher D. Manning." ],
+      "venue" : "8th International Conference on Learning Representations, ICLR 2020, Addis Ababa,",
+      "citeRegEx" : "Clark et al\\.,? 2020",
+      "shortCiteRegEx" : "Clark et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BERT: pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Quasar: Datasets for question answering by search and reading",
+      "author" : [ "Bhuwan Dhingra", "Kathryn Mazaitis", "William W. Cohen." ],
+      "venue" : "CoRR, abs/1707.03904.",
+      "citeRegEx" : "Dhingra et al\\.,? 2017",
+      "shortCiteRegEx" : "Dhingra et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "DROP: A reading comprehension benchmark requiring discrete reasoning over paragraphs",
+      "author" : [ "Dheeru Dua", "Yizhong Wang", "Pradeep Dasigi", "Gabriel Stanovsky", "Sameer Singh", "Matt Gardner." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American",
+      "citeRegEx" : "Dua et al\\.,? 2019",
+      "shortCiteRegEx" : "Dua et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A comprehensive exploration on wikisql with table-aware word contextualization",
+      "author" : [ "Wonseok Hwang", "Jinyeung Yim", "Seunghyun Park", "Minjoon Seo." ],
+      "venue" : "CoRR, abs/1902.01069.",
+      "citeRegEx" : "Hwang et al\\.,? 2019",
+      "shortCiteRegEx" : "Hwang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Triviaqa: A large scale distantly supervised challenge dataset for reading comprehension",
+      "author" : [ "Mandar Joshi", "Eunsol Choi", "Daniel S. Weld", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics, ACL",
+      "citeRegEx" : "Joshi et al\\.,? 2017",
+      "shortCiteRegEx" : "Joshi et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P. Kingma", "Jimmy Ba." ],
+      "venue" : "3rd International Conference on Learning Representations, ICLR 2015, San Diego, CA, USA, May 7-9, 2015, Conference Track Proceedings.",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "Autoencoding variational bayes",
+      "author" : [ "Diederik P. Kingma", "Max Welling." ],
+      "venue" : "2nd International Conference on Learning Representations, ICLR 2014, Banff, AB, Canada, April 14-16, 2014, Conference Track Proceedings.",
+      "citeRegEx" : "Kingma and Welling.,? 2014",
+      "shortCiteRegEx" : "Kingma and Welling.",
+      "year" : 2014
+    }, {
+      "title" : "The narrativeqa reading comprehension challenge",
+      "author" : [ "Tomás Kociský", "Jonathan Schwarz", "Phil Blunsom", "Chris Dyer", "Karl Moritz Hermann", "Gábor Melis", "Edward Grefenstette." ],
+      "venue" : "Trans. Assoc. Comput. Linguistics, 6:317–328.",
+      "citeRegEx" : "Kociský et al\\.,? 2018",
+      "shortCiteRegEx" : "Kociský et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Latent retrieval for weakly supervised open domain question answering",
+      "author" : [ "Kenton Lee", "Ming-Wei Chang", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 57th Conference of the Association for Computational Linguistics, ACL 2019, Florence, Italy, July",
+      "citeRegEx" : "Lee et al\\.,? 2019",
+      "shortCiteRegEx" : "Lee et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "BART: denoising sequence-to-sequence pretraining for natural language",
+      "author" : [ "Mike Lewis", "Yinhan Liu", "Naman Goyal", "Marjan Ghazvininejad", "Abdelrahman Mohamed", "Omer Levy", "Veselin Stoyanov", "Luke Zettlemoyer" ],
+      "venue" : null,
+      "citeRegEx" : "Lewis et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Neural symbolic machines: Learning semantic parsers on freebase with weak supervision",
+      "author" : [ "Chen Liang", "Jonathan Berant", "Quoc V. Le", "Kenneth D. Forbus", "Ni Lao." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational",
+      "citeRegEx" : "Liang et al\\.,? 2017",
+      "shortCiteRegEx" : "Liang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Memory augmented policy optimization for program synthesis and semantic parsing",
+      "author" : [ "Chen Liang", "Mohammad Norouzi", "Jonathan Berant", "Quoc V. Le", "Ni Lao." ],
+      "venue" : "Advances in Neural Information Processing Systems 31: Annual Conference on Neu-",
+      "citeRegEx" : "Liang et al\\.,? 2018",
+      "shortCiteRegEx" : "Liang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Decoupled weight decay regularization",
+      "author" : [ "Ilya Loshchilov", "Frank Hutter." ],
+      "venue" : "7th International Conference on Learning Representations, ICLR 2019, New Orleans, LA, USA, May 6-9, 2019. OpenReview.net.",
+      "citeRegEx" : "Loshchilov and Hutter.,? 2019",
+      "shortCiteRegEx" : "Loshchilov and Hutter.",
+      "year" : 2019
+    }, {
+      "title" : "Hybrid ranking network for text-to-sql",
+      "author" : [ "Qin Lyu", "Kaushik Chakrabarti", "Shobhit Hathi", "Souvik Kundu", "Jianwen Zhang", "Zheng Chen." ],
+      "venue" : "CoRR, abs/2008.04759.",
+      "citeRegEx" : "Lyu et al\\.,? 2020",
+      "shortCiteRegEx" : "Lyu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A discrete hard EM approach for weakly supervised question answering",
+      "author" : [ "Sewon Min", "Danqi Chen", "Hannaneh Hajishirzi", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and",
+      "citeRegEx" : "Min et al\\.,? 2019",
+      "shortCiteRegEx" : "Min et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Compositional semantic parsing on semi-structured tables",
+      "author" : [ "Panupong Pasupat", "Percy Liang." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Language",
+      "citeRegEx" : "Pasupat and Liang.,? 2015",
+      "shortCiteRegEx" : "Pasupat and Liang.",
+      "year" : 2015
+    }, {
+      "title" : "Multi-mention learning for reading comprehension with neural cascades",
+      "author" : [ "Swabha Swayamdipta", "Ankur P. Parikh", "Tom Kwiatkowski." ],
+      "venue" : "6th International Conference on Learning Representations, ICLR 2018, Vancouver, BC, Canada, April 30",
+      "citeRegEx" : "Swayamdipta et al\\.,? 2018",
+      "shortCiteRegEx" : "Swayamdipta et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Multiqa: An empirical investigation of generalization and transfer in reading comprehension",
+      "author" : [ "Alon Talmor", "Jonathan Berant." ],
+      "venue" : "Proceedings of",
+      "citeRegEx" : "Talmor and Berant.,? 2019",
+      "shortCiteRegEx" : "Talmor and Berant.",
+      "year" : 2019
+    }, {
+      "title" : "Question answering and question generation as dual tasks",
+      "author" : [ "Duyu Tang", "Nan Duan", "Tao Qin", "Ming Zhou." ],
+      "venue" : "CoRR, abs/1706.02027.",
+      "citeRegEx" : "Tang et al\\.,? 2017",
+      "shortCiteRegEx" : "Tang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Densely connected attention propagation for reading comprehension",
+      "author" : [ "Yi Tay", "Anh Tuan Luu", "Siu Cheung Hui", "Jian Su." ],
+      "venue" : "Advances in Neural Information Processing Systems 31: Annual Conference on Neural Information Processing Sys-",
+      "citeRegEx" : "Tay et al\\.,? 2018",
+      "shortCiteRegEx" : "Tay et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Lukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems 30: Annual Conference on Neural",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Learning semantic parsers from denotations with latent structured alignments and abstract programs",
+      "author" : [ "Bailin Wang", "Ivan Titov", "Mirella Lapata." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Hotpotqa: A dataset for diverse, explainable multi-hop question answering",
+      "author" : [ "Zhilin Yang", "Peng Qi", "Saizheng Zhang", "Yoshua Bengio", "William W. Cohen", "Ruslan Salakhutdinov", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2018 Conference on",
+      "citeRegEx" : "Yang et al\\.,? 2018",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Jointly learning semantic parser and natural language generator via dual information maximization",
+      "author" : [ "Hai Ye", "Wenjie Li", "Lu Wang." ],
+      "venue" : "Proceedings of the 57th Conference of the Association for Computational Linguistics, ACL 2019, Florence, Italy, July",
+      "citeRegEx" : "Ye et al\\.,? 2019",
+      "shortCiteRegEx" : "Ye et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Gra{pp}a: Grammar-augmented pre-training for table semantic parsing",
+      "author" : [ "Tao Yu", "Chien-Sheng Wu", "Xi Victoria Lin", "bailin wang", "Yi Chern Tan", "Xinyi Yang", "Dragomir Radev", "richard socher", "Caiming Xiong" ],
+      "venue" : "In International Conference on Learning",
+      "citeRegEx" : "Yu et al\\.,? \\Q2021\\E",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Spider: A largescale human-labeled dataset for complex and crossdomain semantic parsing and text-to-sql task",
+      "author" : [ "Dragomir R. Radev." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, Brussels,",
+      "citeRegEx" : "Radev.,? 2018",
+      "shortCiteRegEx" : "Radev.",
+      "year" : 2018
+    }, {
+      "title" : "Seq2sql: Generating structured queries from natural language using reinforcement learning",
+      "author" : [ "Victor Zhong", "Caiming Xiong", "Richard Socher." ],
+      "venue" : "CoRR, abs/1709.00103.",
+      "citeRegEx" : "Zhong et al\\.,? 2017",
+      "shortCiteRegEx" : "Zhong et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "2019) was used to update the question reconstructor with learning rate set to 5e-5",
+      "author" : [ "optimizer (Loshchilov", "Hutter" ],
+      "venue" : null,
+      "citeRegEx" : ".Loshchilov and Hutter,? \\Q2019\\E",
+      "shortCiteRegEx" : ".Loshchilov and Hutter",
+      "year" : 2019
+    }, {
+      "title" : "WikiSQL. Task-specific Model: SQLova encodes the concatenation of a question and a table header with uncased BERTbase, and outputs a SQL query via slot filling with an NL2SQL (natural language",
+      "author" : [ "Hwang" ],
+      "venue" : null,
+      "citeRegEx" : "Hwang,? \\Q2019\\E",
+      "shortCiteRegEx" : "Hwang",
+      "year" : 2019
+    }, {
+      "title" : "2019), we set the batch size to 10",
+      "author" : [ "Min" ],
+      "venue" : "Following Hwang et al",
+      "citeRegEx" : "Min,? \\Q2019\\E",
+      "shortCiteRegEx" : "Min",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 11,
+      "context" : ", the first answer span in the document (Joshi et al., 2017; Tay et al., 2018; Talmor and Berant, 2019); some treated all possible solutions equally and maximized the sum of their likelihood (maximum marginal likelihood, or MML) (Swayamdipta et al.",
+      "startOffset" : 40,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 26,
+      "context" : ", the first answer span in the document (Joshi et al., 2017; Tay et al., 2018; Talmor and Berant, 2019); some treated all possible solutions equally and maximized the sum of their likelihood (maximum marginal likelihood, or MML) (Swayamdipta et al.",
+      "startOffset" : 40,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 24,
+      "context" : ", the first answer span in the document (Joshi et al., 2017; Tay et al., 2018; Talmor and Berant, 2019); some treated all possible solutions equally and maximized the sum of their likelihood (maximum marginal likelihood, or MML) (Swayamdipta et al.",
+      "startOffset" : 40,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 23,
+      "context" : ", 2018; Talmor and Berant, 2019); some treated all possible solutions equally and maximized the sum of their likelihood (maximum marginal likelihood, or MML) (Swayamdipta et al., 2018; Clark and Gardner, 2018; Lee et al., 2019); many others selected solutions according to model confidence (Liang et al.",
+      "startOffset" : 158,
+      "endOffset" : 227
+    }, {
+      "referenceID" : 5,
+      "context" : ", 2018; Talmor and Berant, 2019); some treated all possible solutions equally and maximized the sum of their likelihood (maximum marginal likelihood, or MML) (Swayamdipta et al., 2018; Clark and Gardner, 2018; Lee et al., 2019); many others selected solutions according to model confidence (Liang et al.",
+      "startOffset" : 158,
+      "endOffset" : 227
+    }, {
+      "referenceID" : 15,
+      "context" : ", 2018; Talmor and Berant, 2019); some treated all possible solutions equally and maximized the sum of their likelihood (maximum marginal likelihood, or MML) (Swayamdipta et al., 2018; Clark and Gardner, 2018; Lee et al., 2019); many others selected solutions according to model confidence (Liang et al.",
+      "startOffset" : 158,
+      "endOffset" : 227
+    }, {
+      "referenceID" : 18,
+      "context" : ", 2019); many others selected solutions according to model confidence (Liang et al., 2018; Min et al., 2019),",
+      "startOffset" : 70,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2019); many others selected solutions according to model confidence (Liang et al., 2018; Min et al., 2019),",
+      "startOffset" : 70,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 11,
+      "context" : "A lot of challenging datasets have been constructed to advance models’ reasoning abilities, such as (1) reading comprehension datasets with extractive answer spans (Joshi et al., 2017; Dhingra et al., 2017), with free-form answers (Kociský et al.",
+      "startOffset" : 164,
+      "endOffset" : 206
+    }, {
+      "referenceID" : 8,
+      "context" : "A lot of challenging datasets have been constructed to advance models’ reasoning abilities, such as (1) reading comprehension datasets with extractive answer spans (Joshi et al., 2017; Dhingra et al., 2017), with free-form answers (Kociský et al.",
+      "startOffset" : 164,
+      "endOffset" : 206
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2017), with free-form answers (Kociský et al., 2018), for multi-hop reasoning (Yang et al.",
+      "startOffset" : 32,
+      "endOffset" : 54
+    }, {
+      "referenceID" : 29,
+      "context" : ", 2018), for multi-hop reasoning (Yang et al., 2018), or for discrete reasoning over paragraphs (Dua et al.",
+      "startOffset" : 33,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2018), or for discrete reasoning over paragraphs (Dua et al., 2019), and (2) datasets for semantic parsing (Pasupat and Liang, 2015; Zhong et al.",
+      "startOffset" : 51,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2019), and (2) datasets for semantic parsing (Pasupat and Liang, 2015; Zhong et al., 2017; Yu et al., 2018).",
+      "startOffset" : 47,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 33,
+      "context" : ", 2019), and (2) datasets for semantic parsing (Pasupat and Liang, 2015; Zhong et al., 2017; Yu et al., 2018).",
+      "startOffset" : 47,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 11,
+      "context" : "Most existing approaches for this learning challenge include heuristically selecting one possible solution per question for training (Joshi et al., 2017; Tay et al., 2018; Talmor and Berant, 2019), training on all possible solutions with MML (Swayamdipta et al.",
+      "startOffset" : 133,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 26,
+      "context" : "Most existing approaches for this learning challenge include heuristically selecting one possible solution per question for training (Joshi et al., 2017; Tay et al., 2018; Talmor and Berant, 2019), training on all possible solutions with MML (Swayamdipta et al.",
+      "startOffset" : 133,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 24,
+      "context" : "Most existing approaches for this learning challenge include heuristically selecting one possible solution per question for training (Joshi et al., 2017; Tay et al., 2018; Talmor and Berant, 2019), training on all possible solutions with MML (Swayamdipta et al.",
+      "startOffset" : 133,
+      "endOffset" : 196
+    }, {
+      "referenceID" : 23,
+      "context" : ", 2018; Talmor and Berant, 2019), training on all possible solutions with MML (Swayamdipta et al., 2018; Clark and Gardner, 2018; Lee et al., 2019; Wang et al., 2019), reinforcement learning (Liang et al.",
+      "startOffset" : 78,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 5,
+      "context" : ", 2018; Talmor and Berant, 2019), training on all possible solutions with MML (Swayamdipta et al., 2018; Clark and Gardner, 2018; Lee et al., 2019; Wang et al., 2019), reinforcement learning (Liang et al.",
+      "startOffset" : 78,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 15,
+      "context" : ", 2018; Talmor and Berant, 2019), training on all possible solutions with MML (Swayamdipta et al., 2018; Clark and Gardner, 2018; Lee et al., 2019; Wang et al., 2019), reinforcement learning (Liang et al.",
+      "startOffset" : 78,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 28,
+      "context" : ", 2018; Talmor and Berant, 2019), training on all possible solutions with MML (Swayamdipta et al., 2018; Clark and Gardner, 2018; Lee et al., 2019; Wang et al., 2019), reinforcement learning (Liang et al.",
+      "startOffset" : 78,
+      "endOffset" : 166
+    }, {
+      "referenceID" : 25,
+      "context" : "A few works treated solution prediction and question generation as dual tasks and introduced dual learning losses to regularize learning under the fully-supervised or the semi-supervised setting (Tang et al., 2017; Cao et al., 2019; Ye et al., 2019).",
+      "startOffset" : 195,
+      "endOffset" : 249
+    }, {
+      "referenceID" : 2,
+      "context" : "A few works treated solution prediction and question generation as dual tasks and introduced dual learning losses to regularize learning under the fully-supervised or the semi-supervised setting (Tang et al., 2017; Cao et al., 2019; Ye et al., 2019).",
+      "startOffset" : 195,
+      "endOffset" : 249
+    }, {
+      "referenceID" : 30,
+      "context" : "A few works treated solution prediction and question generation as dual tasks and introduced dual learning losses to regularize learning under the fully-supervised or the semi-supervised setting (Tang et al., 2017; Cao et al., 2019; Ye et al., 2019).",
+      "startOffset" : 195,
+      "endOffset" : 249
+    }, {
+      "referenceID" : 21,
+      "context" : "In cases where the search space of solution is large, we can usually approximate Z so that it contains the ground-truth solution z̄ with a high probability (Min et al., 2019; Wang et al., 2019).",
+      "startOffset" : 156,
+      "endOffset" : 193
+    }, {
+      "referenceID" : 28,
+      "context" : "In cases where the search space of solution is large, we can usually approximate Z so that it contains the ground-truth solution z̄ with a high probability (Min et al., 2019; Wang et al., 2019).",
+      "startOffset" : 156,
+      "endOffset" : 193
+    }, {
+      "referenceID" : 11,
+      "context" : "First Only (Joshi et al., 2017) which trains a reading comprehension model by maximizing logPθ(z|d, q) where z is the first answer span in d.",
+      "startOffset" : 11,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 21,
+      "context" : "HardEM (Min et al., 2019) which maximizes logmaxz∈ZPθ(z|d, q).",
+      "startOffset" : 7,
+      "endOffset" : 25
+    }, {
+      "referenceID" : 3,
+      "context" : "HardEM-thres (Chen et al., 2020): a variant of HardEM that optimizes only on confident solutions, i.",
+      "startOffset" : 13,
+      "endOffset" : 32
+    }, {
+      "referenceID" : 4,
+      "context" : "VAE (Cheng and Lapata, 2018): a method that views a solution as the latent variable for question generation and adopts the training objective of Variational Auto-Encoder (VAE) (Kingma and Welling, 2014) to regularize the task-specific model.",
+      "startOffset" : 4,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 13,
+      "context" : "VAE (Cheng and Lapata, 2018): a method that views a solution as the latent variable for question generation and adopts the training objective of Variational Auto-Encoder (VAE) (Kingma and Welling, 2014) to regularize the task-specific model.",
+      "startOffset" : 176,
+      "endOffset" : 202
+    }, {
+      "referenceID" : 8,
+      "context" : ", Quasar-T (Dhingra et al., 2017) and WebQuestions (Berant et al.",
+      "startOffset" : 11,
+      "endOffset" : 33
+    }, {
+      "referenceID" : 7,
+      "context" : "We used the same BERTbase (Devlin et al., 2019) reading comprehension model and data preprocessing from (Min et al.",
+      "startOffset" : 26,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2019) reading comprehension model and data preprocessing from (Min et al., 2019).",
+      "startOffset" : 64,
+      "endOffset" : 82
+    }, {
+      "referenceID" : 9,
+      "context" : ", arithmetic calculation, sorting, and counting) (Dua et al., 2019).",
+      "startOffset" : 49,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 3,
+      "context" : "We used Neural Symbolic Reader (NeRd) (Chen et al., 2020) as the taskspecific model.",
+      "startOffset" : 38,
+      "endOffset" : 57
+    }, {
+      "referenceID" : 3,
+      "context" : "Our implementation of NeRd has four major differences from that of (Chen et al., 2020).",
+      "startOffset" : 67,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 6,
+      "context" : "(1) Instead of choosing BERTlarge as encoder, we chose the discriminator of Electrabase (Clark et al., 2020) which is of a smaller size.",
+      "startOffset" : 88,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 3,
+      "context" : "(Chen et al., 2020) partly solved this problem by adding model-predicted solutions (with correct answer) into the initial solution sets as learning proceeds.",
+      "startOffset" : 0,
+      "endOffset" : 19
+    }, {
+      "referenceID" : 33,
+      "context" : "We experimented on WikiSQL (Zhong et al., 2017) under the weakly supervised setting2.",
+      "startOffset" : 27,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 10,
+      "context" : "We chose SQLova (Hwang et al., 2019) as the taskspecific model which is a competitive text2SQL",
+      "startOffset" : 16,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 10,
+      "context" : "Hyperparameters were kept the same as in (Hwang et al., 2019).",
+      "startOffset" : 41,
+      "endOffset" : 61
+    }, {
+      "referenceID" : 27,
+      "context" : "We compared BARTbase with two alternatives: (1) T-scratch: a three-layer Transformer (Vaswani et al., 2017) without pretraining and (2) T-DAE: a three-layer Transformer pre-trained as a denoising auto-encoder of questions on the train set; the text infilling pre-training task for BART was used.",
+      "startOffset" : 85,
+      "endOffset" : 107
+    } ],
+    "year" : 2021,
+    "abstractText" : "Weakly supervised question answering usually has only the final answers as supervision signals while the correct solutions to derive the answers are not provided. This setting gives rise to the spurious solution problem: there may exist many spurious solutions that coincidentally derive the correct answer, but training on such solutions can hurt model performance (e.g., producing wrong solutions or answers). For example, for discrete reasoning tasks as on DROP, there may exist many equations to derive a numeric answer, and typically only one of them is correct. Previous learning methods mostly filter out spurious solutions with heuristics or using model confidence, but do not explicitly exploit the semantic correlations between a question and its solution. In this paper, to alleviate the spurious solution problem, we propose to explicitly exploit such semantic correlations by maximizing the mutual information between question-answer pairs and predicted solutions. Extensive experiments on four question answering datasets show that our method significantly outperforms previous learning methods in terms of task performance and is more effective in training models to produce correct solutions.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

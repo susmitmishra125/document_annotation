@@ -1,0 +1,543 @@
+{
+  "name" : "2021.acl-long.369.pdf",
+  "metadata" : {
+    "source" : "CRF",
+    "title" : "MASK-ALIGN: Self-Supervised Neural Word Alignment",
+    "authors" : [ "Chi Chen", "Maosong Sun", "Yang Liu" ],
+    "emails" : [ ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 4781–4791\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n4781"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Word alignment is an important task of finding the correspondence between words in a sentence pair (Brown et al., 1993) and used to be a key component of statistical machine translation (SMT) (Koehn et al., 2003; Dyer et al., 2013). Although word alignment is no longer explicitly modeled in neural machine translation (NMT) (Bahdanau et al., 2015; Vaswani et al., 2017), it is often leveraged to analyze NMT models (Tu et al., 2016; Ding et al., 2017). Word alignment is also used in many other scenarios such as imposing lexical constraints on the decoding process (Arthur et al., 2016; Hasler\n∗Corresponding author 1Code can be found at https://github.com/THUNLP-MT/\nMask-Align.\net al., 2018), improving automatic post-editing (Pal et al., 2017) , and providing guidance for translators in computer-aided translation (Dagan et al., 1993).\nCompared with statistical methods, neural methods can learn representations end-to-end from raw data and have been successfully applied to supervised word alignment (Yang et al., 2013; Tamura et al., 2014). For unsupervised word alignment, however, previous neural methods fail to significantly exceed their statistical counterparts such as FAST-ALIGN (Dyer et al., 2013) and GIZA++ (Och and Ney, 2003). Recently, there is a surge of interest in NMT-based alignment methods which take alignments as a by-product of NMT systems (Li et al., 2019; Garg et al., 2019; Zenkel et al., 2019, 2020; Chen et al., 2020). Using attention weights or feature importance measures to induce alignments for to-be-predicted target tokens, these methods outperform unsupervised statistical aligners like GIZA++ on a variety of language pairs.\nAlthough NMT-based unsupervised aligners have proven to be effective, they suffer from two major limitations. First, due to the autoregressive\nproperty of NMT systems (Sutskever et al., 2014), they only leverage part of the target context. This inevitably brings noisy alignments when the prediction is ambiguous. Consider the target sentence in Figure 1. When predicting “Tokyo”, an NMT system may generate “1968” because future context is not observed, leading to a wrong alignment link (“1968”, “Tokyo”). Second, they have to incorporate an additional guided alignment loss (Chen et al., 2016) to outperform GIZA++. This loss requires pseudo alignments of the full training data to guide the training of the model. Although these pseudo alignments can be utilized to partially alleviate the problem of ignoring future context, they are computationally expensive to obtain.\nIn this paper, we propose a self-supervised model specifically designed for the word alignment task, namely MASK-ALIGN. Our model parallelly masks out each target token and recovers it conditioned on the source and other target tokens. Figure 1 shows an example where the target token “Tokyo” is masked out and re-predicted. Intuitively, as all source tokens except “Tokio” can find their counterparts on the target side, “Tokio” should be aligned to the masked token. Based on this intuition, we assume that the source token contributing most to recovering a masked target token should be aligned to that target token. Compared with NMTbased methods, MASK-ALIGN is able to take full advantage of bidirectional context on the target side and hopefully achieves higher alignment quality. We also introduce an attention variant called leaky attention to reduce the high attention weights on specific tokens such as periods. By encouraging agreement between two directional models both\nfor training and inference, our method consistently outperforms the state-of-the-art on four language pairs without using guided alignment loss."
+    }, {
+      "heading" : "2 Approach",
+      "text" : "Figure 2 shows the architecture of our model. The model predicts each target token conditioned on the source and other target tokens and generates alignments from the attention weights between source and target (Section 2.1). Specifically, our approach introduces two attention variants, static-KV attention and leaky attention, to efficiently obtain attention weights for word alignment. To better utilize attention weights from two directions, we encourage agreement between two unidirectional models during both training (Section 2.2) and inference (Section 2.3)."
+    }, {
+      "heading" : "2.1 Modeling",
+      "text" : "Conventional unsupervised neural aligners are based on NMT models (Peter et al., 2017; Garg et al., 2019). Given a source sentence x = x1, . . . , xJ and a target sentence y = y1, . . . , yI , NMT models the probability of the target sentence conditioned on the source sentence:\nP (y|x; θ) = I∏\ni=1\nP (yi|y<i,x; θ) (1)\nwhere y<i is a partial translation. One problem of this type of approaches is that they fail to exploit the future context on the target side, which is probably helpful for word alignment.\nTo address this problem, we model the same conditional probability but predict each target token\nyi conditioned on the source sentence x and the remaining target tokens y\\yi:\nP (y|x; θ) = I∏\ni=1\nP (yi|y\\yi,x; θ) (2)\nThis equals to masking out each yi and then recovering it. We build our model on top of Transformer (Vaswani et al., 2017) which is the state-of-the-art sequence-to-sequence architecture. Next, we will discuss in detail the implementation of our model.\nStatic-KV Attention As self-attention is fully-connected, directly computing ∏I i=1 P (yi|y\\yi,x; θ) with a vanilla Transformer requires I separate forward passes, in each of which only one target token is masked out and predicted. This is costly and time-consuming. Therefore, how to parallelly mask out and predict all target tokens in a single pass is important.\nTo do so, a major challenge is to avoid the representation of a masked token getting involved in the prediction process of itself. Inspired by Kasai et al. (2020), we modify the self-attention in the Transformer decoder to perform the forward passes concurrently. Given the word embedding wi and position embedding pi for target token yi, we first separate the query inputs qi from key ki and value inputs vi to prevent the to-be-predicted token itself from participating in the prediction:\nqi = piW Q (3)\nki = (wi + pi)W K (4)\nvi = (wi + pi)W V (5)\nwhere WQ, WK and WV are parameter matrices. The hidden representation hi for yi is computed by attending to keys and values, K6=i and V6=i, that correspond to the remaining tokens y\\yi:\nhi = Attention(qi,K 6=i,V 6=i) (6) K6=i = Concat({km|m 6= i}) (7) V 6=i = Concat({vm|m 6= i}) (8)\nIn this way, we ensure that hi is isolated from the word embedding wi in a single decoder layer. However, there exists a problem of information leakage if we update the key and value inputs for each position across decoder layers since they will contain the representation of each position from previous layers. Therefore, we keep the key and value inputs unchanged and only update the query inputs\nAlignment\nto avoid information leakage:\nhli = Attention(q l i,K6=i,V 6=i) (9) qli = h l−1 i W Q (10)\nwhere qli and h l i denote the query inputs and hidden states for yi in the l-th layer, respectively. h0i is initialized with pi. We name this variant of attention the static-KV attention. By static-KV, we mean the keys and values are unchanged across different layers in our approach. Our model replaces all selfattention in the decoder with static-KV attention.\nLeaky Attention Extracting alignments from vanilla cross-attention often suffers from the high attention weights on some specific source tokens such as periods, [EOS], or other high frequency tokens (see Figure 3). This is similar to the “garbage collectors” effect (Moore, 2004) in statistical aligners, where a source token is aligned to too many target tokens. Hereinafter, we will refer to these tokens as collectors. As a result of such effect, many target tokens (e.g., the\ntwo “in”s in Figure 3) will be incorrectly aligned to the collectors according to the attention weights.\nThis phenomenon has been studied in previous works (Clark et al., 2019; Kobayashi et al., 2020). Kobayashi et al. (2020) show that the norms of the value vectors for the collectors are usually small, making their influence on attention outputs actually limited. We conjecture that this phenomenon is due to the incapability of NMT-based aligners to deal with tokens that have no counterparts on the other side because there is no empty (NULL) token that is widely used in statistical aligners (Brown et al., 1993; Och and Ney, 2003).\nWe propose to explicitly model the NULL token with an attention variant, namely leaky attention. As shown in Figure 4, when calculating crossattention weights, leaky attention provides an extra “leak” position in addition to the encoder outputs. Acting as the NULL token, this leak position is expected to address the biased attention weight problem. To be specific, we parameterize the key and value vectors as kNULL and vNULL for the leak position in the cross-attention, and concatenate them with the transformed vectors of the encoder outputs. The attention output zi is computed as follows:\nzi = Attention(h L i W Q,K,V) (11) K = Concat(kNULL,HencW K) (12)\nV = Concat(vNULL,HencW V ) (13)\nwhere Henc denotes encoder outputs. 2 We use a normal distribution with a mean of 0 and a small\n2A similar attention implementation can be found in https://github.com/pytorch/fairseq/blob/master/fairseq/ modules/multihead attention.py.\ndeviation to initialize kNULL and vNULL to ensure that their initial norms are rather small. When extracting alignments, we only consider the attention matrix without the leak position.\nNote that leaky attention is different from adding a special token in the source sequence, which will share the same high attention weights with the existing collector instead of calibrating it (Vig and Belinkov, 2019). Our parameterized method is more flexible than Leaky-Softmax (Sabour et al., 2017) which adds an extra dimension with the value of zero to the routing logits. In Section 2.2, we will show that leaky attention is also helpful for applying agreement-based training on two directional models.\nWe remove the cross-attention in all but the last decoder layer. This makes the interaction between the source and target restricted in the last layer. Our experiments demonstrate that this modification improves alignment results with fewer model parameters."
+    }, {
+      "heading" : "2.2 Training",
+      "text" : "To better utilize the attention weights from two directions, we apply an agreement loss in the training process to improve the symmetry of our model, which has proven effective in statistical alignment models (Liang et al., 2006; Liu et al., 2015). Given a parallel sentence pair 〈x,y〉, we can obtain the attention weights from two different directions, denoted as W x→y and W y→x. As alignment is bijective, W x→y is supposed to be equal to the transpose of W y→x. We encourage this kind of symmetry through an agreement loss:\nLa = MSE ( W x→y,W > y→x ) (14)\nwhere MSE represents the mean squared error. For vanilla attention, La is hardly small because of the normalization constraint. As shown in Figure 4, due to the use of softmax activation, the minimal value of La is 0.25 for vanilla attention. Using leaky attention, our approach can achieve a lower agreement loss (La = 0.1) by adjusting the weights on the leak position.\nHowever, our model may converge to a degenerate case of zero agreement loss where attention weights are all zero except for the leak position. We circumvent this case by introducing an entropy\nloss on the attention weights:\nLe,x→y = − 1\nI I∑ i=1 J∑ j=1 W̃ ijx→y log W̃ij (15)\nW̃ ijx→y = W ijx→y + λ∑ j (W ij x→y + λ)\n(16)\nwhere W̃ ijx→y is the renormalized attention weights and λ is a smoothing hyperparamter. Similarly, we have Le,y→x for the inverse direction.\nWe jointly train two directional models using the following loss:\nL = Lx→y + Ly→x + αLa+ β(Le,x→y + Le,y→x)\n(17)\nwhere Lx→y and Ly→x are NLL losses, α and β are hyperparameters."
+    }, {
+      "heading" : "2.3 Inference",
+      "text" : "When extracting alignments, we compute an alignment score Sij for yi and xj as the harmonic mean of attention weights W ijx→y and W ji y→x from two directional models:\nSij = 2W ijx→yW ji y→x\nW ijx→y +W ji y→x\n(18)\nWe use the harmonic mean because we assume a large Sij requires both W ij x→y and W ji y→x to be large. Word alignments can be induced from the alignment score matrix as follows:\nAij = { 1 if Sij ≥ τ 0 otherwise\n(19)\nwhere τ is a threshold."
+    }, {
+      "heading" : "3 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Datasets",
+      "text" : "We conducted our experiments on four public datasets: German-English (De-En), English-French (En-Fr), Romanian-English (Ro-En) and ChineseEnglish (Zh-En). The Chinese-English training set is from the LDC corpus that consists of 1.2M sentence pairs. For validation and testing, we used the Chinese-English alignment dataset from Liu et al. (2005)3, which contains 450 sentence pairs for validation and 450 for testing. For other three language pairs, we followed the experimental setup in\n3http://nlp.csai.tsinghua.edu.cn/∼ly/systems/ TsinghuaAligner/TsinghuaAligner.html\n(Zenkel et al., 2019, 2020) and used the preprocessing scripts from Zenkel et al. (2019)4. Following Ding et al. (2019), we take the last 1000 sentences of the training data for these three datasets as validation sets. We used a joint source and target Byte Pair Encoding (BPE) (Sennrich et al., 2016) with 40k merge operations. During training, we filtered out sentences with the length of 1 to ensure the validity of the masking process."
+    }, {
+      "heading" : "3.2 Settings",
+      "text" : "We implemented our model based on the Transformer architecture (Vaswani et al., 2017). The encoder consists of 6 standard Transformer encoder layers. The decoder is composed of 6 layers, each of which contains static-KV attention while only the last layer is equipped with leaky attention. We set the embedding size to 512, the hidden size to 1024, and attention heads to 4. The input and output embeddings are shared for the decoder.\nWe trained the models with a batch size of 36K tokens. We used early stopping based on the prediction accuracy on the validation sets. We tuned the hyperparameters via grid search on the ChineseEnglish validation set as it contains gold word alignments. In all of our experiments, we set λ = 0.05 (Eq. (16)), α = 5, β = 1 (Eq. (17)) and τ = 0.2 (Eq. (19)). The evaluation metric is Alignment Error Rate (AER) (Och and Ney, 2000)."
+    }, {
+      "heading" : "3.3 Baselines",
+      "text" : "We introduce the following unsupervised neural baselines besides two statistical baselines FASTALIGN and GIZA++:\n• NAIVE-ATT (Garg et al., 2019): a method that induces alignments from cross-attention weights of the best (usually penultimate) decoder layer in a vanilla Tranformer.\n• NAIVE-ATT-LAST: same as NAIVE-ATT except that only the last decoder layer performs cross-attention.\n• ADDSGD (Zenkel et al., 2019): a method that adds an extra alignment layer to repredict the to-be-aligned target token.\n• MTL-FULLC (Garg et al., 2019): a method that supervises an attention head with symmetrized NAIVE-ATT alignments in a multitask learning framework.\n4https://github.com/lilt/alignment-scripts\n• BAO (Zenkel et al., 2020): an improved version of ADDSGD that extracts alignments with Bidirectional Attention Optimization.\n• SHIFT-ATT (Chen et al., 2020): a method that induces alignments when the to-be-aligned tatget token is the decoder input instead of the output.\nWe also included three additional baselines with guided training: (1) MTL-FULLC-GZ (Garg et al., 2019) which replaces the alignment labels in MTLFULLC with GIZA++ results, (2) BAO-GUIDED (Zenkel et al., 2020) which uses alignments from BAO for guided alignment training, (3) SHIFTAET (Chen et al., 2020) which trains an additional alignment module with supervision from symmetrized SHIFT-ATT alignments."
+    }, {
+      "heading" : "3.4 Main Results",
+      "text" : "Table 1 shows the results on four datasets. Our approach significantly outperforms all statistical and neural baselines. Specifically, it improves over GIZA++ by 1.7-6.5 AER points across different language pairs without using any guided alignment loss, making it a good substitute to this commonly used statistical alignment tool. Compared to SHIFTATT, the best neural methods without guided training, our approach achieves a gain of 2.2-6.4 AER points with fewer parameters (as we remove some cross-attention sublayers in the decoder).\nWhen compared with baselines using guided training, we find MASK-ALIGN still achieves sub-\nstantial improvements over all methods. For example, on the Romanian-English dataset, it improves over SHIFT-AET by 1.7 AER points. Recall that our method is fully end-to-end, which does not require a time-consuming process of obtaining pseudo alignments for full training data."
+    }, {
+      "heading" : "3.5 Ablation Study",
+      "text" : "Table 2 shows the ablation results on the GermanEnglish dataset. As we can see, masked modeling seems to play a critical role since removing it will deteriorate the performance by at least 9.0 AER. We also find that leaky attention and agreementbased training and inference are both important. Removing any of them will significantly diminish\nthe performance."
+    }, {
+      "heading" : "3.6 Effect of Leaky Attention",
+      "text" : "Figure 5 shows the attention weights from vanilla and leaky attention and Table 3 presents the norms of the transformed value vectors of each source token for two types of attention. For vanilla attention, we can see large weights on the high frequency token “der” and the small norm of its transformed value vector. As a result, the target token “in” will be wrongly aligned to “der”. While for leaky attention, we observe a similar phenomenon on the leak position “[NULL]”, and “in” will not be aligned to any source tokens since the weights on all source tokens are small. This example shows leaky attention can effectively prevent the collector phenomenon."
+    }, {
+      "heading" : "3.7 Analysis",
+      "text" : "Removing End Punctuation To further investigate the performance of leaky attention, we tested an extraction method that excludes the attention weights on the end punctuation of a source sentence. The reason behind this is that when the source sentence contains the end punctuation, it will act as the collector in most cases. Therefore removing it will\nalleviate the effect of collectors to a certain extent. Table 4 shows the comparison results. For vanilla attention, removing end punctuation obtains a gain of 7.7 AER points. For leaky attention, however, such extraction method brings no improvement on alignment quality. This suggests that leaky attention can effectively alleviate the problem of collectors.\nCase Study Figure 6 shows the attention weights from four different models for the example in Figure 1. As we have discussed in Section 1, in this example, NMT-based methods might fail to resolve ambiguity when predicting the target token “tokyo”. From the attention weight matrices, we can see that NMT-based methods (Figures 6(b) and 6(c)) indeed put high weights wrongly on “1968” in the source sentence. As for MASK-ALIGN, we can see\nthat the attention weights are highly consistent with the gold alignment, showing that our method can generate sparse and accurate attention weights.\nPrediction and Alignment We analyzed the relevance between the correctness of word-level prediction and alignment. We regard a word as correctly predicted if any of its subwords are correct and as correctly aligned if one of its possible alignment is matched. Figure 7 shows the results. We divide target tokens into four categories:\n1. cPcA: correct prediction & correct alignment;\n2. wPcA: wrong prediction & correct alignment;\n3. cPwA: correct prediction & wrong alignment;\n4. wPwA: wrong prediction & wrong alignment.\nCompared with other methods, MASK-ALIGN significantly reduces the alignment errors caused by wrong predictions (wPwA). In addition, the number of the tokens with correct prediction but wrong\nalignment (cPwA) maintains at a low level, indicating that our model does not degenerate into a target masked language model despite the use of bidirectional target context."
+    }, {
+      "heading" : "4 Related Work",
+      "text" : "Our work is closely related to unsupervised neural word alignment. While early unsupervised neural aligners (Tamura et al., 2014; Alkhouli et al., 2016; Peter et al., 2017) failed to outperform their statistical counterparts such as FAST-ALIGN (Dyer et al., 2013) and GIZA++ (Och and Ney, 2003), recent studies have made significant progress by inducing alignments from NMT models (Garg et al., 2019; Zenkel et al., 2019, 2020; Chen et al., 2020). Our work differs from prior studies in that we design a novel self-supervised model that is capable of utilizing more target context than NMT-based models to generate high quality alignments without using guided training.\nOur work is also inspired by the success of conditional masked language models (CMLMs) (Ghazvininejad et al., 2019), which have been applied to non-autoregressive machine translation. The CMLM can leverage both previous and future context on the target side for sequence-to-sequence tasks with the masking mechanism. Kasai et al. (2020) extend it with a disentangled context Transformer that predicts every target token conditioned on arbitrary context. By taking the characteristics of word alignment into consideration, we propose to use static-KV attention to achieve masking and aligning in parallel. To the best of our knowledge, this is the first work that incorporates a CMLM into alignment models."
+    }, {
+      "heading" : "5 Conclusion",
+      "text" : "We have presented a self-supervised neural alignment model MASK-ALIGN. Our model parallelly masks out and predicts each target token. We propose static-KV attention and leaky attention to achieve parallel computation and address the “garbage collectors” problem, respectively. Experiments show that MASK-ALIGN achieves new stateof-the-art results without using the guided alignment loss. In the future, we plan to extend our method to directly generate symmetrized alignments without leveraging the agreement between two unidirectional models."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "This work was supported by the National Key R&D Program of China (No. 2017YFB0202204), National Natural Science Foundation of China (No.61925601, No. 61772302) and Huawei Noah’s Ark Lab. We thank all anonymous reviewers for their valuable comments and suggestions on this work."
+    } ],
+    "references" : [ {
+      "title" : "Alignment-based neural machine translation",
+      "author" : [ "Tamer Alkhouli", "Gabriel Bretschner", "Jan-Thorsten Peter", "Mohammed Hethnawi", "Andreas Guta", "Hermann Ney." ],
+      "venue" : "Proceedings of the First Conference on Machine Translation: Volume 1, Research Papers,",
+      "citeRegEx" : "Alkhouli et al\\.,? 2016",
+      "shortCiteRegEx" : "Alkhouli et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Incorporating discrete translation lexicons into neural machine translation",
+      "author" : [ "Philip Arthur", "Graham Neubig", "Satoshi Nakamura." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 1557–1567, Austin,",
+      "citeRegEx" : "Arthur et al\\.,? 2016",
+      "shortCiteRegEx" : "Arthur et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Neural machine translation by jointly learning to align and translate",
+      "author" : [ "Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio." ],
+      "venue" : "3rd International Conference on Learning Representations, ICLR 2015, San Diego, CA, USA, May 7-9, 2015,",
+      "citeRegEx" : "Bahdanau et al\\.,? 2015",
+      "shortCiteRegEx" : "Bahdanau et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "The mathematics of statistical machine translation: Parameter estimation",
+      "author" : [ "Peter F. Brown", "Stephen A. Della Pietra", "Vincent J. Della Pietra", "Robert L. Mercer." ],
+      "venue" : "Computational Linguistics, 19(2):263– 311.",
+      "citeRegEx" : "Brown et al\\.,? 1993",
+      "shortCiteRegEx" : "Brown et al\\.",
+      "year" : 1993
+    }, {
+      "title" : "Guided alignment training for topic-aware neural machine translation",
+      "author" : [ "Wenhu Chen", "Evgeny Matusov", "Shahram Khadivi", "Jan-Thorsten Peter." ],
+      "venue" : "Association for Machine Translation in the Americas, page 121.",
+      "citeRegEx" : "Chen et al\\.,? 2016",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Accurate word alignment induction from neural machine translation",
+      "author" : [ "Yun Chen", "Yang Liu", "Guanhua Chen", "Xin Jiang", "Qun Liu." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 566–576,",
+      "citeRegEx" : "Chen et al\\.,? 2020",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "What does BERT look at? an analysis of BERT’s attention",
+      "author" : [ "Kevin Clark", "Urvashi Khandelwal", "Omer Levy", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2019 ACL Workshop BlackboxNLP: Analyzing and Interpreting Neural Networks for",
+      "citeRegEx" : "Clark et al\\.,? 2019",
+      "shortCiteRegEx" : "Clark et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Robust bilingual word alignment for machine aided translation",
+      "author" : [ "Ido Dagan", "Kenneth Church", "Willian Gale." ],
+      "venue" : "Very Large Corpora: Academic and Industrial Perspectives.",
+      "citeRegEx" : "Dagan et al\\.,? 1993",
+      "shortCiteRegEx" : "Dagan et al\\.",
+      "year" : 1993
+    }, {
+      "title" : "Saliency-driven word alignment interpretation for neural machine translation",
+      "author" : [ "Shuoyang Ding", "Hainan Xu", "Philipp Koehn." ],
+      "venue" : "Proceedings of the Fourth Conference on Machine Translation (Volume 1: Research Papers), pages 1–12, Florence, Italy. As-",
+      "citeRegEx" : "Ding et al\\.,? 2019",
+      "shortCiteRegEx" : "Ding et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Visualizing and understanding neural machine translation",
+      "author" : [ "Yanzhuo Ding", "Yang Liu", "Huanbo Luan", "Maosong Sun." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1150–",
+      "citeRegEx" : "Ding et al\\.,? 2017",
+      "shortCiteRegEx" : "Ding et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "A simple, fast, and effective reparameterization of IBM model 2",
+      "author" : [ "Chris Dyer", "Victor Chahuneau", "Noah A. Smith." ],
+      "venue" : "Proceedings of the 2013 Conference of the North American Chapter of the Association for Computational Linguistics: Hu-",
+      "citeRegEx" : "Dyer et al\\.,? 2013",
+      "shortCiteRegEx" : "Dyer et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Jointly learning to align and translate with transformer models",
+      "author" : [ "Sarthak Garg", "Stephan Peitz", "Udhyakumar Nallasamy", "Matthias Paulik." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th Inter-",
+      "citeRegEx" : "Garg et al\\.,? 2019",
+      "shortCiteRegEx" : "Garg et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Mask-predict: Parallel decoding of conditional masked language models",
+      "author" : [ "Marjan Ghazvininejad", "Omer Levy", "Yinhan Liu", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Ghazvininejad et al\\.,? 2019",
+      "shortCiteRegEx" : "Ghazvininejad et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Neural machine translation decoding with terminology constraints",
+      "author" : [ "Eva Hasler", "Adrià de Gispert", "Gonzalo Iglesias", "Bill Byrne." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics:",
+      "citeRegEx" : "Hasler et al\\.,? 2018",
+      "shortCiteRegEx" : "Hasler et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Non-autoregressive machine translation with disentangled context transformer",
+      "author" : [ "Jungo Kasai", "James Cross", "Marjan Ghazvininejad", "Jiatao Gu." ],
+      "venue" : "Proceedings of the 37th International Conference on Machine Learning, ICML 2020, 13-18 July 2020,",
+      "citeRegEx" : "Kasai et al\\.,? 2020",
+      "shortCiteRegEx" : "Kasai et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Attention module is not only a weight: Analyzing transformers with vector norms",
+      "author" : [ "Goro Kobayashi", "Tatsuki Kuribayashi", "Sho Yokoi", "Kentaro Inui." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing and",
+      "citeRegEx" : "Kobayashi et al\\.,? 2020",
+      "shortCiteRegEx" : "Kobayashi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Statistical phrase-based translation",
+      "author" : [ "Philipp Koehn", "Franz J. Och", "Daniel Marcu." ],
+      "venue" : "Proceedings of the 2003 Human Language Technology Conference of the North American Chapter of the Association for Computational Linguistics, pages 127–133.",
+      "citeRegEx" : "Koehn et al\\.,? 2003",
+      "shortCiteRegEx" : "Koehn et al\\.",
+      "year" : 2003
+    }, {
+      "title" : "On the word alignment from neural machine translation",
+      "author" : [ "Xintong Li", "Guanlin Li", "Lemao Liu", "Max Meng", "Shuming Shi." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 1293–1303, Florence,",
+      "citeRegEx" : "Li et al\\.,? 2019",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Alignment by agreement",
+      "author" : [ "Percy Liang", "Ben Taskar", "Dan Klein." ],
+      "venue" : "Proceedings of the Human Language Technology Conference of the NAACL, Main Conference, pages 104–111, New York City, USA. Association for Computational Linguistics.",
+      "citeRegEx" : "Liang et al\\.,? 2006",
+      "shortCiteRegEx" : "Liang et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "Generalized agreement for bidirectional word alignment",
+      "author" : [ "Chunyang Liu", "Yang Liu", "Maosong Sun", "Huanbo Luan", "Heng Yu." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages 1828–1836, Lis-",
+      "citeRegEx" : "Liu et al\\.,? 2015",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Loglinear models for word alignment",
+      "author" : [ "Yang Liu", "Qun Liu", "Shouxun Lin." ],
+      "venue" : "Proceedings of the 43rd Annual Meeting of the Association for Computational Linguistics (ACL’05), pages 459– 466, Ann Arbor, Michigan. Association for Compu-",
+      "citeRegEx" : "Liu et al\\.,? 2005",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2005
+    }, {
+      "title" : "Improving IBM word alignment model 1",
+      "author" : [ "Robert C. Moore." ],
+      "venue" : "Proceedings of the 42nd Annual Meeting of the Association for Computational Linguistics (ACL-04), pages 518–525, Barcelona, Spain.",
+      "citeRegEx" : "Moore.,? 2004",
+      "shortCiteRegEx" : "Moore.",
+      "year" : 2004
+    }, {
+      "title" : "Improved statistical alignment models",
+      "author" : [ "Franz Josef Och", "Hermann Ney." ],
+      "venue" : "Proceedings of the 38th Annual Meeting of the Association for Computational Linguistics, pages 440–447, Hong Kong. Association for Computational Linguistics.",
+      "citeRegEx" : "Och and Ney.,? 2000",
+      "shortCiteRegEx" : "Och and Ney.",
+      "year" : 2000
+    }, {
+      "title" : "A systematic comparison of various statistical alignment models",
+      "author" : [ "Franz Josef Och", "Hermann Ney." ],
+      "venue" : "Computational Linguistics, 29(1):19–51.",
+      "citeRegEx" : "Och and Ney.,? 2003",
+      "shortCiteRegEx" : "Och and Ney.",
+      "year" : 2003
+    }, {
+      "title" : "Neural automatic post-editing using prior alignment and reranking",
+      "author" : [ "Santanu Pal", "Sudip Kumar Naskar", "Mihaela Vela", "Qun Liu", "Josef van Genabith." ],
+      "venue" : "Proceedings of the 15th Conference of the European Chapter of the Association for Computa-",
+      "citeRegEx" : "Pal et al\\.,? 2017",
+      "shortCiteRegEx" : "Pal et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Generating alignments using target foresight in attention-based neural machine translation",
+      "author" : [ "Jan-Thorsten Peter", "Arne Nix", "Hermann Ney." ],
+      "venue" : "The Prague Bulletin of Mathematical Linguistics, 108(1):27–36.",
+      "citeRegEx" : "Peter et al\\.,? 2017",
+      "shortCiteRegEx" : "Peter et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Dynamic routing between capsules",
+      "author" : [ "Sara Sabour", "Nicholas Frosst", "Geoffrey E. Hinton." ],
+      "venue" : "Advances in Neural Information Processing Systems 30: Annual Conference on Neural Information Processing Systems 2017, December 4-9, 2017, Long",
+      "citeRegEx" : "Sabour et al\\.,? 2017",
+      "shortCiteRegEx" : "Sabour et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Neural machine translation of rare words with subword units",
+      "author" : [ "Rico Sennrich", "Barry Haddow", "Alexandra Birch." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1715–",
+      "citeRegEx" : "Sennrich et al\\.,? 2016",
+      "shortCiteRegEx" : "Sennrich et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Sequence to sequence learning with neural networks",
+      "author" : [ "Ilya Sutskever", "Oriol Vinyals", "Quoc V. Le." ],
+      "venue" : "Advances in Neural Information Processing Systems 27: Annual Conference on Neural Information Processing Systems 2014, December 8-13 2014,",
+      "citeRegEx" : "Sutskever et al\\.,? 2014",
+      "shortCiteRegEx" : "Sutskever et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Recurrent neural networks for word alignment model",
+      "author" : [ "Akihiro Tamura", "Taro Watanabe", "Eiichiro Sumita." ],
+      "venue" : "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1470–",
+      "citeRegEx" : "Tamura et al\\.,? 2014",
+      "shortCiteRegEx" : "Tamura et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Modeling coverage for neural machine translation",
+      "author" : [ "Zhaopeng Tu", "Zhengdong Lu", "Yang Liu", "Xiaohua Liu", "Hang Li." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages",
+      "citeRegEx" : "Tu et al\\.,? 2016",
+      "shortCiteRegEx" : "Tu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems 30: Annual Conference on Neural Information Processing Systems 2017, December 49, 2017, Long Beach, CA, USA, pages 5998–6008.",
+      "citeRegEx" : "Kaiser and Polosukhin.,? 2017",
+      "shortCiteRegEx" : "Kaiser and Polosukhin.",
+      "year" : 2017
+    }, {
+      "title" : "Analyzing the structure of attention in a transformer language model",
+      "author" : [ "Jesse Vig", "Yonatan Belinkov." ],
+      "venue" : "Proceedings of the 2019 ACL Workshop BlackboxNLP: Analyzing and Interpreting Neural Networks for NLP, pages 63–76, Florence, Italy. As-",
+      "citeRegEx" : "Vig and Belinkov.,? 2019",
+      "shortCiteRegEx" : "Vig and Belinkov.",
+      "year" : 2019
+    }, {
+      "title" : "Word alignment modeling with context dependent deep neural network",
+      "author" : [ "Nan Yang", "Shujie Liu", "Mu Li", "Ming Zhou", "Nenghai Yu." ],
+      "venue" : "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Pa-",
+      "citeRegEx" : "Yang et al\\.,? 2013",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Adding interpretable attention to neural translation models improves word alignment",
+      "author" : [ "Thomas Zenkel", "Joern Wuebker", "John DeNero." ],
+      "venue" : "arXiv preprint arXiv:1901.11359.",
+      "citeRegEx" : "Zenkel et al\\.,? 2019",
+      "shortCiteRegEx" : "Zenkel et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "End-to-end neural word alignment outperforms GIZA++",
+      "author" : [ "Thomas Zenkel", "Joern Wuebker", "John DeNero." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 1605–1617, Online. Association for",
+      "citeRegEx" : "Zenkel et al\\.,? 2020",
+      "shortCiteRegEx" : "Zenkel et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 3,
+      "context" : "Word alignment is an important task of finding the correspondence between words in a sentence pair (Brown et al., 1993) and used to be a key component of statistical machine translation (SMT) (Koehn et al.",
+      "startOffset" : 99,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 16,
+      "context" : ", 1993) and used to be a key component of statistical machine translation (SMT) (Koehn et al., 2003; Dyer et al., 2013).",
+      "startOffset" : 80,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 10,
+      "context" : ", 1993) and used to be a key component of statistical machine translation (SMT) (Koehn et al., 2003; Dyer et al., 2013).",
+      "startOffset" : 80,
+      "endOffset" : 119
+    }, {
+      "referenceID" : 2,
+      "context" : "Although word alignment is no longer explicitly modeled in neural machine translation (NMT) (Bahdanau et al., 2015; Vaswani et al., 2017), it is often leveraged to analyze NMT models (Tu et al.",
+      "startOffset" : 92,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 30,
+      "context" : ", 2017), it is often leveraged to analyze NMT models (Tu et al., 2016; Ding et al., 2017).",
+      "startOffset" : 53,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2017), it is often leveraged to analyze NMT models (Tu et al., 2016; Ding et al., 2017).",
+      "startOffset" : 53,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 24,
+      "context" : ", 2018), improving automatic post-editing (Pal et al., 2017) , and providing guidance for translators in computer-aided translation (Dagan et al.",
+      "startOffset" : 42,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 7,
+      "context" : ", 2017) , and providing guidance for translators in computer-aided translation (Dagan et al., 1993).",
+      "startOffset" : 79,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 33,
+      "context" : "Compared with statistical methods, neural methods can learn representations end-to-end from raw data and have been successfully applied to supervised word alignment (Yang et al., 2013; Tamura et al., 2014).",
+      "startOffset" : 165,
+      "endOffset" : 205
+    }, {
+      "referenceID" : 29,
+      "context" : "Compared with statistical methods, neural methods can learn representations end-to-end from raw data and have been successfully applied to supervised word alignment (Yang et al., 2013; Tamura et al., 2014).",
+      "startOffset" : 165,
+      "endOffset" : 205
+    }, {
+      "referenceID" : 10,
+      "context" : "For unsupervised word alignment, however, previous neural methods fail to significantly exceed their statistical counterparts such as FAST-ALIGN (Dyer et al., 2013) and GIZA++ (Och and Ney, 2003).",
+      "startOffset" : 145,
+      "endOffset" : 164
+    }, {
+      "referenceID" : 17,
+      "context" : "Recently, there is a surge of interest in NMT-based alignment methods which take alignments as a by-product of NMT systems (Li et al., 2019; Garg et al., 2019; Zenkel et al., 2019, 2020; Chen et al., 2020).",
+      "startOffset" : 123,
+      "endOffset" : 205
+    }, {
+      "referenceID" : 11,
+      "context" : "Recently, there is a surge of interest in NMT-based alignment methods which take alignments as a by-product of NMT systems (Li et al., 2019; Garg et al., 2019; Zenkel et al., 2019, 2020; Chen et al., 2020).",
+      "startOffset" : 123,
+      "endOffset" : 205
+    }, {
+      "referenceID" : 5,
+      "context" : "Recently, there is a surge of interest in NMT-based alignment methods which take alignments as a by-product of NMT systems (Li et al., 2019; Garg et al., 2019; Zenkel et al., 2019, 2020; Chen et al., 2020).",
+      "startOffset" : 123,
+      "endOffset" : 205
+    }, {
+      "referenceID" : 28,
+      "context" : "property of NMT systems (Sutskever et al., 2014), they only leverage part of the target context.",
+      "startOffset" : 24,
+      "endOffset" : 48
+    }, {
+      "referenceID" : 4,
+      "context" : "Second, they have to incorporate an additional guided alignment loss (Chen et al., 2016) to outperform GIZA++.",
+      "startOffset" : 69,
+      "endOffset" : 88
+    }, {
+      "referenceID" : 25,
+      "context" : "Conventional unsupervised neural aligners are based on NMT models (Peter et al., 2017; Garg et al., 2019).",
+      "startOffset" : 66,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 11,
+      "context" : "Conventional unsupervised neural aligners are based on NMT models (Peter et al., 2017; Garg et al., 2019).",
+      "startOffset" : 66,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 21,
+      "context" : "This is similar to the “garbage collectors” effect (Moore, 2004) in statistical aligners, where a source token is aligned to too many target tokens.",
+      "startOffset" : 51,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 6,
+      "context" : "This phenomenon has been studied in previous works (Clark et al., 2019; Kobayashi et al., 2020).",
+      "startOffset" : 51,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 15,
+      "context" : "This phenomenon has been studied in previous works (Clark et al., 2019; Kobayashi et al., 2020).",
+      "startOffset" : 51,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 3,
+      "context" : "We conjecture that this phenomenon is due to the incapability of NMT-based aligners to deal with tokens that have no counterparts on the other side because there is no empty (NULL) token that is widely used in statistical aligners (Brown et al., 1993; Och and Ney, 2003).",
+      "startOffset" : 231,
+      "endOffset" : 270
+    }, {
+      "referenceID" : 23,
+      "context" : "We conjecture that this phenomenon is due to the incapability of NMT-based aligners to deal with tokens that have no counterparts on the other side because there is no empty (NULL) token that is widely used in statistical aligners (Brown et al., 1993; Och and Ney, 2003).",
+      "startOffset" : 231,
+      "endOffset" : 270
+    }, {
+      "referenceID" : 32,
+      "context" : "Note that leaky attention is different from adding a special token in the source sequence, which will share the same high attention weights with the existing collector instead of calibrating it (Vig and Belinkov, 2019).",
+      "startOffset" : 194,
+      "endOffset" : 218
+    }, {
+      "referenceID" : 26,
+      "context" : "Our parameterized method is more flexible than Leaky-Softmax (Sabour et al., 2017) which adds an extra dimension with the value of zero to the routing logits.",
+      "startOffset" : 61,
+      "endOffset" : 82
+    }, {
+      "referenceID" : 18,
+      "context" : "To better utilize the attention weights from two directions, we apply an agreement loss in the training process to improve the symmetry of our model, which has proven effective in statistical alignment models (Liang et al., 2006; Liu et al., 2015).",
+      "startOffset" : 209,
+      "endOffset" : 247
+    }, {
+      "referenceID" : 19,
+      "context" : "To better utilize the attention weights from two directions, we apply an agreement loss in the training process to improve the symmetry of our model, which has proven effective in statistical alignment models (Liang et al., 2006; Liu et al., 2015).",
+      "startOffset" : 209,
+      "endOffset" : 247
+    }, {
+      "referenceID" : 27,
+      "context" : "We used a joint source and target Byte Pair Encoding (BPE) (Sennrich et al., 2016) with 40k merge operations.",
+      "startOffset" : 59,
+      "endOffset" : 82
+    }, {
+      "referenceID" : 22,
+      "context" : "The evaluation metric is Alignment Error Rate (AER) (Och and Ney, 2000).",
+      "startOffset" : 52,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 11,
+      "context" : "• NAIVE-ATT (Garg et al., 2019): a method that induces alignments from cross-attention weights of the best (usually penultimate) decoder layer in a vanilla Tranformer.",
+      "startOffset" : 12,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 34,
+      "context" : "• ADDSGD (Zenkel et al., 2019): a method that adds an extra alignment layer to repredict the to-be-aligned target token.",
+      "startOffset" : 9,
+      "endOffset" : 30
+    }, {
+      "referenceID" : 11,
+      "context" : "• MTL-FULLC (Garg et al., 2019): a method that supervises an attention head with symmetrized NAIVE-ATT alignments in a multitask learning framework.",
+      "startOffset" : 12,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 35,
+      "context" : "• BAO (Zenkel et al., 2020): an improved version of ADDSGD that extracts alignments with Bidirectional Attention Optimization.",
+      "startOffset" : 6,
+      "endOffset" : 27
+    }, {
+      "referenceID" : 5,
+      "context" : "• SHIFT-ATT (Chen et al., 2020): a method that induces alignments when the to-be-aligned tatget token is the decoder input instead of the output.",
+      "startOffset" : 12,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 11,
+      "context" : "We also included three additional baselines with guided training: (1) MTL-FULLC-GZ (Garg et al., 2019) which replaces the alignment labels in MTLFULLC with GIZA++ results, (2) BAO-GUIDED (Zenkel et al.",
+      "startOffset" : 83,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 35,
+      "context" : ", 2019) which replaces the alignment labels in MTLFULLC with GIZA++ results, (2) BAO-GUIDED (Zenkel et al., 2020) which uses alignments from BAO for guided alignment training, (3) SHIFTAET (Chen et al.",
+      "startOffset" : 92,
+      "endOffset" : 113
+    }, {
+      "referenceID" : 5,
+      "context" : ", 2020) which uses alignments from BAO for guided alignment training, (3) SHIFTAET (Chen et al., 2020) which trains an additional alignment module with supervision from symmetrized SHIFT-ATT alignments.",
+      "startOffset" : 83,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 29,
+      "context" : "While early unsupervised neural aligners (Tamura et al., 2014; Alkhouli et al., 2016; Peter et al., 2017) failed to outperform their statistical counterparts such as FAST-ALIGN (Dyer et al.",
+      "startOffset" : 41,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 0,
+      "context" : "While early unsupervised neural aligners (Tamura et al., 2014; Alkhouli et al., 2016; Peter et al., 2017) failed to outperform their statistical counterparts such as FAST-ALIGN (Dyer et al.",
+      "startOffset" : 41,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 25,
+      "context" : "While early unsupervised neural aligners (Tamura et al., 2014; Alkhouli et al., 2016; Peter et al., 2017) failed to outperform their statistical counterparts such as FAST-ALIGN (Dyer et al.",
+      "startOffset" : 41,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 10,
+      "context" : ", 2017) failed to outperform their statistical counterparts such as FAST-ALIGN (Dyer et al., 2013) and GIZA++ (Och and Ney, 2003), recent studies have made significant progress by inducing alignments from NMT models (Garg et al.",
+      "startOffset" : 79,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 23,
+      "context" : ", 2013) and GIZA++ (Och and Ney, 2003), recent studies have made significant progress by inducing alignments from NMT models (Garg et al.",
+      "startOffset" : 19,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 11,
+      "context" : ", 2013) and GIZA++ (Och and Ney, 2003), recent studies have made significant progress by inducing alignments from NMT models (Garg et al., 2019; Zenkel et al., 2019, 2020; Chen et al., 2020).",
+      "startOffset" : 125,
+      "endOffset" : 190
+    }, {
+      "referenceID" : 5,
+      "context" : ", 2013) and GIZA++ (Och and Ney, 2003), recent studies have made significant progress by inducing alignments from NMT models (Garg et al., 2019; Zenkel et al., 2019, 2020; Chen et al., 2020).",
+      "startOffset" : 125,
+      "endOffset" : 190
+    }, {
+      "referenceID" : 12,
+      "context" : "Our work is also inspired by the success of conditional masked language models (CMLMs) (Ghazvininejad et al., 2019), which have been applied to non-autoregressive machine translation.",
+      "startOffset" : 87,
+      "endOffset" : 115
+    } ],
+    "year" : 2021,
+    "abstractText" : "Word alignment, which aims to align translationally equivalent words between source and target sentences, plays an important role in many natural language processing tasks. Current unsupervised neural alignment methods focus on inducing alignments from neural machine translation models, which does not leverage the full context in the target sequence. In this paper, we propose MASK-ALIGN, a selfsupervised word alignment model that takes advantage of the full context on the target side. Our model parallelly masks out each target token and predicts it conditioned on both source and the remaining target tokens. This two-step process is based on the assumption that the source token contributing most to recovering the masked target token should be aligned. We also introduce an attention variant called leaky attention, which alleviates the problem of high cross-attention weights on specific tokens such as periods. Experiments on four language pairs show that our model outperforms previous unsupervised neural aligners and obtains new state-of-the-art results.1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

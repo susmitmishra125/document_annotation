@@ -1,0 +1,664 @@
+{
+  "name" : "2021.acl-long.264.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Consistency Regularization for Cross-Lingual Fine-Tuning",
+    "authors" : [ "Bo Zheng", "Li Dong", "Shaohan Huang", "Wenhui Wang", "Zewen Chi", "Saksham Singhal", "Wanxiang Che", "Ting Liu", "Xia Song", "Furu Wei" ],
+    "emails" : [ "bzheng@ir.hit.edu.cn", "car@ir.hit.edu.cn", "tliu@ir.hit.edu.cn", "lidong1@microsoft.com", "shaohanh@microsoft.com", "wenwan@microsoft.com", "saksingh@microsoft.com", "xiaso@microsoft.com", "fuwei@microsoft.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 3403–3417\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n3403"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al., 2020a; Chi et al., 2020) have shown great transferability across languages. By fine-tuning on labeled data in a source language, the models can generalize to other target languages, even without any additional training. Such generalization ability reduces the required annotation efforts, which is prohibitively expensive for low-resource languages.\nRecent work has demonstrated that data augmentation is helpful for cross-lingual transfer, e.g., translating source language training data into target languages (Singh et al., 2019), and generating codeswitch data by randomly replacing input words in the source language with translated words in target languages (Qin et al., 2020). By populating the dataset, their fine-tuning still treats training\n∗Contribution during internship at Microsoft Research. 1The code is available at https://github.com/\nbozheng-hit/xTune.\ninstances independently, without considering the inherent correlations between the original input and its augmented example. In contrast, we propose to utilize consistency regularization to better leverage data augmentation for cross-lingual fine-tuning. Intuitively, for a semantic-preserving augmentation strategy, the predicted result of the original input should be similar to its augmented one. For example, the classification predictions of an English sentence and its translation tend to remain consistent.\nIn this work, we introduce a cross-lingual finetuning method XTUNE that is enhanced by consistency regularization and data augmentation. First, example consistency regularization enforces the model predictions to be more consistent for semantic-preserving augmentations. The regularizer penalizes the model sensitivity to different surface forms of the same example (e.g., texts written in different languages), which implicitly encourages cross-lingual transferability. Second, we introduce model consistency to regularize the models trained with various augmentation strategies. Specifically, given two augmented versions of the same training set, we encourage the models trained on these two datasets to make consistent predictions for the same example. The method enforces the corpus-level consistency between the distributions learned by two models.\nUnder the proposed fine-tuning framework, we study four strategies of data augmentation, i.e., subword sampling (Kudo, 2018), code-switch substitution (Qin et al., 2020), Gaussian noise (Aghajanyan et al., 2020), and machine translation. We evaluate XTUNE on the XTREME benchmark (Hu et al., 2020), including three different tasks on seven datasets. Experimental results show that our method outperforms conventional fine-tuning with data augmentation. We also demonstrate that XTUNE is flexible to be plugged in various\ntasks, such as classification, span extraction, and sequence labeling.\nWe summarize our contributions as follows:\n• We propose XTUNE, a cross-lingual finetuning method to better utilize data augmentations based on consistency regularization.\n• We study four types of data augmentations that can be easily plugged into cross-lingual fine-tuning.\n• We give instructions on how to apply XTUNE to various downstream tasks, such as classification, span extraction, and sequence labeling.\n• We conduct extensive experiments to show that XTUNE consistently improves the performance of cross-lingual fine-tuning."
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "Cross-Lingual Transfer Besides learning crosslingual word embeddings (Mikolov et al., 2013; Faruqui and Dyer, 2014; Guo et al., 2015; Xu et al., 2018; Wang et al., 2019), most recent work of cross-lingual transfer is based on pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al., 2020a; Chi et al., 2020). These models generate multilingual contextualized word representations for different languages with a shared encoder and show promising cross-lingual transferability.\nCross-Lingual Data Augmentation Machine translation has been successfully applied to the cross-lingual scenario as data augmentation. A common way to use machine translation is to finetune models on both source language training data and translated data in all target languages. Furthermore, Singh et al. (2019) proposed to replace a segment of source language input text with its translation in another language. However, it is usually impossible to map the labels in source language data into target language translations for token-level tasks. Zhang et al. (2019) used code-mixing to perform the syntactic transfer in cross-lingual dependency parsing. Fei et al. (2020) constructed pseudo translated target corpora from the gold-standard annotations of the source languages for cross-lingual semantic role labeling. Fang et al. (2020) proposed an additional Kullback-Leibler divergence self-teaching loss for model training, based on autogenerated soft pseudo-labels for translated text in\nthe target language. Besides, Qin et al. (2020) finetuned models on multilingual code-switch data, which achieves considerable improvements.\nConsistency Regularization One strand of work in consistency regularization focused on regularizing model predictions to be invariant to small perturbations on image data. The small perturbations can be random noise (Zheng et al., 2016), adversarial noise (Miyato et al., 2019; Carmon et al., 2019) and various data augmentation approaches (Hu et al., 2017; Ye et al., 2019; Xie et al., 2020). Similar ideas are used in the natural language processing area. Both adversarial noise (Zhu et al., 2020; Jiang et al., 2020; Liu et al., 2020) and sampled Gaussian noise (Aghajanyan et al., 2020) are adopted to augment input word embeddings. Another strand of work focused on consistency under different model parameters (Tarvainen and Valpola, 2017; Athiwaratkun et al., 2019), which is complementary to the first strand. We focus on the cross-lingual setting, where consistency regularization has not been fully explored."
+    }, {
+      "heading" : "3 Methods",
+      "text" : "Conventional cross-lingual fine-tuning trains a pretrained language model on the source language and directly evaluates it on other languages, which is also known as the setting of zero-shot cross-lingual fine-tuning. Specifically, given a training corpus D in the source language (typically in English), and a model f(·; θ) that predicts task-specific probability distributions, we define the loss of cross-lingual fine-tuning as:\nLtask(D, θ) = ∑ x∈D `(f(x; θ), G(x)),\nwhere G(x) denotes the ground-truth label of example x, `(·, ·) is the loss function depending on the downstream task.\nApart from vanilla cross-lingual fine-tuning on the source language, recent work shows that data augmentation is helpful to improve performance on the target languages. For example, Conneau and Lample (2019) add translated examples to the training set for better cross-lingual transfer. Let A(·) be a cross-lingual data augmentation strategy (such as code-switch substitution), and DA = D ∪ {A(x) | x ∈ D} be the augmented training corpus, the fine-tuning loss isLtask(DA, θ). Notice that it is non-trivial to apply some augmentations for tokenlevel tasks directly. For instance, in part-of-speech\ntagging, the labels of source language examples can not be mapped to the translated examples because of the lack of explicit alignments."
+    }, {
+      "heading" : "3.1 XTUNE: Cross-Lingual Fine-Tuning with Consistency Regularization",
+      "text" : "We propose to improve cross-lingual fine-tuning with two consistency regularization methods, so that we can effectively leverage cross-lingual data augmentations."
+    }, {
+      "heading" : "3.1.1 Example Consistency Regularization",
+      "text" : "In order to encourage consistent predictions for an example and its semantically equivalent augmentation, we introduce example consistency regularization, which is defined as follows:\nR1(D, θ,A) = ∑ x∈D KLS(f(x; θ)‖f(A(x); θ)),\nKLS(P,Q) = KL(stopgrad(P )‖Q)+ KL(stopgrad(Q)‖P )\nwhere KLS(·) is the symmertrical Kullback-Leibler divergence. The regularizer encourages the predicted distributions f(x; θ) and f(A(x); θ) to agree with each other. The stopgrad(·) operation2 is used to stop back-propagating gradients, which is also employed in (Jiang et al., 2020; Liu et al., 2020). The ablation studies in Section 4.2 empirically show that the operation improves fine-tuning performance.\n2Implemented by .detach() in PyTorch."
+    }, {
+      "heading" : "3.1.2 Model Consistency Regularization",
+      "text" : "While the example consistency regularization is conducted at the example level, we propose the model consistency to further regularize the model training at the corpus level. The regularization is conducted at two stages. First, we obtain a finetuned model θ∗ on the training corpus D:\nθ∗ = argmin θ1 Ltask(D, θ1).\nIn the second stage, we keep the parameters θ∗ fixed. The regularization term is defined as:\nR2(DA, θ, θ∗) = ∑ x∈DA KL(f(x; θ∗)‖f(x; θ))\nwhere DA is the augmented training corpus, and KL(·) is Kullback-Leibler divergence. For each example x of the augmented training corpus DA, the model consistency regularization encourages the prediction f(x; θ) to be consistent with f(x; θ∗). The regularizer enforces the corpus-level consistency between the distributions learned by two models.\nAn unobvious advantage of model consistency regularization is the flexibility with respect to data augmentation strategies. For the example of partof-speech tagging, even though the labels can not be directly projected from an English sentence to its translation, we are still able to employ the regularizer. Because the term R2 is put on the same example x ∈ DA, we can always align the tokenlevel predictions of the models θ and θ∗."
+    }, {
+      "heading" : "3.1.3 Full XTUNE Fine-Tuning",
+      "text" : "As shown in Figure 1, we combine example consistency regularizationR1 and model consistency regularization R2 as a two-stage fine-tuning process. Formally, we fine-tune a model with R1 in the first stage:\nθ∗ = argmin θ1 Ltask(D, θ1) +R1(D, θ1,A∗)\nwhere the parameters θ∗ are kept fixed for R2 in the second stage. Then the final loss is computed via:\nLXTUNE = Ltask(DA, θ) + λ1R1(DA, θ,A′) + λ2R2(DA, θ, θ∗)\nwhere λ1 and λ2 are the corresponding weights of two regularization methods. Notice that the data augmentation strategies A, A′, and A∗ can be either different or the same, which are tuned as hyper-parameters."
+    }, {
+      "heading" : "3.2 Data Augmentation",
+      "text" : "We consider four types of data augmentation strategies in this work, which are shown in Figure 2. We aim to study the impact of different data augmentation strategies on cross-lingual transferability."
+    }, {
+      "heading" : "3.2.1 Subword Sampling",
+      "text" : "Representing a sentence in different subword sequences can be viewed as a data augmentation strategy (Kudo, 2018; Provilkov et al., 2020). We utilize XLM-R (Conneau et al., 2020a) as our pre-trained\ncross-lingual language model, while it applies subword tokenization directly on raw text data using SentencePiece (Kudo and Richardson, 2018) with a unigram language model (Kudo, 2018). As one of our data augmentation strategies, we apply the on-the-fly subword sampling algorithm in the unigram language model to generate multiple subword sequences."
+    }, {
+      "heading" : "3.2.2 Gaussian Noise",
+      "text" : "Most data augmentation strategies in NLP change input text discretely, while we directly add random perturbation noise sampled from Gaussian distribution on the input embedding layer to conduct data augmentation. When combining this data augmentation with example consistencyR1, the method is similar to the stability training (Zheng et al., 2016), random perturbation training (Miyato et al., 2019) and the R3F method (Aghajanyan et al., 2020). We also explore Gaussian noise’s capability to generate new examples on continuous input space for conventional fine-tuning."
+    }, {
+      "heading" : "3.2.3 Code-Switch Substitution",
+      "text" : "Anchor points have been shown useful to improve cross-lingual transferability. Conneau et al. (2020b) analyzed the impact of anchor points in pre-training cross-lingual language models. Following Qin et al. (2020), we generate code-switch data in multiple languages as data augmentation. We randomly select words in the original text in the source language and replace them with target language words in the bilingual dictionaries to obtain code-switch data. Intuitively, this type of data augmentation explicitly helps pre-trained cross-lingual models align the multilingual vector space by the replaced anchor points."
+    }, {
+      "heading" : "3.2.4 Machine Translation",
+      "text" : "Machine translation has been proved to be an effective data augmentation strategy (Singh et al., 2019) under the cross-lingual scenario. However, the ground-truth labels of translated data can be unavailable for token-level tasks (see Section 3), which disables conventional fine-tuning on the augmented data. Meanwhile, our proposed model consistencyR2 can not only serve as consistency regularization but also can be viewed as a self-training objective to enable semi-supervised training on the unlabeled target language translations."
+    }, {
+      "heading" : "3.3 Task Adaptation",
+      "text" : "We give instructions on how to apply XTUNE to various downstream tasks, i.e., classification, span extraction, and sequence labeling. By default, we use model consistency R2 in full XTUNE. We describe the usage of example consistency R1 as follows."
+    }, {
+      "heading" : "3.3.1 Classification",
+      "text" : "For classification task, the model is expected to predict one distribution per example on nlabel types, i.e., model f(·; θ) should predict a probability distribution pcls ∈ Rnlabel . Thus we can directly use example consistency R1 to regularize the consistency of the two distributions for all four types of our data augmentation strategies."
+    }, {
+      "heading" : "3.3.2 Span Extraction",
+      "text" : "For span extraction task, the model is expected to predict two distributions per example pstart, pend ∈ Rnsubword , indicating the probability distribution of where the answer span starts and ends, nsubword denotes the length of the tokenized input text. For Gaussian noise, the subword sequence remains unchanged so that example consistency R1 can be directly applied to the two distributions. Since subword sampling and code-switch substitution will change nsubword, we control the ratio of words to be modified and utilize example consistency R1 on unchanged positions only. We do not use the example consistency R1 for machine translation because it is impossible to explicitly align the two distributions."
+    }, {
+      "heading" : "3.3.3 Sequence Labeling",
+      "text" : "Recent pre-trained language models generate representations at the subword-level. For sequence labeling tasks, these models predict label distributions on each word’s first subword. Therefore, the model is expected to predict nword probability distributions per example on nlabel types. Unlike span extraction, subword sampling, code-switch substitution, and Gaussian noise do not change nword. Thus the three data augmentation strategies will not affect the usage of example consistency R1. Although word alignment is a possible solution to map the predicted label distributions between translation pairs, the word alignment process will introduce more noise. Therefore, we do not employ machine translation as data augmentation for the example consistencyR1."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Experiment Setup",
+      "text" : "Datasets For our experiments, we select three types of cross-lingual understanding tasks from XTREME benchmark (Hu et al., 2020), including two classification datasets: XNLI (Conneau et al., 2018), PAWS-X (Yang et al., 2019), three span extraction datasets: XQuAD (Artetxe et al., 2020), MLQA (Lewis et al., 2020), TyDiQA-GoldP (Clark et al., 2020), and two sequence labeling datasets: NER (Pan et al., 2017), POS (Nivre et al., 2018). The statistics of the datasets are shown in the supplementary document.\nFine-Tuning Settings We consider two typical fine-tuning settings from Conneau et al. (2020a) and Hu et al. (2020) in our experiments, which are (1) cross-lingual transfer: the models are finetuned on English training data without translation available, and directly evaluated on different target languages; (2) translate-train-all: translationbased augmentation is available, and the models are fine-tuned on the concatenation of English training data and its translated data on all target languages. Since the official XTREME repository3 does not provide translated target language data for POS and NER, we use Google Translate to obtain translations for these two datasets.\nImplementation Details We utilize XLMR (Conneau et al., 2020a) as our pre-trained cross-lingual language model. The bilingual dictionaries we used for code-switch substitution are from MUSE (Lample et al., 2018).4 For languages that cannot be found in MUSE, we ignore these languages since other bilingual dictionaries might be of poorer quality. For the POS dataset, we use the average-pooling strategy on subwords to obtain word representation since part-of-speech is related to different parts of words, depending on the language. We tune the hyper-parameter and select the model with the best average results over all the languages’ development set. There are two datasets without development set in multi-languages. For XQuAD, we tune the hyper-parameters with the development set of MLQA since they share the same training set and have a higher degree of overlap in languages. For TyDiQA-GoldP, we use the English test set\n3github.com/google-research/xtreme 4github.com/facebookresearch/MUSE\nas the development set. In order to make a fair comparison, the ratio of data augmentation in DA is all set to 1.0. The detailed hyper-parameters are shown in the supplementary document."
+    }, {
+      "heading" : "4.2 Results",
+      "text" : "Table 1 shows our results on XTREME. For the cross-lingual transfer setting, we outperform previous works on all seven cross-lingual language understanding datasets.5 Compared to XLM-Rlarge baseline, we achieve an absolute 4.9-point improvement (70.0 vs. 74.9) on average over seven datasets. For the translate-train-all setting, we achieved stateof-the-art results on six of the seven datasets. Com-\n5X-STILTs (Phang et al., 2020) uses additional SQuAD v1.1 English training data for the TyDiQA-GoldP dataset, while we prefer a cleaner setting here.\npared to FILTER,6 we achieve an absolute 2.1- point improvement (74.4 vs. 76.5), and we do not need English translations during inference.\nTable 2 shows how the two regularization methods affect the model performance separately. For the cross-lingual transfer setting, XTUNE achieves an absolute 2.8-point improvement compared to our implemented XLM-Rbase baseline. Meanwhile, fine-tuning with only example consistencyR1 and model consistency R2 degrades the averaged results by 0.4 and 1.0 points, respectively.\nFor the translate-train-all setting, our proposed model consistencyR2 enables training on POS and NER even if labels of target language translations\n6FILTER directly selects the best model on the test set of XQuAD and TyDiQA-GoldP. Under this setting, we can obtain 83.1/69.7 for XQuAD, 75.5/61.1 for TyDiQA-GoldP.\nare unavailable in these two datasets. To make a fair comparison in the translate-train-all setting, we augment the English training corpus with target language translations when fine-tuning with only example consistencyR1. Otherwise, we only use the English training corpus in the first stage, as shown in Figure 1(a). Compared to XTUNE, the performance drop on two classification datasets under this setting is relatively small sinceR1 can be directly applied between translation-pairs in any languages. However, the performance is significantly degraded in three question answering datasets, where we can not align the predicted distributions between translation-pairs inR1. We use subword sampling as the data augmentation strategy in R1 for this situation. Fine-tuning with only model consistency R2 degrades the overall performance by 1.1 points. These results demonstrate that the two consistency regularization methods complement each other. Be-\nsides, we observe that removing stopgrad degrades the overall performance by 0.5 points.\nTable 3 provides results of each language on the XNLI dataset. For the cross-lingual transfer setting, we utilize code-switch substitution as data augmentation for both example consistencyR1 and model consistencyR2. We utilize all the bilingual dictionaries, except for English to Swahili and English to Urdu, which MUSE does not provide. Results show that our method outperforms all baselines on each language, even on Swahili (+2.2 points) and Urdu (+5.4 points), indicating our method can be generalized to low-resource languages even without corresponding machine translation systems or bilingual dictionaries. For translate-train-all setting, we utilize machine translation as data augmentation for both example consistency R1 and model consistencyR2. We improve the XLM-Rlarge baseline by +2.2 points on average, while we still have +0.9 points on average compared to FILTER. It is worth mentioning that we do not need corresponding English translations during inference. Complete results on other datasets are provided in the supplementary document."
+    }, {
+      "heading" : "4.3 Analysis",
+      "text" : ""
+    }, {
+      "heading" : "It is better to employ data augmentation for consistency regularization than for conven-",
+      "text" : "tional fine-tuning. As shown in Table 4, com-\npared to employing data augmentation for conventional fine-tuning (Data Aug.), our regularization methods (XTUNER1 , XTUNER2) consistently improve the model performance under all four data augmentation strategies. Since there is no labeled data on translations in POS and the issue of distribution alignment in example consistencyR1, when machine translation is utilized as data augmentation, the results for Data Aug. and XTUNER1 in POS, as well as XTUNER1 in MLQA, are unavailable. We observe that Data Aug. can enhance the overall performance for coarse-grained tasks like XNLI, while our methods can further improve the results. However, Data Aug. even causes the performance to degrade for fine-grained tasks like MLQA and POS. In contrast, our proposed two consistency regularization methods improve the performance by a large margin (e.g., for MLQA under code-switch data augmentation, Data Aug. decreases baseline by 1.2 points, while XTUNER1 increases baseline by 2.6 points). We give detailed instructions on how to choose data augmentation strategies for XTUNE in the supplementary document.\nXTUNE improves cross-lingual retrieval. We fine-tune the models on XNLI with different settings and compare their performance on two crosslingual retrieval datasets. Following Chi et al. (2020) and Hu et al. (2020), we utilize representations averaged with hidden-states on the layer 8 of XLM-Rbase. As shown in Table 5, we observe significant improvement from the translatetrain-all baseline to fine-tuning with only example consistencyR1, this suggests regularizing the taskspecific output of translation-pairs to be consistent also encourages the model to generate language-\ninvariant representations. XTUNE only slightly improves upon this setting, indicating R1 between translation-pairs is the most important factor to improve cross-lingual retrieval task.\nXTUNE improves decision boundaries as well as the ability to generate language-invariant representations. As shown in Figure 3, we present t-SNE visualization of examples from the XNLI development set under three different settings. We observe the model fine-tuned with XTUNE significantly improves the decision boundaries of different labels. Besides, for an English example and its translations in other languages, the model fine-tuned with XTUNE generates more similar representations compared to the two baseline models. This observation is also consistent with the cross-lingual retrieval results in Table 5."
+    }, {
+      "heading" : "5 Conclusion",
+      "text" : "In this work, we present a cross-lingual fine-tuning framework XTUNE to make better use of data augmentation. We propose two consistency regularization methods that encourage the model to make consistent predictions for an example and its semantically equivalent data augmentation. We explore four types of cross-lingual data augmentation strategies. We show that both example and model consistency regularization considerably boost the performance compared to directly fine-tuning on data augmentations. Meanwhile, model consistency regularization enables semi-supervised training on the unlabeled target language translations. XTUNE combines the two regularization methods, and the experiments show that it can improve the performance by a large margin on the XTREME benchmark."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "Wanxiang Che is the corresponding author. This work was supported by the National Key R&D Program of China via grant 2020AAA0106501 and the National Natural Science Foundation of China (NSFC) via grant 61976072 and 61772153."
+    }, {
+      "heading" : "A Statistics of XTREME Datasets",
+      "text" : ""
+    }, {
+      "heading" : "B Hyper-Parameters",
+      "text" : "For XNLI, PAWS-X, POS and NER, we fine-tune 10 epochs. For XQuAD and MLQA, we fine-tune 4 epochs. For TyDiQA-GoldP, we fine-tune 20 epochs and 10 epochs for base and large model, respectively. We select λ1 in [1.0, 2.0, 5.0], λ2 in [0.3, 0.5, 1.0, 2.0, 5.0]. For learning rate, we select in [5e-6, 7e-6, 1e-5, 1.5e-5] for large models, [7e-6, 1e-5, 2e-5, 3e-5] for base models. We use batch size 32 for all datasets and 10% of total training steps for warmup with a linear learning rate schedule. Our experiments are conducted with a single 32GB Nvidia V100 GPU, and we use gradient accumulation for large-size models. The other hyper-parameters for the two-stage XTUNE training are shown in Table 7 and Table 8."
+    }, {
+      "heading" : "C Results for Each Dataset and Language",
+      "text" : "We provide detailed results for each dataset and language below. We compare our method against XLM-Rlarge for cross-lingual transfer setting, FILTER (Fang et al., 2020) for translate-train-all setting."
+    }, {
+      "heading" : "D How to Select Data Augmentation Strategies in XTUNE",
+      "text" : "We give instructions on selecting a proper data augmentation strategy depending on the corresponding task.\nD.1 Classification\nThe two distribution in example consistency R1 can always be aligned. Therefore, we recommend using machine translation as data augmentation if the machine translation systems are available. Otherwise, the priority of our data augmentation strategies is code-switch substitution, subword sampling and Gaussian noise.\nD.2 Span Extraction The two distribution in example consistency R1 can not be aligned in translation-pairs. Therefore, it is impossible to use machine translation as data augmentation in example consistency R1. We prefer to use code-switch when applying example consistencyR1 individually. However, when the training corpus is augmented with translations, since the bilingual dictionaries between arbitrary language pairs may not be available, we recommend using subword sampling in example consistencyR1.\nD.3 Sequence Labeling Similar to span extraction, the two distribution in example consistency R1 can not be aligned in translation-pairs. Therefore, we do not use machine translation in example consistencyR1. Unlike classification and span extraction, sequence labeling requires finer-grained information and is more sensitive to noise. We found code-switch is worse than subword sampling as data augmentation in both example consistencyR1 and model consistencyR2, it will even degrade performance for certain hyperparameters. Thus we recommend using subword sampling in example consistencyR1, and use machine translation to augment the English training corpus if machine translation systems are available, otherwise subword sampling."
+    }, {
+      "heading" : "E Cross-Lingual Transfer Gap",
+      "text" : "As shown in Table 9, the cross-lingual transfer gap can be reduced under all four data augmentation strategies. Meanwhile, we observe machine translation and code-switch substitution achieve a smaller cross-lingual transfer gap than the other two data augmentation methods. This suggests the data augmentation methods with cross-lingual knowledge have a greater improvement in crosslingual transferability. Although code-switch significantly reduces the transfer gap on XNLI, the improvement is relatively small on POS and MLQA under the cross-lingual transfer setting, indicating the noisy code-switch substitution will harm the cross-lingual transferability on finer-grained tasks."
+    } ],
+    "references" : [ {
+      "title" : "Better fine-tuning by reducing representational collapse",
+      "author" : [ "Armen Aghajanyan", "Akshat Shrivastava", "Anchit Gupta", "Naman Goyal", "Luke Zettlemoyer", "Sonal Gupta." ],
+      "venue" : "CoRR, abs/2008.03156.",
+      "citeRegEx" : "Aghajanyan et al\\.,? 2020",
+      "shortCiteRegEx" : "Aghajanyan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "On the cross-lingual transferability of monolingual representations",
+      "author" : [ "Mikel Artetxe", "Sebastian Ruder", "Dani Yogatama." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, ACL 2020, Online, July 5-10,",
+      "citeRegEx" : "Artetxe et al\\.,? 2020",
+      "shortCiteRegEx" : "Artetxe et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "There are many consistent explanations of unlabeled data: Why you should average",
+      "author" : [ "Ben Athiwaratkun", "Marc Finzi", "Pavel Izmailov", "Andrew Gordon Wilson." ],
+      "venue" : "7th International Conference on Learning Representations, ICLR 2019, New Orleans, LA,",
+      "citeRegEx" : "Athiwaratkun et al\\.,? 2019",
+      "shortCiteRegEx" : "Athiwaratkun et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unlabeled data improves adversarial robustness",
+      "author" : [ "Yair Carmon", "Aditi Raghunathan", "Ludwig Schmidt", "John C. Duchi", "Percy Liang." ],
+      "venue" : "Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Processing",
+      "citeRegEx" : "Carmon et al\\.,? 2019",
+      "shortCiteRegEx" : "Carmon et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "InfoXLM: An information-theoretic framework for cross-lingual language model pre-training",
+      "author" : [ "Zewen Chi", "Li Dong", "Furu Wei", "Nan Yang", "Saksham Singhal", "Wenhui Wang", "Xia Song", "Xian-Ling Mao", "Heyan Huang", "Ming Zhou." ],
+      "venue" : "CoRR,",
+      "citeRegEx" : "Chi et al\\.,? 2020",
+      "shortCiteRegEx" : "Chi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Tydi QA: A benchmark for information-seeking question answering in typologically diverse languages",
+      "author" : [ "Jonathan H. Clark", "Jennimaria Palomaki", "Vitaly Nikolaev", "Eunsol Choi", "Dan Garrette", "Michael Collins", "Tom Kwiatkowski." ],
+      "venue" : "Trans. Assoc. Com-",
+      "citeRegEx" : "Clark et al\\.,? 2020",
+      "shortCiteRegEx" : "Clark et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Unsupervised cross-lingual representation learning at scale",
+      "author" : [ "Alexis Conneau", "Kartikay Khandelwal", "Naman Goyal", "Vishrav Chaudhary", "Guillaume Wenzek", "Francisco Guzmán", "Edouard Grave", "Myle Ott", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "In",
+      "citeRegEx" : "Conneau et al\\.,? 2020a",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Crosslingual language model pretraining",
+      "author" : [ "Alexis Conneau", "Guillaume Lample." ],
+      "venue" : "Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Processing Systems 2019, NeurIPS 2019, 8-14 December 2019,",
+      "citeRegEx" : "Conneau and Lample.,? 2019",
+      "shortCiteRegEx" : "Conneau and Lample.",
+      "year" : 2019
+    }, {
+      "title" : "XNLI: evaluating cross-lingual sentence representations",
+      "author" : [ "Alexis Conneau", "Ruty Rinott", "Guillaume Lample", "Adina Williams", "Samuel R. Bowman", "Holger Schwenk", "Veselin Stoyanov." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods",
+      "citeRegEx" : "Conneau et al\\.,? 2018",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Emerging cross-lingual structure in pretrained language models",
+      "author" : [ "Alexis Conneau", "Shijie Wu", "Haoran Li", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, ACL",
+      "citeRegEx" : "Conneau et al\\.,? 2020b",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BERT: pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "FILTER: An enhanced fusion method for cross-lingual language understanding",
+      "author" : [ "Yuwei Fang", "Shuohang Wang", "Zhe Gan", "Siqi Sun", "Jingjing Liu." ],
+      "venue" : "CoRR, abs/2009.05166.",
+      "citeRegEx" : "Fang et al\\.,? 2020",
+      "shortCiteRegEx" : "Fang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Improving vector space word representations using multilingual correlation",
+      "author" : [ "Manaal Faruqui", "Chris Dyer." ],
+      "venue" : "Proceedings of the 14th Conference of the European Chapter of the Association for Computational Linguistics, EACL 2014, April 26-30,",
+      "citeRegEx" : "Faruqui and Dyer.,? 2014",
+      "shortCiteRegEx" : "Faruqui and Dyer.",
+      "year" : 2014
+    }, {
+      "title" : "Cross-lingual semantic role labeling with highquality translated training corpus",
+      "author" : [ "Hao Fei", "Meishan Zhang", "Donghong Ji." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, ACL 2020, Online, July",
+      "citeRegEx" : "Fei et al\\.,? 2020",
+      "shortCiteRegEx" : "Fei et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Cross-lingual dependency parsing based on distributed representations",
+      "author" : [ "Jiang Guo", "Wanxiang Che", "David Yarowsky", "Haifeng Wang", "Ting Liu." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the",
+      "citeRegEx" : "Guo et al\\.,? 2015",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "XTREME: A massively multilingual multitask benchmark for evaluating cross-lingual generalisation",
+      "author" : [ "Junjie Hu", "Sebastian Ruder", "Aditya Siddhant", "Graham Neubig", "Orhan Firat", "Melvin Johnson." ],
+      "venue" : "Proceedings of the 37th International",
+      "citeRegEx" : "Hu et al\\.,? 2020",
+      "shortCiteRegEx" : "Hu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Learning discrete representations via information maximizing self-augmented training",
+      "author" : [ "Weihua Hu", "Takeru Miyato", "Seiya Tokui", "Eiichi Matsumoto", "Masashi Sugiyama." ],
+      "venue" : "Proceedings of the 34th International Conference on Machine Learning,",
+      "citeRegEx" : "Hu et al\\.,? 2017",
+      "shortCiteRegEx" : "Hu et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "SMART: Robust and efficient fine-tuning for pretrained natural language models through principled regularized optimization",
+      "author" : [ "Haoming Jiang", "Pengcheng He", "Weizhu Chen", "Xiaodong Liu", "Jianfeng Gao", "Tuo Zhao." ],
+      "venue" : "Proceedings of the",
+      "citeRegEx" : "Jiang et al\\.,? 2020",
+      "shortCiteRegEx" : "Jiang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Subword regularization: Improving neural network translation models with multiple subword candidates",
+      "author" : [ "Taku Kudo." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics, ACL 2018, Melbourne, Australia, July 15-",
+      "citeRegEx" : "Kudo.,? 2018",
+      "shortCiteRegEx" : "Kudo.",
+      "year" : 2018
+    }, {
+      "title" : "Sentencepiece: A simple and language independent subword tokenizer and detokenizer for neural text processing",
+      "author" : [ "Taku Kudo", "John Richardson." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, EMNLP",
+      "citeRegEx" : "Kudo and Richardson.,? 2018",
+      "shortCiteRegEx" : "Kudo and Richardson.",
+      "year" : 2018
+    }, {
+      "title" : "Unsupervised machine translation using monolingual corpora only",
+      "author" : [ "Guillaume Lample", "Alexis Conneau", "Ludovic Denoyer", "Marc’Aurelio Ranzato" ],
+      "venue" : "In 6th International Conference on Learning Representations,",
+      "citeRegEx" : "Lample et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Lample et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "MLQA: evaluating cross-lingual extractive question answering",
+      "author" : [ "Patrick S.H. Lewis", "Barlas Oguz", "Ruty Rinott", "Sebastian Riedel", "Holger Schwenk." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, ACL",
+      "citeRegEx" : "Lewis et al\\.,? 2020",
+      "shortCiteRegEx" : "Lewis et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Adversarial training for large neural language models",
+      "author" : [ "Xiaodong Liu", "Hao Cheng", "Pengcheng He", "Weizhu Chen", "Yu Wang", "Hoifung Poon", "Jianfeng Gao." ],
+      "venue" : "CoRR, abs/2004.08994.",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "VECO: Variable encoder-decoder pre-training for cross-lingual understanding and generation",
+      "author" : [ "Fuli Luo", "W. Wang", "Jiahao Liu", "Yijia Liu", "Bin Bi", "Songfang Huang", "Fei Huang", "L. Si." ],
+      "venue" : "ArXiv, abs/2010.16046.",
+      "citeRegEx" : "Luo et al\\.,? 2020",
+      "shortCiteRegEx" : "Luo et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Exploiting similarities among languages for machine translation",
+      "author" : [ "Tomas Mikolov", "Quoc V. Le", "Ilya Sutskever." ],
+      "venue" : "CoRR, abs/1309.4168.",
+      "citeRegEx" : "Mikolov et al\\.,? 2013",
+      "shortCiteRegEx" : "Mikolov et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Virtual adversarial training: A regularization method for supervised and semisupervised learning",
+      "author" : [ "Takeru Miyato", "Shin-ichi Maeda", "Masanori Koyama", "Shin Ishii." ],
+      "venue" : "IEEE Trans. Pattern Anal. Mach. Intell., 41(8):1979–1993.",
+      "citeRegEx" : "Miyato et al\\.,? 2019",
+      "shortCiteRegEx" : "Miyato et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Universal dependencies 2.2",
+      "author" : [ "Joakim Nivre", "Rogier Blokland", "Niko Partanen", "Michael Rießler" ],
+      "venue" : null,
+      "citeRegEx" : "Nivre et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Nivre et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Crosslingual name tagging and linking for 282 languages",
+      "author" : [ "Xiaoman Pan", "Boliang Zhang", "Jonathan May", "Joel Nothman", "Kevin Knight", "Heng Ji." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics, ACL 2017,",
+      "citeRegEx" : "Pan et al\\.,? 2017",
+      "shortCiteRegEx" : "Pan et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "English intermediate-task training improves zero-shot crosslingual transfer too",
+      "author" : [ "Jason Phang", "Phu Mon Htut", "Yada Pruksachatkun", "Haokun Liu", "Clara Vania", "Katharina Kann", "Iacer Calixto", "Samuel R. Bowman." ],
+      "venue" : "CoRR, abs/2005.13013.",
+      "citeRegEx" : "Phang et al\\.,? 2020",
+      "shortCiteRegEx" : "Phang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "BPE-Dropout: Simple and effective subword regularization",
+      "author" : [ "Ivan Provilkov", "Dmitrii Emelianenko", "Elena Voita." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, ACL 2020, Online, July 5-10, 2020, pages",
+      "citeRegEx" : "Provilkov et al\\.,? 2020",
+      "shortCiteRegEx" : "Provilkov et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "CoSDA-ML: Multi-lingual code-switching data augmentation for zero-shot cross-lingual NLP",
+      "author" : [ "Libo Qin", "Minheng Ni", "Yue Zhang", "Wanxiang Che." ],
+      "venue" : "Proceedings of the Twenty-Ninth International Joint Conference on Artificial Intelligence, IJCAI",
+      "citeRegEx" : "Qin et al\\.,? 2020",
+      "shortCiteRegEx" : "Qin et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "XLDA: cross-lingual data augmentation for natural language inference and question answering",
+      "author" : [ "Jasdeep Singh", "Bryan McCann", "Nitish Shirish Keskar", "Caiming Xiong", "Richard Socher." ],
+      "venue" : "CoRR, abs/1905.11471.",
+      "citeRegEx" : "Singh et al\\.,? 2019",
+      "shortCiteRegEx" : "Singh et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Mean teachers are better role models: Weight-averaged consistency targets improve semi-supervised deep learning results",
+      "author" : [ "Antti Tarvainen", "Harri Valpola." ],
+      "venue" : "5th International Conference on Learning Representations, ICLR 2017, Toulon, France, April",
+      "citeRegEx" : "Tarvainen and Valpola.,? 2017",
+      "shortCiteRegEx" : "Tarvainen and Valpola.",
+      "year" : 2017
+    }, {
+      "title" : "Cross-lingual BERT transformation for zero-shot dependency parsing",
+      "author" : [ "Yuxuan Wang", "Wanxiang Che", "Jiang Guo", "Yijia Liu", "Ting Liu." ],
+      "venue" : "In",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unsupervised data augmentation for consistency training",
+      "author" : [ "Qizhe Xie", "Zihang Dai", "Eduard H. Hovy", "Thang Luong", "Quoc Le." ],
+      "venue" : "Advances in Neural Information Processing Systems 33: Annual Conference on Neural Information Processing Systems",
+      "citeRegEx" : "Xie et al\\.,? 2020",
+      "shortCiteRegEx" : "Xie et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Unsupervised cross-lingual transfer of word embedding spaces",
+      "author" : [ "Ruochen Xu", "Yiming Yang", "Naoki Otani", "Yuexin Wu." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, Brussels, Belgium, October 31 -",
+      "citeRegEx" : "Xu et al\\.,? 2018",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "PAWS-X: A cross-lingual adversarial dataset for paraphrase identification",
+      "author" : [ "Yinfei Yang", "Yuan Zhang", "Chris Tar", "Jason Baldridge." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the",
+      "citeRegEx" : "Yang et al\\.,? 2019",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unsupervised embedding learning via invariant and spreading instance feature",
+      "author" : [ "Mang Ye", "Xu Zhang", "Pong C. Yuen", "Shih-Fu Chang." ],
+      "venue" : "IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2019, Long Beach, CA, USA, June 16-",
+      "citeRegEx" : "Ye et al\\.,? 2019",
+      "shortCiteRegEx" : "Ye et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Cross-lingual dependency parsing using code-mixed treebank",
+      "author" : [ "Meishan Zhang", "Yue Zhang", "Guohong Fu." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Nat-",
+      "citeRegEx" : "Zhang et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Improving the robustness of deep neural networks via stability training",
+      "author" : [ "Stephan Zheng", "Yang Song", "Thomas Leung", "Ian J. Goodfellow." ],
+      "venue" : "2016 IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2016, Las Vegas, NV, USA, June",
+      "citeRegEx" : "Zheng et al\\.,? 2016",
+      "shortCiteRegEx" : "Zheng et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "FreeLB: Enhanced adversarial training for natural language understanding",
+      "author" : [ "Chen Zhu", "Yu Cheng", "Zhe Gan", "Siqi Sun", "Tom Goldstein", "Jingjing Liu." ],
+      "venue" : "8th International Conference on Learning Representations, ICLR 2020, Addis Ababa, Ethiopia,",
+      "citeRegEx" : "Zhu et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhu et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 7,
+      "context" : "Pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al., 2020a; Chi et al., 2020) have shown great transferability across languages.",
+      "startOffset" : 42,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 6,
+      "context" : "Pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al., 2020a; Chi et al., 2020) have shown great transferability across languages.",
+      "startOffset" : 42,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 4,
+      "context" : "Pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al., 2020a; Chi et al., 2020) have shown great transferability across languages.",
+      "startOffset" : 42,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 31,
+      "context" : ", translating source language training data into target languages (Singh et al., 2019), and generating codeswitch data by randomly replacing input words in the source language with translated words in target languages (Qin et al.",
+      "startOffset" : 66,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 30,
+      "context" : ", 2019), and generating codeswitch data by randomly replacing input words in the source language with translated words in target languages (Qin et al., 2020).",
+      "startOffset" : 139,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 18,
+      "context" : ", subword sampling (Kudo, 2018), code-switch substitution (Qin et al.",
+      "startOffset" : 19,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 30,
+      "context" : ", subword sampling (Kudo, 2018), code-switch substitution (Qin et al., 2020), Gaussian noise (Aghajanyan et al.",
+      "startOffset" : 58,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2020), Gaussian noise (Aghajanyan et al., 2020), and machine translation.",
+      "startOffset" : 24,
+      "endOffset" : 49
+    }, {
+      "referenceID" : 15,
+      "context" : "We evaluate XTUNE on the XTREME benchmark (Hu et al., 2020), including three different tasks on seven datasets.",
+      "startOffset" : 42,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 24,
+      "context" : "Cross-Lingual Transfer Besides learning crosslingual word embeddings (Mikolov et al., 2013; Faruqui and Dyer, 2014; Guo et al., 2015; Xu et al., 2018; Wang et al., 2019), most recent work of cross-lingual transfer is based on pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al.",
+      "startOffset" : 69,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 12,
+      "context" : "Cross-Lingual Transfer Besides learning crosslingual word embeddings (Mikolov et al., 2013; Faruqui and Dyer, 2014; Guo et al., 2015; Xu et al., 2018; Wang et al., 2019), most recent work of cross-lingual transfer is based on pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al.",
+      "startOffset" : 69,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 14,
+      "context" : "Cross-Lingual Transfer Besides learning crosslingual word embeddings (Mikolov et al., 2013; Faruqui and Dyer, 2014; Guo et al., 2015; Xu et al., 2018; Wang et al., 2019), most recent work of cross-lingual transfer is based on pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al.",
+      "startOffset" : 69,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 35,
+      "context" : "Cross-Lingual Transfer Besides learning crosslingual word embeddings (Mikolov et al., 2013; Faruqui and Dyer, 2014; Guo et al., 2015; Xu et al., 2018; Wang et al., 2019), most recent work of cross-lingual transfer is based on pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al.",
+      "startOffset" : 69,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 33,
+      "context" : "Cross-Lingual Transfer Besides learning crosslingual word embeddings (Mikolov et al., 2013; Faruqui and Dyer, 2014; Guo et al., 2015; Xu et al., 2018; Wang et al., 2019), most recent work of cross-lingual transfer is based on pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al.",
+      "startOffset" : 69,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 7,
+      "context" : ", 2019), most recent work of cross-lingual transfer is based on pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al., 2020a; Chi et al., 2020).",
+      "startOffset" : 106,
+      "endOffset" : 173
+    }, {
+      "referenceID" : 6,
+      "context" : ", 2019), most recent work of cross-lingual transfer is based on pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al., 2020a; Chi et al., 2020).",
+      "startOffset" : 106,
+      "endOffset" : 173
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2019), most recent work of cross-lingual transfer is based on pre-trained cross-lingual language models (Conneau and Lample, 2019; Conneau et al., 2020a; Chi et al., 2020).",
+      "startOffset" : 106,
+      "endOffset" : 173
+    }, {
+      "referenceID" : 39,
+      "context" : "The small perturbations can be random noise (Zheng et al., 2016), adversarial noise (Miyato et al.",
+      "startOffset" : 44,
+      "endOffset" : 64
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2016), adversarial noise (Miyato et al., 2019; Carmon et al., 2019) and various data augmentation approaches (Hu et al.",
+      "startOffset" : 27,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 3,
+      "context" : ", 2016), adversarial noise (Miyato et al., 2019; Carmon et al., 2019) and various data augmentation approaches (Hu et al.",
+      "startOffset" : 27,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2019) and various data augmentation approaches (Hu et al., 2017; Ye et al., 2019; Xie et al., 2020).",
+      "startOffset" : 49,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 37,
+      "context" : ", 2019) and various data augmentation approaches (Hu et al., 2017; Ye et al., 2019; Xie et al., 2020).",
+      "startOffset" : 49,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 34,
+      "context" : ", 2019) and various data augmentation approaches (Hu et al., 2017; Ye et al., 2019; Xie et al., 2020).",
+      "startOffset" : 49,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 40,
+      "context" : "Both adversarial noise (Zhu et al., 2020; Jiang et al., 2020; Liu et al., 2020) and sampled Gaussian noise (Aghajanyan et al.",
+      "startOffset" : 23,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 17,
+      "context" : "Both adversarial noise (Zhu et al., 2020; Jiang et al., 2020; Liu et al., 2020) and sampled Gaussian noise (Aghajanyan et al.",
+      "startOffset" : 23,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 22,
+      "context" : "Both adversarial noise (Zhu et al., 2020; Jiang et al., 2020; Liu et al., 2020) and sampled Gaussian noise (Aghajanyan et al.",
+      "startOffset" : 23,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2020) and sampled Gaussian noise (Aghajanyan et al., 2020) are adopted to augment input word embeddings.",
+      "startOffset" : 35,
+      "endOffset" : 60
+    }, {
+      "referenceID" : 32,
+      "context" : "Another strand of work focused on consistency under different model parameters (Tarvainen and Valpola, 2017; Athiwaratkun et al., 2019), which is complementary to the first strand.",
+      "startOffset" : 79,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 2,
+      "context" : "Another strand of work focused on consistency under different model parameters (Tarvainen and Valpola, 2017; Athiwaratkun et al., 2019), which is complementary to the first strand.",
+      "startOffset" : 79,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 17,
+      "context" : "The stopgrad(·) operation2 is used to stop back-propagating gradients, which is also employed in (Jiang et al., 2020; Liu et al., 2020).",
+      "startOffset" : 97,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 22,
+      "context" : "The stopgrad(·) operation2 is used to stop back-propagating gradients, which is also employed in (Jiang et al., 2020; Liu et al., 2020).",
+      "startOffset" : 97,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 18,
+      "context" : "Representing a sentence in different subword sequences can be viewed as a data augmentation strategy (Kudo, 2018; Provilkov et al., 2020).",
+      "startOffset" : 101,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 29,
+      "context" : "Representing a sentence in different subword sequences can be viewed as a data augmentation strategy (Kudo, 2018; Provilkov et al., 2020).",
+      "startOffset" : 101,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 6,
+      "context" : "We utilize XLM-R (Conneau et al., 2020a) as our pre-trained cross-lingual language model, while it applies subword tokenization directly on raw text data using SentencePiece (Kudo and Richardson, 2018) with a unigram language model (Kudo, 2018).",
+      "startOffset" : 17,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 19,
+      "context" : ", 2020a) as our pre-trained cross-lingual language model, while it applies subword tokenization directly on raw text data using SentencePiece (Kudo and Richardson, 2018) with a unigram language model (Kudo, 2018).",
+      "startOffset" : 142,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 18,
+      "context" : ", 2020a) as our pre-trained cross-lingual language model, while it applies subword tokenization directly on raw text data using SentencePiece (Kudo and Richardson, 2018) with a unigram language model (Kudo, 2018).",
+      "startOffset" : 200,
+      "endOffset" : 212
+    }, {
+      "referenceID" : 39,
+      "context" : "When combining this data augmentation with example consistencyR1, the method is similar to the stability training (Zheng et al., 2016), random perturbation training (Miyato et al.",
+      "startOffset" : 114,
+      "endOffset" : 134
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2016), random perturbation training (Miyato et al., 2019) and the R3F method (Aghajanyan et al.",
+      "startOffset" : 38,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 31,
+      "context" : "Machine translation has been proved to be an effective data augmentation strategy (Singh et al., 2019) under the cross-lingual scenario.",
+      "startOffset" : 82,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 15,
+      "context" : "Datasets For our experiments, we select three types of cross-lingual understanding tasks from XTREME benchmark (Hu et al., 2020), including two classification datasets: XNLI (Conneau et al.",
+      "startOffset" : 111,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2020), including two classification datasets: XNLI (Conneau et al., 2018), PAWS-X (Yang et al.",
+      "startOffset" : 53,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 36,
+      "context" : ", 2018), PAWS-X (Yang et al., 2019), three span extraction datasets: XQuAD (Artetxe et al.",
+      "startOffset" : 16,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 1,
+      "context" : ", 2019), three span extraction datasets: XQuAD (Artetxe et al., 2020), MLQA (Lewis et al.",
+      "startOffset" : 47,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2020), MLQA (Lewis et al., 2020), TyDiQA-GoldP (Clark et al.",
+      "startOffset" : 14,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 5,
+      "context" : ", 2020), TyDiQA-GoldP (Clark et al., 2020), and two sequence labeling datasets: NER (Pan et al.",
+      "startOffset" : 22,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 27,
+      "context" : ", 2020), and two sequence labeling datasets: NER (Pan et al., 2017), POS (Nivre et al.",
+      "startOffset" : 49,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 6,
+      "context" : "Implementation Details We utilize XLMR (Conneau et al., 2020a) as our pre-trained cross-lingual language model.",
+      "startOffset" : 39,
+      "endOffset" : 62
+    }, {
+      "referenceID" : 20,
+      "context" : "The bilingual dictionaries we used for code-switch substitution are from MUSE (Lample et al., 2018).",
+      "startOffset" : 78,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 10,
+      "context" : "Results of mBERT (Devlin et al., 2019), XLM (Conneau and Lample, 2019) and XLM-Rlarge (Conneau et al.",
+      "startOffset" : 17,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 7,
+      "context" : ", 2019), XLM (Conneau and Lample, 2019) and XLM-Rlarge (Conneau et al.",
+      "startOffset" : 13,
+      "endOffset" : 39
+    }, {
+      "referenceID" : 6,
+      "context" : ", 2019), XLM (Conneau and Lample, 2019) and XLM-Rlarge (Conneau et al., 2020a) are taken from (Hu et al.",
+      "startOffset" : 55,
+      "endOffset" : 78
+    }, {
+      "referenceID" : 11,
+      "context" : "Results of XLM-Rlarge under the translate-train-all setting are from FILTER (Fang et al., 2020).",
+      "startOffset" : 76,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 28,
+      "context" : "X-STILTs (Phang et al., 2020) uses additional SQuAD v1.",
+      "startOffset" : 9,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 15,
+      "context" : "XLM-Rlarge under the cross-lingual transfer setting are from (Hu et al., 2020).",
+      "startOffset" : 61,
+      "endOffset" : 78
+    }, {
+      "referenceID" : 11,
+      "context" : "Results of XLM-Rlarge under the translate-train-all setting are from (Fang et al., 2020).",
+      "startOffset" : 69,
+      "endOffset" : 88
+    } ],
+    "year" : 2021,
+    "abstractText" : "Fine-tuning pre-trained cross-lingual language models can transfer task-specific supervision from one language to the others. In this work, we propose to improve cross-lingual finetuning with consistency regularization. Specifically, we use example consistency regularization to penalize the prediction sensitivity to four types of data augmentations, i.e., subword sampling, Gaussian noise, code-switch substitution, and machine translation. In addition, we employ model consistency to regularize the models trained with two augmented versions of the same training set. Experimental results on the XTREME benchmark show that our method1 significantly improves crosslingual fine-tuning across various tasks, including text classification, question answering, and sequence labeling.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

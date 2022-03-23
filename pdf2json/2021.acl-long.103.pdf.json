@@ -1,0 +1,529 @@
+{
+  "name" : "2021.acl-long.103.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Attention Calibration for Transformer in Neural Machine Translation",
+    "authors" : [ "Yu Lu", "Jiali Zeng", "Jiajun Zhang", "Shuangzhi Wu", "Mu Li" ],
+    "emails" : [ "jjzhang}@nlpr.ia.ac.cn", "ethanlli}@tencent.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 1288–1298\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n1288"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Attention mechanisms have been ubiquitous in neural machine translation (NMT) (Bahdanau et al., 2015; Vaswani et al., 2017). It dynamically encodes source-side information by inducing a conditional distribution over inputs, where the ones that are most relevant to the current translation are expected to receive more attention.\nHowever, many studies doubt whether highlyattended inputs have a large impact on the model outputs. On the one hand, erasing the representations accorded high attention weights do not necessarily lead to a performance decrease (Serrano and\n∗Work done while the author was an intern at Tencent. †Corresponding author.\n1https://github.com/yulu-dada/Attention-calibrationNMT\n远郊连日 大雪多人死亡交通中断\nheavy snow in countryside caused many deaths\nSrc:\nBase:\nheavy snow in countryside has caused many deaths and traffic interruption Ours:\ndays of heavy snow in countryside left many deaths and transportation disrupted Ref:\nSmith, 2019), which can be attributed to that unimportant words (e.g., punctuations) are frequently assigned with high attention weights (Mohankumar et al., 2020). On the other hand, Jain and Wallace (2019) state that attention weights are inconsistent with other feature importance metrics in text classification tasks. It further proves that attention mechanisms are incapable of precisely identifying decisive inputs for each prediction, which would result in wrong-translation or over-translation in NMT (Tu et al., 2016). We take Figure 1 as an example. After producing the target-side word “deaths”, attention mechanisms wrongly attribute most attention to the “〈EOS〉”, making parts of the source sentence untranslated.\nIn this paper, we propose to calibrate the vanilla attention mechanism by focusing more on key in-\nputs. To test what inputs affect the model prediction most, we tend to observe how the model decision changes as perturbing parts of inputs. We define the perturbation operation as applying a learnable mask to scale each attention weight. Then, we perform a “deletion game”, which aims to find the smallest perturbation extents that cause the significant quality degradation. In this manner, we can find the most informative inputs for the prediction.\nBased on the results detected by the mask perturbation model, we further calibrate attention weights by reallocating more attention to informative inputs. We design three fusion methods to incorporate the calibrated attention weights into original attention weights: (1) fixed weighted sum, (2) annealing learning, and (3) gating mechanism. The mask perturbation model and NMT model are jointly trained, while the attention weights in NMT are corrected based on the actual contributions measured by the mask perturbation model.\nRecall the example in Figure 1. After producing the target word “in”, our mask perturbation model finds that the source word “远郊 [countryside]” with a high attention weight is exactly the decisive input for the prediction. Therefore, we strengthen the corresponding attention weight of “远郊 [countryside]”. However, after the prediction “deaths”, the highly-attended “〈EOS〉” is not the decisive input at the current step. We redistribute the attention weights to the source words (“交通 [traffic]” and “中断 [interruption]”) which receive little attention but are important for the subsequent translation discovered by our mask perturbation model. After calibration, the missing source information “traffic interruption” is well-translated.\nWe conduct extensive experiments to verify our method’s effectiveness on Transformer-based translation (NIST Zh⇒En, WMT14 En⇒De, WMT16 En⇔Ro, WMT17 En⇔Fi, and En⇔Lv). Experimental results show that our calibration methods can significantly boost performance. We further visualize calibrated attention weights and investigate when attention weights need to be corrected.\nThe contributions of this paper are three-fold:\n• We propose a mask perturbation model to automatically assess each input’s contribution for translation, which is simple yet effective.\n• We design three methods to calibrate original attention weights by highlighting the informative inputs, which are experimentally proved to outperform strong baselines.\n• Detailed analyses show that calibrated attention weights are more uniform at lower layers while more focused at the higher layers. Highentropy attention weights are found to have great needs for calibration at all layers."
+    }, {
+      "heading" : "2 Background",
+      "text" : "In this section, we first briefly introduce the framework of Transformer (Vaswani et al., 2017) with a focus on the Multi-head attention (MHA). Then we present an analysis of the learned attention weights, the correlation with feature importance measures, which motivates our ideas discussed afterward."
+    }, {
+      "heading" : "2.1 Transformer Architecture",
+      "text" : "The Transformer is an encoder-decoder framework with stacking layers of attention blocks. The encoder first transforms an input x = {x1, x2, ...xn} to a sequence of continues representations h = {h1, h2, ...hn}, from which the decoder generates an output sequence y = {y1, y2, ...ym}.\nMulti-head attention between encoder and decoder enables each prediction to attend overall inputs from different representation subspaces jointly. For the single head, we first project h = {h1, h2, ...hn} to keys K and values V using different linear projections. At the t-th position, we project the hidden state of the previous decoder layer to the query vector qt. Then we multiply qt by keysK to obtain an attention at, which is used to calculate a weighted sum of values V .\nAttn (qt,K,V ) = at ∗ V\nat = softmax\n( qtK T\n√ dk ) (1) where dk is the dimension of the keys. For MHA, we use different projections to obtain the queries, keys, and values representations for each head.\nIt is noted that Transformer (base model) performs N = 6 cross-lingual attention layers and employs h = 8 parallel attention heads for each time. Thus we implement our methods on N × h attention operations separately. For simplicity, we next denote the query, keys, and values as qt,K,V regardless of what layers and heads they come from."
+    }, {
+      "heading" : "2.2 Disagreement Between Attention Weights and Feature Importance Metrics",
+      "text" : "Attention mechanisms provide a distribution over the context representations of inputs, which are\noften presented as communicating the relative importance of inputs. However, recent work has cautioned against whether the inputs accorded high attention weights decide the model outputs (Jain and Wallace, 2019). Our analysis examines the correlation with attention weights and feature importance metrics in NMT to test if the attention mechanisms focus on the decisive inputs. We apply gradient-based methods (Simonyan et al., 2014; Li et al., 2016) to measure the importance of each contextual representation hi for model output yt:\nτit = |∇hip(yt|x1:n)| (2)\nWe train a baseline Transformer model on NIST Zh⇒En dataset and extract the averaged attention weights over heads.\nFigure 2 reports the statistics of Kendall-τ correlation for each attention layer, where the observed correlation is all modest (0 indicates no correlation, while 1 implies perfect concordance). The inconsistency with feature importance metrics reveals that the high-attention inputs are not always responsible for the model prediction. It further motivates us whether we can calibrate the attention weights to focus more on the decisive inputs to achieve better translation."
+    }, {
+      "heading" : "3 Our Method",
+      "text" : "We aim to make the attention mechanism more focused on the informative inputs. The first step is to discover what inputs are essential for the model prediction. As shown in Figure 3, we design a Mask Perturbation Model to worsen the performance with limited perturbation on the original attention weights. By doing this, we can automatically detect what inputs decide the model outputs. Then, we design an Attention Calibration Network (ACN) to correct the original attention weights, highlighting the decisive inputs based on what inputs are perturbed by the mask perturbation model."
+    }, {
+      "heading" : "3.1 Mask Perturbation Model",
+      "text" : "To search the source-side inputs that the model relies on to produce the output, we can observe how the model prediction changes as perturbing different parts of the input sentence. We apply a mask to scale each input’s attention weight, which simulates the process of perturbation.\nFormally, let mt be a mask at t-th step. The perturbed attention weight apt is calculated as:\napt =mt at + (1−mt) µ0 (3)\nwhere µ0 is a uniform distribution (an average vector of 1\nn ) and denotes element-wise multiplica-\ntion. The maskmt is obtained based on the hidden state in the decoder qt and keysK:\nmt = σ\n( qtW Q(KWK) T\n√ dk\n) (4)\nHere, σ(·) is the sigmoid function. A smaller value of mt means a larger perturbation extent on original attention weights. Considering the structure of multi-head attention in Transformer, WQ and WK differ among layers and heads.\nTo test the effect of perturbing distinct regions of inputs, we borrow the idea “deletion game” to find the smallest perturbation extent, which leads to a significant performance decrease. The objective function of mask perturbation model is:\nL (θm) = −LNMT (apt , θ) + αLc (θm) (5)\nwhere θ denotes the parameters of the original Transformer. LNMT (apt , θ) is the cross-entropy loss of the translation model when using perturbed attention weights apt . θ\nm = {WQ,WK} represents the parameters of mask perturbation model. The first term indicates that the perturbation operation aims to harm the translation quality. The second one serves as a penalty term to encourage most of the mask to be turned off (perturb inputs as few as possible).\nLc (θm) = ‖1−mt‖2 (6)\nThe perturbation extent is determined by the hyperparameterα. Notably, earlier studies employ masks and “deletion game” as the analytical tools to explore the importance of each attention head (Fong and Vedaldi, 2017) or the contributions of the pixels in the figure to the model outputs (Voita et al., 2019). However, we extend to probing the inputs’ contributions to the model prediction in NMT and further use the masks to calibrate the attention mechanisms based on the analytical results."
+    }, {
+      "heading" : "3.2 Attention Calibration Network",
+      "text" : "As aforementioned, our mask perturbation model removes the most informative input to deteriorate the translation by setting the corresponding masks to zero. In other words, a smaller mask means a larger perturbation, namely a more significant impact on the prediction. We propose to calibrate the original attention weights in NMT by highlighting the essential inputs for each model prediction.\nFormally, the calibrated attention weight act can be designed as:\nact = at e1−mt (7)\nWe increase the attention weights of key inputs which suffer large perturbation extents. The attention weights of other less-informative inputs are correspondingly decreased. We design three methods to incorporate act into the original one at to obtain combined attention weights acombt :\n• Fixed Weighed Sum. In this method, the calibrated attention weights are added to the original attention weights of fixed ratio λ as:\nacombt = softmax(at + λ ∗ act) (8)\n• Annealing Learning. Considering the mask perturbation model is not well-trained at the early stage, we expect the effect of act to be smaller at first and gradually grow with the training step s. To this end, we use annealing learning to control the ratio of act as:\nacombt = γ(s) ∗ at + (1− γ(s)) ∗ act γ(s) = e−s/10 5 (9)\n• Gating Mechanism. We propose a calibration gate to dynamically select the amount of\nthe information from the perturbation model in the decoding process.\nacombt = gt ∗ at + (1− gt) ∗ act gt = σ(qtW g + bg) (10)\nwhere W g and bg are trainable parameters vary among different layers and heads."
+    }, {
+      "heading" : "3.3 Training",
+      "text" : "Our mask perturbation model and NMT model are jointly optimized. As shown in Figure 3, the mask perturbation model is trained to worsen the performance by limited perturbation on the attention weights (Equation 5). Given what inputs are perturbed, we can figure out the decisive inputs for each model prediction and calibrate the original attention weights in the NMT model by ACN. With the calibrated attention weights, the NMT model is finally optimized by:\nLNMT (θ) = − m∑ t=1 logp(yt|y<t, x;acombt , θ) (11) During testing, the mask perturbation model also helps identify the informative inputs based on the hidden state in the decoder at each step (as seen in Equation 4). The NMT model decodes with the calibrated attention weights. Moreover, our method can provide the saliency map between inputs and outputs based on the generated mask, an accessible measurement of the inputs’ contributions to the model predictions."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : "We evaluate our method in LDC Chinese-English (Zh⇒En), WMT14 English-German (En⇒De), WMT16 English-Romanian (En⇔Ro), WMT17 English-Finnish (En⇔Fi) and English-Latvian (En⇔Lv)."
+    }, {
+      "heading" : "4.1 Dataset",
+      "text" : "We tokenize the corpora using a script from Moses (Koehn et al., 2007). Byte pair encoding (BPE) (Sennrich et al., 2016) is applied to all language pairs to construct a join vocabulary except for Zh⇒En where the source and target languages are separately encoded.\nFor Zh⇒En, we remove the sentences of more than 50 words. We use NIST 2002 as validation set, NIST 2003-2006 as the testbed. For En⇒De, newstest2013 and newstest2014 are set as validation and test sets. We use the standard 4-gram BLEU (Papineni et al., 2002) on the true-case output to score the performance. For En⇔Ro, we use newsdev2016 and newstest2016 as development and test sets. For En⇔Lv and En⇔Fi, newsdev2017 and newstest2017 are validation set and test set. See Table 1 for statistics of the data."
+    }, {
+      "heading" : "4.2 Settings",
+      "text" : "We implement the described models with fairseq5 toolkit for training and evaluating. We experiment with Transformer Base (Vaswani et al., 2017): hidden size dmodel = 512, 6 encoder and decoder layers, 8 attention heads and 2048 feed-forward innerlayer dimension. The dropout rate of the residual connection is 0.1 except for Zh⇒En (0.3). During training, we use label smoothing of value ls = 0.1 and employ the Adam (β1 = 0.9, β2 = 0.998) for parameter optimization with a scheduled learning rate of 4,000 warm-up steps. All the experiments last for 150k steps except for small-scale En⇔Ro translation tasks (100k). For evaluation, we average the last ten checkpoints and use beam search\n1The corpora includes LDC2000T50, LDC2002T01, LDC2002E18, LDC2003E07, LDC2003E14, LDC2003T17 and LDC2004T07. Following previous work, we use caseinsensitive tokenized BLEU to evaluate the performance.\n2http://www.statmt.org/wmt14/translation-task.html 3http://www.statmt.org/wmt17/translation-task.html 4http://www.statmt.org/wmt16/translation-task.html 5https://github.com/pytorch/fairseq\n(beam size 4, length penalty 0.6) for inference. Besides, the hyperparameter λ in Equation 8 decides how much the calibrated attention weights are incorporated in the Fixed Weighted Sum method. We set λ = 0.1 in all experiments for comparison."
+    }, {
+      "heading" : "4.3 Main Results",
+      "text" : "To comprehensively compare with the existing baselines and similar work, we report the results of some competitive models including GNMT (Wu et al., 2016), Conv (Gehring et al., 2017) and AttIsAll (Vaswani et al., 2017) on WMT14 En⇒De translation task. Besides, we also compare our method against related researches about introducing word alignment information to guide translation (Weng et al., 2020; Feng et al., 2020). As presented in Table 2, our method exhibits better performance than the above models. Unlike supervised attention with external word alignment, our model yields a significant gain by looking into what inputs affect the model’s internal training.\nTable 3 shows the translation quality measured in BLEU score for NIST Zh⇒En. Our proposed model significantly outperforms the baseline by 0.96 (MT02), 0.84 (MT03), 0.58 (MT04), 1.02 (MT05) and 0.76 (MT06), respectively.\nWe also conduct our experiments on WMT17 En⇔Fi and En⇔Lv. As shown in Table 4, our methods improve the performance over baseline by 0.54 BLEU (En⇒Fi), 0.6 BLEU (Fi⇒En), 0.57 BLEU (En⇒Lv) and 0.95 BLEU (Lv⇒En). For the small-scale WMT16 En⇔Ro, our methods achieve a substantial improvement of 1.44 more BLEU (En⇒Ro) and 0.95 BLEU (Ro⇒En). Com-\npared to the large-scale dataset, the insufficient training data make it harder to learn the relationship between inputs and outputs, leaving a greater need for calibrating attention weights.\nOverall, our proposed model significantly outperforms the strong baselines, especially for the small-scale dataset. More importantly, the parameter size is tiny (6M), which cannot add much cost to the training and inference process.\nEffect of Fusion Methods For three fusion methods, the fixed weighted sum has a limited gain. Annealing learning is comparatively more stable, which reduces the impact of ACN when the mask perturbation model is not well-trained at the initial stage. But it is challenging to design an annealing strategy that can be applied to all language pairs. Gate mechanism mostly achieves the best performance for dynamically controlling the proportions of original and calibrated attention weights.\nEffect of Hyperparameter The hyperparameter α in the loss function of the mask perturbation model (as in Equation 5) decides how much masks would turn on to perturb the original attention weights. Figure 4 exhibits the average value of generated masks across heads as the function of the setting of α. A larger α forces the model to turn off most masks, which makes the value of the mask closer to 1, resulting in a smaller perturbation extent on the attention weights.\nCorrelation with Feature Importance Metrics Figure 5 reports the correlation between our generated mask (m) and the gradient-based importance measures6 (τit). We find that the masks are relatively closer to the gradient-based importance measures than the original attention weights, which\n6Though these measures are insufficient for telling what inputs are important (Kindermans et al., 2019), they do provide measures of individual feature importance with known semantics (Ross et al., 2017).\nprove the effectiveness of our mask perturbation model to discover decisive inputs."
+    }, {
+      "heading" : "5 Analysis",
+      "text" : "In this section, we explain how our proposed method helps produce better translation by investigating: (1) what attention weights need to calibrate and (2) calibrated attention weights are more focused or more uniform. Specifically, we delve into the differences between layers, which give insights into the attention mechanism’s inner working. We conduct analyses on Zh⇒En NIST03 and En⇒De newstest2014 to understand our model from different perspectives.\nWe apply Jensen-Shannon Divergence (JSD) between attention weights before and after calibration to measure the calibration extent:\nJSD (a1, a2) = 1\n2 KL[a1‖a] +\n1 2 KL[a2‖a] (12)\nwhere a = a1+a22 . A high JSD means the calibrated attention weights are distant from the original one. Besides, we use the entropy changes of attention weights to test whether the calibrated attention weights become more uniform or focused.\n4Ent (a1, a2) = ent (a1)− ent (a2) (13)\nwhere ent (a) = − ∑m\ni=1 ailogai, a metric to describe the uncertainty of the distribution."
+    }, {
+      "heading" : "5.1 What attention weights need to calibrate?",
+      "text" : "High or low layers? Concerning the roles of different attention layers, one natural question is what\nattention layers are not well-trained in the original NMT model and have an urgent need to calibrate. Figure 6 depicts the JSD between original and calibrated attention weights. We find high JSD for high layers and low JSD for low layers in Zh⇒En task. However, a different pattern is observed in En⇒De task, where JSD in the high layer is lower than in the low layers. We speculate that the difference is due to the language discrepancy and we will explore this phenomenon in our future work.\nHigh or low entropy? More focused contributions of inputs suggest that the model is more confident about the choice of important tokens (Voita et al., 2020). We attempt to validate whether the attention weights are more likely to be calibrated when the NMT model is uncertain about its decision. Figure 7 shows the positive relationship between calibration extent and the entropy of attention weights. Take the 6-th attention layer in Zh⇒En translation as an example (as seen in Figure 7(b)). The averaged JSD is 0.0084 for the attention weights in rang [0,0.8], while the value is 0.0324 for the attention weights where the entropy is larger than 3.2. These findings can also be observed at different attention layers and language pairs.\nWe infer that a higher entropy indicates the NMT model relies on multiple inputs to generate the\ntranslation, which increases the probability of information redundancy or error signals. Our proposed model is more likely to calibrate these attention weights to makes the NMT model pay more attention to the informative inputs."
+    }, {
+      "heading" : "5.2 Calibrated attention weights are more dispersed or focused?",
+      "text" : "There are multiple reasons why the calibrated attention weights can boost performance. Section 4.3 states that our generated masks are much closer to the gradient-based feature importance measures compared with attention weights. On the other hand, we present the entropy differences of the original and calibrated attention weights in Table 5 where the entropy of attention weights are overall smaller after calibration. However, the changes vary across layers. For En⇒De translation, the calibrated attention weights are more uniform at 1-3 layers and more focused at 4-6 layers, while the attention weights become more focused for all layers except the 1-st layer on Zh⇒En task. These findings prove that each attention layer plays a different role in the decoding process. The low layers generally grasp information from various inputs, while the high layers look for some particular words tied to the model predictions."
+    }, {
+      "heading" : "6 Related Work",
+      "text" : "The attention mechanism is first introduced to augment vanilla recurrent network (Bahdanau et al., 2015; Luong et al., 2015), which are then the backbone of state-of-the-art Transformer (Vaswani et al., 2017) for NMT. It yields better performance and provides a window into how a model is operating (Belinkov and Glass, 2019; Du et al., 2020). This section reviews the recent researches on analyzing and improving attention mechanisms.\nThe Attention Debate Many recent studies have spawned interest in whether attention weights faithfully represent each input token’s responsibility for model prediction. Serrano and Smith flip the model’s decision by permuting some small attention weights, with high-weighted components not being the reason for the decision. Some work (Jain and Wallace, 2019; Vashishth et al., 2019) find a weak correlation between attention scores and other well-ground feature importance metrics, specially gradient-based and leave-one-out methods, in various text classification tasks. We also present the correlation analysis in the lessdiscussed Transformer-based NMT and reach a similar conclusion. As opposed to the critiques of regarding attention weights as explanation, Wiegreffe and Pinter claim that the trained attention mechanisms do learn something meaningful about the relationship between inputs and outputs, such as syntactic information (Raganato and Tiedemann, 2018; Vig and Belinkov, 2019; Pham et al., 2019).\nCan Attention be improved? There is plenty of work on supervising attention weights with lexical probabilities (Arthur et al., 2016), word alignment (Chen et al., 2016; Liu et al., 2016; Mi et al., 2016; Cohn et al., 2016; Garg et al., 2019; Feng et al., 2020), human rationales (Strout et al., 2019) and sparsity regularization (Zhang et al., 2019). Unlike them, we never introduce any external knowledge but highlight the inputs whose removal would significantly decrease Transformer’s performance. Another work line aims to make attention better indicative of the inputs’ importance (Kitada and Iyatomi, 2020; Tutek and Snajder, 2020; Mohankumar et al., 2020) which is designed for analysis with no significant performance gain, while our methods incorporate the analytical results to enhance the NMT performance."
+    }, {
+      "heading" : "7 Conclusion",
+      "text" : "In this paper, we present a mask perturbation model to automatically discover the decisive inputs for the model prediction. We propose three methods to calibrate the attention mechanism by focusing on the discovered vital inputs. Extensive experimental results show that our approaches obtain significant improvements over the state-of-the-art system. Analytical results indicate that our proposed methods make the low layer’s attention weights more dispersed to grasp multiple information. In contrast, high-layer attention weights become more\nfocused on specific essential inputs. We further find a greater need for calibration in the original attention weights with high entropy. Our work provides insights on future work about learning more useful information via attention mechanisms in other attention-based frameworks."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "The research work has been funded by the Natural Science Foundation of China under Grant No. U1836221 and the National Key Research and Development Program of China under Grant No. 2018YFC0823404. The research work in this paper has also been supported by Beijing Academy of Artificial Intelligence (BAAI2019QN0504). This work is also supported by Youth Innovation Promotion Association CAS No. 2017172."
+    } ],
+    "references" : [ {
+      "title" : "Incorporating discrete translation lexicons into neural machine translation",
+      "author" : [ "Philip Arthur", "Graham Neubig", "Satoshi Nakamura." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 1557–1567, Austin,",
+      "citeRegEx" : "Arthur et al\\.,? 2016",
+      "shortCiteRegEx" : "Arthur et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Neural machine translation by jointly learning to align and translate",
+      "author" : [ "Dzmitry Bahdanau", "Kyunghyun Cho", "Yoshua Bengio." ],
+      "venue" : "3rd International Conference on Learning Representations, ICLR 2015, San Diego, CA, USA, May 7-9, 2015,",
+      "citeRegEx" : "Bahdanau et al\\.,? 2015",
+      "shortCiteRegEx" : "Bahdanau et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Analysis methods in neural language processing: A survey",
+      "author" : [ "Yonatan Belinkov", "James R. Glass." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies,",
+      "citeRegEx" : "Belinkov and Glass.,? 2019",
+      "shortCiteRegEx" : "Belinkov and Glass.",
+      "year" : 2019
+    }, {
+      "title" : "Guided alignment training for topic-aware neural machine translation",
+      "author" : [ "Wenhu Chen", "Evgeny Matusov", "Shahram Khadivi", "Jan-Thorsten Peter." ],
+      "venue" : "CoRR, abs/1607.01628.",
+      "citeRegEx" : "Chen et al\\.,? 2016",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Incorporating structural alignment biases into an attentional neural translation model",
+      "author" : [ "Trevor Cohn", "Cong Duy Vu Hoang", "Ekaterina Vymolova", "Kaisheng Yao", "Chris Dyer", "Gholamreza Haffari." ],
+      "venue" : "NAACL HLT 2016, The 2016 Conference of the",
+      "citeRegEx" : "Cohn et al\\.,? 2016",
+      "shortCiteRegEx" : "Cohn et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Techniques for interpretable machine learning",
+      "author" : [ "Mengnan Du", "Ninghao Liu", "Xia Hu." ],
+      "venue" : "Commun. ACM, 63(1):68–77.",
+      "citeRegEx" : "Du et al\\.,? 2020",
+      "shortCiteRegEx" : "Du et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Modeling fluency and faithfulness for diverse neural machine translation",
+      "author" : [ "Yang Feng", "Wanying Xie", "Shuhao Gu", "Chenze Shao", "Wen Zhang", "Zhengxin Yang", "Dong Yu." ],
+      "venue" : "The Thirty-Fourth AAAI Conference on Artificial Intelligence, AAAI 2020,",
+      "citeRegEx" : "Feng et al\\.,? 2020",
+      "shortCiteRegEx" : "Feng et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Interpretable explanations of black boxes by meaningful perturbation",
+      "author" : [ "Ruth C Fong", "Andrea Vedaldi." ],
+      "venue" : "Proceedings of the IEEE International Conference on Computer Vision, pages 3429–3437.",
+      "citeRegEx" : "Fong and Vedaldi.,? 2017",
+      "shortCiteRegEx" : "Fong and Vedaldi.",
+      "year" : 2017
+    }, {
+      "title" : "Jointly learning to align and translate with transformer models",
+      "author" : [ "Sarthak Garg", "Stephan Peitz", "Udhyakumar Nallasamy", "Matthias Paulik." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th Inter-",
+      "citeRegEx" : "Garg et al\\.,? 2019",
+      "shortCiteRegEx" : "Garg et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Convolutional sequence to sequence learning",
+      "author" : [ "Jonas Gehring", "Michael Auli", "David Grangier", "Denis Yarats", "Yann N Dauphin." ],
+      "venue" : "Proceedings of the 34th International Conference on Machine Learning, volume 70, pages 1243–1252.",
+      "citeRegEx" : "Gehring et al\\.,? 2017",
+      "shortCiteRegEx" : "Gehring et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Attention is not Explanation",
+      "author" : [ "Sarthak Jain", "Byron C. Wallace." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long and Short Pa-",
+      "citeRegEx" : "Jain and Wallace.,? 2019",
+      "shortCiteRegEx" : "Jain and Wallace.",
+      "year" : 2019
+    }, {
+      "title" : "The (un)reliability of saliency methods",
+      "author" : [ "Pieter-Jan Kindermans", "Sara Hooker", "Julius Adebayo", "Maximilian Alber", "Kristof T. Schütt", "Sven Dähne", "Dumitru Erhan", "Been Kim." ],
+      "venue" : "Wojciech Samek, Grégoire Montavon, Andrea Vedaldi,",
+      "citeRegEx" : "Kindermans et al\\.,? 2019",
+      "shortCiteRegEx" : "Kindermans et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Attention meets perturbations: Robust and interpretable attention with adversarial training",
+      "author" : [ "Shunsuke Kitada", "Hitoshi Iyatomi." ],
+      "venue" : "CoRR, abs/2009.12064.",
+      "citeRegEx" : "Kitada and Iyatomi.,? 2020",
+      "shortCiteRegEx" : "Kitada and Iyatomi.",
+      "year" : 2020
+    }, {
+      "title" : "Visualizing and understanding neural models in NLP",
+      "author" : [ "Jiwei Li", "Xinlei Chen", "Eduard Hovy", "Dan Jurafsky." ],
+      "venue" : "Proceedings of the 2016 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-",
+      "citeRegEx" : "Li et al\\.,? 2016",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Neural machine translation with supervised attention",
+      "author" : [ "Lemao Liu", "Masao Utiyama", "Andrew Finch", "Eiichiro Sumita." ],
+      "venue" : "Proceedings of COLING 2016, the 26th International Conference on Computational Linguistics: Technical Papers, pages",
+      "citeRegEx" : "Liu et al\\.,? 2016",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Effective approaches to attention-based neural machine translation",
+      "author" : [ "Thang Luong", "Hieu Pham", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, EMNLP 2015, Lisbon, Portu-",
+      "citeRegEx" : "Luong et al\\.,? 2015",
+      "shortCiteRegEx" : "Luong et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Supervised attentions for neural machine translation",
+      "author" : [ "Haitao Mi", "Zhiguo Wang", "Abe Ittycheriah." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 2283–2288. Association for Computational Linguis-",
+      "citeRegEx" : "Mi et al\\.,? 2016",
+      "shortCiteRegEx" : "Mi et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Towards transparent and explainable attention models",
+      "author" : [ "Akash Kumar Mohankumar", "Preksha Nema", "Sharan Narasimhan", "Mitesh M. Khapra", "Balaji Vasan Srinivasan", "Balaraman Ravindran." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Asso-",
+      "citeRegEx" : "Mohankumar et al\\.,? 2020",
+      "shortCiteRegEx" : "Mohankumar et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Bleu: a method for automatic evaluation of machine translation",
+      "author" : [ "Kishore Papineni", "Salim Roukos", "Todd Ward", "WeiJing Zhu." ],
+      "venue" : "Proceedings of the 40th Annual Meeting of the Association for Computational Linguistics, pages 311–318. Association for",
+      "citeRegEx" : "Papineni et al\\.,? 2002",
+      "shortCiteRegEx" : "Papineni et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Promoting the knowledge of source syntax in transformer NMT is not needed",
+      "author" : [ "Thuong-Hai Pham", "Dominik Machácek", "Ondrej Bojar." ],
+      "venue" : "Computación y Sistemas, 23(3).",
+      "citeRegEx" : "Pham et al\\.,? 2019",
+      "shortCiteRegEx" : "Pham et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "An analysis of encoder representations in transformerbased machine translation",
+      "author" : [ "Alessandro Raganato", "Jörg Tiedemann." ],
+      "venue" : "Proceedings of the 2018 EMNLP Workshop BlackboxNLP: Analyzing and Interpreting Neural Networks for NLP, pages",
+      "citeRegEx" : "Raganato and Tiedemann.,? 2018",
+      "shortCiteRegEx" : "Raganato and Tiedemann.",
+      "year" : 2018
+    }, {
+      "title" : "Right for the right reasons: Training differentiable models by constraining their explanations",
+      "author" : [ "Andrew Slavin Ross", "Michael C. Hughes", "Finale Doshi-Velez." ],
+      "venue" : "Proceedings of the Twenty-Sixth International Joint Conference on Artificial Intelli-",
+      "citeRegEx" : "Ross et al\\.,? 2017",
+      "shortCiteRegEx" : "Ross et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Neural machine translation of rare words with subword units",
+      "author" : [ "Rico Sennrich", "Barry Haddow", "Alexandra Birch." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 1715–1725.",
+      "citeRegEx" : "Sennrich et al\\.,? 2016",
+      "shortCiteRegEx" : "Sennrich et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Is attention interpretable? In Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 2931–2951",
+      "author" : [ "Sofia Serrano", "Noah A. Smith." ],
+      "venue" : "Association for Computational Linguistics.",
+      "citeRegEx" : "Serrano and Smith.,? 2019",
+      "shortCiteRegEx" : "Serrano and Smith.",
+      "year" : 2019
+    }, {
+      "title" : "Deep inside convolutional networks: Visualising image classification models and saliency maps",
+      "author" : [ "Karen Simonyan", "Andrea Vedaldi", "Andrew Zisserman." ],
+      "venue" : "2nd International Conference on Learning Representations, ICLR 2014, Banff, AB, Canada,",
+      "citeRegEx" : "Simonyan et al\\.,? 2014",
+      "shortCiteRegEx" : "Simonyan et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Do human rationales improve machine explanations? In Proceedings of the 2019 ACL Workshop BlackboxNLP: Analyzing and Interpreting Neural Networks for NLP, pages 56–62",
+      "author" : [ "Julia Strout", "Ye Zhang", "Raymond Mooney." ],
+      "venue" : "Association for",
+      "citeRegEx" : "Strout et al\\.,? 2019",
+      "shortCiteRegEx" : "Strout et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Modeling coverage for neural machine translation",
+      "author" : [ "Zhaopeng Tu", "Zhengdong Lu", "Yang Liu", "Xiaohua Liu", "Hang Li." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics, ACL 2016, August 7-12, 2016, Berlin,",
+      "citeRegEx" : "Tu et al\\.,? 2016",
+      "shortCiteRegEx" : "Tu et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Staying true to your word: (how) can attention become explanation? In Proceedings of the 5th Workshop on Representation Learning for NLP, pages 131–142",
+      "author" : [ "Martin Tutek", "Jan Snajder." ],
+      "venue" : "Association for Computational Linguistics.",
+      "citeRegEx" : "Tutek and Snajder.,? 2020",
+      "shortCiteRegEx" : "Tutek and Snajder.",
+      "year" : 2020
+    }, {
+      "title" : "Attention interpretability across NLP tasks",
+      "author" : [ "Shikhar Vashishth", "Shyam Upadhyay", "Gaurav Singh Tomar", "Manaal Faruqui." ],
+      "venue" : "CoRR, abs/1909.11218.",
+      "citeRegEx" : "Vashishth et al\\.,? 2019",
+      "shortCiteRegEx" : "Vashishth et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "undefinedukasz Kaiser", "Illia Polosukhin" ],
+      "venue" : "In Proceedings of the 31st International Conference on Neural Information Processing",
+      "citeRegEx" : "Vaswani et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Analyzing the structure of attention in a transformer language model",
+      "author" : [ "Jesse Vig", "Yonatan Belinkov." ],
+      "venue" : "Proceedings of the 2019 ACL Workshop BlackboxNLP: Analyzing and Interpreting Neural Networks for NLP, pages 63–76. Association for",
+      "citeRegEx" : "Vig and Belinkov.,? 2019",
+      "shortCiteRegEx" : "Vig and Belinkov.",
+      "year" : 2019
+    }, {
+      "title" : "Analyzing the source and target contributions to predictions in neural machine translation",
+      "author" : [ "Elena Voita", "Rico Sennrich", "Ivan Titov." ],
+      "venue" : "CoRR, abs/2010.10907.",
+      "citeRegEx" : "Voita et al\\.,? 2020",
+      "shortCiteRegEx" : "Voita et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Analyzing multi-head self-attention: Specialized heads do the heavy lifting, the rest can be pruned",
+      "author" : [ "Elena Voita", "David Talbot", "Fedor Moiseev", "Rico Sennrich", "Ivan Titov." ],
+      "venue" : "Proceedings of the 57th Conference of the Association for Computa-",
+      "citeRegEx" : "Voita et al\\.,? 2019",
+      "shortCiteRegEx" : "Voita et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Towards enhancing faithfulness for neural machine translation",
+      "author" : [ "Rongxiang Weng", "Heng Yu", "Xiangpeng Wei", "Weihua Luo." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 2675–2684,",
+      "citeRegEx" : "Weng et al\\.,? 2020",
+      "shortCiteRegEx" : "Weng et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Attention is not not explanation",
+      "author" : [ "Sarah Wiegreffe", "Yuval Pinter." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natural Language Processing (EMNLP-",
+      "citeRegEx" : "Wiegreffe and Pinter.,? 2019",
+      "shortCiteRegEx" : "Wiegreffe and Pinter.",
+      "year" : 2019
+    }, {
+      "title" : "Attention with sparsity regularization for neural machine translation and summarization",
+      "author" : [ "Jiajun Zhang", "Yang Zhao", "Haoran Li", "Chengqing Zong." ],
+      "venue" : "IEEE ACM Trans. Audio Speech Lang. Process., 27(3):507–518.",
+      "citeRegEx" : "Zhang et al\\.,? 2019",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2019
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 1,
+      "context" : "Attention mechanisms have been ubiquitous in neural machine translation (NMT) (Bahdanau et al., 2015; Vaswani et al., 2017).",
+      "startOffset" : 78,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 29,
+      "context" : "Attention mechanisms have been ubiquitous in neural machine translation (NMT) (Bahdanau et al., 2015; Vaswani et al., 2017).",
+      "startOffset" : 78,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 17,
+      "context" : ", punctuations) are frequently assigned with high attention weights (Mohankumar et al., 2020).",
+      "startOffset" : 68,
+      "endOffset" : 93
+    }, {
+      "referenceID" : 26,
+      "context" : "It further proves that attention mechanisms are incapable of precisely identifying decisive inputs for each prediction, which would result in wrong-translation or over-translation in NMT (Tu et al., 2016).",
+      "startOffset" : 187,
+      "endOffset" : 204
+    }, {
+      "referenceID" : 29,
+      "context" : "In this section, we first briefly introduce the framework of Transformer (Vaswani et al., 2017) with a focus on the Multi-head attention (MHA).",
+      "startOffset" : 73,
+      "endOffset" : 95
+    }, {
+      "referenceID" : 24,
+      "context" : "We apply gradient-based methods (Simonyan et al., 2014; Li et al., 2016) to measure the importance of each contextual representation hi for model output yt:",
+      "startOffset" : 32,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 13,
+      "context" : "We apply gradient-based methods (Simonyan et al., 2014; Li et al., 2016) to measure the importance of each contextual representation hi for model output yt:",
+      "startOffset" : 32,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 7,
+      "context" : "Notably, earlier studies employ masks and “deletion game” as the analytical tools to explore the importance of each attention head (Fong and Vedaldi, 2017) or the contributions of the pixels in the figure to the model outputs (Voita et al.",
+      "startOffset" : 131,
+      "endOffset" : 155
+    }, {
+      "referenceID" : 32,
+      "context" : "Notably, earlier studies employ masks and “deletion game” as the analytical tools to explore the importance of each attention head (Fong and Vedaldi, 2017) or the contributions of the pixels in the figure to the model outputs (Voita et al., 2019).",
+      "startOffset" : 226,
+      "endOffset" : 246
+    }, {
+      "referenceID" : 22,
+      "context" : "Byte pair encoding (BPE) (Sennrich et al., 2016) is applied to all language pairs to construct a join vocabulary except for Zh⇒En where the source and target languages are separately encoded.",
+      "startOffset" : 25,
+      "endOffset" : 48
+    }, {
+      "referenceID" : 18,
+      "context" : "We use the standard 4-gram BLEU (Papineni et al., 2002) on the true-case output to score the performance.",
+      "startOffset" : 32,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 29,
+      "context" : "We experiment with Transformer Base (Vaswani et al., 2017): hidden size dmodel = 512, 6 encoder and decoder layers, 8 attention heads and 2048 feed-forward innerlayer dimension.",
+      "startOffset" : 36,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2016), Conv (Gehring et al., 2017) and AttIsAll (Vaswani et al.",
+      "startOffset" : 14,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 29,
+      "context" : ", 2017) and AttIsAll (Vaswani et al., 2017) on WMT14 En⇒De translation task.",
+      "startOffset" : 21,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 33,
+      "context" : "Besides, we also compare our method against related researches about introducing word alignment information to guide translation (Weng et al., 2020; Feng et al., 2020).",
+      "startOffset" : 129,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 6,
+      "context" : "Besides, we also compare our method against related researches about introducing word alignment information to guide translation (Weng et al., 2020; Feng et al., 2020).",
+      "startOffset" : 129,
+      "endOffset" : 167
+    }, {
+      "referenceID" : 11,
+      "context" : "Though these measures are insufficient for telling what inputs are important (Kindermans et al., 2019), they do provide measures of individual feature importance with known semantics (Ross et al.",
+      "startOffset" : 77,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 21,
+      "context" : ", 2019), they do provide measures of individual feature importance with known semantics (Ross et al., 2017).",
+      "startOffset" : 88,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 31,
+      "context" : "High or low entropy? More focused contributions of inputs suggest that the model is more confident about the choice of important tokens (Voita et al., 2020).",
+      "startOffset" : 136,
+      "endOffset" : 156
+    }, {
+      "referenceID" : 1,
+      "context" : "The attention mechanism is first introduced to augment vanilla recurrent network (Bahdanau et al., 2015; Luong et al., 2015), which are then the backbone of state-of-the-art Transformer (Vaswani et al.",
+      "startOffset" : 81,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 15,
+      "context" : "The attention mechanism is first introduced to augment vanilla recurrent network (Bahdanau et al., 2015; Luong et al., 2015), which are then the backbone of state-of-the-art Transformer (Vaswani et al.",
+      "startOffset" : 81,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 29,
+      "context" : ", 2015), which are then the backbone of state-of-the-art Transformer (Vaswani et al., 2017) for NMT.",
+      "startOffset" : 69,
+      "endOffset" : 91
+    }, {
+      "referenceID" : 2,
+      "context" : "It yields better performance and provides a window into how a model is operating (Belinkov and Glass, 2019; Du et al., 2020).",
+      "startOffset" : 81,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 5,
+      "context" : "It yields better performance and provides a window into how a model is operating (Belinkov and Glass, 2019; Du et al., 2020).",
+      "startOffset" : 81,
+      "endOffset" : 124
+    }, {
+      "referenceID" : 10,
+      "context" : "Some work (Jain and Wallace, 2019; Vashishth et al., 2019) find a weak correlation between attention scores and other well-ground feature importance metrics, specially gradient-based and leave-one-out methods, in various text classification tasks.",
+      "startOffset" : 10,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 28,
+      "context" : "Some work (Jain and Wallace, 2019; Vashishth et al., 2019) find a weak correlation between attention scores and other well-ground feature importance metrics, specially gradient-based and leave-one-out methods, in various text classification tasks.",
+      "startOffset" : 10,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 20,
+      "context" : "As opposed to the critiques of regarding attention weights as explanation, Wiegreffe and Pinter claim that the trained attention mechanisms do learn something meaningful about the relationship between inputs and outputs, such as syntactic information (Raganato and Tiedemann, 2018; Vig and Belinkov, 2019; Pham et al., 2019).",
+      "startOffset" : 251,
+      "endOffset" : 324
+    }, {
+      "referenceID" : 30,
+      "context" : "As opposed to the critiques of regarding attention weights as explanation, Wiegreffe and Pinter claim that the trained attention mechanisms do learn something meaningful about the relationship between inputs and outputs, such as syntactic information (Raganato and Tiedemann, 2018; Vig and Belinkov, 2019; Pham et al., 2019).",
+      "startOffset" : 251,
+      "endOffset" : 324
+    }, {
+      "referenceID" : 19,
+      "context" : "As opposed to the critiques of regarding attention weights as explanation, Wiegreffe and Pinter claim that the trained attention mechanisms do learn something meaningful about the relationship between inputs and outputs, such as syntactic information (Raganato and Tiedemann, 2018; Vig and Belinkov, 2019; Pham et al., 2019).",
+      "startOffset" : 251,
+      "endOffset" : 324
+    }, {
+      "referenceID" : 0,
+      "context" : "Can Attention be improved? There is plenty of work on supervising attention weights with lexical probabilities (Arthur et al., 2016), word alignment (Chen et al.",
+      "startOffset" : 111,
+      "endOffset" : 132
+    }, {
+      "referenceID" : 3,
+      "context" : ", 2016), word alignment (Chen et al., 2016; Liu et al., 2016; Mi et al., 2016; Cohn et al., 2016; Garg et al., 2019; Feng et al., 2020), human rationales (Strout et al.",
+      "startOffset" : 24,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2016), word alignment (Chen et al., 2016; Liu et al., 2016; Mi et al., 2016; Cohn et al., 2016; Garg et al., 2019; Feng et al., 2020), human rationales (Strout et al.",
+      "startOffset" : 24,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 16,
+      "context" : ", 2016), word alignment (Chen et al., 2016; Liu et al., 2016; Mi et al., 2016; Cohn et al., 2016; Garg et al., 2019; Feng et al., 2020), human rationales (Strout et al.",
+      "startOffset" : 24,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2016), word alignment (Chen et al., 2016; Liu et al., 2016; Mi et al., 2016; Cohn et al., 2016; Garg et al., 2019; Feng et al., 2020), human rationales (Strout et al.",
+      "startOffset" : 24,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2016), word alignment (Chen et al., 2016; Liu et al., 2016; Mi et al., 2016; Cohn et al., 2016; Garg et al., 2019; Feng et al., 2020), human rationales (Strout et al.",
+      "startOffset" : 24,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 6,
+      "context" : ", 2016), word alignment (Chen et al., 2016; Liu et al., 2016; Mi et al., 2016; Cohn et al., 2016; Garg et al., 2019; Feng et al., 2020), human rationales (Strout et al.",
+      "startOffset" : 24,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2020), human rationales (Strout et al., 2019) and sparsity regularization (Zhang et al.",
+      "startOffset" : 26,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 35,
+      "context" : ", 2019) and sparsity regularization (Zhang et al., 2019).",
+      "startOffset" : 36,
+      "endOffset" : 56
+    }, {
+      "referenceID" : 12,
+      "context" : "Another work line aims to make attention better indicative of the inputs’ importance (Kitada and Iyatomi, 2020; Tutek and Snajder, 2020; Mohankumar et al., 2020) which is designed for analysis with no significant performance gain, while our methods incorporate the analytical results to enhance the NMT performance.",
+      "startOffset" : 85,
+      "endOffset" : 161
+    }, {
+      "referenceID" : 27,
+      "context" : "Another work line aims to make attention better indicative of the inputs’ importance (Kitada and Iyatomi, 2020; Tutek and Snajder, 2020; Mohankumar et al., 2020) which is designed for analysis with no significant performance gain, while our methods incorporate the analytical results to enhance the NMT performance.",
+      "startOffset" : 85,
+      "endOffset" : 161
+    }, {
+      "referenceID" : 17,
+      "context" : "Another work line aims to make attention better indicative of the inputs’ importance (Kitada and Iyatomi, 2020; Tutek and Snajder, 2020; Mohankumar et al., 2020) which is designed for analysis with no significant performance gain, while our methods incorporate the analytical results to enhance the NMT performance.",
+      "startOffset" : 85,
+      "endOffset" : 161
+    } ],
+    "year" : 2021,
+    "abstractText" : "Attention mechanisms have achieved substantial improvements in neural machine translation by dynamically selecting relevant inputs for different predictions. However, recent studies have questioned the attention mechanisms’ capability for discovering decisive inputs. In this paper, we propose to calibrate the attention weights by introducing a mask perturbation model that automatically evaluates each input’s contribution to the model outputs. We increase the attention weights assigned to the indispensable tokens, whose removal leads to a dramatic performance decrease. The extensive experiments on the Transformer-based translation have demonstrated the effectiveness of our model. We further find that the calibrated attention weights are more uniform at lower layers to collect multiple information while more concentrated on the specific inputs at higher layers. Detailed analyses also show a great need for calibration in the attention weights with high entropy where the model is unconfident about its decision1.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

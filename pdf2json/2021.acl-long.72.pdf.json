@@ -1,0 +1,980 @@
+{
+  "name" : "2021.acl-long.72.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "DeCLUTR: Deep Contrastive Learning for Unsupervised Textual Representations",
+    "authors" : [ "John Giorgi", "Osvald Nitski", "Bo Wang", "Gary Bader" ],
+    "emails" : [ "gary.bader}@mail.utoronto.ca", "bowang@vectorinstitute.ai" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 879–895\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n879"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Due to the limited amount of labelled training data available for many natural language processing (NLP) tasks, transfer learning has become ubiquitous (Ruder et al., 2019). For some time, transfer learning in NLP was limited to pretrained word embeddings (Mikolov et al., 2013; Pennington et al.,\n1https://github.com/JohnGiorgi/DeCLUTR\n2014). Recent work has demonstrated strong transfer task performance using pretrained sentence embeddings. These fixed-length vectors, often referred to as “universal” sentence embeddings, are typically learned on large corpora and then transferred to various downstream tasks, such as clustering (e.g. topic modelling) and retrieval (e.g. semantic search). Indeed, sentence embeddings have become an area of focus, and many supervised (Conneau et al., 2017), semi-supervised (Subramanian et al., 2018; Phang et al., 2018; Cer et al., 2018; Reimers and Gurevych, 2019) and unsupervised (Le and Mikolov, 2014; Jernite et al., 2017; Kiros et al., 2015; Hill et al., 2016; Logeswaran and Lee, 2018) approaches have been proposed. However, the highest performing solutions require labelled data, limiting their usefulness to languages and domains where labelled data is abundant. Therefore, closing the performance gap between unsupervised and supervised universal sentence embedding methods is an important goal.\nPretraining transformer-based language models has become the primary method for learning textual representations from unlabelled corpora (Radford et al., 2018; Devlin et al., 2019; Dai et al., 2019; Yang et al., 2019; Liu et al., 2019; Clark et al., 2020). This success has primarily been driven by masked language modelling (MLM). This selfsupervised token-level objective requires the model to predict the identity of some randomly masked tokens from the input sequence. In addition to MLM, some of these models have mechanisms for learning sentence-level embeddings via self-supervision. In BERT (Devlin et al., 2019), a special classification token is prepended to every input sequence, and its representation is used in a binary classifi-\ncation task to predict whether one textual segment follows another in the training corpus, denoted Next Sentence Prediction (NSP). However, recent work has called into question the effectiveness of NSP (Conneau and Lample, 2019; You et al., 1904; Joshi et al., 2020). In RoBERTa (Liu et al., 2019), the authors demonstrated that removing NSP during pretraining leads to unchanged or even slightly improved performance on downstream sentencelevel tasks (including semantic text similarity and natural language inference). In ALBERT (Lan et al., 2020), the authors hypothesize that NSP conflates topic prediction and coherence prediction, and instead propose a Sentence-Order Prediction objective (SOP), suggesting that it better models inter-sentence coherence. In preliminary evaluations, we found that neither objective produces good universal sentence embeddings (see Appendix A). Thus, we propose a simple but effective self-supervised, sentence-level objective inspired by recent advances in metric learning.\nMetric learning is a type of representation learning that aims to learn an embedding space where the vector representations of similar data are mapped close together, and vice versa (Lowe, 1995; Mika et al., 1999; Xing et al., 2002). In computer vision (CV), deep metric learning (DML) has been widely used for learning visual representations (Wohlhart and Lepetit, 2015; Wen et al., 2016; Zhang and Saligrama, 2016; Bucher et al., 2016; Leal-Taixé et al., 2016; Tao et al., 2016; Yuan et al., 2020; He et al., 2018; Grabner et al., 2018; Yelamarthi et al., 2018; Yu et al., 2018). Generally speaking, DML is approached as follows: a “pretext” task (often self-supervised, e.g. colourization or inpainting) is carefully designed and used to train deep neural networks to generate useful feature representations. Here, “useful” means a representation that is easily adaptable to other downstream tasks, unknown at training time. Downstream tasks (e.g. object recognition) are then used to evaluate the quality of the learned features (independent of the model that produced them), often by training a linear classifier on the task using these features as input. The most successful approach to date has been to design a pretext task for learning with a pair-based contrastive loss function. For a given anchor data point, contrastive losses attempt to make the distance between the anchor and some positive data points (those that are similar) smaller than the distance between the anchor and some neg-\native data points (those that are dissimilar) (Hadsell et al., 2006). The highest-performing methods generate anchor-positive pairs by randomly augmenting the same image (e.g. using crops, flips and colour distortions); anchor-negative pairs are randomly chosen, augmented views of different images (Bachman et al., 2019; Tian et al., 2020; He et al., 2020; Chen et al., 2020). In fact, Kong et al., 2020 demonstrate that the MLM and NSP objectives are also instances of contrastive learning.\nInspired by this approach, we propose a selfsupervised, contrastive objective that can be used to pretrain a sentence encoder. Our objective learns universal sentence embeddings by training an encoder to minimize the distance between the embeddings of textual segments randomly sampled from nearby in the same document. We demonstrate our objective’s effectiveness by using it to extend the pretraining of a transformer-based language model and obtain state-of-the-art results on SentEval (Conneau and Kiela, 2018) – a benchmark of 28 tasks designed to evaluate universal sentence embeddings. Our primary contributions are:\n• We propose a self-supervised sentence-level objective that can be used alongside MLM to pretrain transformer-based language models, inducing generalized embeddings for sentence- and paragraph-length text without any labelled data (subsection 5.1).\n• We perform extensive ablations to determine which factors are important for learning highquality embeddings (subsection 5.2).\n• We demonstrate that the quality of the learned embeddings scale with model and data size. Therefore, performance can likely be improved simply by collecting more unlabelled text or using a larger encoder (subsection 5.3).\n• We open-source our solution and provide detailed instructions for training it on new data or embedding unseen text.2"
+    }, {
+      "heading" : "2 Related Work",
+      "text" : "Previous works on universal sentence embeddings can be broadly grouped by whether or not they use labelled data in their pretraining step(s), which we refer to simply as supervised or semi-supervised and unsupervised, respectively.\n2https://github.com/JohnGiorgi/DeCLUTR\nSupervised or semi-supervised The highest performing universal sentence encoders are pretrained on the human-labelled natural language inference (NLI) datasets Stanford NLI (SNLI) (Bowman et al., 2015) and MultiNLI (Williams et al., 2018). NLI is the task of classifying a pair of sentences (denoted the “hypothesis” and the “premise”) into one of three relationships: entailment, contradiction or neutral. The effectiveness of NLI for training universal sentence encoders was demonstrated by the supervised method InferSent (Conneau et al., 2017). Universal Sentence Encoder (USE) (Cer et al., 2018) is semi-supervised, augmenting an unsupervised, Skip-Thoughts-like task (Kiros et al. 2015, see section 2) with supervised training on the SNLI corpus. The recently published Sentence Transformers (Reimers and Gurevych, 2019) method fine-tunes pretrained, transformer-based language models like BERT (Devlin et al., 2019) using labelled NLI datasets.\nUnsupervised Skip-Thoughts (Kiros et al., 2015) and FastSent (Hill et al., 2016) are popular unsupervised techniques that learn sentence embeddings by using an encoding of a sentence to predict words in neighbouring sentences. However, in addition to being computationally expensive, this generative objective forces the model to reconstruct the surface form of a sentence, which may capture information irrelevant to the meaning of a sentence. QuickThoughts (Logeswaran and Lee, 2018) addresses these shortcomings with a simple discriminative objective; given a sentence and its context (adjacent sentences), it learns sentence representations by training a classifier to distinguish context sentences from non-context sentences. The unifying theme of unsupervised approaches is that they exploit the “distributional hypothesis”, namely that the meaning of a word (and by extension, a sentence) is characterized by the word context in which it appears.\nOur overall approach is most similar to Sentence Transformers – we extend the pretraining of a transformer-based language model to produce useful sentence embeddings – but our proposed objective is self-supervised. Removing the dependence on labelled data allows us to exploit the vast amount of unlabelled text on the web without being restricted to languages or domains where labelled data is plentiful (e.g. English Wikipedia). Our objective most closely resembles QuickThoughts; some distinctions include: we relax our sampling to\ntextual segments of up to paragraph length (rather than natural sentences), we sample one or more positive segments per anchor (rather than strictly one), and we allow these segments to be adjacent, overlapping or subsuming (rather than strictly adjacent; see Figure 1, B)."
+    }, {
+      "heading" : "3 Model",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Self-supervised contrastive loss",
+      "text" : "Our method learns textual representations via a contrastive loss by maximizing agreement between textual segments (referred to as “spans” in the rest of the paper) sampled from nearby in the same document. Illustrated in Figure 1, this approach comprises the following components:\n• A data loading step randomly samples paired anchor-positive spans from each document in a minibatch of sizeN . LetA be the number of anchor spans sampled per document, P be the number of positive spans sampled per anchor and i ∈ {1 . . . AN} be the index of an arbitrary anchor span. We denote an anchor span\nand its corresponding p ∈ {1 . . . P} positive spans as si and si+pAN respectively. This procedure is designed to maximize the chance of sampling semantically similar anchor-positive pairs (see subsection 3.2).\n• An encoder f(·) maps each token in the input spans to an embedding. Although our method places no constraints on the choice of encoder, we chose f(·) to be a transformer-based language model, as this represents the state-ofthe-art for text encoders (see subsection 3.3).\n• A pooler g(·) maps the encoded spans f(si) and f(si+pAN ) to fixed-length embeddings ei = g(f(si)) and its corresponding mean positive embedding\nei+AN = 1\nP P∑ p=1 g(f(si+pAN ))\nSimilar to Reimers and Gurevych 2019, we found that choosing g(·) to be the mean of the token-level embeddings (referred to as “mean pooling” in the rest of the paper) performs well (see Appendix, Table 4). We pair each anchor embedding with the mean of multiple positive embeddings. This strategy was proposed by Saunshi et al. 2019, who demonstrated theoretical and empirical improvements compared to using a single positive example for each anchor.\n• A contrastive loss function defined for a contrastive prediction task. Given a set of embedded spans {ek} including a positive pair of examples ei and ei+AN , the contrastive prediction task aims to identify ei+AN in {ek}k 6=i for a given ei\n`(i, j) = − log exp(sim(ei, ej)/τ)∑2AN k=1 1[i 6=k] · exp(sim(ei, ek)/τ)\nwhere sim(u,v) = uTv/||u||2||v||2 denotes the cosine similarity of two vectors u and v, 1[i 6=k] ∈ {0, 1} is an indicator function evaluating to 1 if i 6= k, and τ > 0 denotes the temperature hyperparameter.\nDuring training, we randomly sample minibatches of N documents from the train set and define the contrastive prediction task on anchorpositive pairs ei, ei+AN derived from the N documents, resulting in 2AN data points. As proposed in (Sohn, 2016), we treat the other 2(AN − 1) instances within a minibatch as negative examples. The cost function takes the following form\nLcontrastive = AN∑ i=1 `(i, i+AN) + `(i+AN, i)\nThis is the InfoNCE loss used in previous works (Sohn, 2016; Wu et al., 2018; Oord et al., 2018) and denoted normalized temperature-scale crossentropy loss or “NT-Xent” in (Chen et al., 2020). To embed text with a trained model, we simply pass batches of tokenized text through the model, without sampling spans. Therefore, the computational cost of our method at test time is the cost of the encoder, f(·), plus the cost of the pooler, g(·), which is negligible when using mean pooling."
+    }, {
+      "heading" : "3.2 Span sampling",
+      "text" : "We start by choosing a minimum and maximum span length; in this paper, `min = 32 and `max = 512, the maximum input size for many pretrained transformers. Next, a document d is tokenized to produce a sequence of n tokens xd = (x1, x2 . . . xn). To sample an anchor span si from xd, we first sample its length `anchor from a beta distribution and then randomly (uniformly) sample its starting position sstarti\n`anchor = ⌊ panchor × (`max − `min) + `min ⌋ sstarti ∼ {0, . . . , n− `anchor} sendi = s start i + `anchor\nsi = x d sstarti :s end i\nWe then sample p ∈ {1 . . . P} corresponding positive spans si+pAN independently following a similar procedure\n`positive = ⌊ ppositive × (`max − `min) + `min ⌋ sstarti+pAN ∼ {sstarti − `positive, . . . , sendi } sendi+pAN = s start i+pAN + `positive si+pAN = x d sstarti+pAN :s end i+pAN\nwhere panchor ∼ Beta(α = 4, β = 2), which skews anchor sampling towards longer spans, and ppositive ∼ Beta(α = 2, β = 4), which skews positive sampling towards shorter spans (Figure 1, C). In practice, we restrict the sampling of anchor spans from the same document such that they are a minimum of 2 ∗ `max tokens apart. In Appendix B, we show examples of text that has been sampled by our method. We note several carefully considered decisions in the design of our sampling procedure:\n• Sampling span lengths from a distribution clipped at `min = 32 and `max = 512 encourages the model to produce good embeddings for text ranging from sentence- to paragraphlength. At test time, we expect our model to be able to embed up-to paragraph-length texts.\n• We found that sampling longer lengths for the anchor span than the positive spans improves performance in downstream tasks (we did not find performance to be sensitive to the specific choice of α and β). The rationale for this is twofold. First, it enables the model to learn global-to-local view prediction as in (Hjelm et al., 2019; Bachman et al., 2019; Chen et al., 2020) (referred to as “subsumed view” in Figure 1, B). Second, when P > 1, it encourages diversity among positives spans by lowering the amount of repeated text.\n• Sampling positives nearby to the anchor exploits the distributional hypothesis and increases the chances of sampling valid (i.e. semantically similar) anchor-positive pairs.\n• By sampling multiple anchors per document, each anchor-positive pair is contrasted against both easy negatives (anchors and positives sampled from other documents in a minibatch) and hard negatives (anchors and positives sampled from the same document).\nIn conclusion, the sampling procedure produces three types of positives: positives that partially overlap with the anchor, positives adjacent to the anchor, and positives subsumed by the anchor (Figure 1, B) and two types of negatives: easy negatives sampled from a different document than the anchor, and hard negatives sampled from the same document as the anchor. Thus, our stochastically generated training set and contrastive loss implicitly define a family of predictive tasks which can be\nused to train a model, independent of any specific encoder architecture."
+    }, {
+      "heading" : "3.3 Continued MLM pretraining",
+      "text" : "We use our objective to extend the pretraining of a transformer-based language model (Vaswani et al., 2017), as this represents the state-of-the-art encoder in NLP. We implement the MLM objective as described in (Devlin et al., 2019) on each anchor span in a minibatch and sum the losses from the MLM and contrastive objectives before backpropagating\nL = Lcontrastive + LMLM\nThis is similar to existing pretraining strategies, where an MLM loss is paired with a sentence-level loss such as NSP (Devlin et al., 2019) or SOP (Lan et al., 2020). To make the computational requirements feasible, we do not train from scratch, but rather we continue training a model that has been pretrained with the MLM objective. Specifically, we use both RoBERTa-base (Liu et al., 2019) and DistilRoBERTa (Sanh et al., 2019) (a distilled version of RoBERTa-base) in our experiments. In the rest of the paper, we refer to our method as DeCLUTR-small (when extending DistilRoBERTa pretraining) and DeCLUTR-base (when extending RoBERTa-base pretraining)."
+    }, {
+      "heading" : "4 Experimental setup",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Dataset, training, and implementation",
+      "text" : "Dataset We collected all documents with a minimum token length of 2048 from OpenWebText (Gokaslan and Cohen, 2019) an open-access subset of the WebText corpus (Radford et al., 2019), yielding 497,868 documents in total. For reference, Google’s USE was trained on 570,000 humanlabelled sentence pairs from the SNLI dataset (among other unlabelled datasets). InferSent and Sentence Transformer models were trained on both SNLI and MultiNLI, a total of 1 million humanlabelled sentence pairs.\nImplementation We implemented our model in PyTorch (Paszke et al., 2017) using AllenNLP (Gardner et al., 2018). We used the NT-Xent loss function implemented by the PyTorch Metric Learning library (Musgrave et al., 2019) and the pretrained transformer architecture and weights from the Transformers library (Wolf et al., 2020). All models were trained on up to four NVIDIA Tesla V100 16 or 32GB GPUs.\nTraining Unless specified otherwise, we train for one to three epochs over the 497,868 documents with a minibatch size of 16 and a temperature τ = 5 × 10−2 using the AdamW optimizer (Loshchilov and Hutter, 2019) with a learning rate (LR) of 5 × 10−5 and a weight decay of 0.1. For every document in a minibatch, we sample two anchor spans (A = 2) and two positive spans per anchor (P = 2). We use the Slanted Triangular LR scheduler (Howard and Ruder, 2018) with a number of train steps equal to training instances and a cut fraction of 0.1. The remaining hyperparameters of the underlying pretrained transformer (i.e. DistilRoBERTa or RoBERTa-base) are left at their defaults. All gradients are scaled to a vector norm of 1.0 before backpropagating. Hyperparameters were tuned on the SentEval validation sets."
+    }, {
+      "heading" : "4.2 Evaluation",
+      "text" : "We evaluate all methods on the SentEval benchmark, a widely-used toolkit for evaluating generalpurpose, fixed-length sentence representations. SentEval is divided into 18 downstream tasks – representative NLP tasks such as sentiment analysis, natural language inference, paraphrase detection and image-caption retrieval – and ten probing tasks, which are designed to evaluate what linguistic properties are encoded in a sentence representation. We report scores obtained by our model and the relevant baselines on the downstream and probing tasks using the SentEval toolkit3 with default parameters (see Appendix C for details). Note that\n3https://github.com/facebookresearch/ SentEval\nall the supervised approaches we compare to are trained on the SNLI corpus, which is included as a downstream task in SentEval. To avoid train-test contamination, we compute average downstream scores without considering SNLI when comparing to these approaches in Table 2."
+    }, {
+      "heading" : "4.2.1 Baselines",
+      "text" : "We compare to the highest performing, most popular sentence embedding methods: InferSent, Google’s USE and Sentence Transformers. For InferSent, we compare to the latest model.4 We use the latest “large” USE model5, as it is most similar in terms of architecture and number of parameters to DeCLUTR-base. For Sentence Transformers, we compare to “roberta-base-nli-mean-tokens”6, which, like DeCLUTR-base, uses the RoBERTabase architecture and pretrained weights. The only difference is each method’s extended pretraining strategy. We include the performance of averaged GloVe7 and fastText8 word vectors as weak baselines. Trainable model parameter counts and sentence embedding dimensions are listed in Table 1. Despite our best efforts, we could not evaluate the pretrained QuickThought models against the full SentEval benchmark. We cite the scores from the paper directly. Finally, we evaluate the pretrained transformer model’s performance before it is subjected to training with our contrastive objective, denoted “Transformer-*”. We use mean pooling on the pretrained transformers token-level output to produce sentence embeddings – the same pooling strategy used in our method."
+    }, {
+      "heading" : "5 Results",
+      "text" : "In subsection 5.1, we compare the performance of our model against the relevant baselines. In the remaining sections, we explore which components contribute to the quality of the learned embeddings."
+    }, {
+      "heading" : "5.1 Comparison to baselines",
+      "text" : "Downstream task performance Compared to the underlying pretrained models DistilRoBERTa\n4https://dl.fbaipublicfiles.com/ infersent/infersent2.pkl\n5https://tfhub.dev/google/ universal-sentence-encoder-large/5\n6https://www.sbert.net/docs/ pretrained_models.html\n7http://nlp.stanford.edu/data/glove. 840B.300d.zip\n8https://dl.fbaipublicfiles.com/ fasttext/vectors-english/crawl-300d-2M. vec.zip\nand RoBERTa-base, DeCLUTR-small and DeCLUTR-base obtain large boosts in average downstream performance, +4% and +6% respectively (Table 2). DeCLUTR-base leads to improved or equivalent performance for every downstream task but one (SST5) and DeCLUTR-small for all but three (SST2, SST5 and TREC). Compared to existing methods, DeCLUTR-base matches or even outperforms average performance without using any hand-labelled training data. Surprisingly, we also find that DeCLUTR-small outperforms Sentence Transformers while using ∼34% less trainable parameters.\nProbing task performance With the exception of InferSent, existing methods perform poorly on the probing tasks of SentEval (Table 3). Sentence Transformers, which begins with a pretrained transformer model and fine-tunes it on NLI datasets, scores approximately 10% lower on the probing tasks than the model it fine-tunes. In contrast, both DeCLUTR-small and DeCLUTR-base perform comparably to the underlying pretrained model in terms of average performance. We note that the purpose of the probing tasks is not the development of ad-hoc models that attain top performance on them (Conneau et al., 2018). However, it is still interesting to note that high downstream task performance can be obtained without sacrificing probing task performance. Furthermore, these results suggest that fine-tuning transformer-based language models on NLI datasets may discard some of the linguistic information captured by the pretrained model’s weights. We suspect that the inclusion of MLM in our training objective is responsible for DeCLUTR’s relatively high performance on the probing tasks.\nSupervised vs. unsupervised downstream tasks The downstream evaluation of SentEval includes supervised and unsupervised tasks. In the unsupervised tasks, the embeddings of the method to evaluate are used as-is without any further training (see Appendix C for details). Interestingly, we find that USE performs particularly well across the unsupervised evaluations in SentEval (tasks marked with a * in Table 2). Given the similarity of the USE architecture to Sentence Transformers and DeCLUTR and the similarity of its supervised NLI training objective to InferSent and Sentence Transformers, we suspect the most likely cause is one or more of its additional training objectives. These include a conversational response prediction task (Henderson et al., 2017) and a Skip-Thoughts (Kiros et al., 2015) like task."
+    }, {
+      "heading" : "5.2 Ablation of the sampling procedure",
+      "text" : "We ablate several components of the sampling procedure, including the number of anchors sampled per document A, the number of positives sampled per anchor P , and the sampling strategy for those positives (Figure 2). We note that when A = 2, the model is trained on twice the number of spans and twice the effective batch size (2AN , whereN is the number of documents in a minibatch) as compared to when A = 1. To control for this, all experi-\nments where A = 1 are trained for two epochs (twice the number of epochs as when A = 2) and for two times the minibatch size (2N ). Thus, both sets of experiments are trained on the same number of spans and the same effective batch size (4N ), and the only difference is the number of anchors sampled per document (A).\nWe find that sampling multiple anchors per document has a large positive impact on the quality of learned embeddings. We hypothesize this is because the difficulty of the contrastive objective increases when A > 1. Recall that a minibatch is composed of random documents, and each anchor-positive pair sampled from a document is contrasted against all other anchor-positive pairs in the minibatch. When A > 1, anchor-positive pairs will be contrasted against other anchors and positives from the same document, increasing the difficulty of the contrastive objective, thus leading to better representations. We also find that a positive sampling strategy that allows positives to be adjacent to and subsumed by the anchor outperforms a strategy that only allows adjacent or subsuming views, suggesting that the information captured by these views is complementary. Finally, we note that sampling multiple positives per anchor (P > 1) has minimal impact on performance. This is in contrast to (Saunshi et al., 2019), who found both theoretical and empirical improvements when\nmultiple positives are averaged and paired with a given anchor."
+    }, {
+      "heading" : "5.3 Training objective, train set size and model capacity",
+      "text" : "To determine the importance of the training objectives, train set size, and model capacity, we trained two sizes of the model with 10% to 100% (1 full epoch) of the train set (Figure 3). Pretraining the model with both the MLM and contrastive objectives improves performance over training with either objective alone. Including MLM alongside the contrastive objective leads to monotonic improvement as the train set size is increased. We hypothesize that including the MLM loss acts as a form of regularization, preventing the weights of the pretrained model (which itself was trained with an MLM loss) from diverging too dramatically, a phenomenon known as “catastrophic forgetting” (McCloskey and Cohen, 1989; Ratcliff, 1990). These results suggest that the quality of embeddings learned by our approach scale in terms of model capacity and train set size; because the training method is completely self-supervised, scaling the train set would simply involve collecting more unlabelled text."
+    }, {
+      "heading" : "6 Discussion and conclusion",
+      "text" : "In this paper, we proposed a self-supervised objective for learning universal sentence embeddings. Our objective does not require labelled training data and is applicable to any text encoder. We demonstrated the effectiveness of our objective by evaluating the learned embeddings on the SentE-\nval benchmark, which contains a total of 28 tasks designed to evaluate the transferability and linguistic properties of sentence representations. When used to extend the pretraining of a transformerbased language model, our self-supervised objective closes the performance gap with existing methods that require human-labelled training data. Our experiments suggest that the learned embeddings’ quality can be further improved by increasing the model and train set size. Together, these results demonstrate the effectiveness and feasibility of replacing hand-labelled data with carefully designed self-supervised objectives for learning universal sentence embeddings. We release our model and code publicly in the hopes that it will be extended to new domains and non-English languages."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "This research was enabled in part by support provided by Compute Ontario (https://computeontario.ca/), Compute Canada (www.computecanada.ca) and the CIFAR AI Chairs Program and partially funded by the US National Institutes of Health (NIH) [U41 HG006623, U41 HG003751)."
+    }, {
+      "heading" : "A Pretrained transformers make poor universal sentence encoders",
+      "text" : "Certain pretrained transformers, such as BERT and ALBERT, have mechanisms for learning sequencelevel embeddings via self-supervision. These models prepend every input sequence with a special classification token (e.g. “[CLS]”), and its representation is learned using a simple classification task, such as Next Sentence Prediction (NSP) or Sentence-Order Prediction (SOP) (see Devlin et al. 2019 and Lan et al. 2020 respectively for details on these tasks). However, during preliminary experiments, we noticed that these models are not good universal sentence encoders, as measured by their performance on the SentEval benchmark (Conneau and Kiela, 2018). As a simple experiment, we\nevaluated three pretrained transformer models on SentEval: one trained with the NSP loss (BERT), one trained with the SOP loss (ALBERT) and one trained with neither, RoBERTa (Liu et al., 2019). We did not find that the CLS embeddings produced by models trained against the NSP or SOP losses to outperform that of a model trained without either loss and sometimes failed to outperform a bag-ofwords (BoW) baseline (Table 4). Furthermore, we find that pooling token embeddings via averaging (referred to as “mean pooling” in our paper) outperforms pooling via the CLS classification token. Our results are corroborated by Liu et al. 2019, who find that removing NSP loss leads to the same or better results on downstream tasks and Reimers and Gurevych 2019, who find that directly using the output of BERT as sentence embeddings leads to poor performances on the semantic similarity tasks of SentEval."
+    }, {
+      "heading" : "B Examples of sampled spans",
+      "text" : "In Table 5, we present examples of anchor-positive and anchor-negative pairs generated by our sampling procedure. We show one example for each possible view of a sampled positive, e.g. positives adjacent to, overlapping with, or subsumed by the anchor. For each anchor-positive pair, we show examples of both a hard negative (derived from the same document) and an easy negative (derived from another document). Recall that a minibatch is composed of random documents, and each anchor-positive pair sampled from a document is contrasted against all other anchor-positive pairs in the minibatch. Thus, hard negatives, as we have described them here, are generated only when sampling multiple anchors per document (A > 1)."
+    }, {
+      "heading" : "C SentEval evaluation details",
+      "text" : "SentEval is a benchmark for evaluating the quality of fixed-length sentence embeddings. It is divided into 18 downstream tasks, and 10 probing tasks. Sentence embedding methods are evaluated on these tasks via a simple interface9, which standardizes training, evaluation and hyperparameters. For most tasks, the method to evaluate is used to produce fix-length sentence embeddings, and a simple logistic regression (LR) or multi-layer perception (MLP) model is trained on the task using these embeddings as input. For other tasks (namely\n9https://github.com/facebookresearch/ SentEval\nseveral semantic text similarity tasks), the embeddings are used as-is without any further training. Note that this setup is different from evaluations on the popular GLUE benchmark (Wang et al., 2019), which typically use the task data to fine-tune the parameters of the sentence embedding model.\nIn subsection C.1, we present the individual tasks of the SentEval benchmark. In subsection C.2, we explain our method for computing the average downstream and average probing scores presented in our paper.\nC.1 SentEval tasks\nThe downstream tasks of SentEval are representative NLP tasks used to evaluate the transferability of fixed-length sentence embeddings. We give a brief overview of the broad categories that divide the tasks below (see Conneau and Kiela 2018 for more details):\n• Binary and multi-class classification: These tasks cover various types of sentence classification, including sentiment analysis (MR Pang and Lee 2005, SST2 and SST5 Socher et al. 2013), question-type (TREC) (Voorhees and Tice, 2000), product reviews (CR) (Hu and Liu, 2004), subjectivity/objectivity (SUBJ) (Pang and Lee, 2004) and opinion polarity (MPQA) (Wiebe et al., 2005).\n• Entailment and semantic relatedness: These tasks cover multiple entailment\ndatasets (also known as natural language inference or NLI), including SICK-E (Marelli et al., 2014) and the Stanford NLI dataset (SNLI) (Bowman et al., 2015) as well as multiple semantic relatedness datasets including SICK-R and STS-B (Cer et al., 2017).\n• Semantic textual similarity These tasks (STS12 Agirre et al. 2012, STS13 Agirre et al. 2013, STS14 Agirre et al. 2014, STS15 Agirre et al. 2015 and STS16 Agirre et al. 2016) are similar to the semantic relatedness tasks, except the embeddings produced by the encoder are used as-is in a cosine similarity to determine the semantic similarity of two sentences. No additional model is trained on top of the encoder’s output.\n• Paraphrase detection Evaluated on the Microsoft Research Paraphrase Corpus (MRPC) (Dolan et al., 2004), this binary classification task is comprised of human-labelled sentence pairs, annotated according to whether they capture a paraphrase/semantic equivalence relationship.\nTa bl\ne 5:\nE xa\nm pl\nes of\nte xt\nsp an\ns ge\nne ra\nte d\nby ou\nrm et\nho d.\nD ur\nin g\ntr ai\nni ng\n,w e\nra nd\nom ly\nsa m\npl e\non e\nor m\nor e\nan ch\nor s\nfr om\nev er\ny do\ncu m\nen ti\nn a\nm in\nib at\nch .F\nor ea\nch an\nch or\n,w e\nra nd\nom ly\nsa m\npl e\non e\nor m\nor e\npo si\ntiv es\nad ja\nce nt\nto ,o\nve rl\nap pi\nng w\nith ,o\nrs ub\nsu m\ned by\nth e\nan ch\nor .A\nll an\nch or\n-p os\niti ve\npa ir\ns ar\ne co\nnt ra\nst ed\nw ith\nev er\ny ot\nhe ra\nnc ho\nrpo\nsi tiv\ne pa ir in th e m in ib at ch .T hi s le ad s to ea sy ne ga tiv es (a nc ho rs an d po si tiv es sa m pl ed fr om ot he r do cu m en ts in a m in ib at ch )a nd ha rd ne ga tiv es (a nc ho rs an d po si tiv es sa m pl ed fr om th e sa m e do cu m en t) .H er e, ex am pl es ar e ca pp ed at a m ax im um le ng th of 64 to ke ns .D ur in g tr ai ni ng ,w e sa m pl e sp an s up to a le ng th of 51 2 to ke ns .\nA nc\nho r\nPo si\ntiv e\nH ar\nd ne\nga tiv\ne E\nas y\nne ga\ntiv e\nO ve\nrl ap\npi ng\nvi ew\nim m\nig ra\nnt -r\nig ht\ns ad\nvo ca\nte s\nan d\nla w\nen fo\nrc e-\nm en\ntp ro\nfe ss\nio na\nls w\ner e\nsk ep\ntic al\nof th\ne ne w pr og ra m .A ny ef fo rt by lo ca lc op s to en fo rc e im m ig ra tio n la w s, th ey fe lt, w ou ld be ba d fo r co m m un ity po lic in g, si nc e im m ig ra nt vi ct im s or w itn es se s of cr im e w ou ld n’ tf ee lc om fo rt - ab le ta lk in g to po lic e.\nfe el\nco m\nfo rt\nab le\nta lk\nin g\nto po\nlic e.\nSo m\ne w\ner e\nsk ep\ntic al\nth at\nIC E\n’s in\nte nt\nio ns\nw er\ne re\nal ly to pr ot ec tp ub lic sa fe ty ,r at he rt ha n si m pl y to de - po rt un au th or iz ed im m ig ra nt s m or e ea si ly .\nlib er\nal pa\nrt s\nof th\ne co\nun tr\ny w\nith la\nrg e\nim m igr an tp op ul at io ns ,l ik e Sa nt a C la ra C ou nt y in C al ifo rn ia an d C oo k C ou nt y in Ill in oi s, ag re ed w ith th e cr iti cs of Se cu re C om m un iti es .T he y w or rie d th at im pl em en tin g th e pr og ra m w ou ld st ra in th ei rr el at io ns hi ps w ith im m ig ra nt re si - de nt s.\nth at\na ne\nw lo\nca tio\nn is\nno w\nav ai\nla bl\ne fo\nre xp\nlo -\nra tio\nn. A\ngo od\nar ea\n,i n\nm y\nvi ew\n,f ee\nls lik\ne a\nna tu\nra lp\nro gr\nes si\non of\na ga\nm e\nw or\nld it\ndo es\nn’ t\nse em\nta ck\ned on\nor ar\nbi tra\nry .T\nha ti\nn tu\nrn ne\ned s\nit to\nre la\nte\nA dj\nac en\ntv ie\nw\nif th\ne as\nh st\nop s\nbe lc\nhi ng\nou t\nof th\ne vo\nlc an o th en ,a ft er a fe w da ys ,t he pr ob le m w ill ha ve cl ea re d, so th at ’s on e of th e fa ct or s. ”T he ot he r is th e w in d sp ee d an d di re ct io n. ” A tt he m om en t th e w ea th er pa tte rn s ar e ve ry vo la til e w hi ch is w ha ti s m ak in g it qu ite di ffi cu lt, un - lik e la st ye ar ,t o pr ed ic t\nw he\nre th\ne as\nh w\nill go\n. ”T\nhe pu\nbl ic\nca n be ab so lu te ly co nfi de nt th at ai rli ne s ar e on ly ab le to op er at e w he n it is sa fe to do so .” R ya na ir sa id it co ul d no ts ee an y as h cl ou d\nA B\nri tis\nh A\nir w\nay s\nju m\nbo je\ntw as\ngr ou\nnd ed in C an ad a on Su nd ay fo llo w in g fe ar s th e en gi ne s ha d be en co nt am in at ed w ith vo lc an ic as h\nev en\nts ar\ne pr\noc es\nse d\nin FI\nFO or\nde r.\nW he\nn th is ne xt Ti ck Q ue ue is em pt ie d, th e ev en tl oo p co nsi de rs al lo pe ra tio ns to ha ve be en co m pl et ed fo rt he cu rr en tp ha se an d tra ns iti on st o th e ne xt ph as e.\nSu bs\num ed\nvi ew\nFa r\nC ry\nPr im\nal is\nan ac\ntio n-\nad ve\nnt ur\ne vi\nde o\nga m\ne de\nve lo\npe d\nby U\nbi so\nft M\non tre\nal an\nd pu blis he d by U bi so ft .I tw as re le as ed w or ld w id e fo r Pl ay St at io n 4 an d X bo x O ne on Fe br uar y 23 ,2 01 6, an d fo rM ic ro so ft W in do w s on M ar ch 1, 20 16 .T he ga m e is a sp in -o ff of th e m ai n Fa rC ry se rie s. It is th e fir st Fa rC ry ga m e se ti n th e M es ol ith ic A ge .\nby U\nbi so\nft .\nIt w\nas re\nle as\ned w\nor ld\nw id\ne fo r Pl ay St at io n 4 an d X bo x O ne on Fe br ua ry 23 , 20 16 ,a nd fo rM ic ro so ft W in do w s on M ar ch 1, 20 16 .T he ga m e is a sp in -o ff of th e m ai n Fa r C ry se ri es .\nPl ay\ner s\nta ke\non th\ne ro\nle of\na W\nen ja\ntr ib\nes m an na m ed Ta kk ar ,w ho is st ra nd ed in O ro sw ith no w ea po ns af te r hi s hu nt in g pa rt y is am bu sh ed by a Sa be rto ot h Ti ge r.\nto su\nch fe\nel in\ngs .\nFa w\nke s\ncr ie\nd ou\nt an\nd fle w ah ea d, an d A lb us D um bl ed or e fo llo w ed .F\nur -\nth er\nal on\ng th\ne D\nem en\nto rs\n’p at\nh, pe\nop le\nw er e st ill al iv e to be fo ug ht fo r. A nd no m at te rh ow m uc h he hi m se lf w as hu rti ng ,w hi le th er e w er e st ill pe op le w ho ne ed ed hi m he w ou ld go\non .\nFo r\n• Caption-Image retrieval This task is comprised of two sub-tasks: ranking a large collection of images by their relevance for some given query text (Image Retrieval) and ranking captions by their relevance for some given query image (Caption Retrieval). Both tasks are evaluated on data from the COCO dataset (Lin et al., 2014). Each image is represented by a pretrained, 2048-dimensional embedding produced by a ResNet-101 (He et al., 2016).\nThe probing tasks are designed to evaluate what linguistic properties are encoded in a sentence representation. All tasks are binary or multi-class classification. We give a brief overview of each task below (see Conneau et al. 2018 for more details):\n• Sentence length (SentLen): A multi-class classification task where a model is trained to predict the length of a given input sentence, which is binned into six possible length ranges.\n• Word content (WC): A multi-class classification task where, given 1000 words as targets, the goal is to predict which of the target words appears in a given input sentence. Each sentence contains a single target word, and the word occurs exactly once in the sentence.\n• Tree depth (TreeDepth): A multi-class classification task where the goal is to predict the maximum depth (with values ranging from 5 to 12) of a given input sentence’s syntactic tree.\n• Bigram Shift (BShift): A multi-class classification task where the goal is to predict whether two consecutive tokens within a given sentence have been inverted.\n• Top Constituents (TopConst): A multi-class classification task where the goal is to predict the top constituents (from a choice of 19) immediately below the sentence (S) node of the sentence’s syntactic tree.\n• Tense: A binary classification task where the goal is to predict the tense (past or present) of the main verb in a sentence.\n• Subject number (SubjNum): A binary classification task where the goal is to predict the number (singular or plural) of the subject of the main clause.\n• Object number (ObjNum): A binary classification task, analogous to SubjNum, where the goal is to predict the number (singular or plural) of the direct object of the main clause.\n• Semantic odd man out (SOMO): A binary classification task where the goal is to predict whether a sentence has had a single randomly picked noun or verb replaced with another word with the same part-of-speech.\n• Coordinate inversion (CoordInv): A binary classification task where the goal is to predict whether the order of two coordinate clauses in a sentence has been inverted.\nC.2 Computing an average score In our paper, we present averaged downstream and probing scores. Computing averaged probing scores was straightforward; each of the ten probing tasks reports a simple accuracy, which we averaged. To compute an averaged downstream score, we do the following:\n• If a task reports Spearman correlation (i.e. SICK-R, STS-B), we use this score when computing the average downstream task score. If the task reports a mean Spearman correlation for multiple subtasks (i.e. STS12, STS13, STS14, STS15, STS16), we use this score.\n• If a task reports both an accuracy and an F1score (i.e. MRPC), we use the average of these two scores.\n• For the Caption-Image Retrieval task, we report the average of the Recall@K, where K ∈ {1, 5, 10} for the Image and Caption retrieval tasks (a total of six scores). This is the default behaviour of SentEval.\n• Otherwise, we use the reported accuracy."
+    } ],
+    "references" : [ {
+      "title" : "SemEval-2014 task 10: Multilingual semantic textual similarity",
+      "author" : [ "Eneko Agirre", "Carmen Banea", "Claire Cardie", "Daniel Cer", "Mona Diab", "Aitor Gonzalez-Agirre", "Weiwei Guo", "Rada Mihalcea", "German Rigau", "Janyce Wiebe." ],
+      "venue" : "Proceedings of the",
+      "citeRegEx" : "Agirre et al\\.,? 2014",
+      "shortCiteRegEx" : "Agirre et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "SemEval-2016 task 1: Semantic textual similarity, monolingual and cross-lingual evaluation",
+      "author" : [ "Eneko Agirre", "Carmen Banea", "Daniel Cer", "Mona Diab", "Aitor Gonzalez-Agirre", "Rada Mihalcea", "German Rigau", "Janyce Wiebe." ],
+      "venue" : "Proceedings of the",
+      "citeRegEx" : "Agirre et al\\.,? 2016",
+      "shortCiteRegEx" : "Agirre et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "SemEval-2012 task 6: A pilot on semantic textual similarity",
+      "author" : [ "Eneko Agirre", "Daniel Cer", "Mona Diab", "Aitor Gonzalez-Agirre." ],
+      "venue" : "*SEM 2012: The First Joint Conference on Lexical and Computational Semantics – Volume 1: Proceedings of the",
+      "citeRegEx" : "Agirre et al\\.,? 2012",
+      "shortCiteRegEx" : "Agirre et al\\.",
+      "year" : 2012
+    }, {
+      "title" : "sem 2013 shared task: Semantic textual similarity",
+      "author" : [ "Eneko Agirre", "Daniel Cer", "Mona Diab", "Aitor GonzalezAgirre", "Weiwei Guo." ],
+      "venue" : "Second Joint Conference on Lexical and Computational Semantics (*SEM), Volume 1: Proceedings of the Main",
+      "citeRegEx" : "Agirre et al\\.,? 2013",
+      "shortCiteRegEx" : "Agirre et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Learning representations by maximizing mutual information across views",
+      "author" : [ "Philip Bachman", "R. Devon Hjelm", "William Buchwalter." ],
+      "venue" : "Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Processing",
+      "citeRegEx" : "Bachman et al\\.,? 2019",
+      "shortCiteRegEx" : "Bachman et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A large annotated corpus for learning natural language inference",
+      "author" : [ "Samuel R. Bowman", "Gabor Angeli", "Christopher Potts", "Christopher D. Manning." ],
+      "venue" : "Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing, pages",
+      "citeRegEx" : "Bowman et al\\.,? 2015",
+      "shortCiteRegEx" : "Bowman et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Improving semantic embedding consistency by metric learning for zero-shot classiffication",
+      "author" : [ "Maxime Bucher", "Stéphane Herbin", "Frédéric Jurie." ],
+      "venue" : "European Conference on Computer Vision, pages 730–746. Springer.",
+      "citeRegEx" : "Bucher et al\\.,? 2016",
+      "shortCiteRegEx" : "Bucher et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "SemEval-2017 task 1: Semantic textual similarity multilingual and crosslingual focused evaluation",
+      "author" : [ "Daniel Cer", "Mona Diab", "Eneko Agirre", "Iñigo LopezGazpio", "Lucia Specia." ],
+      "venue" : "Proceedings of the 11th International Workshop on Semantic",
+      "citeRegEx" : "Cer et al\\.,? 2017",
+      "shortCiteRegEx" : "Cer et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Universal sentence encoder for English",
+      "author" : [ "Daniel Cer", "Yinfei Yang", "Sheng-yi Kong", "Nan Hua", "Nicole Limtiaco", "Rhomni St. John", "Noah Constant", "Mario Guajardo-Cespedes", "Steve Yuan", "Chris Tar", "Brian Strope", "Ray Kurzweil." ],
+      "venue" : "Proceedings of",
+      "citeRegEx" : "Cer et al\\.,? 2018",
+      "shortCiteRegEx" : "Cer et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A simple framework for contrastive learning of visual representations",
+      "author" : [ "Ting Chen", "Simon Kornblith", "Mohammad Norouzi", "Geoffrey E. Hinton." ],
+      "venue" : "Proceedings of the 37th International Conference on Machine Learning, ICML 2020, 13-18 July 2020,",
+      "citeRegEx" : "Chen et al\\.,? 2020",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "ELECTRA: pretraining text encoders as discriminators rather than generators",
+      "author" : [ "Kevin Clark", "Minh-Thang Luong", "Quoc V. Le", "Christopher D. Manning." ],
+      "venue" : "8th International Conference on Learning Representations, ICLR 2020, Addis Ababa,",
+      "citeRegEx" : "Clark et al\\.,? 2020",
+      "shortCiteRegEx" : "Clark et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "SentEval: An evaluation toolkit for universal sentence representations",
+      "author" : [ "Alexis Conneau", "Douwe Kiela." ],
+      "venue" : "Proceedings of the Eleventh International Conference on Language Resources and Evaluation (LREC 2018), Miyazaki, Japan. European Language",
+      "citeRegEx" : "Conneau and Kiela.,? 2018",
+      "shortCiteRegEx" : "Conneau and Kiela.",
+      "year" : 2018
+    }, {
+      "title" : "Supervised learning of universal sentence representations from natural language inference data",
+      "author" : [ "Alexis Conneau", "Douwe Kiela", "Holger Schwenk", "Loı̈c Barrault", "Antoine Bordes" ],
+      "venue" : "In Proceedings of the 2017 Conference on Empirical Methods in Nat-",
+      "citeRegEx" : "Conneau et al\\.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "What you can cram into a single $&!#* vector: Probing sentence embeddings for linguistic properties",
+      "author" : [ "Alexis Conneau", "German Kruszewski", "Guillaume Lample", "Loı̈c Barrault", "Marco Baroni" ],
+      "venue" : "In Proceedings of the 56th Annual Meeting of the As-",
+      "citeRegEx" : "Conneau et al\\.,? \\Q2018\\E",
+      "shortCiteRegEx" : "Conneau et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Crosslingual language model pretraining",
+      "author" : [ "Alexis Conneau", "Guillaume Lample." ],
+      "venue" : "Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Processing Systems 2019, NeurIPS 2019, December 8-14, 2019,",
+      "citeRegEx" : "Conneau and Lample.,? 2019",
+      "shortCiteRegEx" : "Conneau and Lample.",
+      "year" : 2019
+    }, {
+      "title" : "Transformer-XL: Attentive language models beyond a fixed-length context",
+      "author" : [ "Zihang Dai", "Zhilin Yang", "Yiming Yang", "Jaime Carbonell", "Quoc Le", "Ruslan Salakhutdinov." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computa-",
+      "citeRegEx" : "Dai et al\\.,? 2019",
+      "shortCiteRegEx" : "Dai et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unsupervised construction of large paraphrase corpora: Exploiting massively parallel news sources",
+      "author" : [ "Bill Dolan", "Chris Quirk", "Chris Brockett." ],
+      "venue" : "COLING 2004: Proceedings of the 20th International Conference on Computational Linguistics,",
+      "citeRegEx" : "Dolan et al\\.,? 2004",
+      "shortCiteRegEx" : "Dolan et al\\.",
+      "year" : 2004
+    }, {
+      "title" : "AllenNLP: A deep semantic natural language processing platform",
+      "author" : [ "Matt Gardner", "Joel Grus", "Mark Neumann", "Oyvind Tafjord", "Pradeep Dasigi", "Nelson F. Liu", "Matthew Peters", "Michael Schmitz", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of Workshop for",
+      "citeRegEx" : "Gardner et al\\.,? 2018",
+      "shortCiteRegEx" : "Gardner et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Openwebtext corpus",
+      "author" : [ "Aaron Gokaslan", "Vanya Cohen." ],
+      "venue" : "http://Skylion007.github.io/ OpenWebTextCorpus.",
+      "citeRegEx" : "Gokaslan and Cohen.,? 2019",
+      "shortCiteRegEx" : "Gokaslan and Cohen.",
+      "year" : 2019
+    }, {
+      "title" : "3d pose estimation and 3d model retrieval for objects in the wild",
+      "author" : [ "Alexander Grabner", "Peter M. Roth", "Vincent Lepetit." ],
+      "venue" : "2018 IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2018, Salt Lake City, UT, USA, June 18-22, 2018,",
+      "citeRegEx" : "Grabner et al\\.,? 2018",
+      "shortCiteRegEx" : "Grabner et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Dimensionality reduction by learning an invariant mapping",
+      "author" : [ "Raia Hadsell", "Sumit Chopra", "Yann LeCun." ],
+      "venue" : "2006 IEEE Computer Society Conference on Computer Vision and Pattern Recognition (CVPR’06), volume 2, pages 1735–1742. Ieee.",
+      "citeRegEx" : "Hadsell et al\\.,? 2006",
+      "shortCiteRegEx" : "Hadsell et al\\.",
+      "year" : 2006
+    }, {
+      "title" : "Momentum contrast for unsupervised visual representation learning",
+      "author" : [ "Kaiming He", "Haoqi Fan", "Yuxin Wu", "Saining Xie", "Ross B. Girshick." ],
+      "venue" : "2020 IEEE/CVF Conference on Computer Vision and Pattern Recognition, CVPR 2020, Seattle, WA, USA,",
+      "citeRegEx" : "He et al\\.,? 2020",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deep residual learning for image recognition",
+      "author" : [ "Kaiming He", "Xiangyu Zhang", "Shaoqing Ren", "Jian Sun." ],
+      "venue" : "2016 IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2016, Las Vegas, NV, USA, June 27-30, 2016, pages 770–778.",
+      "citeRegEx" : "He et al\\.,? 2016",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Triplet-center loss for multi-view 3d object retrieval",
+      "author" : [ "Xinwei He", "Yang Zhou", "Zhichao Zhou", "Song Bai", "Xiang Bai." ],
+      "venue" : "2018 IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2018, Salt Lake City, UT, USA, June 18-22, 2018,",
+      "citeRegEx" : "He et al\\.,? 2018",
+      "shortCiteRegEx" : "He et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Efficient natural language response suggestion for smart reply",
+      "author" : [ "Matthew Henderson", "Rami Al-Rfou", "Brian Strope", "YunHsuan Sung", "László Lukács", "Ruiqi Guo", "Sanjiv Kumar", "Balint Miklos", "Ray Kurzweil." ],
+      "venue" : "arXiv preprint arXiv:1705.00652.",
+      "citeRegEx" : "Henderson et al\\.,? 2017",
+      "shortCiteRegEx" : "Henderson et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Learning distributed representations of sentences from unlabelled data",
+      "author" : [ "Felix Hill", "Kyunghyun Cho", "Anna Korhonen." ],
+      "venue" : "Proceedings of the 2016 Conference of the North American Chapter of the Association for Computational Linguistics: Hu-",
+      "citeRegEx" : "Hill et al\\.,? 2016",
+      "shortCiteRegEx" : "Hill et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Universal language model fine-tuning for text classification",
+      "author" : [ "Jeremy Howard", "Sebastian Ruder." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 328–339, Melbourne, Australia.",
+      "citeRegEx" : "Howard and Ruder.,? 2018",
+      "shortCiteRegEx" : "Howard and Ruder.",
+      "year" : 2018
+    }, {
+      "title" : "Mining and summarizing customer reviews",
+      "author" : [ "Minqing Hu", "Bing Liu." ],
+      "venue" : "Proceedings of the tenth ACM SIGKDD international conference on Knowledge discovery and data mining, pages 168–177.",
+      "citeRegEx" : "Hu and Liu.,? 2004",
+      "shortCiteRegEx" : "Hu and Liu.",
+      "year" : 2004
+    }, {
+      "title" : "Discourse-based objectives for fast unsupervised sentence representation learning",
+      "author" : [ "Yacine Jernite", "Samuel R. Bowman", "David A. Sontag." ],
+      "venue" : "CoRR, abs/1705.00557.",
+      "citeRegEx" : "Jernite et al\\.,? 2017",
+      "shortCiteRegEx" : "Jernite et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "SpanBERT: Improving pre-training by representing and predicting spans",
+      "author" : [ "Mandar Joshi", "Danqi Chen", "Yinhan Liu", "Daniel S. Weld", "Luke Zettlemoyer", "Omer Levy." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 8:64–77.",
+      "citeRegEx" : "Joshi et al\\.,? 2020",
+      "shortCiteRegEx" : "Joshi et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Skip-thought vectors",
+      "author" : [ "Ryan Kiros", "Yukun Zhu", "Ruslan Salakhutdinov", "Richard S. Zemel", "Raquel Urtasun", "Antonio Torralba", "Sanja Fidler." ],
+      "venue" : "Advances in Neural Information Processing Systems 28: Annual Conference on Neural Informa-",
+      "citeRegEx" : "Kiros et al\\.,? 2015",
+      "shortCiteRegEx" : "Kiros et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "A mutual information maximization perspective of language representation learning",
+      "author" : [ "Lingpeng Kong", "Cyprien de Masson d’Autume", "Lei Yu", "Wang Ling", "Zihang Dai", "Dani Yogatama" ],
+      "venue" : "In 8th International Conference on Learning Representa-",
+      "citeRegEx" : "Kong et al\\.,? \\Q2020\\E",
+      "shortCiteRegEx" : "Kong et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "ALBERT: A lite BERT for self-supervised learning of language representations",
+      "author" : [ "Zhenzhong Lan", "Mingda Chen", "Sebastian Goodman", "Kevin Gimpel", "Piyush Sharma", "Radu Soricut." ],
+      "venue" : "8th International Conference on Learning Representations,",
+      "citeRegEx" : "Lan et al\\.,? 2020",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Distributed representations of sentences and documents",
+      "author" : [ "Quoc V. Le", "Tomás Mikolov." ],
+      "venue" : "Proceedings of the 31th International Conference on Machine Learning, ICML 2014, Beijing, China, 21-26 June 2014, volume 32 of JMLR Workshop",
+      "citeRegEx" : "Le and Mikolov.,? 2014",
+      "shortCiteRegEx" : "Le and Mikolov.",
+      "year" : 2014
+    }, {
+      "title" : "Learning by tracking: Siamese cnn for robust target association",
+      "author" : [ "Laura Leal-Taixé", "Cristian Canton-Ferrer", "Konrad Schindler." ],
+      "venue" : "Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition Workshops, pages 33–40.",
+      "citeRegEx" : "Leal.Taixé et al\\.,? 2016",
+      "shortCiteRegEx" : "Leal.Taixé et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Microsoft coco: Common objects in context",
+      "author" : [ "Tsung-Yi Lin", "Michael Maire", "Serge Belongie", "James Hays", "Pietro Perona", "Deva Ramanan", "Piotr Dollár", "C Lawrence Zitnick." ],
+      "venue" : "European conference on computer vision, pages 740–755. Springer.",
+      "citeRegEx" : "Lin et al\\.,? 2014",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Roberta: A robustly optimized bert pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "arXiv preprint arXiv:1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "An efficient framework for learning sentence representations",
+      "author" : [ "Lajanugen Logeswaran", "Honglak Lee." ],
+      "venue" : "6th International Conference on Learning Representations, ICLR 2018, Vancouver, BC, Canada, April 30 - May 3, 2018, Conference Track",
+      "citeRegEx" : "Logeswaran and Lee.,? 2018",
+      "shortCiteRegEx" : "Logeswaran and Lee.",
+      "year" : 2018
+    }, {
+      "title" : "Decoupled weight decay regularization",
+      "author" : [ "Ilya Loshchilov", "Frank Hutter." ],
+      "venue" : "7th International Conference on Learning Representations, ICLR 2019, New Orleans, LA, USA, May 6-9, 2019. OpenReview.net.",
+      "citeRegEx" : "Loshchilov and Hutter.,? 2019",
+      "shortCiteRegEx" : "Loshchilov and Hutter.",
+      "year" : 2019
+    }, {
+      "title" : "Similarity metric learning for a variable-kernel classifier",
+      "author" : [ "David G Lowe." ],
+      "venue" : "Neural computation, 7(1):72–85.",
+      "citeRegEx" : "Lowe.,? 1995",
+      "shortCiteRegEx" : "Lowe.",
+      "year" : 1995
+    }, {
+      "title" : "A SICK cure for the evaluation of compositional distributional semantic models",
+      "author" : [ "Marco Marelli", "Stefano Menini", "Marco Baroni", "Luisa Bentivogli", "Raffaella Bernardi", "Roberto Zamparelli." ],
+      "venue" : "Proceedings of the Ninth International Conference on Lan-",
+      "citeRegEx" : "Marelli et al\\.,? 2014",
+      "shortCiteRegEx" : "Marelli et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Catastrophic interference in connectionist networks: The sequential learning problem",
+      "author" : [ "Michael McCloskey", "Neal J Cohen." ],
+      "venue" : "Psychology of learning and motivation, volume 24, pages 109–165. Elsevier.",
+      "citeRegEx" : "McCloskey and Cohen.,? 1989",
+      "shortCiteRegEx" : "McCloskey and Cohen.",
+      "year" : 1989
+    }, {
+      "title" : "Fisher discriminant analysis with kernels",
+      "author" : [ "Sebastian Mika", "Gunnar Ratsch", "Jason Weston", "Bernhard Scholkopf", "Klaus-Robert Mullers." ],
+      "venue" : "Neural networks for signal processing IX: Proceedings of the 1999 IEEE signal processing society workshop",
+      "citeRegEx" : "Mika et al\\.,? 1999",
+      "shortCiteRegEx" : "Mika et al\\.",
+      "year" : 1999
+    }, {
+      "title" : "Distributed representations of words and phrases and their compositionality",
+      "author" : [ "Tomás Mikolov", "Ilya Sutskever", "Kai Chen", "Gregory S. Corrado", "Jeffrey Dean." ],
+      "venue" : "Advances in Neural Information Processing Systems 26: 27th Annual Conference on",
+      "citeRegEx" : "Mikolov et al\\.,? 2013",
+      "shortCiteRegEx" : "Mikolov et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Pytorch metric learning",
+      "author" : [ "Kevin Musgrave", "Ser-Nam Lim", "Serge Belongie." ],
+      "venue" : "https://github.com/KevinMusgrave/ pytorch-metric-learning.",
+      "citeRegEx" : "Musgrave et al\\.,? 2019",
+      "shortCiteRegEx" : "Musgrave et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Representation learning with contrastive predictive coding",
+      "author" : [ "Aaron van den Oord", "Yazhe Li", "Oriol Vinyals." ],
+      "venue" : "arXiv preprint arXiv:1807.03748.",
+      "citeRegEx" : "Oord et al\\.,? 2018",
+      "shortCiteRegEx" : "Oord et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "A sentimental education: Sentiment analysis using subjectivity summarization based on minimum cuts",
+      "author" : [ "Bo Pang", "Lillian Lee." ],
+      "venue" : "Proceedings of the 42nd Annual Meeting of the Association for Computational Linguistics (ACL-04), pages 271–",
+      "citeRegEx" : "Pang and Lee.,? 2004",
+      "shortCiteRegEx" : "Pang and Lee.",
+      "year" : 2004
+    }, {
+      "title" : "Seeing stars: Exploiting class relationships for sentiment categorization with respect to rating scales",
+      "author" : [ "Bo Pang", "Lillian Lee." ],
+      "venue" : "Proceedings of the 43rd Annual Meeting of the Association for Computational Linguistics (ACL’05), pages 115–",
+      "citeRegEx" : "Pang and Lee.,? 2005",
+      "shortCiteRegEx" : "Pang and Lee.",
+      "year" : 2005
+    }, {
+      "title" : "Automatic differentiation in PyTorch",
+      "author" : [ "Adam Paszke", "Sam Gross", "Soumith Chintala", "Gregory Chanan", "Edward Yang", "Zachary DeVito", "Zeming Lin", "Alban Desmaison", "Luca Antiga", "Adam Lerer." ],
+      "venue" : "NIPS Autodiff Workshop.",
+      "citeRegEx" : "Paszke et al\\.,? 2017",
+      "shortCiteRegEx" : "Paszke et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "GloVe: Global vectors for word representation",
+      "author" : [ "Jeffrey Pennington", "Richard Socher", "Christopher Manning." ],
+      "venue" : "Proceedings of the 2014 Conference on Empirical Methods in Natural Language Processing (EMNLP), pages 1532–1543, Doha,",
+      "citeRegEx" : "Pennington et al\\.,? 2014",
+      "shortCiteRegEx" : "Pennington et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Sentence encoders on stilts: Supplementary training on intermediate labeled-data tasks",
+      "author" : [ "Jason Phang", "Thibault Févry", "Samuel R. Bowman." ],
+      "venue" : "CoRR, abs/1811.01088.",
+      "citeRegEx" : "Phang et al\\.,? 2018",
+      "shortCiteRegEx" : "Phang et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Improving language understanding by generative pre-training",
+      "author" : [ "Alec Radford", "Karthik Narasimhan", "Tim Salimans", "Ilya Sutskever." ],
+      "venue" : "URL https://s3-us-west-2. amazonaws. com/openaiassets/researchcovers/languageunsupervised/language",
+      "citeRegEx" : "Radford et al\\.,? 2018",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "Alec Radford", "Jeffrey Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever." ],
+      "venue" : "OpenAI blog, 1(8):9.",
+      "citeRegEx" : "Radford et al\\.,? 2019",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Connectionist models of recognition memory: constraints imposed by learning and forgetting functions",
+      "author" : [ "Roger Ratcliff." ],
+      "venue" : "Psychological review, 97(2):285.",
+      "citeRegEx" : "Ratcliff.,? 1990",
+      "shortCiteRegEx" : "Ratcliff.",
+      "year" : 1990
+    }, {
+      "title" : "SentenceBERT: Sentence embeddings using Siamese BERTnetworks",
+      "author" : [ "Nils Reimers", "Iryna Gurevych." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natu-",
+      "citeRegEx" : "Reimers and Gurevych.,? 2019",
+      "shortCiteRegEx" : "Reimers and Gurevych.",
+      "year" : 2019
+    }, {
+      "title" : "Transfer learning in natural language processing",
+      "author" : [ "Sebastian Ruder", "Matthew E. Peters", "Swabha Swayamdipta", "Thomas Wolf." ],
+      "venue" : "In",
+      "citeRegEx" : "Ruder et al\\.,? 2019",
+      "shortCiteRegEx" : "Ruder et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter",
+      "author" : [ "Victor Sanh", "Lysandre Debut", "Julien Chaumond", "Thomas Wolf." ],
+      "venue" : "arXiv preprint arXiv:1910.01108.",
+      "citeRegEx" : "Sanh et al\\.,? 2019",
+      "shortCiteRegEx" : "Sanh et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A theoretical analysis of contrastive unsupervised representation learning",
+      "author" : [ "Nikunj Saunshi", "Orestis Plevrakis", "Sanjeev Arora", "Mikhail Khodak", "Hrishikesh Khandeparkar." ],
+      "venue" : "Proceedings of the 36th International Conference on Machine Learn-",
+      "citeRegEx" : "Saunshi et al\\.,? 2019",
+      "shortCiteRegEx" : "Saunshi et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Recursive deep models for semantic compositionality over a sentiment treebank",
+      "author" : [ "Richard Socher", "Alex Perelygin", "Jean Wu", "Jason Chuang", "Christopher D. Manning", "Andrew Ng", "Christopher Potts." ],
+      "venue" : "Proceedings of the 2013 Conference on",
+      "citeRegEx" : "Socher et al\\.,? 2013",
+      "shortCiteRegEx" : "Socher et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Improved deep metric learning with multi-class n-pair loss objective",
+      "author" : [ "Kihyuk Sohn." ],
+      "venue" : "Advances in Neural Information Processing Systems 29: Annual Conference on Neural Information Processing Systems 2016, December 5-10, 2016, Barcelona,",
+      "citeRegEx" : "Sohn.,? 2016",
+      "shortCiteRegEx" : "Sohn.",
+      "year" : 2016
+    }, {
+      "title" : "Learning general purpose distributed sentence representations via large scale multi-task learning",
+      "author" : [ "Sandeep Subramanian", "Adam Trischler", "Yoshua Bengio", "Christopher J. Pal." ],
+      "venue" : "6th International Conference on Learning Representations,",
+      "citeRegEx" : "Subramanian et al\\.,? 2018",
+      "shortCiteRegEx" : "Subramanian et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Siamese instance search for tracking",
+      "author" : [ "Ran Tao", "Efstratios Gavves", "Arnold W.M. Smeulders." ],
+      "venue" : "2016 IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2016, Las Vegas, NV, USA, June 27-30, 2016, pages 1420–1429. IEEE Com-",
+      "citeRegEx" : "Tao et al\\.,? 2016",
+      "shortCiteRegEx" : "Tao et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Contrastive multiview coding",
+      "author" : [ "Yonglong Tian", "Dilip Krishnan", "Phillip Isola." ],
+      "venue" : "ECCV.",
+      "citeRegEx" : "Tian et al\\.,? 2020",
+      "shortCiteRegEx" : "Tian et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Lukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "Advances in Neural Information Processing Systems 30: Annual Conference on Neural",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Building a question answering test collection",
+      "author" : [ "Ellen M Voorhees", "Dawn M Tice." ],
+      "venue" : "Proceedings",
+      "citeRegEx" : "Voorhees and Tice.,? 2000",
+      "shortCiteRegEx" : "Voorhees and Tice.",
+      "year" : 2000
+    }, {
+      "title" : "GLUE: A multi-task benchmark and analysis platform for natural language understanding",
+      "author" : [ "Alex Wang", "Amanpreet Singh", "Julian Michael", "Felix Hill", "Omer Levy", "Samuel R. Bowman." ],
+      "venue" : "7th International Conference on Learning Representa-",
+      "citeRegEx" : "Wang et al\\.,? 2019",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A discriminative feature learning approach for deep face recognition",
+      "author" : [ "Yandong Wen", "Kaipeng Zhang", "Zhifeng Li", "Yu Qiao." ],
+      "venue" : "European conference on computer vision, pages 499–515. Springer.",
+      "citeRegEx" : "Wen et al\\.,? 2016",
+      "shortCiteRegEx" : "Wen et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Annotating expressions of opinions and emotions in language",
+      "author" : [ "Janyce Wiebe", "Theresa Wilson", "Claire Cardie." ],
+      "venue" : "Language resources and evaluation, 39(2-3):165–210.",
+      "citeRegEx" : "Wiebe et al\\.,? 2005",
+      "shortCiteRegEx" : "Wiebe et al\\.",
+      "year" : 2005
+    }, {
+      "title" : "A broad-coverage challenge corpus for sentence understanding through inference",
+      "author" : [ "Adina Williams", "Nikita Nangia", "Samuel Bowman." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Lin-",
+      "citeRegEx" : "Williams et al\\.,? 2018",
+      "shortCiteRegEx" : "Williams et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Learning descriptors for object recognition and 3d pose estimation",
+      "author" : [ "Paul Wohlhart", "Vincent Lepetit." ],
+      "venue" : "IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2015, Boston, MA, USA, June 7-12, 2015, pages 3109–3118. IEEE Computer",
+      "citeRegEx" : "Wohlhart and Lepetit.,? 2015",
+      "shortCiteRegEx" : "Wohlhart and Lepetit.",
+      "year" : 2015
+    }, {
+      "title" : "Transformers: State-of-the-art natural language processing",
+      "author" : [ "Teven Le Scao", "Sylvain Gugger", "Mariama Drame", "Quentin Lhoest", "Alexander Rush." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing:",
+      "citeRegEx" : "Scao et al\\.,? 2020",
+      "shortCiteRegEx" : "Scao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Unsupervised feature learning via nonparametric instance discrimination",
+      "author" : [ "Zhirong Wu", "Yuanjun Xiong", "Stella X. Yu", "Dahua Lin." ],
+      "venue" : "2018 IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2018, Salt Lake City, UT, USA, June",
+      "citeRegEx" : "Wu et al\\.,? 2018",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Distance metric learning with application to clustering with side-information",
+      "author" : [ "Eric P. Xing", "Andrew Y. Ng", "Michael I. Jordan", "Stuart J. Russell." ],
+      "venue" : "Advances in Neural Information Processing Systems",
+      "citeRegEx" : "Xing et al\\.,? 2002",
+      "shortCiteRegEx" : "Xing et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Xlnet: Generalized autoregressive pretraining for language understanding",
+      "author" : [ "Zhilin Yang", "Zihang Dai", "Yiming Yang", "Jaime G. Carbonell", "Ruslan Salakhutdinov", "Quoc V. Le." ],
+      "venue" : "Advances in Neural Information Processing Systems 32: Annual Con-",
+      "citeRegEx" : "Yang et al\\.,? 2019",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "A zero-shot framework for sketch based image retrieval",
+      "author" : [ "Sasi Kiran Yelamarthi", "Shiva Krishna Reddy", "Ashish Mishra", "Anurag Mittal." ],
+      "venue" : "European Conference on Computer Vision, pages 316– 333. Springer.",
+      "citeRegEx" : "Yelamarthi et al\\.,? 2018",
+      "shortCiteRegEx" : "Yelamarthi et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Reducing bert pre-training time from 3 days to 76 minutes",
+      "author" : [ "Yang You", "Jing Li", "Jonathan Hseu", "Xiaodan Song", "James Demmel", "C Hsieh." ],
+      "venue" : "corr abs/1904.00962 (2019).",
+      "citeRegEx" : "You et al\\.,? 1904",
+      "shortCiteRegEx" : "You et al\\.",
+      "year" : 1904
+    }, {
+      "title" : "Hard-aware point-to-set deep metric for person re-identification",
+      "author" : [ "Rui Yu", "Zhiyong Dou", "Song Bai", "Zhaoxiang Zhang", "Yongchao Xu", "Xiang Bai." ],
+      "venue" : "Proceedings of the European Conference on Computer Vision (ECCV), pages 188–204.",
+      "citeRegEx" : "Yu et al\\.,? 2018",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "In defense of the triplet loss again: Learning robust person re-identification with fast approximated triplet loss and label distillation",
+      "author" : [ "Ye Yuan", "Wuyang Chen", "Yang Yang", "Zhangyang Wang." ],
+      "venue" : "Proceedings of the IEEE/CVF Conference on Computer",
+      "citeRegEx" : "Yuan et al\\.,? 2020",
+      "shortCiteRegEx" : "Yuan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Zeroshot learning via joint latent similarity embedding",
+      "author" : [ "Ziming Zhang", "Venkatesh Saligrama." ],
+      "venue" : "2016 IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2016, Las Vegas, NV, USA, June 27-30, 2016, pages 6034–6042. IEEE",
+      "citeRegEx" : "Zhang and Saligrama.,? 2016",
+      "shortCiteRegEx" : "Zhang and Saligrama.",
+      "year" : 2016
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 56,
+      "context" : "Due to the limited amount of labelled training data available for many natural language processing (NLP) tasks, transfer learning has become ubiquitous (Ruder et al., 2019).",
+      "startOffset" : 152,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 61,
+      "context" : ", 2017), semi-supervised (Subramanian et al., 2018; Phang et al., 2018; Cer et al., 2018; Reimers and Gurevych, 2019) and unsupervised (Le and Mikolov, 2014; Jernite et al.",
+      "startOffset" : 25,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 51,
+      "context" : ", 2017), semi-supervised (Subramanian et al., 2018; Phang et al., 2018; Cer et al., 2018; Reimers and Gurevych, 2019) and unsupervised (Le and Mikolov, 2014; Jernite et al.",
+      "startOffset" : 25,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2017), semi-supervised (Subramanian et al., 2018; Phang et al., 2018; Cer et al., 2018; Reimers and Gurevych, 2019) and unsupervised (Le and Mikolov, 2014; Jernite et al.",
+      "startOffset" : 25,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 55,
+      "context" : ", 2017), semi-supervised (Subramanian et al., 2018; Phang et al., 2018; Cer et al., 2018; Reimers and Gurevych, 2019) and unsupervised (Le and Mikolov, 2014; Jernite et al.",
+      "startOffset" : 25,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 52,
+      "context" : "Pretraining transformer-based language models has become the primary method for learning textual representations from unlabelled corpora (Radford et al., 2018; Devlin et al., 2019; Dai et al., 2019; Yang et al., 2019; Liu et al., 2019; Clark et al., 2020).",
+      "startOffset" : 137,
+      "endOffset" : 255
+    }, {
+      "referenceID" : 16,
+      "context" : "Pretraining transformer-based language models has become the primary method for learning textual representations from unlabelled corpora (Radford et al., 2018; Devlin et al., 2019; Dai et al., 2019; Yang et al., 2019; Liu et al., 2019; Clark et al., 2020).",
+      "startOffset" : 137,
+      "endOffset" : 255
+    }, {
+      "referenceID" : 15,
+      "context" : "Pretraining transformer-based language models has become the primary method for learning textual representations from unlabelled corpora (Radford et al., 2018; Devlin et al., 2019; Dai et al., 2019; Yang et al., 2019; Liu et al., 2019; Clark et al., 2020).",
+      "startOffset" : 137,
+      "endOffset" : 255
+    }, {
+      "referenceID" : 74,
+      "context" : "Pretraining transformer-based language models has become the primary method for learning textual representations from unlabelled corpora (Radford et al., 2018; Devlin et al., 2019; Dai et al., 2019; Yang et al., 2019; Liu et al., 2019; Clark et al., 2020).",
+      "startOffset" : 137,
+      "endOffset" : 255
+    }, {
+      "referenceID" : 37,
+      "context" : "Pretraining transformer-based language models has become the primary method for learning textual representations from unlabelled corpora (Radford et al., 2018; Devlin et al., 2019; Dai et al., 2019; Yang et al., 2019; Liu et al., 2019; Clark et al., 2020).",
+      "startOffset" : 137,
+      "endOffset" : 255
+    }, {
+      "referenceID" : 10,
+      "context" : "Pretraining transformer-based language models has become the primary method for learning textual representations from unlabelled corpora (Radford et al., 2018; Devlin et al., 2019; Dai et al., 2019; Yang et al., 2019; Liu et al., 2019; Clark et al., 2020).",
+      "startOffset" : 137,
+      "endOffset" : 255
+    }, {
+      "referenceID" : 16,
+      "context" : "In BERT (Devlin et al., 2019), a special classification token is prepended to every input sequence, and its representation is used in a binary classifi-",
+      "startOffset" : 8,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 14,
+      "context" : "However, recent work has called into question the effectiveness of NSP (Conneau and Lample, 2019; You et al., 1904; Joshi et al., 2020).",
+      "startOffset" : 71,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 76,
+      "context" : "However, recent work has called into question the effectiveness of NSP (Conneau and Lample, 2019; You et al., 1904; Joshi et al., 2020).",
+      "startOffset" : 71,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 30,
+      "context" : "However, recent work has called into question the effectiveness of NSP (Conneau and Lample, 2019; You et al., 1904; Joshi et al., 2020).",
+      "startOffset" : 71,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 37,
+      "context" : "In RoBERTa (Liu et al., 2019), the authors demonstrated that removing NSP during pretraining leads to unchanged or even slightly improved performance on downstream sentencelevel tasks (including semantic text similarity and natural language inference).",
+      "startOffset" : 11,
+      "endOffset" : 29
+    }, {
+      "referenceID" : 33,
+      "context" : "In ALBERT (Lan et al., 2020), the authors hypothesize that NSP conflates topic prediction and coherence prediction, and instead propose a Sentence-Order Prediction objective (SOP), suggesting that it better models inter-sentence coherence.",
+      "startOffset" : 10,
+      "endOffset" : 28
+    }, {
+      "referenceID" : 40,
+      "context" : "Metric learning is a type of representation learning that aims to learn an embedding space where the vector representations of similar data are mapped close together, and vice versa (Lowe, 1995; Mika et al., 1999; Xing et al., 2002).",
+      "startOffset" : 182,
+      "endOffset" : 232
+    }, {
+      "referenceID" : 43,
+      "context" : "Metric learning is a type of representation learning that aims to learn an embedding space where the vector representations of similar data are mapped close together, and vice versa (Lowe, 1995; Mika et al., 1999; Xing et al., 2002).",
+      "startOffset" : 182,
+      "endOffset" : 232
+    }, {
+      "referenceID" : 73,
+      "context" : "Metric learning is a type of representation learning that aims to learn an embedding space where the vector representations of similar data are mapped close together, and vice versa (Lowe, 1995; Mika et al., 1999; Xing et al., 2002).",
+      "startOffset" : 182,
+      "endOffset" : 232
+    }, {
+      "referenceID" : 70,
+      "context" : "In computer vision (CV), deep metric learning (DML) has been widely used for learning visual representations (Wohlhart and Lepetit, 2015; Wen et al., 2016; Zhang and Saligrama, 2016; Bucher et al., 2016; Leal-Taixé et al., 2016; Tao et al., 2016; Yuan et al., 2020; He et al., 2018; Grabner et al., 2018; Yelamarthi et al., 2018; Yu et al., 2018).",
+      "startOffset" : 109,
+      "endOffset" : 346
+    }, {
+      "referenceID" : 67,
+      "context" : "In computer vision (CV), deep metric learning (DML) has been widely used for learning visual representations (Wohlhart and Lepetit, 2015; Wen et al., 2016; Zhang and Saligrama, 2016; Bucher et al., 2016; Leal-Taixé et al., 2016; Tao et al., 2016; Yuan et al., 2020; He et al., 2018; Grabner et al., 2018; Yelamarthi et al., 2018; Yu et al., 2018).",
+      "startOffset" : 109,
+      "endOffset" : 346
+    }, {
+      "referenceID" : 79,
+      "context" : "In computer vision (CV), deep metric learning (DML) has been widely used for learning visual representations (Wohlhart and Lepetit, 2015; Wen et al., 2016; Zhang and Saligrama, 2016; Bucher et al., 2016; Leal-Taixé et al., 2016; Tao et al., 2016; Yuan et al., 2020; He et al., 2018; Grabner et al., 2018; Yelamarthi et al., 2018; Yu et al., 2018).",
+      "startOffset" : 109,
+      "endOffset" : 346
+    }, {
+      "referenceID" : 6,
+      "context" : "In computer vision (CV), deep metric learning (DML) has been widely used for learning visual representations (Wohlhart and Lepetit, 2015; Wen et al., 2016; Zhang and Saligrama, 2016; Bucher et al., 2016; Leal-Taixé et al., 2016; Tao et al., 2016; Yuan et al., 2020; He et al., 2018; Grabner et al., 2018; Yelamarthi et al., 2018; Yu et al., 2018).",
+      "startOffset" : 109,
+      "endOffset" : 346
+    }, {
+      "referenceID" : 35,
+      "context" : "In computer vision (CV), deep metric learning (DML) has been widely used for learning visual representations (Wohlhart and Lepetit, 2015; Wen et al., 2016; Zhang and Saligrama, 2016; Bucher et al., 2016; Leal-Taixé et al., 2016; Tao et al., 2016; Yuan et al., 2020; He et al., 2018; Grabner et al., 2018; Yelamarthi et al., 2018; Yu et al., 2018).",
+      "startOffset" : 109,
+      "endOffset" : 346
+    }, {
+      "referenceID" : 62,
+      "context" : "In computer vision (CV), deep metric learning (DML) has been widely used for learning visual representations (Wohlhart and Lepetit, 2015; Wen et al., 2016; Zhang and Saligrama, 2016; Bucher et al., 2016; Leal-Taixé et al., 2016; Tao et al., 2016; Yuan et al., 2020; He et al., 2018; Grabner et al., 2018; Yelamarthi et al., 2018; Yu et al., 2018).",
+      "startOffset" : 109,
+      "endOffset" : 346
+    }, {
+      "referenceID" : 78,
+      "context" : "In computer vision (CV), deep metric learning (DML) has been widely used for learning visual representations (Wohlhart and Lepetit, 2015; Wen et al., 2016; Zhang and Saligrama, 2016; Bucher et al., 2016; Leal-Taixé et al., 2016; Tao et al., 2016; Yuan et al., 2020; He et al., 2018; Grabner et al., 2018; Yelamarthi et al., 2018; Yu et al., 2018).",
+      "startOffset" : 109,
+      "endOffset" : 346
+    }, {
+      "referenceID" : 24,
+      "context" : "In computer vision (CV), deep metric learning (DML) has been widely used for learning visual representations (Wohlhart and Lepetit, 2015; Wen et al., 2016; Zhang and Saligrama, 2016; Bucher et al., 2016; Leal-Taixé et al., 2016; Tao et al., 2016; Yuan et al., 2020; He et al., 2018; Grabner et al., 2018; Yelamarthi et al., 2018; Yu et al., 2018).",
+      "startOffset" : 109,
+      "endOffset" : 346
+    }, {
+      "referenceID" : 20,
+      "context" : "In computer vision (CV), deep metric learning (DML) has been widely used for learning visual representations (Wohlhart and Lepetit, 2015; Wen et al., 2016; Zhang and Saligrama, 2016; Bucher et al., 2016; Leal-Taixé et al., 2016; Tao et al., 2016; Yuan et al., 2020; He et al., 2018; Grabner et al., 2018; Yelamarthi et al., 2018; Yu et al., 2018).",
+      "startOffset" : 109,
+      "endOffset" : 346
+    }, {
+      "referenceID" : 75,
+      "context" : "In computer vision (CV), deep metric learning (DML) has been widely used for learning visual representations (Wohlhart and Lepetit, 2015; Wen et al., 2016; Zhang and Saligrama, 2016; Bucher et al., 2016; Leal-Taixé et al., 2016; Tao et al., 2016; Yuan et al., 2020; He et al., 2018; Grabner et al., 2018; Yelamarthi et al., 2018; Yu et al., 2018).",
+      "startOffset" : 109,
+      "endOffset" : 346
+    }, {
+      "referenceID" : 77,
+      "context" : "In computer vision (CV), deep metric learning (DML) has been widely used for learning visual representations (Wohlhart and Lepetit, 2015; Wen et al., 2016; Zhang and Saligrama, 2016; Bucher et al., 2016; Leal-Taixé et al., 2016; Tao et al., 2016; Yuan et al., 2020; He et al., 2018; Grabner et al., 2018; Yelamarthi et al., 2018; Yu et al., 2018).",
+      "startOffset" : 109,
+      "endOffset" : 346
+    }, {
+      "referenceID" : 21,
+      "context" : "For a given anchor data point, contrastive losses attempt to make the distance between the anchor and some positive data points (those that are similar) smaller than the distance between the anchor and some negative data points (those that are dissimilar) (Hadsell et al., 2006).",
+      "startOffset" : 256,
+      "endOffset" : 278
+    }, {
+      "referenceID" : 4,
+      "context" : "using crops, flips and colour distortions); anchor-negative pairs are randomly chosen, augmented views of different images (Bachman et al., 2019; Tian et al., 2020; He et al., 2020; Chen et al., 2020).",
+      "startOffset" : 123,
+      "endOffset" : 200
+    }, {
+      "referenceID" : 63,
+      "context" : "using crops, flips and colour distortions); anchor-negative pairs are randomly chosen, augmented views of different images (Bachman et al., 2019; Tian et al., 2020; He et al., 2020; Chen et al., 2020).",
+      "startOffset" : 123,
+      "endOffset" : 200
+    }, {
+      "referenceID" : 22,
+      "context" : "using crops, flips and colour distortions); anchor-negative pairs are randomly chosen, augmented views of different images (Bachman et al., 2019; Tian et al., 2020; He et al., 2020; Chen et al., 2020).",
+      "startOffset" : 123,
+      "endOffset" : 200
+    }, {
+      "referenceID" : 9,
+      "context" : "using crops, flips and colour distortions); anchor-negative pairs are randomly chosen, augmented views of different images (Bachman et al., 2019; Tian et al., 2020; He et al., 2020; Chen et al., 2020).",
+      "startOffset" : 123,
+      "endOffset" : 200
+    }, {
+      "referenceID" : 11,
+      "context" : "model and obtain state-of-the-art results on SentEval (Conneau and Kiela, 2018) – a benchmark of 28 tasks designed to evaluate universal sentence embeddings.",
+      "startOffset" : 54,
+      "endOffset" : 79
+    }, {
+      "referenceID" : 5,
+      "context" : "881 Supervised or semi-supervised The highest performing universal sentence encoders are pretrained on the human-labelled natural language inference (NLI) datasets Stanford NLI (SNLI) (Bowman et al., 2015) and MultiNLI (Williams et al.",
+      "startOffset" : 184,
+      "endOffset" : 205
+    }, {
+      "referenceID" : 12,
+      "context" : "The effectiveness of NLI for training universal sentence encoders was demonstrated by the supervised method InferSent (Conneau et al., 2017).",
+      "startOffset" : 118,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 8,
+      "context" : "Universal Sentence Encoder (USE) (Cer et al., 2018) is semi-supervised, augmenting an unsupervised, Skip-Thoughts-like task (Kiros et al.",
+      "startOffset" : 33,
+      "endOffset" : 51
+    }, {
+      "referenceID" : 55,
+      "context" : "The recently published Sentence Transformers (Reimers and Gurevych, 2019) method fine-tunes pretrained, transformer-based language models like BERT (Devlin et al.",
+      "startOffset" : 45,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 16,
+      "context" : "The recently published Sentence Transformers (Reimers and Gurevych, 2019) method fine-tunes pretrained, transformer-based language models like BERT (Devlin et al., 2019) using labelled NLI datasets.",
+      "startOffset" : 148,
+      "endOffset" : 169
+    }, {
+      "referenceID" : 31,
+      "context" : "Unsupervised Skip-Thoughts (Kiros et al., 2015) and FastSent (Hill et al.",
+      "startOffset" : 27,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 26,
+      "context" : ", 2015) and FastSent (Hill et al., 2016) are popular unsupervised techniques that learn sentence embeddings by using an encoding of a sentence to",
+      "startOffset" : 21,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 38,
+      "context" : "QuickThoughts (Logeswaran and Lee, 2018) addresses these shortcomings with a simple discriminative objective; given a sentence and its context (adjacent sentences), it learns sentence representations by training a classifier to distinguish context sentences from non-context sentences.",
+      "startOffset" : 14,
+      "endOffset" : 40
+    }, {
+      "referenceID" : 60,
+      "context" : "As proposed in (Sohn, 2016), we treat the other 2(AN − 1) instances within a minibatch as negative examples.",
+      "startOffset" : 15,
+      "endOffset" : 27
+    }, {
+      "referenceID" : 60,
+      "context" : "This is the InfoNCE loss used in previous works (Sohn, 2016; Wu et al., 2018; Oord et al., 2018) and denoted normalized temperature-scale crossentropy loss or “NT-Xent” in (Chen et al.",
+      "startOffset" : 48,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 72,
+      "context" : "This is the InfoNCE loss used in previous works (Sohn, 2016; Wu et al., 2018; Oord et al., 2018) and denoted normalized temperature-scale crossentropy loss or “NT-Xent” in (Chen et al.",
+      "startOffset" : 48,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 46,
+      "context" : "This is the InfoNCE loss used in previous works (Sohn, 2016; Wu et al., 2018; Oord et al., 2018) and denoted normalized temperature-scale crossentropy loss or “NT-Xent” in (Chen et al.",
+      "startOffset" : 48,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 9,
+      "context" : ", 2018) and denoted normalized temperature-scale crossentropy loss or “NT-Xent” in (Chen et al., 2020).",
+      "startOffset" : 83,
+      "endOffset" : 102
+    }, {
+      "referenceID" : 4,
+      "context" : "First, it enables the model to learn global-to-local view prediction as in (Hjelm et al., 2019; Bachman et al., 2019; Chen et al., 2020) (referred to as “subsumed view” in Fig-",
+      "startOffset" : 75,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 9,
+      "context" : "First, it enables the model to learn global-to-local view prediction as in (Hjelm et al., 2019; Bachman et al., 2019; Chen et al., 2020) (referred to as “subsumed view” in Fig-",
+      "startOffset" : 75,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 16,
+      "context" : "We implement the MLM objective as described in (Devlin et al., 2019) on each anchor span in a minibatch and sum the losses from the MLM and contrastive objectives before backpropagating",
+      "startOffset" : 47,
+      "endOffset" : 68
+    }, {
+      "referenceID" : 16,
+      "context" : "This is similar to existing pretraining strategies, where an MLM loss is paired with a sentence-level loss such as NSP (Devlin et al., 2019) or SOP (Lan et al.",
+      "startOffset" : 119,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 37,
+      "context" : "Specifically, we use both RoBERTa-base (Liu et al., 2019) and DistilRoBERTa (Sanh et al.",
+      "startOffset" : 39,
+      "endOffset" : 57
+    }, {
+      "referenceID" : 57,
+      "context" : ", 2019) and DistilRoBERTa (Sanh et al., 2019) (a distilled version of RoBERTa-base) in our experiments.",
+      "startOffset" : 26,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 19,
+      "context" : "Dataset We collected all documents with a minimum token length of 2048 from OpenWebText (Gokaslan and Cohen, 2019) an open-access subset of the WebText corpus (Radford et al.",
+      "startOffset" : 88,
+      "endOffset" : 114
+    }, {
+      "referenceID" : 53,
+      "context" : "Dataset We collected all documents with a minimum token length of 2048 from OpenWebText (Gokaslan and Cohen, 2019) an open-access subset of the WebText corpus (Radford et al., 2019), yielding 497,868 documents in total.",
+      "startOffset" : 159,
+      "endOffset" : 181
+    }, {
+      "referenceID" : 49,
+      "context" : "Implementation We implemented our model in PyTorch (Paszke et al., 2017) using AllenNLP (Gardner et al.",
+      "startOffset" : 51,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 45,
+      "context" : "We used the NT-Xent loss function implemented by the PyTorch Metric Learning library (Musgrave et al., 2019) and the pretrained transformer architecture and weights from the Transformers library (Wolf et al.",
+      "startOffset" : 85,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 39,
+      "context" : "Training Unless specified otherwise, we train for one to three epochs over the 497,868 documents with a minibatch size of 16 and a temperature τ = 5 × 10−2 using the AdamW optimizer (Loshchilov and Hutter, 2019) with a learning rate (LR) of 5 × 10−5 and a weight decay of 0.",
+      "startOffset" : 182,
+      "endOffset" : 211
+    }, {
+      "referenceID" : 27,
+      "context" : "We use the Slanted Triangular LR scheduler (Howard and Ruder, 2018) with a number of train steps equal to training instances and a cut fraction of 0.",
+      "startOffset" : 43,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 38,
+      "context" : "QuickThoughts scores are taken directly from (Logeswaran and Lee, 2018).",
+      "startOffset" : 45,
+      "endOffset" : 71
+    }, {
+      "referenceID" : 13,
+      "context" : "We note that the purpose of the probing tasks is not the development of ad-hoc models that attain top performance on them (Conneau et al., 2018).",
+      "startOffset" : 122,
+      "endOffset" : 144
+    }, {
+      "referenceID" : 25,
+      "context" : "These include a conversational response prediction task (Henderson et al., 2017) and a Skip-Thoughts (Kiros et al.",
+      "startOffset" : 56,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 31,
+      "context" : ", 2017) and a Skip-Thoughts (Kiros et al., 2015) like task.",
+      "startOffset" : 28,
+      "endOffset" : 48
+    }, {
+      "referenceID" : 58,
+      "context" : "This is in contrast to (Saunshi et al., 2019), who found both theoretical and empirical improvements when",
+      "startOffset" : 23,
+      "endOffset" : 45
+    }, {
+      "referenceID" : 42,
+      "context" : "We hypothesize that including the MLM loss acts as a form of regularization, preventing the weights of the pretrained model (which itself was trained with an MLM loss) from diverging too dramatically, a phenomenon known as “catastrophic forgetting” (McCloskey and Cohen, 1989; Ratcliff, 1990).",
+      "startOffset" : 249,
+      "endOffset" : 292
+    }, {
+      "referenceID" : 54,
+      "context" : "We hypothesize that including the MLM loss acts as a form of regularization, preventing the weights of the pretrained model (which itself was trained with an MLM loss) from diverging too dramatically, a phenomenon known as “catastrophic forgetting” (McCloskey and Cohen, 1989; Ratcliff, 1990).",
+      "startOffset" : 249,
+      "endOffset" : 292
+    } ],
+    "year" : 2021,
+    "abstractText" : "Sentence embeddings are an important component of many natural language processing (NLP) systems. Like word embeddings, sentence embeddings are typically learned on large text corpora and then transferred to various downstream tasks, such as clustering and retrieval. Unlike word embeddings, the highest performing solutions for learning sentence embeddings require labelled data, limiting their usefulness to languages and domains where labelled data is abundant. In this paper, we present DeCLUTR: Deep Contrastive Learning for Unsupervised Textual Representations. Inspired by recent advances in deep metric learning (DML), we carefully design a self-supervised objective for learning universal sentence embeddings that does not require labelled training data. When used to extend the pretraining of transformer-based language models, our approach closes the performance gap between unsupervised and supervised pretraining for universal sentence encoders. Importantly, our experiments suggest that the quality of the learned embeddings scale with both the number of trainable parameters and the amount of unlabelled training data. Our code and pretrained models are publicly available and can be easily adapted to new domains or used to embed unseen text.1",
+    "creator" : "LaTeX with hyperref"
+  }
+}

@@ -1,0 +1,431 @@
+{
+  "name" : "2021.acl-long.364.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Benchmarking Scalable Methods for Streaming Cross Document Entity Coreference",
+    "authors" : [ "Robert L. Logan IV", "Andrew McCallum", "Sameer Singh", "Daniel Bikel" ],
+    "emails" : [ "sameer}@uci.edu", "dbikel}@google.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 4717–4731\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n4717"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "The ability to disambiguate mentions of named entities in text is a central task in the field of information extraction, and is crucial to topic tracking, knowledge base induction and question answering. Recent work on this problem has focused almost solely on entity linking–based ap-\n∗Work done during an internship at Google Research. 1Code and data available at: https://github.com/\nrloganiv/streaming-cdc\nproaches, i.e., models that link mentions to a fixed set of known entities. While significant strides have been made on this front—with systems that can be trained end-to-end (Kolitsas et al., 2018), on millions of entities (Ling et al., 2020), and link to entities using only their textual descriptions (Logeswaran et al., 2019)—all entity linking systems suffer from the significant limitation that they are restricted to linking to a curated list of entities that is fixed at inference time. Thus they are of limited use when processing data streams where new entities regularly appear, such as research publications, social media feeds, and news articles.\nIn contrast, the alternative approach of crossdocument entity coreference (CDC) (Bagga and Baldwin, 1998; Gooi and Allan, 2004; Singh et al., 2011; Dutta and Weikum, 2015), which disambiguates mentions via clustering, does not suffer from this shortcoming. Instead most CDC algorithms suffer from a different failure mode: lack of scalability. Since they run expensive clustering routines over the entire set of mentions, they are not well suited to applications where mentions arrive one at a time. There are, however, a subset of streaming CDC methods that avoid this issue by clustering mentions incrementally (Figure 1). Unfortunately, despite such methods’ apparent fitness for streaming data scenarios, this area of research has received little attention from the NLP community. To our knowledge there are only two existing works on the task (Rao et al., 2010; Shrimpton et al., 2015), and only the latter evaluates truly streaming systems, i.e., systems that process new mentions in constant time with constant memory.\nOne crucial factor limiting research on this topic is a lack of free, publicly accessible benchmark datasets; datasets used in existing works are either small and impossible to reproduce (e.g., the dataset collected by Shrimpton et al. (2015) only contains a few hundred unique entities, and many of the\nSARS - CoV fusion peptides induce membrane surface ordering and\ncurvature...\n...gather information on the membrane fusion mechanism promoted by two\nputative SARS FPs...\nMild encephalitis/encephalopathy with reversible splenial lesion (MERS)\nassociated with...\n...Middle East respiratory syndrome (MERS) outbreaks have been linked to\nhealthcare facilities...\nTime\n(a) New mentions arrive over time.\n(b) Mentions are encoded as points in a vector space and incrementally clustered. As the space grows some points are removed to ensure that the amount of memory used does not exceed a given threshold.\nFigure 1: Streaming Cross-Document Coreference.\nannotated tweets are no longer available for download) or lack the necessary canonical ordering and are expensive to procure (e.g., the ACE 2008 and TAC-KBP 2009 corpora used by Rao et al. (2010)). To remedy this, we compile a benchmark of three datasets for evaluating English streaming CDC systems along with a canonical ordering in which evaluation data should be processed. These datasets are derived from existing datasets that cover diverse subject matter: biomedical texts (Mohan and Li, 2019), news articles (Hoffart et al., 2011), and Wikia fandoms (Logeswaran et al., 2019).\nWe evaluate a number of novel and existing streaming CDC systems on this benchmark. Our systems utilize a two step approach where: 1) each mention is encoded using a neural or feature-based model, and 2) the mention is then clustered with existing mentions using an incremental clustering algorithm. We investigate the performance of different mention encoders (existing feature-based methods, pretrained LMs, and encoders from entity linkers such as RELIC (Ling et al., 2020) and BLINK (Wu et al., 2020)), and incremental clustering algorithms (greedy nearest-neighbors clustering, and a recently introduced online agglomerative clustering algorithm, GRINCH (Monath et al., 2019)). Since GRINCH does not use bounded memory, which is required for scalability in the streaming setting, we introduce a novel bounded memory variant that prunes nodes from the cluster tree when the number of leaves exceeds a given size, and compare its performance to existing bounded memory approaches.\nOur results show that the relative performance of different mention encoders and clustering algorithms varies across different domains. We\nfind that existing approaches for streaming CDC (e.g., feature-based mention encoding with greedy nearest-neighbors clustering) outperform neural approaches on two of three datasets (+1-3% abs. improvement in CoNLL F1), while a RELIC-based encoder with GRINCH performs better on the last dataset (+9% abs. improvement in CoNLL F1). In cases where existing approaches perform well, we also find that better performance can be obtained by using a combination of neural and feature-based mention encoders. Lastly, we observe that by using relatively simple memory management policies, e.g. removing old and redundant mentions from the mention cache, bounded memory models can achieve performance near on-par with unbounded models while storing only a fraction of the mentions (in one case we observe a 2% abs. drop in CoNLL F1 caching only 10% of the mentions)."
+    }, {
+      "heading" : "2 Streaming Cross-Document Entity Coreference (CDC)",
+      "text" : ""
+    }, {
+      "heading" : "2.1 Task Overview",
+      "text" : "The key goal of cross-document entity coreference (CDC) is to identify mentions that refer to the same entity. Formally, let M = { m1, . . . ,m|M| } denote a corpus of mentions, where each mention consists of a surface text m.surface (e.g., the colored text in Figure 1a), as well as its surrounding context m.context (e.g., the text in black). Provided M as an input, a CDC system produces a disjoint clustering over the mentions C = { C1, . . . , C|C| } , |C| ≤ |M|, as the output, where each cluster Ce = {m ∈M|m.entity = e} is the set of mentions that refer to the same entity.\nIn streaming CDC, there are two additional requirements: 1) mentions arrive in a fixed order\n(M is a list) and are clustered incrementally, and 2) memory is constrained so that only a fixed number of mentions can be stored. This can be formulated in terms of the above notation by adding a time index t, so thatMT = {mt ∈M| t ≤ T} is the set of all mentions observed at or before time T , M̃T ⊆ MT is a subset of “active” mentions whose size does not exceed a fixed memory bound k, e.g., |M̃T | ≤ k, and CT is comprised of clusters that only contain mentions in M̃T . Due to the streaming nature, M̃T − {mT } ⊂ M̃T−1, i.e., a mention cannot be added back to M̃T if it was previously removed. When the memory bound is reached, mention are removed from M̃ according to a memory management policy Φ.\nAn illustrative example is provided in Figure 1. Mentions arrive in left-to-right order (Figure 1a), with the clustering process depicted in Figure 1b (memory bound k = 3). At time T = 4, the mention m1 is removed from M̃4. Note that, even though m1 is removed, it is still possible to disambiguate mentions of all previously observed entities, whereas this would not be possible had m3 or m4 been removed. This illustrates the effect the memory management policy can have on performance."
+    }, {
+      "heading" : "2.2 Background and Motivation",
+      "text" : "Cross Document Entity Coreference As we show later, we employ a two-stage CDC pipeline where mentions are first encoded as vectors, and subsequently clustered. This approach is used in most existing work on CDC (Bagga and Baldwin, 1998; Mann and Yarowsky, 2003; Gooi and Allan, 2004). In the past decade, research on CDC has mainly focused in improving scalability (Singh et al., 2011), and jointly learning to perform CDC with other tasks such as entity linking (Dutta and Weikum, 2015) and event coreference (discussed in the next paragraph). This work similarly investigates whether entity linking is beneficial for CDC, however we use entity linkers that are pretrained separately and kept fixed during inference.\nRecently, there has been a renewed interest in performing CDC jointly with cross-document event coreference (Barhom et al., 2019; Meged et al., 2020; Cattan et al., 2020; Caciularu et al., 2021) on the ECB+ dataset (Cybulska and Vossen, 2014). Although we do not evaluate methods from this line of research in this work, we hope that the benchmark we compile will be useful for future evaluation of these systems.\nStreaming Cross Document Coreference The methods mentioned in the previous paragraphs disambiguate mentions all at once, and are thus unsuitable for applications where a large number of mentions appear over time. Rao et al. (2010) propose to address this issue using an incremental clustering approach where each new mention is either placed into one of a number of candidate clusters, or a new cluster if similarity does not exceed a given threshold (Allaway et al. (2021) use a similar approach for joint entity and event coreference). Shrimpton et al. (2015) note that the this incremental clustering does not process mentions in constant time/memory, and thus is not “truly streaming”. They present the only truly streaming approach for CDC by introducing a number of memory management policies that limit the size of M̃, which we describe in more detail in Section 3.3.\nOne of the key problems inhibiting further research on streaming CDC is a lack of suitable evaluation datasets for measuring system performance. The datasets used in Rao et al. (2010) are either small in size (few hundreds of mentions), contain few annotated entities, or are expensive to procure. Additionally, they do not include any canonical ordering of the mentions, which precludes consistent evaluation of streaming systems. Meanwhile, Tweets annotated by Shrimpton et al. (2015) only cover two surface texts (Roger and Jessica) and are no longer accessible via the Twitter API.2 To address this we collect a new evaluation benchmark, comprised of 3 existing publicly available datasets, covering a diverse collection of topics (News, Biomedical Articles, Wikias) with natural orderings (e.g., chronological, categorical). This benchmark is described in detail in Section 4.1.\nEntity Linking CDC is similar to the task of entity linking (EL, Mihalcea and Csomai (2007)), which also addresses the problem of named entity disambiguation, with the key distinction that EL is formulated as a supervised classification problem (list of entities is known at training and test time), while CDC is an unsupervised clustering problem. In particular, CDC is similar to time-aware EL (Agarwal et al., 2018)—where temporal context is used to help disambiguate mentions—and zero-shot EL (Zeshel, Logeswaran et al. (2019))— where the set of entities linked to during evaluation does not overlap with the set of entities observed during training. Streaming CDC can also be con-\n2At this time, only 56 of the first 100 tweets were available.\nsidered a method for time/order-aware zero-shot named entity disambiguation, however, it is strictly more challenging as it does not assume access to a curated list of entities at prediction time, or any supervised training data.\nAlthough CDC is formulated as a strictly unsupervised clustering task, this does not preclude the usage of labeled data for transfer learning. One of the primary goals in this work is to investigate whether the mention encoders learned by entity linking systems provide useful representations in the first step of the CDC pipeline. Specifically, we consider mention encoders for two state-of-the-art entity linking architectures: RELIC (Ling et al., 2020) and the BLINK bi-encoder (Wu et al., 2020).\nEmerging Entity Detection Streaming CDC is also related to the task of emerging entity detection (EED, Färber et al. (2016)), which, given a mention that cannot be linked, seeks to predict whether it should produce a new KB entry. Although both tasks share similar motivations, they adopt different approaches (EED is formulated as a binary classification task), and CDC does not require deciding which entities should and should not be added to a knowledge base. However, in many practical applications, it may make sense to apply streaming CDC only to emerging entities."
+    }, {
+      "heading" : "3 Building Streaming CDC Systems",
+      "text" : "Following previous work, we adopt a two-step approach to performing streaming cross-document coreference. In the first step, an encoder is used to produce a vector representation of the incoming mention mt = Enc(mt). In the second step, these vectors are input into an incremental clustering algorithm to update the predicted clustering Ct = Clust(Ct−1,mt). In the following sections we describe in detail the mention encoders and clustering algorithms used in this work."
+    }, {
+      "heading" : "3.1 Mention Encoders",
+      "text" : "The primary goal of mention encoders Enc(mt) is to produce a compact representation of the mention, including both the surface and the context text.\nFeature-Based Encoders Existing models for streaming cross-document coreference exclusively make use of feature-based mention encoders. While there are many feature engineering options explored in the literature, in this work we consider the mention encoding approach proposed by\nShrimpton et al. (2015), which uses character skip bigram indicator vectors to encode the surface text, and tf-idf vectors to represent contexts. When using this encoding scheme, similarity scores are computed independently for the surface and context embeddings, and a weighted average is taken to produce the final similarity score. We use the same setup and parameters as Shrimpton et al. (2015).\nMasked Language Model Encoders We also consider mention encodings produced by masked language models, particularly BERT (Devlin et al., 2019). We encode the mention by feeding the contiguous text of the mention (containing both the surrounding and surface text) into BERT and concatenating the contextualized vectors associated with the first and last word-piece of the surface text. That is, let s, e ∈ N denote the start and end of the mention surface text within the complete mention, and let M = BERT(m) denote the contextualized word vectors output by BERT. Then the mention encoding is given by: EncMLM(m) = [M [s];M [e]].\nEntity Linker-Based Encoders We consider producing mention encodings using the bi-encoderbased neural entity linkers: RELIC (Ling et al., 2020) and BLINK (Wu et al., 2020). The bi-encoder architecture is comprised of two components—a mention encoder Encm, and an entity encoder Ence—and is trained to maximize a similarity score (e.g., dot-product) between the mention encoding and the encoding of its underlying entity, while simultaneously minimizing the score for other entities. We use Encm from pretrained entity linkers to encode mentions for CDC.\nHybrid Encoder We also consider a hybrid encoder which combines feature-based and neural mention encoders. We retain the feature-based character skip bigram surface text encoder, but use one of the neural encoders from entity linkers in place of tf-idf context representation. Similarity scores are computed by averaging the two without any weights, unlike by Shrimpton et al. (2015)."
+    }, {
+      "heading" : "3.2 Clustering Algorithms",
+      "text" : "Here we describe incremental clustering approaches, Clust(Ct−1,mt), that compute a new clustering when mt is added to the mentions under consideration (M̃).\nGreedy Nearest Neighbors Clustering Shrimpton et al. (2015) and Rao et al. (2010) both evaluate\nCDC using a single linkage incremental clustering approach that clusters each new mention m to its nearest neighbor m′ = arg min\nm′∈M̃ sim(m,m ′),\nif the similarity exceeds some threshold τ . We use a similar approach here, however we cluster m with all m′ ∈ M̃ such that sim(m,m′) > τ thus allowing previously separate clusters to be merged if m is similar to both of them.\nGRINCH Gooi and Allan (2004) find that average link hierarchical agglomerative clustering can outperform greedy single link approaches. However, agglomerative approaches are typically not used for streaming CDC because running the algorithm at each time step is too expensive, and incremental variants of the approach are not able to recover from incorrect choices made early on (Figure 2a). The recently introduced GRINCH clustering algorithm (Monath et al., 2019) uses rotate and graft operations that reconfigure the tree, thereby avoiding these issues (Figure 2b). We defer to the original paper for details, however note that, for our application, each interior node of the cluster tree is computed as a weighted average of its children’s representations (where the weights are proportional to the number of leaves). Thus at each interior node, it is possible to compute the similarity score between that node’s children. This allows us to produce a flat clustering from the cluster tree by thresholding the similarity score, just as in the greedy clustering case."
+    }, {
+      "heading" : "3.3 Memory Management Policies",
+      "text" : "As described in Section 2.1, memory management policies decide which mentions to remove from\nM̃ to prevent its size from exceeding the memory bound, providing scalable, memory-bound variants of the clustering algorithms.\nBounded Memory Greedy NN Clustering For bounded memory greedy nearest neighbors clustering, we consider the following memory management policies of Shrimpton et al. (2015): • Window: Remove the oldest mention in M̃. • Cache: Remove the oldest mention in the least\nrecently updated cluster CLRU. • Diversity: Remove the most similar mention to\nmention just added, i.e. arg maxm sim(m,mt) • Diversity-Cache: A combination of the diversity\nand cache strategies, where the diversity strategy is used if the similarity score exceeds a given threshold sim(m,mt) > α, and the cache strategy is used otherwise.\nBounded Memory GRINCH Memory management for GRINCH is more complicated than for greedy clustering, as instead of maintaining a flat clustering of mentions, GRINCH instead maintains a cluster hierarchy in the form of a binary cluster tree. Every time a mention is inserted into the tree, two new nodes are created: one node for the mention itself, and a new parent node linking the mention to its sibling (Figure 2a). Accordingly, when the memory bound is reached, the memory management policy for GRINCH must remove two nodes from the tree. Furthermore, in order to preserve the tree’s binary structure, the removed nodes must be leaf nodes as well as siblings. Because the original GRINCH algorithm only includes routines for inserting nodes into the tree, and reconfiguring the tree’s structure, we modify GRINCH to\ninclude a new remove operation that prunes two nodes satisfying the these criteria. The parent of these nodes then becomes a leaf node, whose vector representation is produced by combining the vector representations of its former children using a weighted average (this is conceptually similar to the collapse operation described in Kobren et al. (2017)). We consider the following policies here: • Window: Remove the nodes whose parent was\nleast recently added to the tree. • Diversity: Remove the pair of nodes that are most\nsimilar to each other."
+    }, {
+      "heading" : "4 Benchmarking Streaming CDC",
+      "text" : "In this section, we describe our proposed benchmark for evaluating streaming CDC systems."
+    }, {
+      "heading" : "4.1 Datasets",
+      "text" : "Current research on CDC is inhibited by a lack of large, publicly accessible datasets. We address this by compiling datasets for streaming CDC by adapting existing entity linking datasets: AIDA CoNLL-YAGO, MedMentions, and Zeshel.\nAIDA AIDA CoNLL-YAGO (Hoffart et al., 2011) contains news articles from the Reuters Corpus written between August and December 1996 with annotations linking mentions to YAGO and Wikipedia. We create a canonical ordering for this dataset by ordering articles by date. As the original train, dev, and test splits respect this ordering, we use the original splits in our benchmark.\nMedMentions The MedMentions (Mohan and Li, 2019) corpus contains abstracts for biomedical\narticles published to PubMed in 2016, and annotated with links to the UMLS medical ontology. We order abstracts by publication date3 to create a canonical ordering. Since the original dataset is not ordered by date, we create new train, dev, and test splits of comparable size that respect this ordering.\nZeshel The Zeshel (Logeswaran et al., 2019) dataset consists of Wikia articles for different FANDOMs. In addition to the original set of annotated mentions, we use the provided entity descriptions as an additional source of mentions. We impose an ordering that groups all mentions belonging to the same Wikia together, and otherwise retains their original order in the Zeshel data. This is an interesting scenario for streaming CDC as no clusters need be retained when transitioning to a new Wikia.\nAnalysis Statistics for the benchmark data are provided in Table 1, which list the number of mentions and unique entities for each dataset. We also list the percentage overlap between entities in the training set, and entities in the dev and test sets (% Seen), as well as the maximum active entities (MAE). MAE is a quantity introduced by Toshniwal et al. (2020), which measures the maximum number of “active entities” (e.g., entities that have been previously mentioned, and will be mentioned in the future) for a given dataset, which can alternatively be interpreted as the smallest possible memory bound that can be used in order to ensure that a CDC system can cluster each mention with at least one other mention of the same entity. Importantly, this number is a small fraction of the total number of mentions in each dataset, indicating that these datasets are appropriate for the streaming setting and to compare memory management policies."
+    }, {
+      "heading" : "4.2 Evaluation Metrics",
+      "text" : "We evaluate CDC performance using the standard evaluation metrics: MUC (Vilain et al., 1995), B3 (Bagga and Baldwin, 1998), CEAFe (Luo, 2005), and CoNLL F1 which is an average of the previous three. In order to perform evaluation when memory is bounded, we perform the following bookkeeping to track nodes which have been removed by the memory management policy. For bounded memory greedy NN clustering, we keep track of the removed node’s predicted cluster (e.g., if the node was removed from cluster C, then it is considered an element of C during evaluation).\n36 abstracts were omitted due to missing metadata\nThis is similar to the evaluation used by Toshniwal et al. (2020). For bounded memory GRINCH, we keep track of the removed node’s place within the tree structure, and produce a flat clustering using the thresholding approach described in Section 3.2 as if the node were never removed. Because leaf nodes (and accordingly removed nodes) are never updated by insertion or removal operations, nodes belonging to the same cluster before they are pruned they will always remain in the same cluster during evaluation, which is the same assumption used for the greedy NN evaluation."
+    }, {
+      "heading" : "4.3 Hyperparameters",
+      "text" : "Vocabulary and inverse document frequency (idf) weights are estimated using each dataset’s train set. For masked language model encoders, we use an unmodified BERT-base architecture, with model weights provided by the HuggingFace transformers library (Wolf et al., 2020). For BLINK, we use the released BERT-large bi-encoder weights.4 Our bounded memory variant of GRINCH is based on the official implementation.5 Note that GRINCH does not currently support sparse inputs, so we do not include results for feature-based mention encoders. RELIC model weights are initialized from BERT-base, and then finetuned to perform entity linking in the following settings: • RELIC (wiki): Trained on the same Wikipedia\ndata used to train the BLINK bi-encoder. • RELIC (in-domain): Trained on respective bench-\nmark’s training dataset; a separate model is trained for each benchmark.\nTraining is performed using hyperparameters suggested by Ling et al. (2020).6 For each benchmark, the hybrid mention encoder uses the best performing RELIC variant on that benchmark. Cluster thresholds τ are chosen so that the number of predicted clusters on the dev dataset approximately matches the number of unique entities."
+    }, {
+      "heading" : "5 Results",
+      "text" : "In this section, we provide a comprehensive evaluation of the design choices that define the existing and proposed approaches for streaming CDC.\n4https://github.com/facebookresearch/ BLINK\n5https://github.com/iesl/grinch 6Trained on a server w/ 754 GB RAM, Intel Xeon Gold\n5218 CPU and 4x NVIDIA Quadro RTX 8000 GPUs.\nChoice of Encoder We include the results for CDC systems with unbounded memory on the benchmark datasets in Table 2, as well as results for two baselines: 1) a system that clusters together all mentions with the same surface forms (exact match), and 2) a system that only considers gold within-document clusters and does not merge clusters across documents (oracle within-doc). We observe that, in general, neural mention encoders are not sufficient to obtain good CDC performance. With the exception of the RELIC (In-Domain) on MedMentions, no neural mention encoders are able to outperform the feature-based greedy NN approach, and furthermore, the MLM and BLINK mention encoders do not even surpass the exact match baseline. However, note that for AIDA and Zeshel, best results are obtained using a hybrid mention encoder. Thus, in these domains, we can conclude that while neural mention encoders are useful for encoding contexts, CDC systems require an additional system to model surface texts to achieve good performance. The results on MedMentions provide an interesting contrast to this conclusion. Here the RELIC (In-Domain) mention encoder outperforms both the feature-based and hybrid mention encoders. In the error analysis below, we find that this is due mainly to improved performance clustering mentions of entities seen when training the mention encoder.\nChoice of Clustering Algorithm Comparing greedy nearest neighbors clustering to GRINCH, we do not observe a consistent trend across mention encoders or datasets. While the best performance on AIDA and Zeshel is achieved using greedy nearest neighbor clustering, the best performance on MedMentions is achieved using GRINCH. These results highlight the importance of benchmarking CDC systems on a number of different datasets; patterns observed on a single dataset do not extrapolate well to other settings. It is also interesting to observe that a much simpler approach often works better than the more complex one.\nError Analysis We characterize the errors of these models by investigating: a) the entities whose mentions are conflated (e.g., are wrongly clustered together) and split (e.g., wrongly grouped into separate clusters) using the approach of Kummerfeld and Klein (2013), and b) differences in performance on entities that are seen vs. unseen during training for models that use in-domain data. A sub-\nFeature-Based + Greedy NN\nFIFA World Cup . . . ’ ’ Japan , co-hosts of the World Cup in 2002 and ranked 20th in the world by . . . 1995 Rugby World Cup . . . team . Cuttitta announced his retirement after the 1995 World Cup , where he took issue with being dropped from . . . Rugby World Cup . . . Australia to defeat with a last-ditch drop-goal in the World Cup quarter-final in Cape Town . . .\nRELIC (Wiki) + Greedy NN\nFC Volendam . . . leaders PSV Eindhoven romped to a 6-0 win over Volendam on Saturday . Their other marksmen were Brazilian . . . Feyenoord . . . game . They boast a nine-point lead over Feyenoord , who have two games in hand , and . . . RKC Waalwijk . . . division soccer match played on Friday : RKC Waalwijk 1 ( Starbuck 76 ) Willem II . . .\nTable 3: Most Conflated Entities on AIDA. Left: Unique entity ID. Right: Mention with entity surface form in italics. Results for remaining models are provided in the Appendix.\nset of our results is provided in Table 3, with full results available in Tables 4–11 in the Appendix.\nIn aggregate, these error metrics closely track the results in Table 2, where better models make fewer errors of all types. We do, however, observe that in-domain training improves RELIC’s performance considerably on MedMentions (+15 CoNLL F1 on seen entities, and +18 on unseen entities), and is the primary reason underlying the improved performance over feature-based encoders (72.6 vs. 60.7 CoNLL F1 on seen entities, while performance on unseen entities is comparable).\nComparing mentions of the most conflated entities provides a qualitative sense of the failure modes of each method. We note that the featurebased method tends to fail at distinguishing entities with the same surface form, e.g., world cups of different sports, while neural entity linkers tend to conflate entities with similar contexts, particularly when surface forms are split into multiple\nword pieces in the model’s vocabulary (each surface form in the bottom of Table 3 gets broken into 3+ word pieces).\nEffect of Bounded Memory Results for the bounded memory setting are illustrated in Figure 3. In these experiments we take the best neural mention encoder for each benchmark dataset (RELIC (Wiki) for AIDA and Zeshel, and RELIC (InDomain) for MedMentions), and plot the CoNLL F1 score for each of the memory management policies described in Section 3.3. We measure performance for memory bounds at the maximum number of active entities (MAE) and total unique entities (|E|) for each dataset (as well as 1/2x, and 2x multiples of these numbers). In sum, these results provide strong evidence that CDC systems can reliably cluster mentions in a truly streaming setting, even when memory is bounded to a small fraction of the number of entities encountered by the system. Most impressively, using the diversity-\ncache memory management policy, a greedy nearest neighbors bounded memory model achieves a CoNLL F1 score within 2% of the best performing unbounded memory model, while only storing approximately 10% (i.e., E /2) of the mentions.\nWe notice a few fairly consistent trends across datasets. The first is that increasing the memory bound has diminishing returns; while there is a large benefit incurred by increasing the bound from MAE/2 to MAE, the difference in performance attained from increasing the bound from E to 2E is often negligible. We also find that naı̈ve memory management policies that store recent mentions (i.e., window, W, and cache, C) tend to perform better than the policies that attempt to remove redundant mentions (i.e., diversity, D). This effect is particularly pronounced for small memory bounds. While this is somewhat surprising—storing mentions of the same entity is particularly harmful when memory is limited, so encouraging diversity should be a good thing—one possible explanation is that the diversity policy is actually removing mentions of entities that appear within the same context, as we saw earlier that neural mention encoders appear to focus more on mention context than surface text. Lastly, regarding the comparison of greedy nearest neighbors clustering to GRINCH we again see that inconsistency in performance across datasets; GRINCH appears to perform better at larger cache sizes for AIDA and MedMentions, while greedy nearest neighbors clustering has much better performance than GRINCH on Zeshel."
+    }, {
+      "heading" : "6 Conclusion and Future Work",
+      "text" : "Streaming cross document coreference has a number of compelling applications, especially concerning processing streams of data such as research publications, social media feeds, and news articles where new entities are frequently introduced. Despite being well-motivated, this task has received little attention from the NLP community. In order to foster a more welcoming environment for research on this task, we compile a diverse benchmark dataset for evaluating CDC, comprised of existing datasets that are free and publicly available. We additionally evaluate the performance of a collection of existing approaches for CDC, as well as introduce new approaches that leverage modern neural architectures. Our results highlight a number of challenges for future CDC research, such as how to better incorporate surface level fea-\ntures into neural mention encoders, as well as alternative policies for memory management that improve upon the naı̈ve baselines studied in this work. Benchmark data and materials needed to reproduce our results are provided at: https://github. com/rloganiv/streaming-cdc."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "The authors would like to thank Sanjay Subramanian, Nitish Gupta, Keith Hall, Ryan McDonald, Livio Baldini Soares, Nicholas FitzGerald, and Tom Kwiatkowski for their technical guidance and helpful comments while conducting this work. We would also like to thank thank the anonymous ACL reviewers for their valuable feedback. This project is supported in part by NSF award no. 1817183, and the DARPA MCS program under Contract No. N660011924033.\nBroader Impact Statement\nThis paper focuses on systems that perform entity disambiguation without reliance on an external knowledge base. The potential benefit of such systems is an improved ability to track mentions of rare and emergent entities (e.g., natural disasters, novel disease variants, etc.); however, this is also relevant in digital surveillance settings, and may result in reduced privacy."
+    }, {
+      "heading" : "A Error Analysis",
+      "text" : "A.1 Seen vs. Unseen Performance We evaluate CoNLL F1 scores for mentions of entities that are seen vs. unseen in the AIDA and MedMentions training datasets (Zeshel is excluded since no test entities are seen in the training data). Results are provided in Table 4, with performance of models that are trained using the in-domain training datasets reported in bold.\nA.2 Clustering Mistakes Kummerfeld and Klein (2013) define a system for categorizing coreference errors into a number of underlying error types. Because gold mention boundaries are provided in our task setup, the main error types of relevance are divided entities, i.e., mentions of the same entity that occur in different clusters, and conflated entities, i.e., mentions of different entities that are grouped into the same clusters. We can quantify these error types by counting the number of times clusters need to be merged together vs. split, respectively. The overall error counts are provided in Table 5.\nIn addition to providing the overall error counts, we also render a sample of mentions from predicted clusters containing the most conflated entities in Tables 6–11.\nFeature-Based\nFIS Ski Jumping World Cup . . . ) 228.1 ( 129.4 / 98.7 ) Leading World Cup standings ( after three events ) : 1. . . . FIFA World Cup . . . his squad to face Macedonia next week in a World Cup qualifier . Midfielder Valentin Stefan and striker Viorel . . . 1966 FIFA World Cup . . . 35 caps and was a key member of the 1966 World Cup winning team with his younger brother , Bobby . . . .\nMLM\nSheffield Wednesday F0̆02eC0̆02e . . . . 0-1 . 19,306 Liverpool 0 Sheffield Wednesday 1 ( Whittingham 22 ) . 0-1 . . . . Aston Villa F0̆02eC0̆02e . . . 0 Leeds 0 . 30,018 Southampton 0 Aston Villa 1 ( Townsend 34 ) . 0-1 . . . . Newcastle United F0̆02eC0̆02e . . . Villa 17 9 3 5 22 15 30 Newcastle 15 9 2 4 26 17 29 Manchester . . .\nBLINK (Wiki)\nJapan national football team . . . SOCCER - JAPAN GET LUCKY WIN , CHINA IN SURPRISE DEFEAT . . . . China PR national football team . . . SOCCER - JAPAN GET LUCKY WIN , CHINA IN SURPRISE DEFEAT . Nadim Ladki AL-AIN . . . Al Ain . . . CHINA IN SURPRISE DEFEAT . Nadim Ladki AL-AIN , United Arab Emirates 1996-12-06 Japan began the . . .\nRELIC (Wiki)\nRKC Waalwijk . . . division soccer match played on Friday : RKC Waalwijk 1 ( Starbuck 76 ) Willem II Tilburg 2 . . . Willem II (football club) . . . : RKC Waalwijk 1 ( Starbuck 76 ) Willem II Tilburg 2 ( Konterman 45 , Van der Vegt . . . PSV Eindhoven . . . SOCCER - PSV HIT VOLENDAM FOR SIX . AMSTERDAM 1996-12-07 . . .\nRELIC (In-Domain)\nJapan national football team . . . SOCCER - JAPAN GET LUCKY WIN , CHINA IN SURPRISE DEFEAT . . . . China PR national football team . . . SOCCER - JAPAN GET LUCKY WIN , CHINA IN SURPRISE DEFEAT . Nadim Ladki AL-AIN . . . United Nations . . . 1975 and annexed the following year . The United Nations has never recognised Jakarta ’s move . Alatas . . .\nHybrid\nFIFA World Cup . . . ’ ’ Japan , co-hosts of the World Cup in 2002 and ranked 20th in the world by . . . 1966 FIFA World Cup . . . 35 caps and was a key member of the 1966 World Cup winning team with his younger brother , Bobby . . . . Rugby World Cup . . . Australia to defeat with a last-ditch drop-goal in the World Cup quarter-final in Cape Town . ” Campo has . . .\nTable 6: Most Conflated Entities on AIDA using Greedy NN Clustering. Left: Unique entity ID. Right: Mention with entity surface form in italics.\nMLM\nJapan national football team . . . SOCCER - JAPAN GET LUCKY WIN , CHINA IN SURPRISE DEFEAT . . . . China PR national football team . . . SOCCER - JAPAN GET LUCKY WIN , CHINA IN SURPRISE DEFEAT . Nadim Ladki AL-AIN . . . Japan national football team . . . Ladki AL-AIN , United Arab Emirates 1996-12-06 Japan began the defence of their Asian Cup title with . . .\nBLINK (Wiki)\nJapan national football team . . . SOCCER - JAPAN GET LUCKY WIN , CHINA IN SURPRISE DEFEAT . . . . China PR national football team . . . SOCCER - JAPAN GET LUCKY WIN , CHINA IN SURPRISE DEFEAT . Nadim Ladki AL-AIN . . . Al Ain . . . CHINA IN SURPRISE DEFEAT . Nadim Ladki AL-AIN , United Arab Emirates 1996-12-06 Japan began the . . .\nRELIC (Wiki)\nRKC Waalwijk . . . division soccer match played on Friday : RKC Waalwijk 1 ( Starbuck 76 ) Willem II Tilburg 2 . . . Willem II (football club) . . . : RKC Waalwijk 1 ( Starbuck 76 ) Willem II Tilburg 2 ( Konterman 45 , Van der Vegt . . . PSV Eindhoven . . . SOCCER - PSV HIT VOLENDAM FOR SIX . AMSTERDAM 1996-12-07 . . .\nRELIC (In-Domain)\nEnglish people . . . Mahindra International . The Australian brushed aside unseeded Englishman Mark Cairns 15-7 15-6 15-8 . Top-seeded Eyles . . . England . . . 16-year-old who attended Sale Grammar School in the northern England city of Manchester died less than a day after . . . England . . . a last-minute goal to salvage a 2-2 draw for English premier league leaders Arsenal at home to Derby on . . .\nTable 7: Most Conflated Entities on AIDA using GRINCH Clustering. Left: Unique entity ID. Right: Mention with entity surface form in italics.\nFeature-Based\nTranscription, Genetic . . . of eight tissues. The Mef2c promoter had the higher transcriptional activity in differentiated C2C12 cells than that in proliferating C2C12 . . . Transcriptional Activation . . . in proliferating C2C12 cells, which was accompanied by the up-regulation of mRNA expression of Mef2c gene. Function deletion and . . . Regulation of Biological Process . . . (GPCRs) is a key event for cell signaling and regulation of receptor function. Previously, using tandem mass spectrometry, we . . .\nMLM\nLeft Ventricular Function . . . computed tomography angiography, we assessed 3 primary outcome measures: left ventricular (LV) systolic function (left ventricular ejection fraction), LV diastolic function (early relaxation . . . Left Ventricular Ejection Fraction . . . 3 primary outcome measures: left ventricular (LV) systolic function ( left ventricular ejection fraction ), LV diastolic function (early relaxation velocity), and coronary atherosclerosis . . . Endoscopy (Procedure) . . . Comprehensive Cancer Network (NCCN) guidelines, which are based on rigid endoscopic measurements. The medical records of patients scheduled to receive . . .\nBLINK (Wiki)\nMedical Records . . . guidelines, which are based on rigid endoscopic measurements. The medical records of patients scheduled to receive curative surgery for histologically . . . Lower - Spatial Qualifier . . . with rectal cancer located in the upper (Ra) or lower (Rb) division using double-contrast barium enema. The median values . . . Asymptomatic (Finding) . . . two bladder urothelial cancer metastatic to the penis with no relevant clinical symptoms . Namely, a 69 years-old man with a warthy lesions . . .\nRELIC (Wiki)\nLysome-associated . . . . . . Herein, we demonstrated that Zn(2+) could induce deglycosylation of lysosome-associated membrane protein 1 and 2 (LAMP-1 and LAMP-2), which primarily locate in . . . Sialic Acid . . . . . . In this study, we set out to define how CD169(+) phagocytes contribute to neuroinflammation in MS. CD169 - diphtheria . . . SMAD3 gene . . . Epigenome-wide analysis links SMAD3 methylation at birth to asthma in children of asthmatic . . .\nRELIC (In-Domain)\nIndividual . . . Cardiovascular Toxicity of Illicit Anabolic-Androgenic Steroid Use Millions of individuals have used illicit anabolicandrogenic steroids (AAS), but the long-term . . . Pharmicologic Substance . . . steroids (AAS), but the long-term cardiovascular associations of these drugs remain incompletely understood. Using a cross-sectional cohort design, we . . . Finding . . . complications occurred in the studied neonates. Based on these findings , IC - ECG -guided tip placement appears to be . . .\nHybrid\nStudy . . . marker for activated phagocytes in inflammatory disorders. In this study , we set out to define how CD169(+) phagocytes contribute . . . Evaluation . . . to provide holistic end-of-life care and assisted in the overall assessment of palliative care patients, identifying areas that might not . . . Research Study . . . which is hardly visible in clinically applied CT-imaging. This experimental study investigates ten different PSI designs and their effect to . . .\nTable 8: Most Conflated Entities on MedMentions using Greedy NN Clustering. Left: Unique entity ID. Right: Mention with entity surface form in italics.\nMLM\nCardiovascular . . . Cardiovascular Toxicity of Illicit Anabolic-Androgenic Steroid Use Millions of individuals . . . Toxic Effect . . . Cardiovascular Toxicity of Illicit Anabolic-Androgenic Steroid Use Millions of individuals have . . . Steroids . . . Cardiovascular Toxicity of Illicit Anabolic-Androgenic Steroid Use Millions of individuals have used illicit anabolic-androgenic\nsteroids . . .\nBLINK (Wiki)\nCardiovascular . . . Cardiovascular Toxicity of Illicit Anabolic-Androgenic Steroid Use Millions of individuals . . . Toxic Effect . . . Cardiovascular Toxicity of Illicit Anabolic-Androgenic Steroid Use Millions of individuals have . . . Steroids . . . Cardiovascular Toxicity of Illicit Anabolic-Androgenic Steroid Use Millions of individuals have used illicit anabolic-androgenic\nsteroids . . .\nRELIC (Wiki)\nSialic Acid . . . . . . In this study, we set out to define how CD169(+) phagocytes contribute to neuroinflammation in MS. CD169 - diphtheria . . . USP17L2 Protein . . . DUB3 and USP7 de-ubiquitinating enzymes control replication inhibitor Geminin: molecular . . . USP7 Protein . . . DUB3 and USP7 de-ubiquitinating enzymes control replication inhibitor Geminin: molecular characterization and . . .\nRELIC (In-Domain)\nProtein Expression . . . by vascular endothelial growth factor (VEGF) signaling. We describe spatiotemporal expression of vegf and vegfr and experimental manipulations targeting VEGF . . . Genes, Homeobox . . . cell adhesion, and newly identified processes, including transcription and homeobox genes . We identified mutations in protein binding sites correlating with . . . Gene Expression . . . identified mutations in protein binding sites correlating with differential expression of proximal genes and experimentally validated effects of mutations . . .\nTable 9: Most Conflated Entities on MedMentions using GRINCH Clustering. Left: Unique entity ID. Right: Mention with entity surface form in italics.\nFeature-Based\nYu - Gi - Oh ! - Episode 004 . . . Yu - Gi - Oh ! - Episode 004 ” Into the Hornet ’ s Nest ” , known . . . Yu - Gi - Oh ! ZEXAL - Episode 082 . . . Yu - Gi - Oh ! ZEXAL - Episode 082 ” Sphere Cube Calamity : Part 1 ” , known . . . Yu - Gi - Oh ! Duelist - Duel 168 . . . Yu - Gi - Oh ! Duelist - Duel 168 ” The Waiting Grave ” , also known as ” . . .\nMLM\nYami Yugi and Rafael ’ s first Duel . . . Yami Yugi and Rafael ’ s first Duel Yami Yugi goes to duel against Rafael as the message . . . Yu - Gi - Oh ! - Episode 004 . . . Yu - Gi - Oh ! - Episode 004 ” Into the Hornet ’ s Nest ” , known . . . Yu - Gi - Oh ! ZEXAL - Episode 082 . . . Yu - Gi - Oh ! ZEXAL - Episode 082 ” Sphere Cube Calamity : Part 1 ” , known . . .\nBLINK (Wiki)\nRobin ( Friends ) . . . , Sarah and Maya . Emma has a horse called Robin , dog called Lady and a cat called Jewel . . . . 41003 Olivia ’ s Newborn Foal . . . a pet bird , Goldie . Olivia also has a new pet foal , which she takes care of frequently . She seems . . . 41007 Heartlake Pet Salon . . . its neck . Background . Joanna brings her poodle to the pet salon , where Emma pampers her up . ¡ br ¿ . . .\nRELIC (Wiki)\nRo Gale . . . , as was Maquis leader Macias . Ro recalled that her father made the strongest ” hasperat ” she ’ d ever . . . Unnamed shuttlepods ( 22nd century ) . . . . ” ( ) The Federation starship carried at least one shuttlepod until the time of its disappearance in the mid - . . . Founders ’ homeworld ( 2372 ) . . . As she is reluctant to reveal the location of the Founders ’ new homeworld , but respects Sisko ’ s loyalty to Odo\nwhen . . .\nRELIC (In-Domain)\nYu - Gi - Oh ! - Episode 004 . . . Yu - Gi - Oh ! - Episode 004 ” Into the Hornet ’ s Nest ” , known . . . Yu - Gi - Oh ! ZEXAL - Episode 082 . . . Yu - Gi - Oh ! ZEXAL - Episode 082 ” Sphere Cube Calamity : Part 1 ” , known . . . Yu - Gi - Oh ! Duelist - Duel 168 . . . Yu - Gi - Oh ! Duelist - Duel 168 ” The Waiting Grave ” , also known as ” . . .\nHybrid\nYu - Gi - Oh ! - Episode 004 . . . Yu - Gi - Oh ! - Episode 004 ” Into the Hornet ’ s Nest ” , known . . . Yu - Gi - Oh ! ZEXAL - Episode 082 . . . Yu - Gi - Oh ! ZEXAL - Episode 082 ” Sphere Cube Calamity : Part 1 ” , known . . . Yu - Gi - Oh ! Duelist - Duel 168 . . . Yu - Gi - Oh ! Duelist - Duel 168 ” The Waiting Grave ” , also known as ” . . .\nTable 10: Most Conflated Entities on Zeshel using Greedy NN Clustering. Left: Unique entity ID. Right: Mention with entity surface form in italics.\nMLM\nMoondeep Sea . . . Larynda Telenna was the high priestess of Kiaransalee in the Vault of Gnashing Teeth beneath Vaasa . She was also the leader of Kiaransalee . . . Tabaxi ( tribe ) . . . the Chultan Peninsula , consisting primarily of members of the Tabaxi tribe . Description . Chultans were tall and had dark , . . . New Velar . . . from the Moonsea Ride , as it would have connected Harrowdale Town with this major road . To avoid ambushes by the . . .\nBLINK (Wiki)\nAstral projection . . . also possible to escape with ” teleportation ” spells or astral travel , though the force blocked ethereal travel . A captive . . . Krakentua ( Shinkintin ) . . . and force newly hatched krakentua spawn to fight . A krakentua related these events via dreams to adventurers in the Fochu . . . Generic temple guard . . . two to attempt a crossing were Father Sambar and a temple guard . Sambar died horrifically , but the guard survived as . . .\nRELIC (Wiki)\nMoondeep Sea . . . Larynda Telenna was the high priestess of Kiaransalee in the Vault of Gnashing Teeth beneath Vaasa . She was also the leader of Kiaransalee . . . Tabaxi ( tribe ) . . . the Chultan Peninsula , consisting primarily of members of the Tabaxi tribe . Description . Chultans were tall and had dark , . . . Kaedlaw Burdun . . . the Silver Wyrm in 1369 DR , Queen Brianna , her newborn child , Avner , Tavis Burdun , and Basil retreated to . . .\nRELIC (In-Domain)\nVetrix Family . . . Vetrix Family The Vetrix Family , known as the Tron Family in . . . Yu - Gi - Oh ! - Episode 004 . . . Yu - Gi - Oh ! - Episode 004 ” Into the Hornet ’ s Nest ” , known . . . Yu - Gi - Oh ! ZEXAL - Episode 082 . . . Yu - Gi - Oh ! ZEXAL - Episode 082 ” Sphere Cube Calamity : Part 1 ” , known . . .\nTable 11: Most Conflated Entities on Zeshel using GRINCH Clustering. Left: Unique entity ID. Right: Mention with entity surface form in italics."
+    } ],
+    "references" : [ {
+      "title" : "diaNED: Time-aware named entity disambiguation for diachronic corpora",
+      "author" : [ "Prabal Agarwal", "Jannik Strötgen", "Luciano del Corro", "Johannes Hoffart", "Gerhard Weikum." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational",
+      "citeRegEx" : "Agarwal et al\\.,? 2018",
+      "shortCiteRegEx" : "Agarwal et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Sequential cross-document coreference resolution",
+      "author" : [ "Emily Allaway", "Shuai Wang", "Miguel Ballesteros." ],
+      "venue" : "arXiv preprint arXiv:2104.08413.",
+      "citeRegEx" : "Allaway et al\\.,? 2021",
+      "shortCiteRegEx" : "Allaway et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Entitybased cross-document coreferencing using the vector space model",
+      "author" : [ "Amit Bagga", "Breck Baldwin." ],
+      "venue" : "36th Annual Meeting of the Association for Computational Linguistics and 17th International Conference on Computational Linguis-",
+      "citeRegEx" : "Bagga and Baldwin.,? 1998",
+      "shortCiteRegEx" : "Bagga and Baldwin.",
+      "year" : 1998
+    }, {
+      "title" : "Revisiting joint modeling of cross-document entity and event coreference resolution",
+      "author" : [ "Shany Barhom", "Vered Shwartz", "Alon Eirew", "Michael Bugert", "Nils Reimers", "Ido Dagan." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Com-",
+      "citeRegEx" : "Barhom et al\\.,? 2019",
+      "shortCiteRegEx" : "Barhom et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Crossdocument language modeling",
+      "author" : [ "Avi Caciularu", "Arman Cohan", "Iz Beltagy", "Matthew E Peters", "Arie Cattan", "Ido Dagan." ],
+      "venue" : "arXiv preprint arXiv:2101.00406.",
+      "citeRegEx" : "Caciularu et al\\.,? 2021",
+      "shortCiteRegEx" : "Caciularu et al\\.",
+      "year" : 2021
+    }, {
+      "title" : "Streamlining crossdocument coreference resolution: Evaluation and modeling",
+      "author" : [ "Arie Cattan", "Alon Eirew", "Gabriel Stanovsky", "Mandar Joshi", "Ido Dagan." ],
+      "venue" : "arXiv preprint arXiv:2009.11032.",
+      "citeRegEx" : "Cattan et al\\.,? 2020",
+      "shortCiteRegEx" : "Cattan et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Using a sledgehammer to crack a nut? lexical diversity and event coreference resolution",
+      "author" : [ "Agata Cybulska", "Piek Vossen." ],
+      "venue" : "Proceedings of the Ninth International Conference on Language Resources and Evaluation (LREC’14), pages 4545–",
+      "citeRegEx" : "Cybulska and Vossen.,? 2014",
+      "shortCiteRegEx" : "Cybulska and Vossen.",
+      "year" : 2014
+    }, {
+      "title" : "2019. BERT: Pre-training",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova" ],
+      "venue" : null,
+      "citeRegEx" : "Devlin et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Crossdocument co-reference resolution using samplebased clustering with knowledge enrichment",
+      "author" : [ "Sourav Dutta", "Gerhard Weikum." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 3:15–28.",
+      "citeRegEx" : "Dutta and Weikum.,? 2015",
+      "shortCiteRegEx" : "Dutta and Weikum.",
+      "year" : 2015
+    }, {
+      "title" : "On emerging entity detection",
+      "author" : [ "Michael Färber", "Achim Rettinger", "Boulos El Asmar." ],
+      "venue" : "Knowledge Engineering and Knowledge Management, pages 223–238, Cham. Springer International Publishing.",
+      "citeRegEx" : "Färber et al\\.,? 2016",
+      "shortCiteRegEx" : "Färber et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Crossdocument coreference on a large scale corpus",
+      "author" : [ "Chung Heong Gooi", "James Allan." ],
+      "venue" : "Proceedings of the Human Language Technology Conference of the North American Chapter of the Association for Computational Linguistics: HLT-",
+      "citeRegEx" : "Gooi and Allan.,? 2004",
+      "shortCiteRegEx" : "Gooi and Allan.",
+      "year" : 2004
+    }, {
+      "title" : "Robust disambiguation of named entities in text",
+      "author" : [ "Johannes Hoffart", "Mohamed Amir Yosef", "Ilaria Bordino", "Hagen Fürstenau", "Manfred Pinkal", "Marc Spaniol", "Bilyana Taneva", "Stefan Thater", "Gerhard Weikum." ],
+      "venue" : "Proceedings of the 2011 Conference",
+      "citeRegEx" : "Hoffart et al\\.,? 2011",
+      "shortCiteRegEx" : "Hoffart et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "A hierarchical algorithm for extreme clustering",
+      "author" : [ "Ari Kobren", "Nicholas Monath", "Akshay Krishnamurthy", "Andrew McCallum." ],
+      "venue" : "Proceedings of the 23rd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining, pages 255–",
+      "citeRegEx" : "Kobren et al\\.,? 2017",
+      "shortCiteRegEx" : "Kobren et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "End-to-end neural entity linking",
+      "author" : [ "Nikolaos Kolitsas", "Octavian-Eugen Ganea", "Thomas Hofmann." ],
+      "venue" : "Proceedings of the 22nd Conference on Computational Natural Language Learning, pages 519–529, Brussels, Belgium. Association for",
+      "citeRegEx" : "Kolitsas et al\\.,? 2018",
+      "shortCiteRegEx" : "Kolitsas et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Errordriven analysis of challenges in coreference resolution",
+      "author" : [ "Jonathan K. Kummerfeld", "Dan Klein." ],
+      "venue" : "Proceedings of the 2013 Conference on Empirical Methods in Natural Language Processing, pages 265–277, Seattle, Washington, USA. Associa-",
+      "citeRegEx" : "Kummerfeld and Klein.,? 2013",
+      "shortCiteRegEx" : "Kummerfeld and Klein.",
+      "year" : 2013
+    }, {
+      "title" : "Learning crosscontext entity representations from text",
+      "author" : [ "Jeffrey Ling", "Nicholas FitzGerald", "Zifei Shan", "Livio Baldini Soares", "Thibault Févry", "David Weiss", "Tom Kwiatkowski." ],
+      "venue" : "arXiv preprint arXiv:2001.03765.",
+      "citeRegEx" : "Ling et al\\.,? 2020",
+      "shortCiteRegEx" : "Ling et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Zero-shot entity linking by reading entity descriptions",
+      "author" : [ "Lajanugen Logeswaran", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova", "Jacob Devlin", "Honglak Lee." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics,",
+      "citeRegEx" : "Logeswaran et al\\.,? 2019",
+      "shortCiteRegEx" : "Logeswaran et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "On coreference resolution performance metrics",
+      "author" : [ "Xiaoqiang Luo." ],
+      "venue" : "Proceedings of Human Language Technology Conference and Conference on Empirical Methods in Natural Language Processing, pages 25–32, Vancouver, British Columbia, Canada.",
+      "citeRegEx" : "Luo.,? 2005",
+      "shortCiteRegEx" : "Luo.",
+      "year" : 2005
+    }, {
+      "title" : "Unsupervised personal name disambiguation",
+      "author" : [ "Gideon Mann", "David Yarowsky." ],
+      "venue" : "Proceedings of the Seventh Conference on Natural Language Learning at HLT-NAACL 2003, pages 33–40.",
+      "citeRegEx" : "Mann and Yarowsky.,? 2003",
+      "shortCiteRegEx" : "Mann and Yarowsky.",
+      "year" : 2003
+    }, {
+      "title" : "Paraphrasing vs coreferring: Two sides of the same coin",
+      "author" : [ "Yehudit Meged", "Avi Caciularu", "Vered Shwartz", "Ido Dagan." ],
+      "venue" : "Findings of the Association for Computational Linguistics: EMNLP 2020, pages 4897–4907, Online. Association for Computa-",
+      "citeRegEx" : "Meged et al\\.,? 2020",
+      "shortCiteRegEx" : "Meged et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Wikify! linking documents to encyclopedic knowledge",
+      "author" : [ "Rada Mihalcea", "Andras Csomai." ],
+      "venue" : "Proceedings of the sixteenth ACM conference on Conference on information and knowledge management, pages 233–242.",
+      "citeRegEx" : "Mihalcea and Csomai.,? 2007",
+      "shortCiteRegEx" : "Mihalcea and Csomai.",
+      "year" : 2007
+    }, {
+      "title" : "Medmentions: A large biomedical corpus annotated with {umls} concepts",
+      "author" : [ "Sunil Mohan", "Donghui Li." ],
+      "venue" : "Automated Knowledge Base Construction (AKBC).",
+      "citeRegEx" : "Mohan and Li.,? 2019",
+      "shortCiteRegEx" : "Mohan and Li.",
+      "year" : 2019
+    }, {
+      "title" : "Scalable hierarchical clustering with tree grafting",
+      "author" : [ "Nicholas Monath", "Ari Kobren", "Akshay Krishnamurthy", "Michael R. Glass", "Andrew McCallum." ],
+      "venue" : "Proceedings of the 25th ACM SIGKDD International Conference on Knowledge Discovery & Data",
+      "citeRegEx" : "Monath et al\\.,? 2019",
+      "shortCiteRegEx" : "Monath et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Streaming cross document entity coreference resolution",
+      "author" : [ "Delip Rao", "Paul McNamee", "Mark Dredze." ],
+      "venue" : "Coling 2010: Posters, pages 1050–1058, Beijing, China. Coling 2010 Organizing Committee.",
+      "citeRegEx" : "Rao et al\\.,? 2010",
+      "shortCiteRegEx" : "Rao et al\\.",
+      "year" : 2010
+    }, {
+      "title" : "Sampling techniques for streaming cross document coreference resolution",
+      "author" : [ "Luke Shrimpton", "Victor Lavrenko", "Miles Osborne." ],
+      "venue" : "Proceedings of the 2015 Conference of the North American Chapter of the Association for Computational Linguis-",
+      "citeRegEx" : "Shrimpton et al\\.,? 2015",
+      "shortCiteRegEx" : "Shrimpton et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Large-scale cross-document coreference using distributed inference and hierarchical models",
+      "author" : [ "Sameer Singh", "Amarnag Subramanya", "Fernando Pereira", "Andrew McCallum." ],
+      "venue" : "Proceedings of",
+      "citeRegEx" : "Singh et al\\.,? 2011",
+      "shortCiteRegEx" : "Singh et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "Learning to Ignore: Long Document Coreference with Bounded Memory Neural Networks",
+      "author" : [ "Shubham Toshniwal", "Sam Wiseman", "Allyson Ettinger", "Karen Livescu", "Kevin Gimpel." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods",
+      "citeRegEx" : "Toshniwal et al\\.,? 2020",
+      "shortCiteRegEx" : "Toshniwal et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A modeltheoretic coreference scoring scheme",
+      "author" : [ "Marc Vilain", "John Burger", "John Aberdeen", "Dennis Connolly", "Lynette Hirschman." ],
+      "venue" : "Sixth Message Understanding Conference (MUC-6): Proceedings of a Conference Held in Columbia, Maryland,",
+      "citeRegEx" : "Vilain et al\\.,? 1995",
+      "shortCiteRegEx" : "Vilain et al\\.",
+      "year" : 1995
+    }, {
+      "title" : "Transformers: State-of-the-art natural language processing",
+      "author" : [ "Teven Le Scao", "Sylvain Gugger", "Mariama Drame", "Quentin Lhoest", "Alexander Rush." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing:",
+      "citeRegEx" : "Scao et al\\.,? 2020",
+      "shortCiteRegEx" : "Scao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Scalable zeroshot entity linking with dense entity retrieval",
+      "author" : [ "Ledell Wu", "Fabio Petroni", "Martin Josifoski", "Sebastian Riedel", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP),",
+      "citeRegEx" : "Wu et al\\.,? 2020",
+      "shortCiteRegEx" : "Wu et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 13,
+      "context" : "While significant strides have been made on this front—with systems that can be trained end-to-end (Kolitsas et al., 2018), on millions of entities (Ling et al.",
+      "startOffset" : 99,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 15,
+      "context" : ", 2018), on millions of entities (Ling et al., 2020), and link to",
+      "startOffset" : 33,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 16,
+      "context" : "entities using only their textual descriptions (Logeswaran et al., 2019)—all entity linking systems suffer from the significant limitation that they are restricted to linking to a curated list of entities that is fixed at inference time.",
+      "startOffset" : 47,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 23,
+      "context" : "To our knowledge there are only two existing works on the task (Rao et al., 2010; Shrimpton et al., 2015), and only the latter evaluates truly streaming systems, i.",
+      "startOffset" : 63,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 24,
+      "context" : "To our knowledge there are only two existing works on the task (Rao et al., 2010; Shrimpton et al., 2015), and only the latter evaluates truly streaming systems, i.",
+      "startOffset" : 63,
+      "endOffset" : 105
+    }, {
+      "referenceID" : 21,
+      "context" : "These datasets are derived from existing datasets that cover diverse subject matter: biomedical texts (Mohan and Li, 2019), news articles (Hoffart et al.",
+      "startOffset" : 102,
+      "endOffset" : 122
+    }, {
+      "referenceID" : 11,
+      "context" : "These datasets are derived from existing datasets that cover diverse subject matter: biomedical texts (Mohan and Li, 2019), news articles (Hoffart et al., 2011), and",
+      "startOffset" : 138,
+      "endOffset" : 160
+    }, {
+      "referenceID" : 15,
+      "context" : "We investigate the performance of different mention encoders (existing feature-based methods, pretrained LMs, and encoders from entity linkers such as RELIC (Ling et al., 2020) and BLINK (Wu et al.",
+      "startOffset" : 157,
+      "endOffset" : 176
+    }, {
+      "referenceID" : 29,
+      "context" : ", 2020) and BLINK (Wu et al., 2020)), and incremental clustering algorithms (greedy nearest-neighbors clustering, and a recently introduced online agglomerative clustering algorithm, GRINCH (Monath et al.",
+      "startOffset" : 18,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2020)), and incremental clustering algorithms (greedy nearest-neighbors clustering, and a recently introduced online agglomerative clustering algorithm, GRINCH (Monath et al., 2019)).",
+      "startOffset" : 162,
+      "endOffset" : 183
+    }, {
+      "referenceID" : 2,
+      "context" : "This approach is used in most existing work on CDC (Bagga and Baldwin, 1998; Mann and Yarowsky, 2003; Gooi and Allan, 2004).",
+      "startOffset" : 51,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 18,
+      "context" : "This approach is used in most existing work on CDC (Bagga and Baldwin, 1998; Mann and Yarowsky, 2003; Gooi and Allan, 2004).",
+      "startOffset" : 51,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 10,
+      "context" : "This approach is used in most existing work on CDC (Bagga and Baldwin, 1998; Mann and Yarowsky, 2003; Gooi and Allan, 2004).",
+      "startOffset" : 51,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 25,
+      "context" : "In the past decade, research on CDC has mainly focused in improving scalability (Singh et al., 2011), and jointly learning to perform CDC with other tasks such as entity linking (Dutta and Weikum, 2015) and event coreference (discussed in the next paragraph).",
+      "startOffset" : 80,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 8,
+      "context" : ", 2011), and jointly learning to perform CDC with other tasks such as entity linking (Dutta and Weikum, 2015) and event coreference (discussed in the next paragraph).",
+      "startOffset" : 85,
+      "endOffset" : 109
+    }, {
+      "referenceID" : 3,
+      "context" : "Recently, there has been a renewed interest in performing CDC jointly with cross-document event coreference (Barhom et al., 2019; Meged et al., 2020; Cattan et al., 2020; Caciularu et al., 2021) on the ECB+ dataset (Cybulska and Vossen, 2014).",
+      "startOffset" : 108,
+      "endOffset" : 194
+    }, {
+      "referenceID" : 19,
+      "context" : "Recently, there has been a renewed interest in performing CDC jointly with cross-document event coreference (Barhom et al., 2019; Meged et al., 2020; Cattan et al., 2020; Caciularu et al., 2021) on the ECB+ dataset (Cybulska and Vossen, 2014).",
+      "startOffset" : 108,
+      "endOffset" : 194
+    }, {
+      "referenceID" : 5,
+      "context" : "Recently, there has been a renewed interest in performing CDC jointly with cross-document event coreference (Barhom et al., 2019; Meged et al., 2020; Cattan et al., 2020; Caciularu et al., 2021) on the ECB+ dataset (Cybulska and Vossen, 2014).",
+      "startOffset" : 108,
+      "endOffset" : 194
+    }, {
+      "referenceID" : 4,
+      "context" : "Recently, there has been a renewed interest in performing CDC jointly with cross-document event coreference (Barhom et al., 2019; Meged et al., 2020; Cattan et al., 2020; Caciularu et al., 2021) on the ECB+ dataset (Cybulska and Vossen, 2014).",
+      "startOffset" : 108,
+      "endOffset" : 194
+    }, {
+      "referenceID" : 0,
+      "context" : "In particular, CDC is similar to time-aware EL (Agarwal et al., 2018)—where temporal context is used to help disambiguate mentions—and zero-shot EL (Zeshel, Logeswaran et al.",
+      "startOffset" : 47,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 15,
+      "context" : "Specifically, we consider mention encoders for two state-of-the-art entity linking architectures: RELIC (Ling et al., 2020) and the BLINK bi-encoder (Wu et al.",
+      "startOffset" : 104,
+      "endOffset" : 123
+    }, {
+      "referenceID" : 7,
+      "context" : "Masked Language Model Encoders We also consider mention encodings produced by masked language models, particularly BERT (Devlin et al., 2019).",
+      "startOffset" : 120,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 15,
+      "context" : "Entity Linker-Based Encoders We consider producing mention encodings using the bi-encoderbased neural entity linkers: RELIC (Ling et al., 2020) and BLINK (Wu et al.",
+      "startOffset" : 124,
+      "endOffset" : 143
+    }, {
+      "referenceID" : 22,
+      "context" : "(b) The GRINCH (Monath et al., 2019) algorithm recovers from this mistake by reconfiguring the tree structure (in this case using a rotation operation).",
+      "startOffset" : 15,
+      "endOffset" : 36
+    }, {
+      "referenceID" : 22,
+      "context" : "The recently introduced GRINCH clustering algorithm (Monath et al., 2019) uses rotate and graft operations that reconfigure the tree, thereby avoiding these issues (Figure 2b).",
+      "startOffset" : 52,
+      "endOffset" : 73
+    }, {
+      "referenceID" : 11,
+      "context" : "AIDA AIDA CoNLL-YAGO (Hoffart et al., 2011) contains news articles from the Reuters Corpus written between August and December 1996 with annotations linking mentions to YAGO and Wikipedia.",
+      "startOffset" : 21,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 21,
+      "context" : "MedMentions The MedMentions (Mohan and Li, 2019) corpus contains abstracts for biomedical articles published to PubMed in 2016, and annotated with links to the UMLS medical ontology.",
+      "startOffset" : 28,
+      "endOffset" : 48
+    }, {
+      "referenceID" : 16,
+      "context" : "Zeshel The Zeshel (Logeswaran et al., 2019) dataset consists of Wikia articles for different FANDOMs.",
+      "startOffset" : 18,
+      "endOffset" : 43
+    }, {
+      "referenceID" : 27,
+      "context" : "We evaluate CDC performance using the standard evaluation metrics: MUC (Vilain et al., 1995), B3 (Bagga and Baldwin, 1998), CEAFe (Luo, 2005), and CoNLL F1 which is an average of the previous three.",
+      "startOffset" : 71,
+      "endOffset" : 92
+    }, {
+      "referenceID" : 2,
+      "context" : ", 1995), B3 (Bagga and Baldwin, 1998), CEAFe (Luo, 2005), and CoNLL F1 which is an average of the previous three.",
+      "startOffset" : 12,
+      "endOffset" : 37
+    }, {
+      "referenceID" : 17,
+      "context" : ", 1995), B3 (Bagga and Baldwin, 1998), CEAFe (Luo, 2005), and CoNLL F1 which is an average of the previous three.",
+      "startOffset" : 45,
+      "endOffset" : 56
+    } ],
+    "year" : 2021,
+    "abstractText" : "Streaming cross document entity coreference (CDC) systems disambiguate mentions of named entities in a scalable manner via incremental clustering. Unlike other approaches for named entity disambiguation (e.g., entity linking), streaming CDC allows for the disambiguation of entities that are unknown at inference time. Thus, it is well-suited for processing streams of data where new entities are frequently introduced. Despite these benefits, this task is currently difficult to study, as existing approaches are either evaluated on datasets that are no longer available, or omit other crucial details needed to ensure fair comparison. In this work, we address this issue by compiling a large benchmark adapted from existing free datasets, and performing a comprehensive evaluation of a number of novel and existing baseline models.1 We investigate: how to best encode mentions, which clustering algorithms are most effective for grouping mentions, how models transfer to different domains, and how bounding the number of mentions tracked during inference impacts performance. Our results show that the relative performance of neural and feature-based mention encoders varies across different domains, and in most cases the best performance is achieved using a combination of both approaches. We also find that performance is minimally impacted by limiting the number of tracked mentions.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

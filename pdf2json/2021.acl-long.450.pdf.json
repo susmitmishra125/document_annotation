@@ -1,0 +1,782 @@
+{
+  "name" : "2021.acl-long.450.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "A Conditional Splitting Framework for Efficient Constituency Parsing",
+    "authors" : [ "Thanh-Tung Nguyen", "Xuan-Phi Nguyen", "Shafiq Joty", "Xiaoli Li" ],
+    "emails" : [ "xlli@i2r.a-star.edu.sg" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 5795–5807\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n5795"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "A number of formalisms have been introduced to analyze natural language at different linguistic levels. This includes syntactic structures in the form of phrasal and dependency trees, semantic structures in the form of meaning representations (Banarescu et al., 2013; Artzi et al., 2013), and discourse structures with Rhetorical Structure Theory (RST) (Mann and Thompson, 1988) or DiscourseLTAG (Webber, 2004). Many of these formalisms have a constituency structure, where textual units (e.g., phrases, sentences) are organized into nested constituents. For example, Figure 1 shows examples of a phrase structure tree and a sentence-level discourse tree (RST) that respectively represent how the phrases and clauses are hierarchically or-\nganized into a constituency structure. Developing efficient and effective parsing solutions has always been a key focus in NLP. In this work, we consider both phrasal (syntactic) and discourse parsing.\nIn recent years, neural end-to-end parsing methods have outperformed traditional methods that use grammar, lexicon and hand-crafted features. These methods can be broadly categorized based on whether they employ a greedy transition-based, a globally optimized chart parsing or a greedy topdown algorithm. Transition-based parsers (Dyer et al., 2016; Cross and Huang, 2016; Liu and Zhang, 2017; Wang et al., 2017) generate trees auto-regressively as a form of shift-reduce decisions. Though computationally attractive, the local decisions made at each step may propagate errors to subsequent steps due to exposure bias (Bengio et al., 2015). Moreover, there may be mismatches in shift and reduce steps, resulting in invalid trees.\nChart based methods, on the other hand, train neural scoring functions to model the tree structure globally (Durrett and Klein, 2015; Gaddy et al., 2018; Kitaev and Klein, 2018; Zhang et al., 2020b; Joty et al., 2012, 2013). By utilizing dynamic programming, these methods can perform exact inference to combine these constituent scores into finding the highest probable tree. However, they are generally slow with at least O(n3) time complexity. Greedy top-down parsers find the split points recursively and have received much attention lately due to their efficiency, which is usually O(n2) (Stern et al., 2017a; Shen et al., 2018; Lin et al., 2019; Nguyen et al., 2020). However, they still suffer from exposure bias, where one incorrect splitting step may affect subsequent steps.\nDiscourse parsing in RST requires an additional step – discourse segmentation which involves breaking the text into contiguous clause-like units called Elementary Discourse Units or EDUs (Figure 1). Traditionally, segmentation has been\nconsidered separately and as a prerequisite step for the parsing task which links the EDUs (and larger spans) into a discourse tree (Soricut and Marcu, 2003; Joty et al., 2012; Wang et al., 2017). In this way, the errors in discourse segmentation can propagate to discourse parsing (Lin et al., 2019).\nIn this paper, we propose a generic top-down neural framework for constituency parsing that we validate on both syntactic and sentence-level discourse parsing. Our main contributions are:\n• We cast the constituency parsing task into a series of conditional splitting decisions and use a seq2seq architecture to model the splitting decision at each decoding step. Our parsing model, which is an instance of a Pointer Network (Vinyals et al., 2015a), estimates the pointing score from a span to a splitting boundary point, representing the likelihood that the span will be split at that point and create two child spans.\n• The conditional probabilities of the splitting decisions are optimized using a cross entropy loss and structural consistency is maintained through a global pointing mechanism. The training process can be fully parallelized without requiring structured inference as in (Shen et al., 2018; Gómez and Vilares, 2018; Nguyen et al., 2020).\n• Our model enables efficient top-down decoding with O(n) running time like transition-based parsers, while also supporting a customized beam search to get the best tree by searching through a reasonable search space of high scoring trees. The beam-search inference along with the structural consistency from the modeling makes our approach competitive with existing structured chart methods for syntactic (Kitaev and Klein, 2018) and discourse parsing (Zhang et al., 2020b). Moreover, our parser does not rely on any handcrafted features (not even part-of-speech tags), which makes it more efficient and be flexible to different domains or languages.\n• For discourse analysis, we demonstrate that our method can effectively find the segments (EDUs) by simply performing one additional step in the top-down parsing process. In other words, our method can parse a text into the discourse tree without needing discourse segmentation as a prerequisite; instead, it produces the segments as a by-product. To the best of our knowledge, this is the first model that can perform segmentation and parsing in a single embedded framework.\nIn the experiments with English Penn Treebank, our model without pre-trained representations achieves 93.8 F1, outperforming all existing methods with similar time complexity. With pre-training, our model pushes the F1 score to 95.7, which is on par with the SoTA while supporting faster decoding with a speed of over 1,100 sentences per second (fastest so far). Our model also performs competitively with SoTA methods on the multilingual parsing tasks in the SPMRL 2013/2014 shared tasks. In discourse parsing, our method establishes a new SoTA in end-to-end sentence-level parsing performance on the RST Discourse Treebank with an F1 score of 78.82.\nWe make our code available at https://ntunlpsg.github.io/project/conditionconstituency-style-parser/"
+    }, {
+      "heading" : "2 Parsing as a Splitting Problem",
+      "text" : "Constituency parsing (both syntactic and discourse) can be considered as the problem of finding a set of labeled spans over the input text (Stern et al., 2017a). Let S(T ) denote the set of labeled spans for a parse tree T , which can formally be expressed as (excluding the trivial singleton span layer):\nS(T ) := {((it, jt), lt)}|S(T )|t=1 for it < jt (1)\nwhere lt is the label of the text span (it, jt) encompassing tokens from index it to index jt.\nPrevious approaches to syntactic parsing (Stern et al., 2017a; Kitaev and Klein, 2018; Nguyen et al., 2020) train a neural model to score each possible span and then apply a greedy or dynamic programming algorithm to find the parse tree. In other words, these methods are span-based formulation.\nIn contrary, we formulate constituency parsing as the problem of finding the splitting points in a recursive, top-down manner. For each parent node in a tree that spans over (i, j), our parsing model is trained to point to the boundary between the tokens at k and k+1 positions to split the parent span into two child spans (i, k) and (k + 1, j). This is done through the Pointing mechanism (Vinyals et al., 2015a), where each splitting decision is modeled as a multinomial distribution over the input elements, which in our case are the token boundaries.\nThe correspondence between token- and boundary-based representations of a tree is straightforward. After including the start (<sos>) and end (<eos>) tokens, the token-based span (i, j) is equivalent to the boundary-based span (i− 1, j)\nLabeled span representation S(T ) = {((1, 5), S), ((2, 5), ∅), ((2, 4), VP), ((3, 4), S-VP)} Boundary-based splitting representation C(T ) = {(0, 5) )1, (1, 5) )4, (1, 4) )2, (2, 4) )3}\nLabeled span representation S(DT ) = {((1, 8, 11), Same-UnitNN), ((1, 5, 8), ElaborationNS)} Boundary-based splitting representation C(DT ) = {(0, 11) )8, (0, 8) )5, (0,5) )5, (5,8) )8, (8,11) )11}\nFigure 1: A syntactic tree at the left and a discourse tree (DT) at the right; both have a constituency structure. The internal nodes in the discourse tree (Elaboration, Same-Unit) represent coherence relations and the edge labels indicate the nuclearity statuses (‘N’ for Nucleus and ‘S’ for Satellite) of the child spans. Below the tree, we show the labeled span and splitting representations. The bold splits in the DT representation (C(DT )) indicate the end of further splitting into smaller spans (i.e., they are EDUs).\nand the boundary between i-th and (i+1)-th tokens is indexed as i. For example, the (boundary-based) span “enjoys playing tennis” in Figure 1 is defined as (1, 4). Similarly, the boundary between the tokens “enjoys” and “playing” is indexed with 2.1\nFollowing the common practice in syntactic parsing, we binarize the n-ary tree by introducing a dummy label ∅. We also collapsed the nested labeled spans in the unary chains into unique atomic labels, such as S-VP in Figure 1. Every span represents an internal node in the tree, which has a left and a right child. Therefore, we can represent each internal node by its split into left and right children. Based on this, we define the set of splitting decisions C(T ) for a syntactic tree T as follows.\nProposition 1 A binary syntactic tree T of a sentence containing n tokens can be transformed into a set of splitting decisions C(T ) = {(i, j) )k : i < k < j} such that the parent span (i, j) is split into two child spans (i, k) and (k, j).\nAn example of the splitting representation of a tree is shown in Figure 1 (without the node labels). Note that our transformed representation has a one-toone mapping with the tree since each splitting decision corresponds to one and only one internal node in the tree. We follow a depth-first order of the decision sequence, which in our preliminary experiments showed more consistent performance than other alternatives like breadth-first order.\nExtension to End-to-End Discourse Parsing Note that in syntactic parsing, the split position\n1We use the same example from (Stern et al., 2017a; Shen et al., 2018; Nguyen et al., 2020) to distinguish the differences between the methods.\nmust be within the span but not at its edge, that is, k must satisfy i < k < j for each boundary span (i, j). Otherwise, it will not produce valid sub-trees. In this case, we keep splitting until each span contains a single leaf token. However, for discourse trees, each leaf is an EDU – a clause-like unit that can contain one or multiple tokens.\nUnlike previous studies which assume discourse segmentation as a pre-processing step, we propose a unified formulation that treats segmentation as one additional step in the top-down parsing process. To accommodate this, we relax Proposition 1 as:\nProposition 2 A binary discourse tree DT of a text containing n tokens can be transformed into a set of splitting decisions C(DT ) = {(i, j) )k : i < k ≤ j} such that the parent span (i, j) gets split into two child spans (i, k) and (k, j) for k < j or a terminal span or EDU for k = j (end of splitting the span further).\nWe illustrate it with the DT example in Figure 1. Each splitting decision in C(DT ) represents either the splitting of the parent span into two child spans (when the splitting point is strictly within the span) or the end of any further splitting (when the splitting point is the right endpoint of the span). By making this simple relaxation, our formulation can not only generate the discourse tree (in the former case) but can also find the discourse segments (EDUs) as a by-product (in the latter case)."
+    }, {
+      "heading" : "3 Seq2Seq Parsing Framework",
+      "text" : "Let C(T ) and L(T ) respectively denote the structure (in split representation) and labels of a tree T (syntactic or discourse) for a given text x. We can express the probability of the tree as:\nPθ(T |x) = Pθ(L(T ),C(T )|x) = Pθ(L(T )|C(T ),x)Pθ(C(T )|x)\n(2)\nThis factorization allows us to first infer the tree structure from the input text, and then find the corresponding labels. As discussed in the previous section, we consider the structure prediction as a sequence of splitting decisions to generate the tree in a top-down manner. Specifically, at each decoding step t, the output yt represents the splitting decision (it, jt) ) kt and y<t represents the previous splitting decisions. Thus, we can express the probability of the tree structure as follows:\nPθ(C(T )|x) = ∏\nyt∈C(T )\nPθ(yt|y<t,x)\n= |C(T )|∏ t=1 Pθ((it, jt) )kt|((i, j) )k)<t,x) (3)\nThis can effectively be modeled within a Seq2Seq pointing framework as shown in Figure 2. At each step t, the decoder autoregressively predicts the split point kt in the input by conditioning on the current input span (it, jt) and previous splitting decisions (i, j) ) k)<t. This conditional splitting formulation (decision at step t depends on previous steps) can help our model to find better trees compared to non-conditional top-down parsers (Stern et al., 2017a; Shen et al., 2018; Nguyen et al., 2020), thus bridging the gap between the global (but expensive) and the local (but efficient) models. The labels L(T ) can be modeled by using a label classifier, as described later in the next section."
+    }, {
+      "heading" : "3.1 Model Architecture",
+      "text" : "We now describe the components of our parsing model: the sentence encoder, the span representation, the pointing model and the labeling model.\nSentence Encoder Given an input sequence of n tokens x = (x1, . . . , xn), we first add <sos> and <eos> markers to the sequence. After that, each token t in the sequence is mapped into its dense vector representation et as\net = [e char t , e word t ] (4)\nwhere echart , e word t are respectively the character and word embeddings of token t. Similar to (Kitaev and Klein, 2018; Nguyen et al., 2020), we use a character LSTM to compute the character embedding of a token. We experiment with both randomly initialized and pretrained token embeddings. When pretrained embedding is used, the character embedding is replaced by the pretrained token embedding. The token representations are then passed to a 3- layer Bi-LSTM encoder to obtain their contextual representations. In the experiments, we find that even without the POS-tags, our model performs competitively with other baselines that use them.\nBoundary and Span Representations To represent each boundary between positions k and k + 1, we use the fencepost representation (Cross and Huang, 2016; Stern et al., 2017a):\nhk = [fk, bk+1] (5)\nwhere fk and bk+1 are the forward and backward LSTM hidden vectors at positions k and k + 1, re-\nspectively. To represent the span (i, j), we compute a linear combination of the two endpoints\nhi,j = W1hi +W2hj (6)\nThis span representation will be used as input to the decoder. Figure 3 shows the boundary-based span representations for our example.\nThe Decoder Our model uses a unidirectional LSTM as the decoder. At each decoding step t, the decoder takes as input the corresponding span (i, j) (specifically, hi,j) and its previous state dt−1 to generate the current state dt and then apply a biaffine function (Dozat and Manning, 2017) between dt and all of the encoded boundary representations (h0,h1, . . . ,hn) as follows:\nd′t = MLPd(dt) h ′ i = MLPh(hi) (7)\nst,i = d ′ t T Wdhh ′ i + h ′ i T wh (8)\nat,i = exp(st,i)∑n i=1 exp(st,i)\n(9)\nwhere each MLP operation includes a linear transformation with LeakyReLU activation to transform d and h into equal-sized vectors, and Wdh ∈ IRd×d and wh ∈ IRd are respectively the weight matrix and weight vector for the biaffine function. The biaffine scores are then passed through a softmax layer to acquire the pointing distribution at ∈ [0, 1]n for the splitting decision.\nWhen decoding the tree during inference, at each step we only examine the ‘valid’ splitting points between i and j – for syntactic parsing, it is i < k < j and for discourse parsing, it is i < k ≤ j.\nLabel Classifier For syntactic parsing, we perform the label assignments for a span (i, j) as:\nhli = MLPl(hi); h r j = MLPr(hj) (10)\nPθ(l|i, j) = softmax((hli)TWlrhrj +(hli) TWl + (h r j ) TWr + b) (11)\nli,j = argmax l∈L\nPθ(l|i, j) (12)\nwhere each of MLPl and MLPr includes a linear transformation with LeakyReLU activations to transform the left and right spans into equal-sized vectors, and Wlr ∈ IRd×L×d,Wl ∈ IRd×L,Wr ∈ IRd×L are the weights and b is a bias vector with L being the number of phrasal labels.\nFor discourse parsing, we perform label assignment after every split decision since the label here represents the relation between the child spans. Specifically, as we split a span (i, j) into two child spans (i, k) and (k, j), we determine the relation label as the following.\nhlik = MLPl([hi,hk]); h r kj = MLPr([hk,hj ]) (13)\nPθ(l|(i, k), (k, j)) = softmax((hlik)TWlrhrkj +(hlik) TWl + (h r kj)\nTWr + b) (14) l(i,k),(k,j) = argmax\nl∈L Pθ(l|(i, k), (k, j)) (15)\nwhere MLPl,MLPr, Wlr,Wl,Wr, b are similarly defined.\nTraining Objective The total loss is simply the sum of the cross entropy losses for predicting the structure (split decisions) and the labels:\nLtotal(θ) = Lsplit(θe, θd) + Llabel(θe, θlabel) (16)\nwhere θ = {θe, θd, θlabel} denotes the overall model parameters, which includes the encoder parameters θe shared by all components, parameters for splitting θd and parameters for labeling θlabel."
+    }, {
+      "heading" : "3.2 Top-Down Beam-Search Inference",
+      "text" : "As mentioned, existing top-down syntactic parsers do not consider the decoding history. They also perform greedy inference. With our conditional splitting formulation, our method can not only model the splitting history but also enhance the search space of high scoring trees through beam search.\nAt each step, our decoder points to all the encoded boundary representations which ensures that the pointing scores are in the same scale, allowing a fair comparison between the total scores of all candidate subtrees. With these uniform scores, we could apply a beam search to infer the most\nprobable tree using our model. Specifically, the method generates the tree in depth-first order while maintaining top-B (beam size) partial trees at each step. It terminates exactly after n− 1 steps, which matches the number of internal nodes in the tree. Because beam size B is constant with regards to the sequence length, we can omit it in the Big O notation. Therefore, each decoding step with beam search can be parallelized (O(1) complexity) using GPUs. This makes our algorithm run at O(n) time complexity, which is faster than most top-down methods. If we strictly use CPU, our method runs at O(n2), while chart-based parsers run at O(n3). Algorithm 1 illustrate the syntactic tree inference procedure. We also propose a similar version of the inference algorithm for discourse parsing in the Appendix.\nAlgorithm 1 Syntactic Tree Inference with Beam Search Input: Sentence length n; beam width B; boundary-based\nencoder states: (h0,h1, . . . ,hn); label scores: Pθ(l|i, j), 0 ≤ i < j ≤ n, l ∈ {1, . . . , L}, initial decoder state s. Output: Parse tree T 1: Ld = n− 1 // Decoding length 2: beam = array of Ld items // List of empty beam items 3: init_tree= [(0, n), (0, 0), . . . , (0, 0)] // n− 2 paddings\n(0,0) 4: beam[0] = (0, s, init_tree) // Init 1st\nitem(log-prob,state,tree) 5: for t = 1 to Ld do 6: for (logp, s, tree) ∈ beam[t− 1] do 7: (i, j) = tree[t− 1] // Current span to split 8: a, s′ = decoder-step(s,hi,j) // a: split prob. dist.\n9: for (k, pk) ∈ top-B(a) and i < k < j do 10: curr-tree = tree 11: if k > i+ 1 then 12: curr-tree[t] = (i, k) 13: end if 14: if j > k + 1 then 15: curr-tree[t+ j − k − 1] = (k, j) 16: end if 17: push (logp + log(pk), s′, curr-tree) to beam[t] 18: end for 19: end for 20: prune beam[t] // Keep top-B highest score trees 21: end for 22: logp*, s∗,S∗ = argmaxlogp beam[Ld] // S∗: best\nstructure 23: labeled-spans = [(i, j, argmaxl Pθ(l|i, j)) ∀(i, j) ∈ S∗] 24: labeled-singletons = [(i, i + 1, argmaxl Pθ(l|i, i + 1)) for i = {0, . . . , n− 1}] 25: T = labeled-spans ∪ labeled-singletons\nBy enabling beam search, our method can find the best tree by comparing high scoring trees within a reasonable search space, making our model competitive with existing structured (globally) inference methods that use more expensive algorithms\nlike CKY and/or larger models (Kitaev and Klein, 2018; Zhang et al., 2020b)."
+    }, {
+      "heading" : "4 Experiment",
+      "text" : "Datasets and Metrics To show the effectiveness of our approach, we conduct experiments on both syntactic and sentence-level RST parsing tasks.2 We use the standard Wall Street Journal (WSJ) part of the Penn Treebank (PTB) (Marcus et al., 1993) for syntactic parsing and RST Discourse Treebank (RST-DT) (Lynn et al., 2002) for discourse parsing. For syntactic parsing, we also experiment with the multilingual parsing tasks on seven different languages from the SPMRL 2013-2014 shared task (Seddah et al., 2013): Basque, French, German, Hungarian, Korean, Polish and Swedish.\nFor evaluation on syntactic parsing, we report the standard labeled precision (LP), labeled recall (LR), and labelled F1 computed by evalb3. For evaluation on RST-DT, we report the standard span, nuclearity label, relation label F1 scores, computed using the implementation of (Lin et al., 2019).4"
+    }, {
+      "heading" : "4.1 English (PTB) Syntactic Parsing",
+      "text" : "Setup We follow the standard train/valid/test split, which uses Sections 2-21 for training, Section 22 for development and Section 23 for evaluation. This results in 39,832 sentences for training, 1,700 for development, and 2,416 for testing. For our model, we use an LSTM encoder-decoder framework with a 3-layer bidirectional encoder and 3- layer unidirectional decoder. The word embedding size is 100 while the character embedding size is 50; the LSTM hidden size is 400. The hidden dimension in MLP modules and biaffine function for split point prediction is 500. The beam width B is set to 20. We use the Adam optimizer (Kingma and Ba, 2015) with a batch size of 5000 tokens, and an initial learning rate of 0.002 which decays at the rate 0.75 exponentially at every 5k steps. Model selection for final evaluation is performed based on the labeled F1 score on the development set.\nResults without Pre-training From the results shown in Table 1, we see that our model achieves an F1 of 93.77, the highest among models that use\n2Extending the discourse parser to the document level may require handling of intra- and multi-sentential constituents differently, which we leave for future work.\n3http://nlp.cs.nyu.edu/evalb/ 4https://github.com/ntunlpsg/\nUnifiedParser_RST\ntop-down methods. Specifically, our parser outperforms Stern et al. (2017a); Shen et al. (2018) by about 2 points in F1-score and Nguyen et al. (2020) by ∼1 point. Notably, without beam search (beam width 1 or greedy decoding), our model achieves an F1 of 93.40, which is still better than other topdown methods. Our model also performs competitively with CKY-based methods like (Kitaev and Klein, 2018; Zhang et al., 2020b; Wei et al., 2020; Zhou and Zhao, 2019), while these methods run slower than ours.\nPlus, Zhou and Zhao (2019) uses external supervision (head information) from the dependency parsing task. Dependency parsing models, in fact, have a strong resemblance to the pointing mechanism that our model employs (Ma et al., 2018). As such, integrating dependency parsing information into our model may also be beneficial. We leave this for future work.\nResults with Pre-training Similar to (Kitaev and Klein, 2018; Kitaev et al., 2019), we also eval-\nuate our parser with BERT embeddings (Devlin et al., 2019). They fine-tuned Bert-large-cased on the task, while in our work keeping it frozen was already good enough (gives training efficiency). As shown in Table 2, our model achieves an F1 of 95.7, which is on par with SoTA models. However, our parser runs faster than other methods. Specifically, our model runs at O(n) time complexity, while CKY needs O(n3). Comprehensive comparisons on parsing speed are presented later."
+    }, {
+      "heading" : "4.2 SPMRL Multilingual Syntactic Parsing",
+      "text" : "We use the identical hyper-parameters and optimizer setups as in English PTB. We follow the standard train/valid/test split provided in the SPMRL datasets; details are reported in the Table 3.\nFrom the results in Table 4, we see that our model achieves the highest F1 in French, Hungarian and Korean and higher than the best baseline by 0.06, 0.15 and 0.13, respectively. Our method also rivals existing SoTA methods on other languages even though some of them use predicted POS tags (Nguyen et al., 2020) or bigger models (75M parameters) (Kitaev and Klein, 2018). Meanwhile, our model is smaller (31M), uses no extra information and runs 40% faster."
+    }, {
+      "heading" : "4.3 Discourse Parsing",
+      "text" : "Setup For discourse parsing, we follow the standard split from (Lin et al., 2019), which has 7321 sentence-level discourse trees for training and 951 for testing. We also randomly select 10% of the training for validation. Model selection for testing is performed based on the F1 of relation labels on the validation set. We use the same model settings as the constituency parsing experiments, with BERT as pretrained embeddings.5\n5Lin et al. (2019) used ELMo (Peters et al., 2018) as pretrained embeddings. With BERT, their model performs worse which we have confirmed with the authors.\nResults Table 5 compares the results on the discourse parsing tasks in two settings: (i) when the EDUs are given (gold segmentation) and (ii) endto-end parsing. We see that our model outperforms the baselines in both parsing conditions achieving SoTA. When gold segmentation is provided, our model outperforms the single-task training model of (Lin et al., 2019) by 0.43%, 1.06% and 0.82% absolute in Span, Nuclearity and Relation, respectively. Our parser also surpasses their joint training model, which uses multi-task training (segmentation and parsing), with 0.61% and 0.4% absolute improvements in Nuclearity and Relation, respectively. For end-to-end parsing, compared to the best baseline (Lin et al., 2019), our model yields 0.27%, 0.67%, and 1.30% absolute improvements in Span, Nuclearity, Relation, respectively. This demonstrates the effectiveness of our conditional splitting approach and end-to-end formulation of the discourse analysis task. The fact that our model improves on span identification indicates that our method also yields better EDU segmentation."
+    }, {
+      "heading" : "4.4 Parsing Speed Comparison",
+      "text" : "We compare parsing speed of different models in Table 6. We ran our models on both CPU (Intel\nXeon W-2133) and GPU (Nvidia GTX 1080 Ti).\nSyntactic Parsing The Berkeley Parser and ZPar are two representative non-neural parsers without access to GPUs. Stern et al. (2017a) employ maxmargin training and perform top-down greedy decoding on CPUs. Meanwhile, Kitaev and Klein (2018); Zhou and Zhao (2019); Wei et al. (2020) use a self-attention encoder and perform decoding using Cython for acceleration. Zhang et al. (2020b) perform CKY decoding on GPU. The parser proposed by Gómez and Vilares (2018) is also efficient as it treats parsing as a sequence labeling task. However, its parsing accuracy is much lower compared to others (90.7 F1 in Table 1).\nWe see that our parser is much more efficient than existing ones. It utilizes neural modules to perform splitting, which is optimized and parallelized with efficient GPU implementation. It can parse 1, 127 sentences/second, which is faster than existing parsers. In fact, there is still room to improve our speed by choosing better architectures, like the Transformer which has O(1) running time in encoding a sentence compared to O(n) of the bi-LSTM encoder. Moreover, allowing tree generation by splitting the spans/nodes at the same tree level in parallel at each step can boost the speed further. We leave these extensions to future work.\nDiscourse Parsing For measuring discourse parsing speed, we follow the same set up as Lin et al. (2019), and evaluate the models with the same 100 sentences randomly selected from the test set. We include the model loading time for all the systems. Since SPADE and CODRA need to extract a handful of features, they are typically slower than the neural models which use pretrained embeddings. In addition, CODRA’s DCRF parser has a O(n3) inference time complexity. As shown, our parser is 4.7x faster than the fastest end-to-end parser of Lin et al. (2019), making it not only effective but also highly efficient. Even when tested only on the CPU, our model is faster than all the other models which run on GPU or CPU, thanks\nto the end-to-end formulation that does not need EDU segmentation beforehand."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "With the recent popularity of neural architectures, such as LSTMs (Hochreiter and Schmidhuber, 1997) and Transformers (Vaswani et al., 2017), various neural models have been proposed to encode the input sentences and infer their constituency trees. To enforce structural consistency, such methods employ either a greedy transition-based (Dyer et al., 2016; Liu and Zhang, 2017), a globally optimized chart parsing (Gaddy et al., 2018; Kitaev and Klein, 2018), or a greedy top-down algorithm (Stern et al., 2017a; Shen et al., 2018). Meanwhile, researchers also tried to cast the parsing problem into tasks that can be solved differently. For example, Gómez and Vilares (2018); Shen et al. (2018) proposed to map the syntactic tree of a sentence containing n tokens into a sequence of n − 1 labels or scalars. However, parsers of this type suffer from the exposure bias during inference. Beside these methods, Seq2Seq models have been used to generate a linearized form of the tree (Vinyals et al., 2015b; Kamigaito et al., 2017; Suzuki et al., 2018; Fernández-González and Gómez-Rodríguez, 2020a). However, these methods may generate invalid trees when the open and end brackets do not match.\nIn discourse parsing, existing parsers receive the EDUs from a segmenter to build the discourse tree, which makes them susceptible to errors when the segmenter produces incorrect EDUs (Joty et al.,\n2012, 2015; Lin et al., 2019; Zhang et al., 2020a; Liu et al., 2020). There are also attempts which model constituency and discourse parsing jointly (Zhao and Huang, 2017) and do not need to perform EDU preprocessing. It is based on the finding that each EDU generally corresponds to a constituent in constituency tree, i.e., discourse structure usually aligns with constituency structure. However, it has the drawback that it needs to build joint syntactodiscourse data set for training which is not easily adaptable to new languages and domains.\nOur approach differs from previous methods in that it represents the constituency structure as a series of splitting representations, and uses a Seq2Seq framework to model the splitting decision at each step. By enabling beam search, our model can find the best trees without the need to perform an expensive global search. We also unify discourse segmentation and parsing into one system by generalizing our model, which has been done for the first time to the best of our knowledge.\nOur splitting mechanism shares some similarities with Pointer Network (Vinyals et al., 2015a; Ma et al., 2018; Fernández-González and GómezRodríguez, 2019, 2020b) or head-selection approaches (Zhang et al., 2017; Kurita and Søgaard, 2019), but is distinct from them that in each decoding step, our method identifies the splitting point of a span and generates a new input for future steps instead of pointing to generate the next decoder input."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "We have presented a novel, generic parsing method for constituency parsing based on a Seq2Seq framework. Our method supports an efficient top-down decoding algorithm that uses a pointing function for scoring possible splitting points. The pointing mechanism captures global structural properties of a tree and allows efficient training with a cross entropy loss. Our formulation, when applied to discourse parsing, can bypass discourse segmentation as a pre-requisite step. Through experiments we have shown that our method outperforms all existing top-down methods on English Penn Treebank and RST Discourse Treebank sentence-level parsing tasks. With pre-trained representations, our method rivals state-of-the-art methods, while being faster. Our model also establishes a new state-ofthe-art for sentence-level RST parsing."
+    }, {
+      "heading" : "6.1 Discourse Parsing Architecture",
+      "text" : "Figure 4 illustrates our end-to-end model architecture for discourse parsing."
+    }, {
+      "heading" : "6.2 Discourse Parsing Inference Algorithms",
+      "text" : "Algorithm 2 shows the end-to-end discourse parsing inference process.\nAlgorithm 2 Discourse Inference ] Input: Sentence length n; boundary encoder states: (h0, h1, . . . , hn); label scores: P (l|(i, k), (k, j)), 0 ≤ i < k ≤ j ≤ n, l ∈ L, initial decoder state st. Output: Parse tree T ST = [(1, n)] // stack of spans S = [] while ST 6= ∅ do\n(i, j) = pop(ST ) prob, st = dec(st, (i, j)) k = argmaxi<k≤j prob curr_partial_tree = partial_tree if j − 1 > k > i+ 1 then\npush(ST , (k, j)) push(ST , (i, k))\nelse if j − 1 > k = i+ 1 then push(ST , (k, j)) else if k = j − 1 > i+ 1 then push(ST , (i, k)) end if if k 6= j then\npush(S((i, k, j)) end if\nend while T = [((i, k, j), argmaxlP (l|(i, k)(k, j))∀(i, k, j) ∈ S]"
+    } ],
+    "references" : [ {
+      "title" : "Semantic parsing with Combinatory Categorial Grammars",
+      "author" : [ "Yoav Artzi", "Nicholas FitzGerald", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Tutorials), page 2, Sofia, Bul-",
+      "citeRegEx" : "Artzi et al\\.,? 2013",
+      "shortCiteRegEx" : "Artzi et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Abstract Meaning Representation for sembanking",
+      "author" : [ "Laura Banarescu", "Claire Bonial", "Shu Cai", "Madalina Georgescu", "Kira Griffitt", "Ulf Hermjakob", "Kevin Knight", "Philipp Koehn", "Martha Palmer", "Nathan Schneider." ],
+      "venue" : "Proceedings of the 7th Linguis-",
+      "citeRegEx" : "Banarescu et al\\.,? 2013",
+      "shortCiteRegEx" : "Banarescu et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Scheduled sampling for sequence prediction with recurrent neural networks",
+      "author" : [ "Samy Bengio", "Oriol Vinyals", "Navdeep Jaitly", "Noam Shazeer." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 28, pages 1171–1179. Curran Asso-",
+      "citeRegEx" : "Bengio et al\\.,? 2015",
+      "shortCiteRegEx" : "Bengio et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "The imswrocław-szeged-cis entry at the spmrl 2014 shared task: Reranking and morphosyntax meet unlabeled",
+      "author" : [ "Anders Bjorkelund", "Ozlem Cetinoglu", "Agnieszka Falenska", "Richard Farkas", "Thomas Mueller", "Wolfgang Seeker", "Zsolt Szanto" ],
+      "venue" : null,
+      "citeRegEx" : "Bjorkelund et al\\.,? \\Q2014\\E",
+      "shortCiteRegEx" : "Bjorkelund et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Multilingual lexicalized constituency parsing with wordlevel auxiliary tasks",
+      "author" : [ "Maximin Coavoux", "Benoît Crabbé." ],
+      "venue" : "Proceedings of the 15th Conference of the European Chapter of the Association for Computational Linguistics: Volume 2, Short Pa-",
+      "citeRegEx" : "Coavoux and Crabbé.,? 2017",
+      "shortCiteRegEx" : "Coavoux and Crabbé.",
+      "year" : 2017
+    }, {
+      "title" : "Span-based constituency parsing with a structure-label system and provably optimal dynamic oracles",
+      "author" : [ "James Cross", "Liang Huang." ],
+      "venue" : "Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, pages 1–11, Austin,",
+      "citeRegEx" : "Cross and Huang.,? 2016",
+      "shortCiteRegEx" : "Cross and Huang.",
+      "year" : 2016
+    }, {
+      "title" : "BERT: Pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Deep biaffine attention for neural dependency parsing",
+      "author" : [ "Timothy Dozat", "Christopher D. Manning." ],
+      "venue" : "5th International Conference on Learning Representations, ICLR 2017, Toulon, France, April 24-26, 2017, Conference Track Proceedings.",
+      "citeRegEx" : "Dozat and Manning.,? 2017",
+      "shortCiteRegEx" : "Dozat and Manning.",
+      "year" : 2017
+    }, {
+      "title" : "Neural CRF parsing",
+      "author" : [ "Greg Durrett", "Dan Klein." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Language Processing (Volume 1: Long Pa-",
+      "citeRegEx" : "Durrett and Klein.,? 2015",
+      "shortCiteRegEx" : "Durrett and Klein.",
+      "year" : 2015
+    }, {
+      "title" : "Recurrent neural network grammars",
+      "author" : [ "Chris Dyer", "Adhiguna Kuncoro", "Miguel Ballesteros", "Noah A. Smith." ],
+      "venue" : "Proceedings of the 2016 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language",
+      "citeRegEx" : "Dyer et al\\.,? 2016",
+      "shortCiteRegEx" : "Dyer et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Left-to-right dependency parsing with pointer networks",
+      "author" : [ "Daniel Fernández-González", "Carlos GómezRodríguez." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human",
+      "citeRegEx" : "Fernández.González and GómezRodríguez.,? 2019",
+      "shortCiteRegEx" : "Fernández.González and GómezRodríguez.",
+      "year" : 2019
+    }, {
+      "title" : "Enriched in-order linearization for faster sequence-to-sequence constituent parsing",
+      "author" : [ "Daniel Fernández-González", "Carlos GómezRodríguez." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages",
+      "citeRegEx" : "Fernández.González and GómezRodríguez.,? 2020a",
+      "shortCiteRegEx" : "Fernández.González and GómezRodríguez.",
+      "year" : 2020
+    }, {
+      "title" : "Transition-based semantic dependency parsing with pointer networks",
+      "author" : [ "Daniel Fernández-González", "Carlos GómezRodríguez." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages",
+      "citeRegEx" : "Fernández.González and GómezRodríguez.,? 2020b",
+      "shortCiteRegEx" : "Fernández.González and GómezRodríguez.",
+      "year" : 2020
+    }, {
+      "title" : "What’s going on in neural constituency parsers? an analysis",
+      "author" : [ "David Gaddy", "Mitchell Stern", "Dan Klein." ],
+      "venue" : "Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-",
+      "citeRegEx" : "Gaddy et al\\.,? 2018",
+      "shortCiteRegEx" : "Gaddy et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Constituent parsing as sequence labeling",
+      "author" : [ "Carlos Gómez", "Rodríguez", "David Vilares." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, pages 1314– 1324, Brussels, Belgium. Association for Computa-",
+      "citeRegEx" : "Gómez et al\\.,? 2018",
+      "shortCiteRegEx" : "Gómez et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Long short-term memory",
+      "author" : [ "Sepp Hochreiter", "Jürgen Schmidhuber." ],
+      "venue" : "Neural computation, 9(8):1735–1780.",
+      "citeRegEx" : "Hochreiter and Schmidhuber.,? 1997",
+      "shortCiteRegEx" : "Hochreiter and Schmidhuber.",
+      "year" : 1997
+    }, {
+      "title" : "A novel discriminative framework for sentence-level discourse analysis",
+      "author" : [ "Shafiq Joty", "Giuseppe Carenini", "Raymond Ng." ],
+      "venue" : "Proceedings of the 2012 Joint Conference on Empirical Methods",
+      "citeRegEx" : "Joty et al\\.,? 2012",
+      "shortCiteRegEx" : "Joty et al\\.",
+      "year" : 2012
+    }, {
+      "title" : "Combining intra- and multisentential rhetorical parsing for document-level discourse analysis",
+      "author" : [ "Shafiq Joty", "Giuseppe Carenini", "Raymond Ng", "Yashar Mehdad." ],
+      "venue" : "Proceedings of the 51st Annual Meeting of the Association for Computational Lin-",
+      "citeRegEx" : "Joty et al\\.,? 2013",
+      "shortCiteRegEx" : "Joty et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "CODRA: A novel discriminative framework for rhetorical analysis",
+      "author" : [ "Shafiq Joty", "Giuseppe Carenini", "Raymond T. Ng." ],
+      "venue" : "Computational Linguistics, 41(3):385–435.",
+      "citeRegEx" : "Joty et al\\.,? 2015",
+      "shortCiteRegEx" : "Joty et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Supervised attention for sequence-to-sequence constituency parsing",
+      "author" : [ "Hidetaka Kamigaito", "Katsuhiko Hayashi", "Tsutomu Hirao", "Hiroya Takamura", "Manabu Okumura", "Masaaki Nagata." ],
+      "venue" : "Proceedings of the Eighth International Joint Confer-",
+      "citeRegEx" : "Kamigaito et al\\.,? 2017",
+      "shortCiteRegEx" : "Kamigaito et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P. Kingma", "Jimmy Ba." ],
+      "venue" : "3rd International Conference on Learning Representations, ICLR 2015, San Diego, CA, USA, May 7-9, 2015, Conference Track Proceedings.",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "Multilingual constituency parsing with self-attention and pre-training",
+      "author" : [ "Nikita Kitaev", "Steven Cao", "Dan Klein." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 3499–3505, Florence, Italy. Associa-",
+      "citeRegEx" : "Kitaev et al\\.,? 2019",
+      "shortCiteRegEx" : "Kitaev et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Constituency parsing with a self-attentive encoder",
+      "author" : [ "Nikita Kitaev", "Dan Klein." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages 2676–2686, Melbourne, Australia. Associa-",
+      "citeRegEx" : "Kitaev and Klein.,? 2018",
+      "shortCiteRegEx" : "Kitaev and Klein.",
+      "year" : 2018
+    }, {
+      "title" : "Multi-task semantic dependency parsing with policy gradient for learning easy-first strategies",
+      "author" : [ "Shuhei Kurita", "Anders Søgaard." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 2420–2430, Florence,",
+      "citeRegEx" : "Kurita and Søgaard.,? 2019",
+      "shortCiteRegEx" : "Kurita and Søgaard.",
+      "year" : 2019
+    }, {
+      "title" : "A unified linear-time framework for sentence-level discourse parsing",
+      "author" : [ "Xiang Lin", "Shafiq Joty", "Prathyusha Jwalapuram", "M Saiful Bari." ],
+      "venue" : "Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics, pages 4190–",
+      "citeRegEx" : "Lin et al\\.,? 2019",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Shift-reduce constituent parsing with neural lookahead features",
+      "author" : [ "Jiangming Liu", "Yue Zhang" ],
+      "venue" : null,
+      "citeRegEx" : "Liu and Zhang.,? \\Q2017\\E",
+      "shortCiteRegEx" : "Liu and Zhang.",
+      "year" : 2017
+    }, {
+      "title" : "Multilingual neural RST discourse parsing",
+      "author" : [ "Zhengyuan Liu", "Ke Shi", "Nancy Chen." ],
+      "venue" : "Proceedings of the 28th International Conference on Computational Linguistics, pages 6730–6738, Barcelona, Spain (Online). International Committee on Compu-",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Rst discourse treebank (rst–dt) ldc2002t07",
+      "author" : [ "Carlson Lynn", "Daniel Marcu", "Mary Ellen Okurowski." ],
+      "venue" : "Linguistic Data Consortium.",
+      "citeRegEx" : "Lynn et al\\.,? 2002",
+      "shortCiteRegEx" : "Lynn et al\\.",
+      "year" : 2002
+    }, {
+      "title" : "Stackpointer networks for dependency parsing",
+      "author" : [ "Xuezhe Ma", "Zecong Hu", "Jingzhou Liu", "Nanyun Peng", "Graham Neubig", "Eduard Hovy." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long",
+      "citeRegEx" : "Ma et al\\.,? 2018",
+      "shortCiteRegEx" : "Ma et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Rhetorical Structure Theory: Toward a Functional Theory of Text Organization",
+      "author" : [ "William Mann", "Sandra Thompson." ],
+      "venue" : "Text, 8(3):243–281.",
+      "citeRegEx" : "Mann and Thompson.,? 1988",
+      "shortCiteRegEx" : "Mann and Thompson.",
+      "year" : 1988
+    }, {
+      "title" : "Building a large annotated corpus of english: The penn treebank",
+      "author" : [ "Mitchell P. Marcus", "Mary Ann Marcinkiewicz", "Beatrice Santorini." ],
+      "venue" : "Comput. Linguist., 19(2):313–330.",
+      "citeRegEx" : "Marcus et al\\.,? 1993",
+      "shortCiteRegEx" : "Marcus et al\\.",
+      "year" : 1993
+    }, {
+      "title" : "Efficient constituency parsing by pointing",
+      "author" : [ "Thanh-Tung Nguyen", "Xuan-Phi Nguyen", "Shafiq Joty", "Xiaoli Li." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 3284–3294, Online. Association for",
+      "citeRegEx" : "Nguyen et al\\.,? 2020",
+      "shortCiteRegEx" : "Nguyen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Deep contextualized word representations",
+      "author" : [ "Matthew E. Peters", "Mark Neumann", "Mohit Iyyer", "Matt Gardner", "Christopher Clark", "Kenton Lee", "Luke Zettlemoyer." ],
+      "venue" : "Proc. of NAACL.",
+      "citeRegEx" : "Peters et al\\.,? 2018",
+      "shortCiteRegEx" : "Peters et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Improved inference for unlexicalized parsing",
+      "author" : [ "Slav Petrov", "Dan Klein." ],
+      "venue" : "Human Language Technologies 2007: The Conference of the North American Chapter of the Association for Computational Linguistics; Proceedings of the Main Conference,",
+      "citeRegEx" : "Petrov and Klein.,? 2007",
+      "shortCiteRegEx" : "Petrov and Klein.",
+      "year" : 2007
+    }, {
+      "title" : "Straight to the tree: Constituency parsing with neural syntactic distance",
+      "author" : [ "Yikang Shen", "Zhouhan Lin", "Athul Paul Jacob", "Alessandro Sordoni", "Aaron Courville", "Yoshua Bengio." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Compu-",
+      "citeRegEx" : "Shen et al\\.,? 2018",
+      "shortCiteRegEx" : "Shen et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Sentence level discourse parsing using syntactic and lexical information",
+      "author" : [ "Radu Soricut", "Daniel Marcu." ],
+      "venue" : "Proceedings of the 2003 Human Language Technology Conference of the North American Chapter of the Association for Computational",
+      "citeRegEx" : "Soricut and Marcu.,? 2003",
+      "shortCiteRegEx" : "Soricut and Marcu.",
+      "year" : 2003
+    }, {
+      "title" : "A minimal span-based neural constituency parser",
+      "author" : [ "Mitchell Stern", "Jacob Andreas", "Dan Klein." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics, ACL 2017, Vancouver, Canada, July 30 - August 4, Volume 1:",
+      "citeRegEx" : "Stern et al\\.,? 2017a",
+      "shortCiteRegEx" : "Stern et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Effective inference for generative neural parsing",
+      "author" : [ "Mitchell Stern", "Daniel Fried", "Dan Klein." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 1695–1700, Copenhagen, Denmark. Association for",
+      "citeRegEx" : "Stern et al\\.,? 2017b",
+      "shortCiteRegEx" : "Stern et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "An empirical study of building a strong baseline for constituency parsing",
+      "author" : [ "Jun Suzuki", "Sho Takase", "Hidetaka Kamigaito", "Makoto Morishita", "Masaaki Nagata." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguis-",
+      "citeRegEx" : "Suzuki et al\\.,? 2018",
+      "shortCiteRegEx" : "Suzuki et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N Gomez", "Ł ukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "I. Guyon, U. V. Luxburg, S. Bengio, H. Wallach, R. Fergus, S. Vishwanathan, and R. Gar-",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Pointer networks",
+      "author" : [ "Oriol Vinyals", "Meire Fortunato", "Navdeep Jaitly." ],
+      "venue" : "C. Cortes, N. D. Lawrence, D. D. Lee, M. Sugiyama, and R. Garnett, editors, Advances in Neural Information Processing Systems 28, pages 2692–2700. Curran Asso-",
+      "citeRegEx" : "Vinyals et al\\.,? 2015a",
+      "shortCiteRegEx" : "Vinyals et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Grammar as a foreign language",
+      "author" : [ "Oriol Vinyals", "Ł ukasz Kaiser", "Terry Koo", "Slav Petrov", "Ilya Sutskever", "Geoffrey Hinton." ],
+      "venue" : "Advances in Neural Information Processing Systems, volume 28, pages 2773–2781. Curran Associates, Inc.",
+      "citeRegEx" : "Vinyals et al\\.,? 2015b",
+      "shortCiteRegEx" : "Vinyals et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "A two-stage parsing method for text-level discourse analysis",
+      "author" : [ "Yizhong Wang", "Sujian Li", "Houfeng Wang." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics",
+      "citeRegEx" : "Wang et al\\.,? 2017",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "D-LTAG: Extending Lexicalized TAG to Discourse",
+      "author" : [ "B. Webber." ],
+      "venue" : "Cognitive Science, 28(5):751– 779.",
+      "citeRegEx" : "Webber.,? 2004",
+      "shortCiteRegEx" : "Webber.",
+      "year" : 2004
+    }, {
+      "title" : "A spanbased linearization for constituent trees",
+      "author" : [ "Yang Wei", "Yuanbin Wu", "Man Lan." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, pages 3267– 3277, Online. Association for Computational Lin-",
+      "citeRegEx" : "Wei et al\\.,? 2020",
+      "shortCiteRegEx" : "Wei et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A top-down neural architecture towards text-level parsing of discourse rhetorical structure",
+      "author" : [ "Longyin Zhang", "Yuqing Xing", "Fang Kong", "Peifeng Li", "Guodong Zhou." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational",
+      "citeRegEx" : "Zhang et al\\.,? 2020a",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Dependency parsing as head selection",
+      "author" : [ "Xingxing Zhang", "Jianpeng Cheng", "Mirella Lapata." ],
+      "venue" : "Proceedings of the 15th Conference of the European Chapter of the Association for Computational Linguistics: Volume 1, Long Papers, pages 665–676,",
+      "citeRegEx" : "Zhang et al\\.,? 2017",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Fast and accurate neural crf constituency parsing",
+      "author" : [ "Yu Zhang", "Houquan Zhou", "Zhenghua Li." ],
+      "venue" : "Proceedings of the Twenty-Ninth International Joint Conference on Artificial Intelligence, IJCAI20, pages 4046–4053. International Joint Confer-",
+      "citeRegEx" : "Zhang et al\\.,? 2020b",
+      "shortCiteRegEx" : "Zhang et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Joint syntactodiscourse parsing and the syntacto-discourse treebank",
+      "author" : [ "Kai Zhao", "Liang Huang." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, pages 2117–2123, Copenhagen, Denmark. Associa-",
+      "citeRegEx" : "Zhao and Huang.,? 2017",
+      "shortCiteRegEx" : "Zhao and Huang.",
+      "year" : 2017
+    }, {
+      "title" : "Head-driven phrase structure grammar parsing on penn treebank",
+      "author" : [ "Junru Zhou", "Hai Zhao." ],
+      "venue" : "Proceedings of the 57th Conference of the Association for Computational Linguistics, ACL 2019, Florence, Italy, July 28- August 2, 2019, Volume 1: Long Pa-",
+      "citeRegEx" : "Zhou and Zhao.,? 2019",
+      "shortCiteRegEx" : "Zhou and Zhao.",
+      "year" : 2019
+    }, {
+      "title" : "Fast and accurate shiftreduce constituent parsing",
+      "author" : [ "Muhua Zhu", "Yue Zhang", "Wenliang Chen", "Min Zhang", "Jingbo Zhu." ],
+      "venue" : "Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages",
+      "citeRegEx" : "Zhu et al\\.,? 2013",
+      "shortCiteRegEx" : "Zhu et al\\.",
+      "year" : 2013
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 1,
+      "context" : "of phrasal and dependency trees, semantic structures in the form of meaning representations (Banarescu et al., 2013; Artzi et al., 2013), and discourse structures with Rhetorical Structure Theory (RST) (Mann and Thompson, 1988) or DiscourseLTAG (Webber, 2004).",
+      "startOffset" : 92,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 0,
+      "context" : "of phrasal and dependency trees, semantic structures in the form of meaning representations (Banarescu et al., 2013; Artzi et al., 2013), and discourse structures with Rhetorical Structure Theory (RST) (Mann and Thompson, 1988) or DiscourseLTAG (Webber, 2004).",
+      "startOffset" : 92,
+      "endOffset" : 136
+    }, {
+      "referenceID" : 29,
+      "context" : ", 2013), and discourse structures with Rhetorical Structure Theory (RST) (Mann and Thompson, 1988) or DiscourseLTAG (Webber, 2004).",
+      "startOffset" : 73,
+      "endOffset" : 98
+    }, {
+      "referenceID" : 43,
+      "context" : ", 2013), and discourse structures with Rhetorical Structure Theory (RST) (Mann and Thompson, 1988) or DiscourseLTAG (Webber, 2004).",
+      "startOffset" : 116,
+      "endOffset" : 130
+    }, {
+      "referenceID" : 9,
+      "context" : "Transition-based parsers (Dyer et al., 2016; Cross and Huang, 2016; Liu and Zhang, 2017; Wang et al., 2017) generate trees auto-regressively as a form of shift-reduce deci-",
+      "startOffset" : 25,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 5,
+      "context" : "Transition-based parsers (Dyer et al., 2016; Cross and Huang, 2016; Liu and Zhang, 2017; Wang et al., 2017) generate trees auto-regressively as a form of shift-reduce deci-",
+      "startOffset" : 25,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 25,
+      "context" : "Transition-based parsers (Dyer et al., 2016; Cross and Huang, 2016; Liu and Zhang, 2017; Wang et al., 2017) generate trees auto-regressively as a form of shift-reduce deci-",
+      "startOffset" : 25,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 42,
+      "context" : "Transition-based parsers (Dyer et al., 2016; Cross and Huang, 2016; Liu and Zhang, 2017; Wang et al., 2017) generate trees auto-regressively as a form of shift-reduce deci-",
+      "startOffset" : 25,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 2,
+      "context" : "Though computationally attractive, the local decisions made at each step may propagate errors to subsequent steps due to exposure bias (Bengio et al., 2015).",
+      "startOffset" : 135,
+      "endOffset" : 156
+    }, {
+      "referenceID" : 8,
+      "context" : "Chart based methods, on the other hand, train neural scoring functions to model the tree structure globally (Durrett and Klein, 2015; Gaddy et al., 2018; Kitaev and Klein, 2018; Zhang et al., 2020b; Joty et al., 2012, 2013).",
+      "startOffset" : 108,
+      "endOffset" : 223
+    }, {
+      "referenceID" : 13,
+      "context" : "Chart based methods, on the other hand, train neural scoring functions to model the tree structure globally (Durrett and Klein, 2015; Gaddy et al., 2018; Kitaev and Klein, 2018; Zhang et al., 2020b; Joty et al., 2012, 2013).",
+      "startOffset" : 108,
+      "endOffset" : 223
+    }, {
+      "referenceID" : 22,
+      "context" : "Chart based methods, on the other hand, train neural scoring functions to model the tree structure globally (Durrett and Klein, 2015; Gaddy et al., 2018; Kitaev and Klein, 2018; Zhang et al., 2020b; Joty et al., 2012, 2013).",
+      "startOffset" : 108,
+      "endOffset" : 223
+    }, {
+      "referenceID" : 47,
+      "context" : "Chart based methods, on the other hand, train neural scoring functions to model the tree structure globally (Durrett and Klein, 2015; Gaddy et al., 2018; Kitaev and Klein, 2018; Zhang et al., 2020b; Joty et al., 2012, 2013).",
+      "startOffset" : 108,
+      "endOffset" : 223
+    }, {
+      "referenceID" : 36,
+      "context" : "Greedy top-down parsers find the split points recursively and have received much attention lately due to their efficiency, which is usually O(n2) (Stern et al., 2017a; Shen et al., 2018; Lin et al., 2019; Nguyen et al., 2020).",
+      "startOffset" : 146,
+      "endOffset" : 225
+    }, {
+      "referenceID" : 34,
+      "context" : "Greedy top-down parsers find the split points recursively and have received much attention lately due to their efficiency, which is usually O(n2) (Stern et al., 2017a; Shen et al., 2018; Lin et al., 2019; Nguyen et al., 2020).",
+      "startOffset" : 146,
+      "endOffset" : 225
+    }, {
+      "referenceID" : 24,
+      "context" : "Greedy top-down parsers find the split points recursively and have received much attention lately due to their efficiency, which is usually O(n2) (Stern et al., 2017a; Shen et al., 2018; Lin et al., 2019; Nguyen et al., 2020).",
+      "startOffset" : 146,
+      "endOffset" : 225
+    }, {
+      "referenceID" : 31,
+      "context" : "Greedy top-down parsers find the split points recursively and have received much attention lately due to their efficiency, which is usually O(n2) (Stern et al., 2017a; Shen et al., 2018; Lin et al., 2019; Nguyen et al., 2020).",
+      "startOffset" : 146,
+      "endOffset" : 225
+    }, {
+      "referenceID" : 35,
+      "context" : "the parsing task which links the EDUs (and larger spans) into a discourse tree (Soricut and Marcu, 2003; Joty et al., 2012; Wang et al., 2017).",
+      "startOffset" : 79,
+      "endOffset" : 142
+    }, {
+      "referenceID" : 16,
+      "context" : "the parsing task which links the EDUs (and larger spans) into a discourse tree (Soricut and Marcu, 2003; Joty et al., 2012; Wang et al., 2017).",
+      "startOffset" : 79,
+      "endOffset" : 142
+    }, {
+      "referenceID" : 42,
+      "context" : "the parsing task which links the EDUs (and larger spans) into a discourse tree (Soricut and Marcu, 2003; Joty et al., 2012; Wang et al., 2017).",
+      "startOffset" : 79,
+      "endOffset" : 142
+    }, {
+      "referenceID" : 24,
+      "context" : "In this way, the errors in discourse segmentation can propagate to discourse parsing (Lin et al., 2019).",
+      "startOffset" : 85,
+      "endOffset" : 103
+    }, {
+      "referenceID" : 40,
+      "context" : "Our parsing model, which is an instance of a Pointer Network (Vinyals et al., 2015a), estimates the pointing score from a span to a splitting boundary point, representing the likelihood that the span will be",
+      "startOffset" : 61,
+      "endOffset" : 84
+    }, {
+      "referenceID" : 34,
+      "context" : "The training process can be fully parallelized without requiring structured inference as in (Shen et al., 2018; Gómez and Vilares, 2018; Nguyen et al., 2020).",
+      "startOffset" : 92,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 31,
+      "context" : "The training process can be fully parallelized without requiring structured inference as in (Shen et al., 2018; Gómez and Vilares, 2018; Nguyen et al., 2020).",
+      "startOffset" : 92,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 22,
+      "context" : "The beam-search inference along with the structural consistency from the modeling makes our approach competitive with existing structured chart methods for syntactic (Kitaev and Klein, 2018) and discourse parsing (Zhang et al.",
+      "startOffset" : 166,
+      "endOffset" : 190
+    }, {
+      "referenceID" : 47,
+      "context" : "The beam-search inference along with the structural consistency from the modeling makes our approach competitive with existing structured chart methods for syntactic (Kitaev and Klein, 2018) and discourse parsing (Zhang et al., 2020b).",
+      "startOffset" : 213,
+      "endOffset" : 234
+    }, {
+      "referenceID" : 36,
+      "context" : "of labeled spans over the input text (Stern et al., 2017a).",
+      "startOffset" : 37,
+      "endOffset" : 58
+    }, {
+      "referenceID" : 36,
+      "context" : "Previous approaches to syntactic parsing (Stern et al., 2017a; Kitaev and Klein, 2018; Nguyen et al., 2020) train a neural model to score each possible span and then apply a greedy or dynamic programming algorithm to find the parse tree.",
+      "startOffset" : 41,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 22,
+      "context" : "Previous approaches to syntactic parsing (Stern et al., 2017a; Kitaev and Klein, 2018; Nguyen et al., 2020) train a neural model to score each possible span and then apply a greedy or dynamic programming algorithm to find the parse tree.",
+      "startOffset" : 41,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 31,
+      "context" : "Previous approaches to syntactic parsing (Stern et al., 2017a; Kitaev and Klein, 2018; Nguyen et al., 2020) train a neural model to score each possible span and then apply a greedy or dynamic programming algorithm to find the parse tree.",
+      "startOffset" : 41,
+      "endOffset" : 107
+    }, {
+      "referenceID" : 40,
+      "context" : "This is done through the Pointing mechanism (Vinyals et al., 2015a), where each splitting decision is modeled as a multinomial distribution over the input elements, which in our case are the token boundaries.",
+      "startOffset" : 44,
+      "endOffset" : 67
+    }, {
+      "referenceID" : 36,
+      "context" : "We use the same example from (Stern et al., 2017a; Shen et al., 2018; Nguyen et al., 2020) to distinguish the differences between the methods.",
+      "startOffset" : 29,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 34,
+      "context" : "We use the same example from (Stern et al., 2017a; Shen et al., 2018; Nguyen et al., 2020) to distinguish the differences between the methods.",
+      "startOffset" : 29,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 31,
+      "context" : "We use the same example from (Stern et al., 2017a; Shen et al., 2018; Nguyen et al., 2020) to distinguish the differences between the methods.",
+      "startOffset" : 29,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 36,
+      "context" : "This conditional splitting formulation (decision at step t depends on previous steps) can help our model to find better trees compared to non-conditional top-down parsers (Stern et al., 2017a; Shen et al., 2018; Nguyen et al., 2020), thus bridging the gap between the global (but expensive) and the local (but efficient) models.",
+      "startOffset" : 171,
+      "endOffset" : 232
+    }, {
+      "referenceID" : 34,
+      "context" : "This conditional splitting formulation (decision at step t depends on previous steps) can help our model to find better trees compared to non-conditional top-down parsers (Stern et al., 2017a; Shen et al., 2018; Nguyen et al., 2020), thus bridging the gap between the global (but expensive) and the local (but efficient) models.",
+      "startOffset" : 171,
+      "endOffset" : 232
+    }, {
+      "referenceID" : 31,
+      "context" : "This conditional splitting formulation (decision at step t depends on previous steps) can help our model to find better trees compared to non-conditional top-down parsers (Stern et al., 2017a; Shen et al., 2018; Nguyen et al., 2020), thus bridging the gap between the global (but expensive) and the local (but efficient) models.",
+      "startOffset" : 171,
+      "endOffset" : 232
+    }, {
+      "referenceID" : 5,
+      "context" : "Boundary and Span Representations To represent each boundary between positions k and k + 1, we use the fencepost representation (Cross and Huang, 2016; Stern et al., 2017a):",
+      "startOffset" : 128,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 36,
+      "context" : "Boundary and Span Representations To represent each boundary between positions k and k + 1, we use the fencepost representation (Cross and Huang, 2016; Stern et al., 2017a):",
+      "startOffset" : 128,
+      "endOffset" : 172
+    }, {
+      "referenceID" : 7,
+      "context" : "At each decoding step t, the decoder takes as input the corresponding span (i, j) (specifically, hi,j) and its previous state dt−1 to generate the current state dt and then apply a biaffine function (Dozat and Manning, 2017) between dt and all of the encoded boundary representations (h0,h1, .",
+      "startOffset" : 199,
+      "endOffset" : 224
+    }, {
+      "referenceID" : 30,
+      "context" : "2 We use the standard Wall Street Journal (WSJ) part of the Penn Treebank (PTB) (Marcus et al., 1993) for syntactic parsing and RST Discourse Treebank",
+      "startOffset" : 80,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 24,
+      "context" : "For evaluation on RST-DT, we report the standard span, nuclearity label, relation label F1 scores, computed using the implementation of (Lin et al., 2019).",
+      "startOffset" : 136,
+      "endOffset" : 154
+    }, {
+      "referenceID" : 20,
+      "context" : "We use the Adam optimizer (Kingma and Ba, 2015) with a batch size of 5000 tokens, and an initial learning rate of 0.",
+      "startOffset" : 26,
+      "endOffset" : 47
+    }, {
+      "referenceID" : 22,
+      "context" : "Our model also performs competitively with CKY-based methods like (Kitaev and Klein, 2018; Zhang et al., 2020b; Wei et al., 2020; Zhou and Zhao, 2019), while these methods run slower than ours.",
+      "startOffset" : 66,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 47,
+      "context" : "Our model also performs competitively with CKY-based methods like (Kitaev and Klein, 2018; Zhang et al., 2020b; Wei et al., 2020; Zhou and Zhao, 2019), while these methods run slower than ours.",
+      "startOffset" : 66,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 44,
+      "context" : "Our model also performs competitively with CKY-based methods like (Kitaev and Klein, 2018; Zhang et al., 2020b; Wei et al., 2020; Zhou and Zhao, 2019), while these methods run slower than ours.",
+      "startOffset" : 66,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 49,
+      "context" : "Our model also performs competitively with CKY-based methods like (Kitaev and Klein, 2018; Zhang et al., 2020b; Wei et al., 2020; Zhou and Zhao, 2019), while these methods run slower than ours.",
+      "startOffset" : 66,
+      "endOffset" : 150
+    }, {
+      "referenceID" : 28,
+      "context" : "Dependency parsing models, in fact, have a strong resemblance to the pointing mechanism that our model employs (Ma et al., 2018).",
+      "startOffset" : 111,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 22,
+      "context" : "Results with Pre-training Similar to (Kitaev and Klein, 2018; Kitaev et al., 2019), we also evaluate our parser with BERT embeddings (Devlin",
+      "startOffset" : 37,
+      "endOffset" : 82
+    }, {
+      "referenceID" : 21,
+      "context" : "Results with Pre-training Similar to (Kitaev and Klein, 2018; Kitaev et al., 2019), we also evaluate our parser with BERT embeddings (Devlin",
+      "startOffset" : 37,
+      "endOffset" : 82
+    }, {
+      "referenceID" : 31,
+      "context" : "guages even though some of them use predicted POS tags (Nguyen et al., 2020) or bigger models (75M parameters) (Kitaev and Klein, 2018).",
+      "startOffset" : 55,
+      "endOffset" : 76
+    }, {
+      "referenceID" : 22,
+      "context" : ", 2020) or bigger models (75M parameters) (Kitaev and Klein, 2018).",
+      "startOffset" : 42,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 24,
+      "context" : "Setup For discourse parsing, we follow the standard split from (Lin et al., 2019), which has 7321 sentence-level discourse trees for training and 951 for testing.",
+      "startOffset" : 63,
+      "endOffset" : 81
+    }, {
+      "referenceID" : 32,
+      "context" : "(2019) used ELMo (Peters et al., 2018) as pretrained embeddings.",
+      "startOffset" : 17,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 24,
+      "context" : "When gold segmentation is provided, our model outperforms the single-task training model of (Lin et al., 2019) by 0.",
+      "startOffset" : 92,
+      "endOffset" : 110
+    }, {
+      "referenceID" : 24,
+      "context" : "For end-to-end parsing, compared to the best baseline (Lin et al., 2019), our model yields 0.",
+      "startOffset" : 54,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 18,
+      "context" : "End-to-End Discourse parsing (Segmenter + Parser) CODRA (Joty et al., 2015) 3.",
+      "startOffset" : 56,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 15,
+      "context" : "With the recent popularity of neural architectures, such as LSTMs (Hochreiter and Schmidhuber, 1997) and Transformers (Vaswani et al.",
+      "startOffset" : 66,
+      "endOffset" : 100
+    }, {
+      "referenceID" : 39,
+      "context" : "With the recent popularity of neural architectures, such as LSTMs (Hochreiter and Schmidhuber, 1997) and Transformers (Vaswani et al., 2017), var-",
+      "startOffset" : 118,
+      "endOffset" : 140
+    }, {
+      "referenceID" : 9,
+      "context" : "To enforce structural consistency, such methods employ either a greedy transition-based (Dyer et al., 2016; Liu and Zhang, 2017), a globally op-",
+      "startOffset" : 88,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 25,
+      "context" : "To enforce structural consistency, such methods employ either a greedy transition-based (Dyer et al., 2016; Liu and Zhang, 2017), a globally op-",
+      "startOffset" : 88,
+      "endOffset" : 128
+    }, {
+      "referenceID" : 13,
+      "context" : "timized chart parsing (Gaddy et al., 2018; Kitaev and Klein, 2018), or a greedy top-down algorithm (Stern et al.",
+      "startOffset" : 22,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 22,
+      "context" : "timized chart parsing (Gaddy et al., 2018; Kitaev and Klein, 2018), or a greedy top-down algorithm (Stern et al.",
+      "startOffset" : 22,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 36,
+      "context" : ", 2018; Kitaev and Klein, 2018), or a greedy top-down algorithm (Stern et al., 2017a; Shen et al., 2018).",
+      "startOffset" : 64,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 34,
+      "context" : ", 2018; Kitaev and Klein, 2018), or a greedy top-down algorithm (Stern et al., 2017a; Shen et al., 2018).",
+      "startOffset" : 64,
+      "endOffset" : 104
+    }, {
+      "referenceID" : 41,
+      "context" : "to generate a linearized form of the tree (Vinyals et al., 2015b; Kamigaito et al., 2017; Suzuki et al., 2018; Fernández-González and Gómez-Rodríguez, 2020a).",
+      "startOffset" : 42,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 19,
+      "context" : "to generate a linearized form of the tree (Vinyals et al., 2015b; Kamigaito et al., 2017; Suzuki et al., 2018; Fernández-González and Gómez-Rodríguez, 2020a).",
+      "startOffset" : 42,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 38,
+      "context" : "to generate a linearized form of the tree (Vinyals et al., 2015b; Kamigaito et al., 2017; Suzuki et al., 2018; Fernández-González and Gómez-Rodríguez, 2020a).",
+      "startOffset" : 42,
+      "endOffset" : 157
+    }, {
+      "referenceID" : 48,
+      "context" : "There are also attempts which model constituency and discourse parsing jointly (Zhao and Huang, 2017) and do not need to perform EDU preprocessing.",
+      "startOffset" : 79,
+      "endOffset" : 101
+    }, {
+      "referenceID" : 40,
+      "context" : "ties with Pointer Network (Vinyals et al., 2015a; Ma et al., 2018; Fernández-González and GómezRodríguez, 2019, 2020b) or head-selection approaches (Zhang et al.",
+      "startOffset" : 26,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 28,
+      "context" : "ties with Pointer Network (Vinyals et al., 2015a; Ma et al., 2018; Fernández-González and GómezRodríguez, 2019, 2020b) or head-selection approaches (Zhang et al.",
+      "startOffset" : 26,
+      "endOffset" : 118
+    }, {
+      "referenceID" : 46,
+      "context" : ", 2018; Fernández-González and GómezRodríguez, 2019, 2020b) or head-selection approaches (Zhang et al., 2017; Kurita and Søgaard, 2019), but is distinct from them that in each decod-",
+      "startOffset" : 89,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 23,
+      "context" : ", 2018; Fernández-González and GómezRodríguez, 2019, 2020b) or head-selection approaches (Zhang et al., 2017; Kurita and Søgaard, 2019), but is distinct from them that in each decod-",
+      "startOffset" : 89,
+      "endOffset" : 135
+    } ],
+    "year" : 2021,
+    "abstractText" : "We introduce a generic seq2seq parsing framework that casts constituency parsing problems (syntactic and discourse parsing) into a series of conditional splitting decisions. Our parsing model estimates the conditional probability distribution of possible splitting points in a given text span and supports efficient topdown decoding, which is linear in number of nodes. The conditional splitting formulation together with efficient beam search inference facilitate structural consistency without relying on expensive structured inference. Crucially, for discourse analysis we show that in our formulation, discourse segmentation can be framed as a special case of parsing which allows us to perform discourse parsing without requiring segmentation as a pre-requisite. Experiments show that our model achieves good results on the standard syntactic parsing tasks under settings with/without pre-trained representations and rivals state-of-the-art (SoTA) methods that are more computationally expensive than ours. In discourse parsing, our method outperforms SoTA by a good margin.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

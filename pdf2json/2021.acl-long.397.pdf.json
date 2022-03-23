@@ -1,0 +1,748 @@
+{
+  "name" : "2021.acl-long.397.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "From Paraphrasing to Semantic Parsing: Unsupervised Semantic Parsing via Synchronous Semantic Decoding",
+    "authors" : [ "Shan Wu", "Bo Chen", "Chunlei Xin", "Xianpei Han", "Le Sun", "Weipeng Zhang", "Jiansong Chen", "Fan Yang", "Xunliang Cai" ],
+    "emails" : [ "wushan2018@iscas.ac.cn,", "chenbo@iscas.ac.cn,", "xianpei@iscas.ac.cn,", "sunle@iscas.ac.cn,", "xinchunlei20@mails.ucas.ac.cn,", "zhangweipeng02@meituan.com", "chenjiansong@meituan.com", "yangfan79@meituan.com", "caixunliang@meituan.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 5110–5121\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n5110"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "Semantic parsing aims to translate natural language utterances to their formal meaning representations, such as lambda calculus (Zettlemoyer and Collins, 2005; Wong and Mooney, 2007), FunQL (Kate et al., 2005; Lu et al., 2008), and SQL queries. Currently, most neural semantic parsers (Dong and Lapata, 2016; Chen et al., 2018b; Zhao et al., 2020; Shao et al., 2020) model semantic parsing as a sequence to sequence translation task via encoder-decoder framework.\n∗Corresponding Author 1Canonical utterances are pseudo-language representations of logical forms, which have the synchronous structure of logical forms.(Berant and Liang, 2014; Xiao et al., 2016; Su and Yan, 2017; Cao et al., 2020)\nSemantic parsing is a challenging task due to the structure gap and the semantic gap between natural language utterances and logical forms. For structure gap, because utterances are usually word sequences and logical forms are usually trees/graphs constrained by specific grammars, a semantic parser needs to learn the complex structure transformation rules between them. For semantic gap, because the flexibility of natural languages, the same meaning can be expressed using very different utterances, a semantic parser needs be able to map various expressions to their semantic form. To address the structure gap and the semantic gap, current semantic parsers usually rely on a large amount of labeled data, often resulting in data bottleneck problem.\nPrevious studies have found that the structure gap and the semantic gap can be alleviated by leveraging external resources, therefore the reliance on data can be reduced. For structure gap, previous studies found that constrained decoding can effectively constrain the output structure by injecting grammars of logical forms and facts in\nknowledge bases during inference. For example, the grammar-based neural semantic parsers (Xiao et al., 2016; Yin and Neubig, 2017) and the constrained decoding algorithm (Krishnamurthy et al., 2017). For semantic gap, previous studies have found that paraphrasing is an effective technique for resolving the diversity of natural expressions. Using paraphrasing, semantic parsers can handle the different expressions of the same meaning, therefore can reduce the requirement of labeled data. For example, supervised methods (Berant and Liang, 2014; Su and Yan, 2017) use the paraphrasing scores between canonical utterances and sentences to re-rank logical forms; Two-stage (Cao et al., 2020) rewrites utterances to canonical utterances which can be easily parsed. The main drawback of these studies is that they use constrained decoding and paraphrasing independently and separately, therefore they can only alleviate either semantic gap or structure gap.\nIn this paper, we propose an unsupervised semantic parsing method – Synchronous Semantic Decoding (SSD), which can simultaneously resolve the structure gap and the semantic gap by jointly leveraging paraphrasing and grammarconstrained decoding. Specifically, we model semantic parsing as a constrained paraphrasing task: given an utterance, we synchronously decode its canonical utterance and its logical form using a general paraphrase model, where the canonical utterance and the logical form share the same underlying structure. Based on the synchronous decoding, the canonical utterance generation can be constrained by the structure of logical form, and the logical form generation can be guided by the semantics of canonical form. By modeling the interdependency between canonical utterance and logical form, and exploiting them through synchronous decoding, our method can perform effective unsupervised semantic parsing using only pretrained general paraphrasing model – no annotated data for semantic parsing is needed.\nWe conduct experiments on GEO and OVERNIGHT. Experimental results show that our method is promising, which can achieve competitive unsupervised semantic parsing performance, and can be further improved with external resources. The main contributions of this paper are:\n• We propose an unsupervised semantic parsing method – Synchronous Semantic De-\ncoding , which can simultaneously resolve the semantic gap and the structure gap by jointly leveraging paraphrasing and grammar-constrained semantic decoding.\n• We design two effective synchronous semantic decoding algorithms – rule-level inference and word-level inference, which can generate paraphrases under the grammar constraints and synchronously decode meaning representations.\n• Our model achieves competitive unsupervised semantic parsing performance on GEO and OVERNIGHT datasets."
+    }, {
+      "heading" : "2 Model Overview",
+      "text" : "We now present overview of our synchronous semantic decoding algorithm, which can jointly leverage paraphrasing and grammar-constrained decoding for unsupervised semantic parsing. Given an utterance, SSD reformulates semantic parsing as a constrained paraphrasing problem, and synchronously generates its canonical utterance and logical form. For example in Fig. 2, given “How many rivers run through Texas”, SSD generates “What is the number of river traverse State0” as its canonical form and Answer(Count(River(Traverse 2( State0)))) as its logical form. During synchronous decoding: the utterance paraphrase generation is constrained by the grammar of logical forms, therefore the canonical utterance can be generated controlledly; the logical form is generated synchronously with the canonical utterance via synchronous grammar. Logical form generation is controlled by the semantic constraints from paraphrasing and structure constraints from grammars and database schemas. Therefore the logical form can be generated unsupervisedly.\nTo this end, SSD needs to address two challenges. Firstly, we need to design paraphrasingbased decoding algorithms which can effectively impose grammar constraints on inference. Secondly, current paraphrasing models are trained on natural language sentences, which are different from the unnatural canonical utterances. Therefore SSD needs to resolve this style bias for effective canonical utterance generation.\nSpecifically, we first propose two inference algorithms for constrained paraphrasing based syn-\nchronous semantic decoding: rule-level inference and word-level inference. Then we resolve the style bias of paraphrase model via adaptive fine-tuning and utterance reranking, where adaptive fine-tuning can adjust the paraphrase model to generate canonical utterances, and utterance reranking resolves the style bias by focusing more on semantic coherence. In Sections 3-5, we provide the details of our implementation."
+    }, {
+      "heading" : "3 Synchronous Semantic Decoding",
+      "text" : "Given an utterance x, we turn semantic parsing into a constrained paraphrasing task. Concretely, we use synchronous context-free grammar as our synchronous grammar, which provides a one-to-one mapping from a logical form y to its canonical utterance cy. The parsing task ŷ = argmax\ny∈Y pparse(y|x) is then transferred to\nŷ = argmax y∈Y\npparaphrase(c y|x). Instead of directly\nparsing utterance into its logical form, SSD generates its canonical utterance and obtains its logical form based on the one-to-one mapping relation. In following we first introduce the grammar constraints in decoding, and then present two inference algorithms for generating paraphrases under the grammar constraints."
+    }, {
+      "heading" : "3.1 Grammar Constraints in Decoding",
+      "text" : "Synchronous context-free grammar(SCFG) is employed as our synchronous grammar, which is widely used to convert a meaning representation into an unique canonical utterance (Wang et al., 2015; Jia and Liang, 2016). An SCFG consists of a set of production rules: N → 〈α, β〉, whereN is\na non-terminal, and α and β are sequence of terminal and non-terminal symbols. Each non-terminal symbol in α is aligned to the same non-terminal symbol in β, and vice versa. Therefore, an SCFG defines a set of joint derivations of aligned pairs of utterances and logical forms.\nSCFGs can provide useful constraints for semantic decoding by restricting the decoding space and exploiting the semantic knowledge:\nGrammar Constraints The grammars ensure the generated utterances/logical forms are grammar-legal. In this way the search space can be greatly reduced. For example, when expanding the non-terminal $r in Fig 2 we don’t need to consider the words “run” and “flow”, because they are not in the candidate grammar rules.\nSemantic Constraints Like the type checking in Wang et al. (2015), the constraints of knowledge base schema can be integrated to further refine the grammar. The semantic constraints ensure the generated utterances/logical forms will be semantically valid."
+    }, {
+      "heading" : "3.2 Decoding",
+      "text" : ""
+    }, {
+      "heading" : "3.2.1 Rule-Level Inference",
+      "text" : "One strategy to generate paraphrase under the grammar constraint is taking the grammar rule as the decoding unit. Grammar-based decoders have been proposed to output sequences of grammar rules instead of words(Yin and Neubig, 2017). Like them, our rule-level inference method takes the grammar rule as the decoding unit. Figure 3 (a) shows an example of our rule level inference method.\nloc ate\nd\ninWhat thatstateis\nlargest city\ncity0\nlake0\nthe\nlocated\nlocated\nAnswer(State($s))\nAnswer(State(Loc_1(city0)))\nAnswer(State(Loc_1(lake0)))\nAnswer(State(Loc_1(largest(city))))\nAnswer($e)\n$e →\n$s →\nroot → What is $e Answer($e)\nstate $s State($s)\nthat $c located in Loc_1($c)\n$c → city0 City0\nroot → <What is $e, Answer($e)>\n$e → <state $s, State($s)>\n$s → <that $c located in, Loc_1($c)>\n$c → <city0, City0>\n(a) Rule-Level Inference $e →\n$s →\nroot → What is $e Answer($e)\nstate $s State($s)\nthat $c located in\nLoc_1($c)\n$c → city0 City0\nloc ate\nd\ninWhat thatstateis\nlargest city\ncity0\nlake0\nthe\nlocated\nlocated\nAnswer(State($s))\nAnswer(State(Loc_1(city0))) Answer(State(Loc_1(lake0))) Answer(State(Loc_1(largest(city))))\nAnswer($e)\n$e →\n$s →\nroot → What is $e Answer($e)\nstate $s State($s)\nthat $c located in Loc_1($c)\n$c → city0 City0\n(b) Word-Level Inference\nFigure 3: From the utterance “which state is city0 i ”, two inference methods generate its canonical utterance “what is state that city0 located in” and its logical form Answer(State(Loc 1(City0))). The ways they handle non-terminal $c which is not at the end of utterance-side production rule are represented by purple lines.\nAlgorithm 1: Rule-level inference Input : input utterance x, paraphrasing model\nPara, beam size B, maximum output length L, SCFG rules R, maximum search depth K;\n1 beam0 ← {〈s〉} 2 outputs← {} 3 for t = 1 to L do 4 for hypothesis c in beamt−1 do 5 for r in expand rules for c do 6 if all non-terminals in rβ are on the right then 7 c′ ← Expand(c, r) 8 beamt ← beamt ∪ {c′} 9 else 10 c′ ← expand(c, r) 11 beamc ′ t ← {c′} 12 for k = 1 to K do 13 for hypothesis h in beamc ′ t+k−1 do 14 rh← expand rules for h’s first non-terminal 15 beamc ′\nt+k ←beamc\n′\nt+k ∪ Expand(h, rh)\n16 beamc ′\nt+k ← NBest(beamc\n′\nt+k , B)\n17 Move utterances from beamc ′\nt+k to beamt+k,\nif non-terminals are on the right of the utterances.\n18 beamt ← NBest(beamt,B − |outputs|) 19 Move full utterances from beamt to outputs 20 if beamt is empty then 21 return outputs 22 return outputs\nWhen the non-terminal in the utterance-side production rule is at the end of the rule (e.g., $e→ 〈state $s,State($s)〉), denoting the utteranceside production rule as rβ = [w1, w2, ..., wLr , N ], we can simply expand non-terminals in canonical utterances by this rule, and generate the canonical utterances from left to right with probabilities computed by:\nP (cy≤t |x) = P (cy<t |x) Lr∏ i=1 Pparaphrase(wi|x, cy<t , w<i)\n(1)\nOtherwise, we generate the next production rules to expand this rule (i.e., rule with purple line), until\nthere is no non-terminal on the left of words, or the generating step reaches the depth of K. We use beam search during the inference. The inference details are described in Algorithm 1."
+    }, {
+      "heading" : "3.2.2 Word-Level Inference",
+      "text" : "Except for rule-level inference, we also propose a word-level inference algorithm, which generates paraphrases word by word under the SCFG constraints.\nFirstly, we construct a deterministic automaton using LR(1) parser (Knuth, 1965) from the CFG in utterance side. The automaton can transit from one state to another in response to an input. The inputs of the automaton are words and the states of it are utterance/logical form segments. LR(1) parser peeks ahead one lookahead input symbol, and the state transition table describes the acceptable inputs and the next states.\nThen, in each decoding step we generate a word with a new state which is transited from previous state. An example is shown in Figure 3 (b). Only the acceptable words in the current state can be generated, and the end-of-sentence symbol can only be generated when reaching the final state. Beam search is also used in this inference."
+    }, {
+      "heading" : "4 Adaptive Fine-tuning",
+      "text" : "The above decoding algorithms only rely on a paraphrase generation model , which generates canonical utterance and logical form synchronously for semantic parsing. We can directly use general paraphrase generation models such as GPT-2(Radford et al., 2019), T5(Raffel et al., 2020) for SSD. However, as described in above, there exists a style bias between natural language sentences and canonical utterances, which hurts the performance of unsupervised semantic par-\ning. In this section, we describe how to alleviate this bias via adaptive fine-tuning. Given a text generation model, after pretraining it using paraphrase corpus, we fine-tune it using synthesized 〈sentence, canonical utterance〉 pairs.\nPrevious studies have shown that the pretraining on synthesized data can significantly improve the performance of semantic parsing (Xu et al., 2020a; Marzoev et al., 2020; Yu et al., 2020; Xu et al., 2020b). Specifically, we design three data synthesis algorithms: 1) CUs We sample CUs from SCFGs, and preserve executable ones. As we do not have the paired sentences, we only fine-tune the language model of the PLMs on CUs. 2) Self Paras We use the trained paraphrase model to get the natural language paraphrases of the sampled canonical utterances to form 〈sentence, canonical utterance〉 pairs. 3) External Paras We also use external paraphrase methods such as back translation to get the pairs."
+    }, {
+      "heading" : "5 Utterance Reranking",
+      "text" : "Adaptive fine-tuning resolves the style bias problem by fitting a better paraphrase model. In this section, we propose an utterance reranking algorithm to further alleviate the style bias by reranking and selecting the best canonical form.\nGiven the utterance x and top-N parsing results (yn, cn), n = 1, 2, ..., N , we rerank all candidates by focusing on semantic similarities between x and cn, so that canonical utterances can be effectively selected. Reranking for semantic parsing has been exploited in many previous studies (Berant and Liang, 2014; Yin and Neubig, 2019). These works employ reranking for canonical utterances selection. Differently, our re-ranker does not need labeled data. Formally, we measure two similarities between x and cn and the final reranking score is calculated by:\nscore(x, c) = log p(c|x) + srec(x, c) + sasso(x, c)\n(2)\nReconstruction Score The reconstruction score measures the coherence and adequacy of the canonical utterances, using the probability of reproducing the original input sentence x from c with the trained paraphrasing model: srec(x, c) = log ppr(x|c)\nAssociation Score The association score measures whether x and c contain words that are likely to be paraphrases. We calculate it as:\nsasso(x, c) = log |c|∏ i=1 |x|∑ j=0 p (ci|xj) a(j|i)\n+ log |x|∏ j=1 |c|∑ i=0 p (xj |ci) a(i|j)\n(3)\nin which, p (ci|xj) means the paraphrase probability from xj to ci, and a(j|i) means the alignment probability. The paraphrase probability and alignment are trained and inferred as the translation model in SMT IBM model 2."
+    }, {
+      "heading" : "6 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "6.1 Experimental Settings",
+      "text" : "Datasets We conduct experiments on three datasets: OVERNIGHT(λ-DCS), GEO(FunQL), and GEOGRANNO, which use different meaning representations and on different domains. Our implementations are public available2.\nOVERNIGHT This is a multi-domain dataset, which contains natural language paraphrases paired with lambda DCS logical forms across eight domains. We use the same train/test splits as Wang et al. (2015).\nGEO(FunQL) This is a semantic parsing benchmark about U.S. geography (Zelle and Mooney, 1996) using the variable-free semantic representation FunQL (Kate et al., 2005). We extend the FunQL grammar to SCFG for this dataset. We follow the standard 600/280 train/test splits.\nGEOGRANNO This is another version of GEO (Herzig and Berant, 2019), in which lambda DCS logical forms paired with canonical utterances are produced from SCFG. Instead of paraphrasing sentences, crowd workers are required to select the correct canonical utterance from candidate list. We follow the split (train/valid/test 487/59/278) in original paper.\nParaphrase Model We obtain the paraphrase model by training T5 and GPT2.0 on WikiAnswer Paraphrase3, we train 10 epochs with learning rate as 1e-5. Follow Li et al. (2019), we sample 500K pairs of sentences in WikiAnswer corpus as training set and 6K as dev set. We generate adaptive fine-tuning datasets proportional to their labeled datasets, and back-translation(from English\n2https://github.com/lingowu/ssd 3http://knowitall.cs.washington.edu/ paralex\nto Chinese then translate back) is used to obtain external paraphrases data. On average, we sample 423 CUs per domain, and synthesize 847 instances per domain in Self Paras and 1252 in External Paras.\nUnsupervised settings In unsupervised settings, we do not use any annotated semantic parsing data. The paraphrase generation models are fixed after the paraphrasing pre-training and the adaptive fine-tuning. The models are employed to generate canonical utterances and MRs synchronously via rule-level or word-level inference. In rule-level inference, the leftmost nonterminators are eliminated by cyclically expanded and the maximum depth K is set to 5, the beam size is set to 20. SSD uses T5 as the pre-trained language model in all the proposed components, including adaptive fine-tuning, reranking and the two decoding constraints. Ablation experiments are conducted over all components with rule-level inference.\nUnsupervised settings (with external nonparallel data) Cao et al. (2020) have shown that external nonparallel data (including nonparallel natural language utterances and canonical utterances) can be used to build unsupervised semantic parsers. For fair comparison, we also conduct unsupervised experiments with external unparallel data. Specifically, we enhance the original SSD using the SAMPLES methods (Cao et al., 2020): we label\neach input sentences with the most possible outputs in the nonparallel corpus and use these samples as peusdo training data – we denote this setting as SSD-SAMPLES.\nSupervised settings Our SSD method can be further enhanced using annotated training instances. Specifically, given the annotated 〈utterance, logical form〉 instances, we first transform logical form to its canonical form, then use them to further fine-tune our paraphrase models after unsupervised pre-training.\nBaselines We compare our method with the following unsupervised baselines: 1) Cross-domain Zero Shot(Herzig and Berant, 2018), which trains on other source domains and then generalizes to target domains in OVERNIGHT and 2) GENOVERNIGHT(Wang et al., 2015) in which models are trained on synthesized 〈CU, MR〉 pairs; 3) We also implement SEQ2SEQ baseline on the synthesized data as SYNTH-SEQ2SEQ. 4) SYNTHPARASEQ2SEQ is trained on the synthesized data and 〈CU paraphrase, MR〉 pairs, the paraphrases are obtained in the same way in Section 4."
+    }, {
+      "heading" : "6.2 Experimental Results",
+      "text" : ""
+    }, {
+      "heading" : "6.2.1 Overall Results",
+      "text" : "The overall results of different baselines and our method are shown in Table 1 and Table 3 (We also demonstrate several cases in Appendix). For our\nmethod, we report its performances on three settings. We can see that:\n1. By synchronously decoding canonical utterances and meaning representations, SSD achieves competitive unsupervised semantic parsing performance. In all datasets, our method outperforms other baselines in the unsupervised settings. These results demonstrate that unsupervised semantic parsers can be effectively built by simultaneously exploit semantic and structural constraints, without the need of labeled data.\n2. Our model can achieve competitive performance on different datasets with different settings. In supervised settings, our model can achieve competitive performance with SOTA. With nonparallel data, our model can outperform Two-stage. On GEO(FunQL) our model also ob-\ntains a significant improvement compared with baselines, which also verifies that our method is not limited to specific datasets (i.e., OVERNIGHT and GEOGRANNO, which are constructed with SCFG and paraphrasing.)"
+    }, {
+      "heading" : "3. Both rule-level inference and word-level",
+      "text" : "inference can effectively generate paraphrases under the grammar constraints. The rule-level inference can achieve better performance, we believe this is because rule-level inference is more compact than word-level inference, therefore the rule-level inference can search wider space and benefit beam search more."
+    }, {
+      "heading" : "6.2.2 Detailed Analysis",
+      "text" : "Effect of Decoding Constraints To analyze the effect of decoding constraints, we conduct ablation experiments with different constraint settings and the results are shown in Table 2: - SEMANTIC denotes removing the semantic constraint, -GRAMMAR denotes all constraints are removed at the same time, the decoding is unrestricted. We can see that the constrained decoding is critical for our paraphrasing-based semantic parsing, and both grammar constraints and semantic constraints contribute to the improvement.\nEffect of Adaptive Fine-tuning To analyze the effect of adaptive fine-tuning, we show the results with different settings by ablating a finetuning corpus at a time (see Table 2). We can see that adaptive fine-tuning can significantly improve the performance. And the paraphrase generation model can be effectively fine-tuned only using CUs or Self Paras, which can be easily constructed.\n0 10 20 30 40 50 60 70 80 90\n0 5 10 15 30 50 100\nAc cu\nra cy (% )\nSSD Seq2Seq Syth-Seq2Seq\nEffect of Reranking To analyze the effect of reranking, we compare the settings with/without reranking and its upper bound – Oracle, which can always select the correct logical form if it is within the beam. Experimental results show that reranking can improve the semantic parsing performance. Moreover, there is still a large margin between our method and Oracle, i.e., the unsupervised semantic parsing can be significantly promoted by designing better reranking algorithms.\nEffect of Adding Labeled Data To investigate the effect of adding labeled data, we test our method by varying the size of the labeled data on OVERNIGHT from 0% to 100%. In Fig. 4, we can see that our method can outperform baselines using the same labeled data. And a small amount of data can produce a good performance using our method.\nEffect of Pretrained Language Models To analyze the effect of PLMs, we show the results with different PLM settings: instead of T5 we use GPT2 or randomly initialized transformers to construct paraphrasing models. Experimental results show that powerful PLMs can improve the performance. Powered by the language generation models to do semantic parsing, our method can benefit from the rapid development of PLMs."
+    }, {
+      "heading" : "7 Related Work",
+      "text" : "Data Scarcity in Semantic Parsing. Witnessed the labeled data bottleneck problem, many techniques have been proposed to reduce the demand for labeled logical forms. Many weakly supervised learning are proposed (Artzi and Zettlemoyer, 2013; Berant et al., 2013; Reddy et al., 2014; Agrawal et al., 2019; Chen et al., 2020), such as denotation-base learning (Pasupat and Liang, 2016; Goldman et al., 2018), iterative searching (Dasigi et al., 2019). Semi-supervised\nsemantic parsing is also proposed(Chen et al., 2018a). Such as variational auto-encoding (Yin et al., 2018), dual learning framework for semantic parsing (Cao et al., 2019), dual information maximization method (Ye et al., 2019), and backtranslation (Sun et al., 2019). One other strategy is to generate data for semantic parsing, e.g., Wang et al. (2015) construct a semantic parsing dataset from grammar rules and crowdsourcing paraphrase. Guo et al. (2018) produce pseudolabeled data. Jia and Liang (2016) create new “recombinant” training examples with SCFG. The domain transfer techniques are also used to reduce the cost of data collecting for the unseen domain (Su and Yan, 2017; Herzig and Berant, 2018; Lu et al., 2019; Zhong et al., 2020). Goldwasser et al. (2011); Poon and Domingos (2009); Schmitt et al. (2020) leverage external resources or techniques for unsupervised learning.\nConstrained Decoding. After neural parsers model semantic parsing as a sentence to logical form translation task (Yih et al., 2015; Krishnamurthy et al., 2017; Iyyer et al., 2017; Jie and Lu, 2018; Lindemann et al., 2020), many constrained decoding algorithms are also proposed, such as type constraint-based illegal token filtering (Krishnamurthy et al., 2017); Lisp interpreter-based method (Liang et al., 2017); type constraints for generating valid actions (Iyyer et al., 2017).\nParaphrasing in Semantic Parsing. Paraphrase models have been widely used in semantic parsing. ParaSempre (Berant and Liang, 2014) use paraphrase model to rerank candidate logical forms. Wang et al. (2015) employ SCFG grammar rules to produce MR and canonical utterance pairs, and construct OVERNIGHT dataset by paraphrasing utterances. Dong et al. (2017) use paraphrasing to expand the expressions of query sentences. Compared with these methods, we combine paraphrasing with grammar-constrained decoding, therefore SSD can further reduce the requirement of labeled data and achieve unsupervised semantic parsing."
+    }, {
+      "heading" : "8 Conclusions",
+      "text" : "We propose an unsupervised semantic parsing method – Synchronous Semantic Decoding, which leverages paraphrasing and grammar-constrained decoding to simultaneously resolve the semantic gap and the structure gap. Specifically, we design\ntwo synchronous semantic decoding algorithms for paraphrasing under grammar constraints, and exploit adaptive fine-tuning and utterance reranking to alleviate the style bias in semantic parsing. Experimental results show that our approach can achieve competitive performance in unsupervised settings."
+    }, {
+      "heading" : "Acknowledgments",
+      "text" : "We sincerely thank the reviewers for their insightful comments and valuable suggestions. Moreover, this work is supported by the National Key Research and Development Program of China(No. 2020AAA0106400), the National Natural Science Foundation of China under Grants no. 61906182 and 62076233, and in part by the Youth Innovation Promotion Association CAS(2018141)."
+    }, {
+      "heading" : "A Appendix",
+      "text" : "A.1 Case Study\nIn Table 4, we present the cases generated from SSD. Cases show that SSD can output semanticssimilar and grammar-legal utterances. In case 1, “take-out” does not appear in paraphrase\ndataset, we can still efficiently generate the utterances containing it, which shows our constrainedparaphrasing based semantic parser has the generalization ability on unseen words. We found that the parser maintains high recall, covering the correct canonical utterances in our n-best list of predictions. As case 2 shows the designed utterance reranking score can select the best canonical utterances by focusing on coherence and adequacy. With adaptive fine-tuning (case 3), our model can generate the utterances focusing more on semantics to alleviate the style bias."
+    } ],
+    "references" : [ {
+      "title" : "Unified semantic parsing with weak supervision",
+      "author" : [ "Priyanka Agrawal", "Ayushi Dalmia", "Parag Jain", "Abhishek Bansal", "Ashish R. Mittal", "Karthik Sankaranarayanan." ],
+      "venue" : "Proceedings of the 57th Conference of the Association for Computa-",
+      "citeRegEx" : "Agrawal et al\\.,? 2019",
+      "shortCiteRegEx" : "Agrawal et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Weakly supervised learning of semantic parsers for mapping instructions to actions",
+      "author" : [ "Yoav Artzi", "Luke Zettlemoyer." ],
+      "venue" : "TACL, 1:49–62.",
+      "citeRegEx" : "Artzi and Zettlemoyer.,? 2013",
+      "shortCiteRegEx" : "Artzi and Zettlemoyer.",
+      "year" : 2013
+    }, {
+      "title" : "Semantic parsing on freebase from question-answer pairs",
+      "author" : [ "Jonathan Berant", "Andrew Chou", "Roy Frostig", "Percy Liang." ],
+      "venue" : "Proceedings of the 2013 Conference on Empirical Methods in Natural Language Processing, EMNLP 2013, 18-21 October",
+      "citeRegEx" : "Berant et al\\.,? 2013",
+      "shortCiteRegEx" : "Berant et al\\.",
+      "year" : 2013
+    }, {
+      "title" : "Semantic parsing via paraphrasing",
+      "author" : [ "Jonathan Berant", "Percy Liang." ],
+      "venue" : "Proceedings of the 52nd Annual Meeting of the Association for Computational Linguistics, ACL 2014, June 22-27, 2014, Baltimore, MD, USA, Volume 1: Long Papers, pages",
+      "citeRegEx" : "Berant and Liang.,? 2014",
+      "shortCiteRegEx" : "Berant and Liang.",
+      "year" : 2014
+    }, {
+      "title" : "Semantic parsing with dual learning",
+      "author" : [ "Ruisheng Cao", "Su Zhu", "Chen Liu", "Jieyu Li", "Kai Yu." ],
+      "venue" : "Proceedings of the 57th Conference of the Association for Computational Linguistics, ACL 2019, Florence, Italy, July 28- August 2, 2019, Volume 1: Long Pa-",
+      "citeRegEx" : "Cao et al\\.,? 2019",
+      "shortCiteRegEx" : "Cao et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unsupervised dual paraphrasing for two-stage semantic parsing",
+      "author" : [ "Ruisheng Cao", "Su Zhu", "Chenyu Yang", "Chen Liu", "Rao Ma", "Yanbin Zhao", "Lu Chen", "Kai Yu." ],
+      "venue" : "Proceedings of the 58th Annual Meeting",
+      "citeRegEx" : "Cao et al\\.,? 2020",
+      "shortCiteRegEx" : "Cao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Semi-supervised lexicon learning for wide-coverage semantic parsing",
+      "author" : [ "Bo Chen", "Bo An", "Le Sun", "Xianpei Han." ],
+      "venue" : "Proceedings of the 27th International Conference on Computational Linguistics, COLING 2018, Santa Fe, New Mexico, USA, August",
+      "citeRegEx" : "Chen et al\\.,? 2018a",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Learning to map frequent phrases to sub-structures of meaning representation for neural semantic parsing",
+      "author" : [ "Bo Chen", "Xianpei Han", "Ben He", "Le Sun." ],
+      "venue" : "The Thirty-Fourth AAAI Conference on Artificial Intelligence, AAAI 2020, The Thirty-Second",
+      "citeRegEx" : "Chen et al\\.,? 2020",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Sequenceto-action: End-to-end semantic graph generation for semantic parsing",
+      "author" : [ "Bo Chen", "Le Sun", "Xianpei Han." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics, ACL 2018, Melbourne, Australia, July",
+      "citeRegEx" : "Chen et al\\.,? 2018b",
+      "shortCiteRegEx" : "Chen et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Iterative search for weakly supervised semantic parsing",
+      "author" : [ "Pradeep Dasigi", "Matt Gardner", "Shikhar Murty", "Luke Zettlemoyer", "Eduard H. Hovy." ],
+      "venue" : "Proceedings of the 2019 Conference of the North American Chapter of the Association for Computa-",
+      "citeRegEx" : "Dasigi et al\\.,? 2019",
+      "shortCiteRegEx" : "Dasigi et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Language to logical form with neural attention",
+      "author" : [ "Li Dong", "Mirella Lapata." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics, ACL 2016, August 7-12, 2016, Berlin, Germany, Volume 1: Long Papers.",
+      "citeRegEx" : "Dong and Lapata.,? 2016",
+      "shortCiteRegEx" : "Dong and Lapata.",
+      "year" : 2016
+    }, {
+      "title" : "Learning to paraphrase for question answering",
+      "author" : [ "Li Dong", "Jonathan Mallinson", "Siva Reddy", "Mirella Lapata." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, EMNLP 2017, Copenhagen, Denmark,",
+      "citeRegEx" : "Dong et al\\.,? 2017",
+      "shortCiteRegEx" : "Dong et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Weakly supervised semantic parsing with abstract examples",
+      "author" : [ "Omer Goldman", "Veronica Latcinnik", "Ehud Nave", "Amir Globerson", "Jonathan Berant." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics, ACL 2018,",
+      "citeRegEx" : "Goldman et al\\.,? 2018",
+      "shortCiteRegEx" : "Goldman et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Confidence driven unsupervised semantic parsing",
+      "author" : [ "Dan Goldwasser", "Roi Reichart", "James Clarke", "Dan Roth." ],
+      "venue" : "The 49th Annual Meeting of the Asso-",
+      "citeRegEx" : "Goldwasser et al\\.,? 2011",
+      "shortCiteRegEx" : "Goldwasser et al\\.",
+      "year" : 2011
+    }, {
+      "title" : "Question generation from SQL queries improves neural semantic parsing",
+      "author" : [ "Daya Guo", "Yibo Sun", "Duyu Tang", "Nan Duan", "Jian Yin", "Hong Chi", "James Cao", "Peng Chen", "Ming Zhou." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Nat-",
+      "citeRegEx" : "Guo et al\\.,? 2018",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Benchmarking meaning representations in neural semantic parsing",
+      "author" : [ "Jiaqi Guo", "Qian Liu", "Jian-Guang Lou", "Zhenwen Li", "Xueqing Liu", "Tao Xie", "Ting Liu." ],
+      "venue" : "EMNLP.",
+      "citeRegEx" : "Guo et al\\.,? 2020",
+      "shortCiteRegEx" : "Guo et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Decoupling structure and lexicon for zero-shot semantic parsing",
+      "author" : [ "Jonathan Herzig", "Jonathan Berant." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, Brussels, Belgium, October 31 - November 4,",
+      "citeRegEx" : "Herzig and Berant.,? 2018",
+      "shortCiteRegEx" : "Herzig and Berant.",
+      "year" : 2018
+    }, {
+      "title" : "Don’t paraphrase, detect! rapid and effective data collection for semantic parsing",
+      "author" : [ "Jonathan Herzig", "Jonathan Berant." ],
+      "venue" : "Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International",
+      "citeRegEx" : "Herzig and Berant.,? 2019",
+      "shortCiteRegEx" : "Herzig and Berant.",
+      "year" : 2019
+    }, {
+      "title" : "Search-based neural structured learning for sequential question answering",
+      "author" : [ "Mohit Iyyer", "Wen-tau Yih", "Ming-Wei Chang." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics, ACL 2017, Vancouver, Canada,",
+      "citeRegEx" : "Iyyer et al\\.,? 2017",
+      "shortCiteRegEx" : "Iyyer et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Data recombination for neural semantic parsing",
+      "author" : [ "Robin Jia", "Percy Liang." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics, ACL 2016, August 7-12, 2016, Berlin, Germany, Volume 1: Long Papers.",
+      "citeRegEx" : "Jia and Liang.,? 2016",
+      "shortCiteRegEx" : "Jia and Liang.",
+      "year" : 2016
+    }, {
+      "title" : "Dependency-based hybrid trees for semantic parsing",
+      "author" : [ "Zhanming Jie", "Wei Lu." ],
+      "venue" : "Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing, Brussels, Belgium, October 31 - November 4, 2018, pages 2431–2441.",
+      "citeRegEx" : "Jie and Lu.,? 2018",
+      "shortCiteRegEx" : "Jie and Lu.",
+      "year" : 2018
+    }, {
+      "title" : "Learning to transform natural to formal languages",
+      "author" : [ "Rohit J. Kate", "Yuk Wah Wong", "Raymond J. Mooney." ],
+      "venue" : "Proceedings, The Twentieth National Conference on Artificial Intelligence and the Seventeenth Innovative Applications of Artificial In-",
+      "citeRegEx" : "Kate et al\\.,? 2005",
+      "shortCiteRegEx" : "Kate et al\\.",
+      "year" : 2005
+    }, {
+      "title" : "On the translation of languages from left to right",
+      "author" : [ "Donald E. Knuth." ],
+      "venue" : "Inf. Control., 8(6):607– 639.",
+      "citeRegEx" : "Knuth.,? 1965",
+      "shortCiteRegEx" : "Knuth.",
+      "year" : 1965
+    }, {
+      "title" : "Neural semantic parsing with type constraints for semi-structured tables",
+      "author" : [ "Jayant Krishnamurthy", "Pradeep Dasigi", "Matt Gardner." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, EMNLP 2017, Copen-",
+      "citeRegEx" : "Krishnamurthy et al\\.,? 2017",
+      "shortCiteRegEx" : "Krishnamurthy et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Decomposable neural paraphrase generation",
+      "author" : [ "Zichao Li", "Xin Jiang", "Lifeng Shang", "Qun Liu." ],
+      "venue" : "Proceedings of the 57th Conference of the Association for Computational Linguistics, ACL 2019, Florence, Italy, July 28- August 2, 2019, Volume 1:",
+      "citeRegEx" : "Li et al\\.,? 2019",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Neural symbolic machines: Learning semantic parsers on freebase with weak supervision",
+      "author" : [ "Chen Liang", "Jonathan Berant", "Quoc Le", "Kenneth D. Forbus", "Ni Lao." ],
+      "venue" : "Proceedings of the 55th Annual Meeting of the Association for Computational",
+      "citeRegEx" : "Liang et al\\.,? 2017",
+      "shortCiteRegEx" : "Liang et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Fast semantic parsing with welltypedness guarantees",
+      "author" : [ "Matthias Lindemann", "Jonas Groschwitz", "Alexander Koller." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing, EMNLP 2020, Online, Novem-",
+      "citeRegEx" : "Lindemann et al\\.,? 2020",
+      "shortCiteRegEx" : "Lindemann et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "A generative model for parsing natural language to meaning representations",
+      "author" : [ "Wei Lu", "Hwee Tou Ng", "Wee Sun Lee", "Luke S. Zettlemoyer." ],
+      "venue" : "2008 Conference on Empirical Methods in Natural Language Processing, EMNLP 2008, Proceedings",
+      "citeRegEx" : "Lu et al\\.,? 2008",
+      "shortCiteRegEx" : "Lu et al\\.",
+      "year" : 2008
+    }, {
+      "title" : "Look-up and adapt: A oneshot semantic parser",
+      "author" : [ "Zhichu Lu", "Forough Arabshahi", "Igor Labutov", "Tom M. Mitchell." ],
+      "venue" : "CoRR, abs/1910.12197.",
+      "citeRegEx" : "Lu et al\\.,? 2019",
+      "shortCiteRegEx" : "Lu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Unnatural language processing: Bridging the gap between synthetic and natural language data",
+      "author" : [ "Alana Marzoev", "Samuel Madden", "M. Frans Kaashoek", "Michael J. Cafarella", "Jacob Andreas." ],
+      "venue" : "CoRR, abs/2004.13645.",
+      "citeRegEx" : "Marzoev et al\\.,? 2020",
+      "shortCiteRegEx" : "Marzoev et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Inferring logical forms from denotations",
+      "author" : [ "Panupong Pasupat", "Percy Liang." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics, ACL 2016, August 7-12, 2016, Berlin, Germany, Volume 1: Long Papers.",
+      "citeRegEx" : "Pasupat and Liang.,? 2016",
+      "shortCiteRegEx" : "Pasupat and Liang.",
+      "year" : 2016
+    }, {
+      "title" : "Unsupervised semantic parsing",
+      "author" : [ "Hoifung Poon", "Pedro M. Domingos." ],
+      "venue" : "Proceedings of the 2009 Conference on Empirical Methods in Natural Language Processing, EMNLP 2009, 6-7 August 2009, Singapore, A meeting of SIGDAT, a Special",
+      "citeRegEx" : "Poon and Domingos.,? 2009",
+      "shortCiteRegEx" : "Poon and Domingos.",
+      "year" : 2009
+    }, {
+      "title" : "Language models are unsupervised multitask learners",
+      "author" : [ "Alec Radford", "Jeffrey Wu", "Rewon Child", "David Luan", "Dario Amodei", "Ilya Sutskever" ],
+      "venue" : null,
+      "citeRegEx" : "Radford et al\\.,? \\Q2019\\E",
+      "shortCiteRegEx" : "Radford et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Exploring the limits of transfer learning with a unified text-to-text transformer",
+      "author" : [ "Colin Raffel", "Noam Shazeer", "Adam Roberts", "Katherine Lee", "Sharan Narang", "Michael Matena", "Yanqi Zhou", "Wei Li", "Peter J. Liu." ],
+      "venue" : "J. Mach. Learn. Res., 21:140:1–140:67.",
+      "citeRegEx" : "Raffel et al\\.,? 2020",
+      "shortCiteRegEx" : "Raffel et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Large-scale semantic parsing without questionanswer pairs",
+      "author" : [ "Siva Reddy", "Mirella Lapata", "Mark Steedman." ],
+      "venue" : "Transactions of the Association for Computational Linguistics, 2:377–392.",
+      "citeRegEx" : "Reddy et al\\.,? 2014",
+      "shortCiteRegEx" : "Reddy et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "An unsupervised joint system for text generation from knowledge graphs and semantic parsing",
+      "author" : [ "Martin Schmitt", "Sahand Sharifzadeh", "Volker Tresp", "Hinrich Schütze." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language",
+      "citeRegEx" : "Schmitt et al\\.,? 2020",
+      "shortCiteRegEx" : "Schmitt et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Multi-level alignment pretraining for multi-lingual semantic parsing",
+      "author" : [ "Bo Shao", "Yeyun Gong", "Weizhen Qi", "Nan Duan", "Xiaola Lin." ],
+      "venue" : "Proceedings of the 28th International Conference on Computational Linguistics, COLING 2020, Barcelona, Spain",
+      "citeRegEx" : "Shao et al\\.,? 2020",
+      "shortCiteRegEx" : "Shao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Cross-domain semantic parsing via paraphrasing",
+      "author" : [ "Yu Su", "Xifeng Yan." ],
+      "venue" : "Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing, EMNLP 2017, Copenhagen, Denmark, September 9-11, 2017, pages 1235–1246.",
+      "citeRegEx" : "Su and Yan.,? 2017",
+      "shortCiteRegEx" : "Su and Yan.",
+      "year" : 2017
+    }, {
+      "title" : "Neural semantic parsing in low-resource settings with back-translation and meta-learning",
+      "author" : [ "Yibo Sun", "Duyu Tang", "Nan Duan", "Yeyun Gong", "Xiaocheng Feng", "Bing Qin", "Daxin Jiang." ],
+      "venue" : "CoRR, abs/1909.05438.",
+      "citeRegEx" : "Sun et al\\.,? 2019",
+      "shortCiteRegEx" : "Sun et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Building a semantic parser overnight",
+      "author" : [ "Yushi Wang", "Jonathan Berant", "Percy Liang." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Linguistics and the 7th International Joint Conference on Natural Language Pro-",
+      "citeRegEx" : "Wang et al\\.,? 2015",
+      "shortCiteRegEx" : "Wang et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Learning synchronous grammars for semantic parsing with lambda calculus",
+      "author" : [ "Yuk Wah Wong", "Raymond J. Mooney." ],
+      "venue" : "ACL 2007, Proceedings of the 45th Annual Meeting of the Association for Computational Linguistics, June 23-30, 2007, Prague,",
+      "citeRegEx" : "Wong and Mooney.,? 2007",
+      "shortCiteRegEx" : "Wong and Mooney.",
+      "year" : 2007
+    }, {
+      "title" : "Sequence-based structured prediction for semantic parsing",
+      "author" : [ "Chunyang Xiao", "Marc Dymetman", "Claire Gardent." ],
+      "venue" : "Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics, ACL 2016, August 7-12, 2016, Berlin, Ger-",
+      "citeRegEx" : "Xiao et al\\.,? 2016",
+      "shortCiteRegEx" : "Xiao et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Improving AMR parsing with sequence-to-sequence pre-training",
+      "author" : [ "Dongqin Xu", "Junhui Li", "Muhua Zhu", "Min Zhang", "Guodong Zhou." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing, EMNLP 2020,",
+      "citeRegEx" : "Xu et al\\.,? 2020a",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Autoqa: From databases to QA semantic parsers with only synthetic training data",
+      "author" : [ "Silei Xu", "Sina J. Semnani", "Giovanni Campagna", "Monica S. Lam." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Process-",
+      "citeRegEx" : "Xu et al\\.,? 2020b",
+      "shortCiteRegEx" : "Xu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Jointly learning semantic parser and natural language generator via dual information maximization",
+      "author" : [ "Hai Ye", "Wenjie Li", "Lu Wang." ],
+      "venue" : "Proceedings of the 57th Conference of the Association for Computational Linguistics, ACL 2019, Florence, Italy,",
+      "citeRegEx" : "Ye et al\\.,? 2019",
+      "shortCiteRegEx" : "Ye et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Semantic parsing via staged query graph generation: Question answering with knowledge base",
+      "author" : [ "Wen-tau Yih", "Ming-Wei Chang", "Xiaodong He", "Jianfeng Gao." ],
+      "venue" : "Proceedings of the 53rd Annual Meeting of the Association for Computational Lin-",
+      "citeRegEx" : "Yih et al\\.,? 2015",
+      "shortCiteRegEx" : "Yih et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "A syntactic neural model for general-purpose code generation",
+      "author" : [ "Pengcheng Yin", "Graham Neubig." ],
+      "venue" : "ACL 2017, pages 440–450. ACL 2017.",
+      "citeRegEx" : "Yin and Neubig.,? 2017",
+      "shortCiteRegEx" : "Yin and Neubig.",
+      "year" : 2017
+    }, {
+      "title" : "Reranking for neural semantic parsing",
+      "author" : [ "Pengcheng Yin", "Graham Neubig." ],
+      "venue" : "Proceedings of the 57th Conference of the Association for Computational Linguistics, ACL 2019, Florence, Italy, July 28- August 2, 2019, Volume 1: Long Papers, pages",
+      "citeRegEx" : "Yin and Neubig.,? 2019",
+      "shortCiteRegEx" : "Yin and Neubig.",
+      "year" : 2019
+    }, {
+      "title" : "Structvae: Tree-structured latent variable models for semi-supervised semantic parsing",
+      "author" : [ "Pengcheng Yin", "Chunting Zhou", "Junxian He", "Graham Neubig." ],
+      "venue" : "Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics, ACL",
+      "citeRegEx" : "Yin et al\\.,? 2018",
+      "shortCiteRegEx" : "Yin et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Grappa: Grammar-augmented pre-training for table semantic parsing",
+      "author" : [ "Tao Yu", "Chien-Sheng Wu", "Xi Victoria Lin", "Bailin Wang", "Yi Chern Tan", "Xinyi Yang", "Dragomir R. Radev", "Richard Socher", "Caiming Xiong." ],
+      "venue" : "CoRR, abs/2009.13845.",
+      "citeRegEx" : "Yu et al\\.,? 2020",
+      "shortCiteRegEx" : "Yu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Learning to parse database queries using inductive logic programming",
+      "author" : [ "John M. Zelle", "Raymond J. Mooney." ],
+      "venue" : "Proceedings of the Thirteenth National Conference on Artificial Intelligence and",
+      "citeRegEx" : "Zelle and Mooney.,? 1996",
+      "shortCiteRegEx" : "Zelle and Mooney.",
+      "year" : 1996
+    }, {
+      "title" : "Learning to map sentences to logical form: Structured classification with probabilistic categorial grammars",
+      "author" : [ "Luke S. Zettlemoyer", "Michael Collins." ],
+      "venue" : "UAI ’05, Proceedings of the 21st Conference in Uncertainty in Artificial Intelligence, Ed-",
+      "citeRegEx" : "Zettlemoyer and Collins.,? 2005",
+      "shortCiteRegEx" : "Zettlemoyer and Collins.",
+      "year" : 2005
+    }, {
+      "title" : "Semantic parsing for english as a second language",
+      "author" : [ "Yuanyuan Zhao", "Weiwei Sun", "Junjie Cao", "Xiaojun Wan." ],
+      "venue" : "Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics, ACL 2020, Online, July 5-10, 2020, pages",
+      "citeRegEx" : "Zhao et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhao et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Grounded adaptation for zeroshot executable semantic parsing",
+      "author" : [ "Victor Zhong", "Mike Lewis", "Sida I. Wang", "Luke Zettlemoyer." ],
+      "venue" : "Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing, EMNLP 2020, Online,",
+      "citeRegEx" : "Zhong et al\\.,? 2020",
+      "shortCiteRegEx" : "Zhong et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 51,
+      "context" : "Semantic parsing aims to translate natural language utterances to their formal meaning representations, such as lambda calculus (Zettlemoyer and Collins, 2005; Wong and Mooney, 2007), FunQL (Kate et al.",
+      "startOffset" : 128,
+      "endOffset" : 182
+    }, {
+      "referenceID" : 40,
+      "context" : "Semantic parsing aims to translate natural language utterances to their formal meaning representations, such as lambda calculus (Zettlemoyer and Collins, 2005; Wong and Mooney, 2007), FunQL (Kate et al.",
+      "startOffset" : 128,
+      "endOffset" : 182
+    }, {
+      "referenceID" : 21,
+      "context" : "Semantic parsing aims to translate natural language utterances to their formal meaning representations, such as lambda calculus (Zettlemoyer and Collins, 2005; Wong and Mooney, 2007), FunQL (Kate et al., 2005; Lu et al., 2008), and SQL queries.",
+      "startOffset" : 190,
+      "endOffset" : 226
+    }, {
+      "referenceID" : 27,
+      "context" : "Semantic parsing aims to translate natural language utterances to their formal meaning representations, such as lambda calculus (Zettlemoyer and Collins, 2005; Wong and Mooney, 2007), FunQL (Kate et al., 2005; Lu et al., 2008), and SQL queries.",
+      "startOffset" : 190,
+      "endOffset" : 226
+    }, {
+      "referenceID" : 10,
+      "context" : "Currently, most neural semantic parsers (Dong and Lapata, 2016; Chen et al., 2018b; Zhao et al., 2020; Shao et al., 2020) model semantic parsing as a sequence to sequence translation task via encoder-decoder framework.",
+      "startOffset" : 40,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 8,
+      "context" : "Currently, most neural semantic parsers (Dong and Lapata, 2016; Chen et al., 2018b; Zhao et al., 2020; Shao et al., 2020) model semantic parsing as a sequence to sequence translation task via encoder-decoder framework.",
+      "startOffset" : 40,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 52,
+      "context" : "Currently, most neural semantic parsers (Dong and Lapata, 2016; Chen et al., 2018b; Zhao et al., 2020; Shao et al., 2020) model semantic parsing as a sequence to sequence translation task via encoder-decoder framework.",
+      "startOffset" : 40,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 36,
+      "context" : "Currently, most neural semantic parsers (Dong and Lapata, 2016; Chen et al., 2018b; Zhao et al., 2020; Shao et al., 2020) model semantic parsing as a sequence to sequence translation task via encoder-decoder framework.",
+      "startOffset" : 40,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 3,
+      "context" : "∗Corresponding Author (1)Canonical utterances are pseudo-language representations of logical forms, which have the synchronous structure of logical forms.(Berant and Liang, 2014; Xiao et al., 2016; Su and Yan, 2017; Cao et al., 2020) Paraphrase Model Semantic Parsing Grammar",
+      "startOffset" : 154,
+      "endOffset" : 233
+    }, {
+      "referenceID" : 41,
+      "context" : "∗Corresponding Author (1)Canonical utterances are pseudo-language representations of logical forms, which have the synchronous structure of logical forms.(Berant and Liang, 2014; Xiao et al., 2016; Su and Yan, 2017; Cao et al., 2020) Paraphrase Model Semantic Parsing Grammar",
+      "startOffset" : 154,
+      "endOffset" : 233
+    }, {
+      "referenceID" : 37,
+      "context" : "∗Corresponding Author (1)Canonical utterances are pseudo-language representations of logical forms, which have the synchronous structure of logical forms.(Berant and Liang, 2014; Xiao et al., 2016; Su and Yan, 2017; Cao et al., 2020) Paraphrase Model Semantic Parsing Grammar",
+      "startOffset" : 154,
+      "endOffset" : 233
+    }, {
+      "referenceID" : 5,
+      "context" : "∗Corresponding Author (1)Canonical utterances are pseudo-language representations of logical forms, which have the synchronous structure of logical forms.(Berant and Liang, 2014; Xiao et al., 2016; Su and Yan, 2017; Cao et al., 2020) Paraphrase Model Semantic Parsing Grammar",
+      "startOffset" : 154,
+      "endOffset" : 233
+    }, {
+      "referenceID" : 41,
+      "context" : "For example, the grammar-based neural semantic parsers (Xiao et al., 2016; Yin and Neubig, 2017) and the constrained decoding algorithm (Krishnamurthy et al.",
+      "startOffset" : 55,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 46,
+      "context" : "For example, the grammar-based neural semantic parsers (Xiao et al., 2016; Yin and Neubig, 2017) and the constrained decoding algorithm (Krishnamurthy et al.",
+      "startOffset" : 55,
+      "endOffset" : 96
+    }, {
+      "referenceID" : 23,
+      "context" : ", 2016; Yin and Neubig, 2017) and the constrained decoding algorithm (Krishnamurthy et al., 2017).",
+      "startOffset" : 69,
+      "endOffset" : 97
+    }, {
+      "referenceID" : 3,
+      "context" : "For example, supervised methods (Berant and Liang, 2014; Su and Yan, 2017) use the paraphrasing scores between canonical utterances and sentences to re-rank logical forms; Two-stage (Cao et al.",
+      "startOffset" : 32,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 37,
+      "context" : "For example, supervised methods (Berant and Liang, 2014; Su and Yan, 2017) use the paraphrasing scores between canonical utterances and sentences to re-rank logical forms; Two-stage (Cao et al.",
+      "startOffset" : 32,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 5,
+      "context" : "For example, supervised methods (Berant and Liang, 2014; Su and Yan, 2017) use the paraphrasing scores between canonical utterances and sentences to re-rank logical forms; Two-stage (Cao et al., 2020) rewrites utterances to canonical utterances which can be easily parsed.",
+      "startOffset" : 182,
+      "endOffset" : 200
+    }, {
+      "referenceID" : 39,
+      "context" : "Synchronous context-free grammar(SCFG) is employed as our synchronous grammar, which is widely used to convert a meaning representation into an unique canonical utterance (Wang et al., 2015; Jia and Liang, 2016).",
+      "startOffset" : 171,
+      "endOffset" : 211
+    }, {
+      "referenceID" : 19,
+      "context" : "Synchronous context-free grammar(SCFG) is employed as our synchronous grammar, which is widely used to convert a meaning representation into an unique canonical utterance (Wang et al., 2015; Jia and Liang, 2016).",
+      "startOffset" : 171,
+      "endOffset" : 211
+    }, {
+      "referenceID" : 46,
+      "context" : "Grammar-based decoders have been proposed to output sequences of grammar rules instead of words(Yin and Neubig, 2017).",
+      "startOffset" : 95,
+      "endOffset" : 117
+    }, {
+      "referenceID" : 22,
+      "context" : "Firstly, we construct a deterministic automaton using LR(1) parser (Knuth, 1965) from the CFG in utterance side.",
+      "startOffset" : 67,
+      "endOffset" : 80
+    }, {
+      "referenceID" : 32,
+      "context" : "We can directly use general paraphrase generation models such as GPT-2(Radford et al., 2019), T5(Raffel et al.",
+      "startOffset" : 70,
+      "endOffset" : 92
+    }, {
+      "referenceID" : 42,
+      "context" : "Previous studies have shown that the pretraining on synthesized data can significantly improve the performance of semantic parsing (Xu et al., 2020a; Marzoev et al., 2020; Yu et al., 2020; Xu et al., 2020b).",
+      "startOffset" : 131,
+      "endOffset" : 206
+    }, {
+      "referenceID" : 29,
+      "context" : "Previous studies have shown that the pretraining on synthesized data can significantly improve the performance of semantic parsing (Xu et al., 2020a; Marzoev et al., 2020; Yu et al., 2020; Xu et al., 2020b).",
+      "startOffset" : 131,
+      "endOffset" : 206
+    }, {
+      "referenceID" : 49,
+      "context" : "Previous studies have shown that the pretraining on synthesized data can significantly improve the performance of semantic parsing (Xu et al., 2020a; Marzoev et al., 2020; Yu et al., 2020; Xu et al., 2020b).",
+      "startOffset" : 131,
+      "endOffset" : 206
+    }, {
+      "referenceID" : 43,
+      "context" : "Previous studies have shown that the pretraining on synthesized data can significantly improve the performance of semantic parsing (Xu et al., 2020a; Marzoev et al., 2020; Yu et al., 2020; Xu et al., 2020b).",
+      "startOffset" : 131,
+      "endOffset" : 206
+    }, {
+      "referenceID" : 3,
+      "context" : "Reranking for semantic parsing has been exploited in many previous studies (Berant and Liang, 2014; Yin and Neubig, 2019).",
+      "startOffset" : 75,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 47,
+      "context" : "Reranking for semantic parsing has been exploited in many previous studies (Berant and Liang, 2014; Yin and Neubig, 2019).",
+      "startOffset" : 75,
+      "endOffset" : 121
+    }, {
+      "referenceID" : 50,
+      "context" : "geography (Zelle and Mooney, 1996) using the variable-free semantic representation FunQL (Kate et al.",
+      "startOffset" : 10,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 21,
+      "context" : "geography (Zelle and Mooney, 1996) using the variable-free semantic representation FunQL (Kate et al., 2005).",
+      "startOffset" : 89,
+      "endOffset" : 108
+    }, {
+      "referenceID" : 17,
+      "context" : "GEOGRANNO This is another version of GEO (Herzig and Berant, 2019), in which lambda DCS logical forms paired with canonical utterances are produced from SCFG.",
+      "startOffset" : 41,
+      "endOffset" : 66
+    }, {
+      "referenceID" : 5,
+      "context" : "Specifically, we enhance the original SSD using the SAMPLES methods (Cao et al., 2020): we label each input sentences with the most possible outputs in the nonparallel corpus and use these samples as peusdo training data – we denote this setting as SSD-SAMPLES.",
+      "startOffset" : 68,
+      "endOffset" : 86
+    }, {
+      "referenceID" : 16,
+      "context" : "Baselines We compare our method with the following unsupervised baselines: 1) Cross-domain Zero Shot(Herzig and Berant, 2018), which trains on other source domains and then generalizes to target domains in OVERNIGHT and 2) GENOVERNIGHT(Wang et al.",
+      "startOffset" : 100,
+      "endOffset" : 125
+    }, {
+      "referenceID" : 39,
+      "context" : "Baselines We compare our method with the following unsupervised baselines: 1) Cross-domain Zero Shot(Herzig and Berant, 2018), which trains on other source domains and then generalizes to target domains in OVERNIGHT and 2) GENOVERNIGHT(Wang et al., 2015) in which models are trained on synthesized 〈CU, MR〉 pairs; 3) We also implement SEQ2SEQ baseline on the synthesized data as SYNTH-SEQ2SEQ.",
+      "startOffset" : 235,
+      "endOffset" : 254
+    }, {
+      "referenceID" : 1,
+      "context" : "Many weakly supervised learning are proposed (Artzi and Zettlemoyer, 2013; Berant et al., 2013; Reddy et al., 2014; Agrawal et al., 2019; Chen et al., 2020), such as denotation-base learning (Pasupat and Liang, 2016; Goldman et al.",
+      "startOffset" : 45,
+      "endOffset" : 156
+    }, {
+      "referenceID" : 2,
+      "context" : "Many weakly supervised learning are proposed (Artzi and Zettlemoyer, 2013; Berant et al., 2013; Reddy et al., 2014; Agrawal et al., 2019; Chen et al., 2020), such as denotation-base learning (Pasupat and Liang, 2016; Goldman et al.",
+      "startOffset" : 45,
+      "endOffset" : 156
+    }, {
+      "referenceID" : 34,
+      "context" : "Many weakly supervised learning are proposed (Artzi and Zettlemoyer, 2013; Berant et al., 2013; Reddy et al., 2014; Agrawal et al., 2019; Chen et al., 2020), such as denotation-base learning (Pasupat and Liang, 2016; Goldman et al.",
+      "startOffset" : 45,
+      "endOffset" : 156
+    }, {
+      "referenceID" : 0,
+      "context" : "Many weakly supervised learning are proposed (Artzi and Zettlemoyer, 2013; Berant et al., 2013; Reddy et al., 2014; Agrawal et al., 2019; Chen et al., 2020), such as denotation-base learning (Pasupat and Liang, 2016; Goldman et al.",
+      "startOffset" : 45,
+      "endOffset" : 156
+    }, {
+      "referenceID" : 7,
+      "context" : "Many weakly supervised learning are proposed (Artzi and Zettlemoyer, 2013; Berant et al., 2013; Reddy et al., 2014; Agrawal et al., 2019; Chen et al., 2020), such as denotation-base learning (Pasupat and Liang, 2016; Goldman et al.",
+      "startOffset" : 45,
+      "endOffset" : 156
+    }, {
+      "referenceID" : 30,
+      "context" : ", 2020), such as denotation-base learning (Pasupat and Liang, 2016; Goldman et al., 2018), iterative searching (Dasigi et al.",
+      "startOffset" : 42,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 12,
+      "context" : ", 2020), such as denotation-base learning (Pasupat and Liang, 2016; Goldman et al., 2018), iterative searching (Dasigi et al.",
+      "startOffset" : 42,
+      "endOffset" : 89
+    }, {
+      "referenceID" : 6,
+      "context" : "Semi-supervised semantic parsing is also proposed(Chen et al., 2018a).",
+      "startOffset" : 49,
+      "endOffset" : 69
+    }, {
+      "referenceID" : 48,
+      "context" : "Such as variational auto-encoding (Yin et al., 2018), dual learning framework for semantic parsing (Cao et al.",
+      "startOffset" : 34,
+      "endOffset" : 52
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2018), dual learning framework for semantic parsing (Cao et al., 2019), dual information maximization method (Ye et al.",
+      "startOffset" : 54,
+      "endOffset" : 72
+    }, {
+      "referenceID" : 44,
+      "context" : ", 2019), dual information maximization method (Ye et al., 2019), and backtranslation (Sun et al.",
+      "startOffset" : 46,
+      "endOffset" : 63
+    }, {
+      "referenceID" : 37,
+      "context" : "The domain transfer techniques are also used to reduce the cost of data collecting for the unseen domain (Su and Yan, 2017; Herzig and Berant, 2018; Lu et al., 2019; Zhong et al., 2020).",
+      "startOffset" : 105,
+      "endOffset" : 185
+    }, {
+      "referenceID" : 16,
+      "context" : "The domain transfer techniques are also used to reduce the cost of data collecting for the unseen domain (Su and Yan, 2017; Herzig and Berant, 2018; Lu et al., 2019; Zhong et al., 2020).",
+      "startOffset" : 105,
+      "endOffset" : 185
+    }, {
+      "referenceID" : 28,
+      "context" : "The domain transfer techniques are also used to reduce the cost of data collecting for the unseen domain (Su and Yan, 2017; Herzig and Berant, 2018; Lu et al., 2019; Zhong et al., 2020).",
+      "startOffset" : 105,
+      "endOffset" : 185
+    }, {
+      "referenceID" : 53,
+      "context" : "The domain transfer techniques are also used to reduce the cost of data collecting for the unseen domain (Su and Yan, 2017; Herzig and Berant, 2018; Lu et al., 2019; Zhong et al., 2020).",
+      "startOffset" : 105,
+      "endOffset" : 185
+    }, {
+      "referenceID" : 45,
+      "context" : "After neural parsers model semantic parsing as a sentence to logical form translation task (Yih et al., 2015; Krishnamurthy et al., 2017; Iyyer et al., 2017; Jie and Lu, 2018; Lindemann et al., 2020), many constrained decoding algorithms are also proposed, such as type constraint-based illegal token filtering (Krishnamurthy et al.",
+      "startOffset" : 91,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 23,
+      "context" : "After neural parsers model semantic parsing as a sentence to logical form translation task (Yih et al., 2015; Krishnamurthy et al., 2017; Iyyer et al., 2017; Jie and Lu, 2018; Lindemann et al., 2020), many constrained decoding algorithms are also proposed, such as type constraint-based illegal token filtering (Krishnamurthy et al.",
+      "startOffset" : 91,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 18,
+      "context" : "After neural parsers model semantic parsing as a sentence to logical form translation task (Yih et al., 2015; Krishnamurthy et al., 2017; Iyyer et al., 2017; Jie and Lu, 2018; Lindemann et al., 2020), many constrained decoding algorithms are also proposed, such as type constraint-based illegal token filtering (Krishnamurthy et al.",
+      "startOffset" : 91,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 20,
+      "context" : "After neural parsers model semantic parsing as a sentence to logical form translation task (Yih et al., 2015; Krishnamurthy et al., 2017; Iyyer et al., 2017; Jie and Lu, 2018; Lindemann et al., 2020), many constrained decoding algorithms are also proposed, such as type constraint-based illegal token filtering (Krishnamurthy et al.",
+      "startOffset" : 91,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 26,
+      "context" : "After neural parsers model semantic parsing as a sentence to logical form translation task (Yih et al., 2015; Krishnamurthy et al., 2017; Iyyer et al., 2017; Jie and Lu, 2018; Lindemann et al., 2020), many constrained decoding algorithms are also proposed, such as type constraint-based illegal token filtering (Krishnamurthy et al.",
+      "startOffset" : 91,
+      "endOffset" : 199
+    }, {
+      "referenceID" : 23,
+      "context" : ", 2020), many constrained decoding algorithms are also proposed, such as type constraint-based illegal token filtering (Krishnamurthy et al., 2017); Lisp interpreter-based method (Liang et al.",
+      "startOffset" : 119,
+      "endOffset" : 147
+    }, {
+      "referenceID" : 25,
+      "context" : ", 2017); Lisp interpreter-based method (Liang et al., 2017); type constraints for generating valid actions (Iyyer et al.",
+      "startOffset" : 39,
+      "endOffset" : 59
+    }, {
+      "referenceID" : 18,
+      "context" : ", 2017); type constraints for generating valid actions (Iyyer et al., 2017).",
+      "startOffset" : 55,
+      "endOffset" : 75
+    }, {
+      "referenceID" : 3,
+      "context" : "ParaSempre (Berant and Liang, 2014) use paraphrase model to rerank candidate logical forms.",
+      "startOffset" : 11,
+      "endOffset" : 35
+    } ],
+    "year" : 2021,
+    "abstractText" : "Semantic parsing is challenging due to the structure gap and the semantic gap between utterances and logical forms. In this paper, we propose an unsupervised semantic parsing method – Synchronous Semantic Decoding (SSD), which can simultaneously resolve the semantic gap and the structure gap by jointly leveraging paraphrasing and grammarconstrained decoding. Specifically, we reformulate semantic parsing as a constrained paraphrasing problem: given an utterance, our model synchronously generates its canonical utterance1 and meaning representation. During synchronous decoding: the utterance paraphrasing is constrained by the structure of the logical form, therefore the canonical utterance can be paraphrased controlledly; the semantic decoding is guided by the semantics of the canonical utterance, therefore its logical form can be generated unsupervisedly. Experimental results show that SSD is a promising approach and can achieve competitive unsupervised semantic parsing performance on multiple datasets.",
+    "creator" : "LaTeX with hyperref"
+  }
+}

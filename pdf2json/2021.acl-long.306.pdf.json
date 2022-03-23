@@ -1,0 +1,453 @@
+{
+  "name" : "2021.acl-long.306.pdf",
+  "metadata" : {
+    "source" : "META",
+    "title" : "Exploring Discourse Structures for Argument Impact Classification",
+    "authors" : [ "Xin Liu", "Jiefu Ou", "Yangqiu Song", "Xin Jiang" ],
+    "emails" : [ "xliucr@cse.ust.hk", "jouaa@connect.ust.hk", "yqsong@cse.ust.hk", "jiang.xin@huawei.com" ],
+    "sections" : [ {
+      "heading" : null,
+      "text" : "Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint Conference on Natural Language Processing, pages 3958–3969\nAugust 1–6, 2021. ©2021 Association for Computational Linguistics\n3958"
+    }, {
+      "heading" : "1 Introduction",
+      "text" : "It is an interesting natural language understanding problem to identify the impact and the persuasiveness of an argument in a conversation. Previous works have shown that many factors can affect the persuasiveness prediction, ranging from textual and argumentation features (Wei et al., 2016), style factors (Baff et al., 2020), to the traits of source or audience (Durmus and Cardie, 2018, 2019; ShmueliScheuer et al., 2019). Discourse relations, such as Restatement and Instantiation, among arguments reveal logical structures of a debate conversation. It is natural to consider using the discourse structure to study the argument impact.\nDurmus et al. (2019) initiated a new study of the influence of discourse contexts on determining argument quality by constructing a new dataset Kialo.\n∗ This work was done when Xin Liu was an intern at Huawei Noah’s Ark Lab.\nAs shown in Figure 1, it consists of arguments, impact labels, stances where every argument is located in an argument tree for a controversial topic. They argue contexts reflect the discourse of arguments and conduct experiments to utilize historical arguments. They find BERT with flat context concatenation is the best, but discourse structures are not easily captured by this method because it is difficult to reflect implicit discourse relations by the surface form of two arguments (Prasad et al., 2008; Lin et al., 2009; Xue et al., 2015; Lan et al., 2017; Varia et al., 2019). Therefore, there is still a gap to study how discourse relations and their sequential structures or patterns affect the argument impact and persuasiveness prediction.\nIn this paper, we acquire discourse relations for argument pairs with the state-of-the-art classifier for implicit discourse relations. Then we train a BiLSTM whose input is the sequence of discourse relations between two adjacent arguments to predict the last argument’s impact, and the performance is comparable to that of a BiLSTM on raw text. This indicates that a sequence of discourse re-\nlations is one of the essential factors for identifying the persuasive power of an argument. Based on this intuition, we further propose a new model called DISCOC (Discourse Context Oriented Classifier) to explicitly produce discourse-dependent contextualized representations, fuse context representations in long distances, and make predictions. By simple finetuning, our model beats the backbone RoBERTa (Liu et al., 2019) over 1.67% and previous best model BERT over 2.38%. Extensive experiments show that DISCOC results in steady increases when longer context paths with discourse structures, e.g., stances and discourse relations, are provided. On the contrary, encoders with full-range attentions are hard to capture such interactions, and narrow-range attentions cannot handle complex contexts and even become poisoned.\nOur contributions can be highlighted as follows: 1. To the best of our knowledge, we are the first to explicitly analyze the effect of discourse among contexts and an argument on the persuasiveness.\n2. We propose a new model called DISCOC to utilize attentions to imitate recurrent networks for sentence-level contextual representation learning.\n3. Fair and massive experiments demonstrate the significant improvement; detailed ablation studies prove the necessities of modules.\n4. Last, we discover distinct discourse relation path patterns in a machine learning way and conduct consistent case studies.\nCode is publicly released at https://github. com/HKUST-KnowComp/DisCOC."
+    }, {
+      "heading" : "2 Argument Tree Structure",
+      "text" : ""
+    }, {
+      "heading" : "2.1 Overview",
+      "text" : "Kialo dataset is collected by Durmus et al. (2019), which consists of 47,219 argument claim texts from kialo.com for 741 controversial topics and corresponding impact votes. Arguments are organized as tree structures, where a tree is rooted in an argument thesis, and each node corresponds to an argument claim. Along a path of an argument tree, every claim except the thesis was made to either support or oppose its parent claim and propose a viewpoint. As shown in Figure 1, an argument tree is rooted at the thesis “Physical torture of prisoners is an acceptable interrogation tool.”. There is one claim to support this thesis (S1 in green) and one to oppose it (O2 in fuchsia). Moreover, S1 is supported by its child claim S2 and opposed by O1, and S3 holds the same viewpoint of O2."
+    }, {
+      "heading" : "2.2 Claim and Context Path",
+      "text" : "As each claim was put in view of all its ancestral claims and surrounding siblings, the audience evaluated the claim based on how timely and appropriate it is. Therefore, the context information is of most interest to be discussed and researched in the Kialo dataset. We define that a claim denoted as C is the argumentative and persuasive text to express an idea for the audience, and a context path of a claim of length l is the path from the ancestor claim to its parent claim, denoted as (C0, C1, · · · , C l−1) where C l−1 is the parent of C. For simplicity, we may use C l instead of C without causing ambiguity. The longest path of C starts from the thesis. Statistically, the average length of the longest paths is 3.5."
+    }, {
+      "heading" : "2.3 Argument Stance",
+      "text" : "In a controversial topic, each argument claim except the thesis would have a stance, whether to support or oppose the argument thesis or its parent claim. In Kialo, users need to directly add a stance tag (Pro or Con) to show their agreement or disagreement about the chosen parent argument when they post their arguments. We use si to denote the stance whether Ci is to support or oppose its parent Ci−1 when i ≥ 1. The statistics of these stances are shown in Table 1."
+    }, {
+      "heading" : "2.4 Impact Label",
+      "text" : "After reading claims as well as the contexts, users may agree or disagree about these claims. The impact vote for each argument claim is provided by users who can choose from 1 to 5. Durmus et al. (2019) categorize votes into three impact classes (Not Impactful, Medium Impact, and Impactful) based on the agreement and the valid vote numbers to reduce noise. We can see the overall distribution from Table 1. The argument impact classification is defined to predict the impact label y of C given the claim text C and its corresponding context path (C0, C1, · · · , C l−1)."
+    }, {
+      "heading" : "3 Discourse Structure Analysis",
+      "text" : ""
+    }, {
+      "heading" : "3.1 Argument Impact from the Perspective of Discourse",
+      "text" : "As paths under a controversial topic are strongly related to Comparison (e.g., Contrast), Contingency (e.g., Reason), Expansion (e.g., Restatement), and Temporal (e.g., Succession) discourse relations (Prasad et al., 2008), we model the discourse structures from a view of discourse relations. The first step is to acquire discourse relation annotations. BMGF-RoBERTa (Liu et al., 2020) is the state-of-the-art model proposed to detect implicit discourse relations from raw text. In the following experiments, we use that as our annotation model to predict discourse relation distributions for each adjacent claim pair.\nSpecifically, for a given argument claim C l and its context path (C0, C1, · · · , C l−1), we denote pdisco(C\nl) = (r1, r2, · · · , rl) as a discourse relation path such that ri ∈ R indicates the discourse relation between Ci−1 and Ci when i ≥ 1. In this work, we adopt the 14 discourse relation senses in CoNLL2015 Shared Task (Xue et al., 2015) as R. And we also define the corresponding distributed discourse relation path to be pdist(C l) = (d1,d2, · · · ,dl) such that di = F (Ci−1, Ci) is the predicted discourse relation distribution between claims Ci−1 and Ci (i ≥ 1) by a predictive model F . In experiments, F is BMGFRoBERTa1. 8 out of 14 relations appear in the predictions, and the statistics of 7 frequent predictions are shown in Table 2.\nAs discourse contexts would affect the persuasive power of claims, we first discover the correlations between impacts and stances as well as correlations between impacts and discourse relations, illustrated in Figure 2. From the label distribution and correlations, we find there are some clear trends: 1) Stances have little influence on argument impact, but discourse relations do. Correlations indicate that it is the contents instead of standpoints that contribute to potential impacts; 2) It is a smart choice to show some examples to convince others\n1The official open-source code is at https://github. com/HKUST-KnowComp/BMGF-RoBERTa. We train such a classifier on CoNLL2015 Shared Task training data, and achieve 57.57% accuracy on the test set.\nbecause Instantiation is more relevant to Impactful than any other relations; 3) Similarly, explaining is also helpful to make voices outstanding; 4) Restatement is also positively correlated with Impactful so that we can also share our opinions by paraphrasing others’ viewpoints to command more attention. On the contrary, Chosen Alternative is a risky method because the audience may object.\nTo investigate the role of discourse relations in impact analysis, we design a simple experiment that a single-layer BiLSTM followed by a 2-layer MLP with batch normalization predicts the impact by utilizing the distributed discourse relation path pdist(C\nl). For the purposes of comparison and analysis, we build another BiLSTM on the raw text. Each claim has [BOS] and [EOS] tokens to clarify boundaries and we use 300-dim pretrained GloVe word embeddings (Pennington et al., 2014) and remain them fixed. We set different thresholds for context path lengths so that we can control how many discourse relations or contexts are provided. From Figure 3, discourse features can result in comparable performance, especially when longer discourse paths are provided. Instead, the model with raw text gets stuck in complex contexts."
+    }, {
+      "heading" : "3.2 Discourse Context Oriented Classifier",
+      "text" : "It is generally agreed that the informative context can help understand the text to be classified. However, it is still unclear how to determine whether a context is helpful. One drawback of a broader context is the increasing ambiguity, especially in the scenario of the argument context path from different users like the results shown in Figure 3. Take claims in Figure 1 for example, S1 and O2 give two different consequences to support or oppose\nthe thesis. And O1 objects S1 by a contrast conclusion. It is hard to build a connection between the thesis and O1 if S1 is not given because it is challenging to build a connection between “reveal desired information” with “interrogation tool” without a precondition “Torture can help force prisoners to reveal information”. On the contrary, thesis and S2 are still compatible as S2 is also a kind of result. Hence, a recurrent model with the gating mechanism that depicts pair-wise relations and passes to the following texts makes more sense.\nLSTM has gates to decide whether to remember or forget during encoding, but it cannot handle long-range information with limited memory. Recently, transformer-based encoders have shown remarkable performance in various complicated tasks. These models regard sequences as fully connected graphs to learn the correlations and representations for each token. People assume that transformers can learn whether two tokens are relevant and how strong the correlation is by back-propagation. Table 3 illustrates different possible ways to aggregation context information. Transformer (Vaswani et al., 2017) and BERT (Devlin et al., 2019) adopt full-range attentions while TransformerXL (Dai et al., 2019) and XLNet (Yang et al., 2019) regard historical encoded representations as memories to reuse hidden states. SparseTransformer (Child et al., 2019), in the opposite direction, stacks hundreds of layers by narrow the attention scope by sparse factorization. Information can still spread after propagations in several layers. Inspired by these observations, we design DISCOC (Discourse Context Oriented Classifier) to capture contextualized features by localized attentions and imitate recurrent models to reduce noises from long distance context. As shown in Figure 4, DISCOC predicts the argument impact through three steps."
+    }, {
+      "heading" : "3.2.1 Adjacent Claim Pair Encoding",
+      "text" : "A difficult problem in such an argument claim tree is the noise in irrelevant contexts. A claim is connected to its parent claim because of a supporting or opposing stance, but claims in long distances are not high-correlated. Based on this observation, DISCOC conduct word-level representations by encoding claim pairs instead of the whole contexts.\nGiven a claim C l and its context path (C0, C1, · · · , C l−1), all adjacent pairs are coupled together, i.e., (C0, C1), · · · , (C l−1, C l). We can observe that each claim appears twice except the first and the last. Next, each pair (Ci−1, Ci) is fed into the RoBERTa encoder to get the contextualized word representations. C0 and C l are also encoded separately so that each claim has been encoded twice. We use −→ H i to denote the encoded word representations of Ci when this claim is encoded with its parent Ci−1, or when it is computed alone as C0. Similarly, ←− H i is the representations when encoding (Ci, Ci+1), or when it is fed as C l. The encoding runs in parallel but we still use the term phase to demonstrate for better understanding. In 0-th phase, RoBERTa outputs −→ H0. One particular relationship between a parent-child pair is the stance, and we insert the one special token [Pro] or [Con] between them. It makes the sentiment and viewpoint of the child claim more accurate. On the other hand, discourse relations can also influence impact prediction, as reported in Section 3.1. However, discourse relations are not mutually exclusive, let alone predictions from BMGF-RoBERTa are not precise. Thus, we use the relation distributions as weights to get sense-related embeddings over 14 relations. We add additional W 1di for the parent and W 2di for the child except position embeddings and segment embeddings, where di is predicted discourse relation distribution for (Ci−1, Ci), W 1 and W 2 are trainable transformations for parents and children. Hence, RoBERTa outputs\n←− H i−1 and−→ H i with the concatenation of two claims, [CTX] Ci−1 [SEP] [CLS] si Ci [SEP] in the i-th phase\n(i ∈ {1, 2, · · · , l}), where [CTX] is a special token to indicate the parent claim and distinguish from [CLS]. Its embedding is initialized as a copy embedding of [CLS] but able to update by itself. And←− H l is computed by self-attention with no context in the last phase. In the end, each claim Ci has two contextualized representations ←− H i and −→ H i with limited surrounding context information."
+    }, {
+      "heading" : "3.2.2 Bidirectional Representation Fusion",
+      "text" : "As claim representations { ←− H i} and { −→ H i} from RoBERTa are not bidirectional, we need to combine them and control which of them matters more. The gated fusion (Liu et al., 2020) has been shown of a better mixture than the combination of multihead attention and layer normalization. We use it to maintain the powerful representative features and carry useful historical context information:\nĤ i = MultiHead( ←− H i, −→ H i, −→ H i) (1) Aj = Sigmoid(W a[ ←− H i, Ĥ i]j + b a) (2) U i = A Ĥ i + (1−A) ←− H i, (3)\nwhere MultHead is the multi-head attention operation (Vaswani et al., 2017) whose query is ←− H i and key & value is −→ H i, Aj is the fusion gate for the j-th word embedding, [· · · ] is the concatenation, is the element product operation, and W a and ba are trainable matrix and bias for fusion gating.\nThere are two reasons why using ←− H i as the key of the multi-head attention: 1) [CLS] exists in the←− H i while the replaced token [CTX] appears in −→ H i when i 6= 0; 2) The position ids start from 0 when computing ←− H i. The fused [CLS] token embedding ui is selected to represent the whole claim."
+    }, {
+      "heading" : "3.2.3 Context Path Information Gathering",
+      "text" : "After extracting sentence-level claim representations u0,u1, · · · ,ul, a transformer layer is used to gather longer-range context representations. The transformer layer includes a position embedding layer to provide sinusoid positional embeddings, a gated multi-head attention layer, a feed-forward network, and a layer normalization. The position embedding layer in DISCOC is different from that in the vanilla Transformer because it generates position ids in a reversed order, i.e. l, l − 1, · · · , 0. The reversed order is helpful to model the contexts of variable length because the claim to be classified has the same position embedding. We also choose a gate to maintain the scale instead of using a residual connection. The gated transformer can generate meaningful representations because each claim can attend any other claims and itself. On the other hand, it perfectly fits the pair-wise encoding that imitates the recurrent networks to reduce the noise in irrelevant contexts and enhance the nearest context’s correlations. For example, in Figure 1, S2 is predicted as a result of S1 (with a probability\nof 39.17%) and a restatement (with a probability of 19.81%), and S1 is also a result of thesis (with a probability of 70.57%). Consequently, S2 is highrelevant to the thesis as a potential result if “physical torture is acceptable”, which can be captured by DISCOC. Finally, a 2-layer MLP with batch normalization is applied to vl of the last claim to predict its impact."
+    }, {
+      "heading" : "4 Experiments",
+      "text" : ""
+    }, {
+      "heading" : "4.1 Baseline Models",
+      "text" : "Majority. The baseline simply returns Impactful.\nSVM. Durmus et al. (2019) created linguistic features for a SVM classifier, such as named entity types, POS tags, special marks, tf-idf scores for n-grams, etc. We report the result from their paper.\nHAN. HAN (Yang et al., 2016) computes document vectors in a hierarchical way of encoding and aggregation. We replace its BiGRU with BiLSTM for the sake of comparison. And we also extend it with pretrained encoders and transformer layers.\nFlat-MLMs. Pretrained masked languages, e.g., RoBERTa, learn word representations and predict masked words by self-attention. We use these encoders to encode the flat context concatenation like [CTX] C0 [SEP] [CTX] · · · [CTX] C l−1 [SEP] as Segment A and [CLS] C l [SEP] as Segment B. After getting [CTX] and [CLS] representations, a gated transformer layer and a MLP predict impacts. As for XLNet, we follow its default setting so that [CTX] and [CLS] are located at the end of claims.\nInterval-MLMs. Flat-MLMs regard the context path as a whole segment and ignore the real discourse structures except the adjacency, e.g., distances between two claims are missing. We borrow the idea from BERT-SUM (Liu and Lapata, 2019): segment embeddings of Ci are assigned depending on whether the distance to C l is odd or even.\nContext-MLMs. We also compare pretrained encoders with context masks. A context mask is to localize the attention scope from the previous to the next. That is, Ci can attends words in Ci−1 and Ci+1 except for itself if 1 ≤ i < l; C0 can only attend C0, C1, and C l can only attend C l−1, C l.\nMemory-MLMs. XLNet utilizes memory to extend the capability of self-attention to learn super long historical text information. We also extend Flat-MLMs under this setting."
+    }, {
+      "heading" : "4.2 Model Configuration and Settings",
+      "text" : "We use pretrained base models 2 in DISCOC and baselines. We follow the same finetuning setting: classifiers are optimized by Adam (Kingma and Ba, 2015) with a scheduler and a maximum learning rate 2e-5. The learning rate scheduler consists of a linear warmup for the 6% steps and a linear decay for the remaining steps. As for BiLSTM and HAN, the maximum learning rate is 1e-3. The hidden state dimension of linear layers, the hidden units of LSTM layers, and projected dimensions for attention are 128. The number of the multi-head attention is set as 8. Dropout is applied after each layer and the probability is 0.1. We pick the best context path length l for each model by grid search from 0 to 5 on validation data with the batch size of 32 in 10 epochs. Each model runs five times."
+    }, {
+      "heading" : "4.3 Argument Impact Classification",
+      "text" : "Table 4 shows experimental results of different models. It is not surprising that neural models can easily beat traditional feature engineering methods in overall performance. But linguistic features still bring the highest precision. We also observe a significant 3.49% improvement with context vectors aggregating in HAN-BiLSTM compared with the simple BiLSTM. This indicates that it is necessary to model contexts with higher-level sentence features. Models with pretrained encoders benefit from representative embeddings, and HANRoBERTa achieves a gain of 5.49%. Flat context paths contain useful information to help detect the argument impact, but they also involve some noise from unrelated standpoints. Interval segment embeddings do not reduce noise but make BERT confused. It is counterintuitive that the segment embeddings depend on whether the distance is odd or even because BERT uses these for next sentence prediction. Since XLNet uses relative segment encodings instead of segment embeddings, Interval-XNet is better than Flat-XLNet in all three metrics. On the other hand, context masks bring another side effect for BERT, RoBERTa, and XLNet. Although these masks limit the attention scope at first sight, distant word information is able to flow to words with the increment of transformer layers. As a result, the uncertainty and attention bias increase after adding context masks. The memory storing context representations is also not helpful. The main reason is\n2BERT-base-uncased, RoBERTa-base, and XLNet-basecased are downloaded from huggingface.co\nthat the last claim’s update signal can not be used to update previous context representations. That is, Memory-models degenerate to models with frozen path features or even worth. DISCOC that we proposed can capture useful contexts and fuse in a comprehensive manner. Finally, DISCOC outperforms the second best model Flat-BERT over 1.61% and its backbone Flat-RoBERTa over 1.67%, the previous best model BERT by 2.38%."
+    }, {
+      "heading" : "4.4 Ablation Study",
+      "text" : "Influence of the Context Path Length\nDifferent claims have different contexts. We only report the best performance with a fixed maximum context path length in Table 4. Figure 5 shows F1 scores of models with different hyper-parameters. DISCOC always benefits from longer discourse contexts while other models get stuck in performance fluctuation. Most models can handle one context claim, which is consistent with our idea of pair-wise encoding. DISCOC has consistent performance gains; instead, other models cannot learn long-distance structures better. Each token in Flat-RoBERTa and Interval-RoBERTa can attend all other tokens, and the two are the most competitive baselines. However, Context-RoBERTa and Memory-RoBERTa limit the attention scope to the tokens of one previous claim, making models unable to make use of long-distance context information.\nRoBERTa vs. BERT\nAs shown in Table 4, there is little difference between the performance of RoBERTa variants and that of BERT variants. We conduct the experiment for DISCOC (E-BERT) with BERT as the encoder reported in Table 5. Its performance has achieved a significant boost over 1.29% despite the small gap between itself and DISCOC.\nAre Stances and Discourse Senses Helpful? We also remove either the stance token embedding or the discourse sense embeddings from DISCOC. The results in Table 5 suggest that both sides of structures are essential for modelling the correlation between the parent claim and the child claim. By comparison, discourse sense embeddings are more vital.\nAre Gated Transformers Necessary? We add a gated transformer layer to gather sentencelevel vectors. Such gathering is necessary for the proposed framework because each claim can only attend limited contexts. BiLSTM and convolutions can also be used for this purpose, so we replace the gated transformer layer with a BiLSTM or a convolutional layer. Moreover, we also remove it to make predictions by ul directly. The results in Table 5 show that the gated transformer is the irreplaceable part of DISCOC because it retains the contextualized representations and remains their scales. Simple removing it hurts recall enormously."
+    }, {
+      "heading" : "4.5 What Makes Claims Impactful?",
+      "text" : "High-coefficient Discourse Relation Patterns We use Logistic Regression to mine several interesting discourse relation patterns. Detailed settings are described in Appendix A, and results including the most high-coefficient patterns are listed in Table 6. We observe that some discourse relation path patterns are distinguishing for classifying individual impact labels. Instantiation is a typical relation that only occurs in the top patterns of Impactful. Also, Restatement is relatively frequent for Impactful (5 of top 10), but it is the relation between the grandparent and the parent. Providing additional resources (Restatement-Result) or objecting others’ repetitions (Restatement-Contrast) can increase the persuasive power. For the Medium Impact class, its top 10 significant patterns are the longest on aver-\nage. That indicates some views are usually considered ordinary in complex structures. Conjunction is the dominant relation (8 of top 10) so that we are suggested to avoid to go along with others. The case of Not Impactful is a little clearer, in the sense that it has a unique relation Chosen Alternative as one of the most significant patterns. Restatement also appears frequently, showing neither generalization, nor specification, nor paraphrasing of others’ views can help make claims stand out.\nCase Study\nIn Appendix A, we define Pr(r1, · · · , rl) as the joint probability to generate the discourse relation path (r1, · · · , rl) given the context (C0, C1, · · · , C l−1) and the claim C l. For example, the Pr(Reason,Contrast) is 56.59% which corresponds to an Impactful claim “There is no evidence for this” with its parent claim “Our bodies know how to recognise and process current foods; changing them through genetic modification will create health issues”. Furthermore, we find 5 of top 5 and 8 of top 10 are voted as Impactful claims after sorting based on Pr(Reason,Contrast). For a complex pattern Restatement-Restatement appearing in both top patterns of the Impactful and the Not Impactful, 3 cases with the maximum probabil-\nities are Not Impactful while the following 7 cases are Impactful. It is interesting that the thesis of the top 3 claims is the same discussion about an American politician. There are 25 Impactful claims and 22 Not Impactful claims in this topic, 24 of which are restatements of their parent claims. As for Restatement-Reason, the most top pattern of the Not Impactful, we find 7 of the top 10 claims relevant to politics, 2 of them about globalization, and one food-related. Therefore, there is no perfect answer in these quite controversial topics, and that is why Restatement and Reason appear frequently.\nEmpirical Results On the other hand, we check the performance of testing examples to verify the effectiveness of these discourse relation patterns. We choose the best model of DISCOC, whose F1 score is 59.04% as well as the best model of DISCOC (w/o DiscoE) whose F1 score is 58.06%. We select testing examples with specific discourse patterns, and performance differences are shown in Table 7. DISCOC benefits from 7 of the top 9 patterns and the performance margins are even more significant than the improvement of the overall results. Without giving discourse relation patterns, the model still has trouble capturing such implicit context influences. Empirical results support our idea that implicit discourse relations could affect the persuasiveness."
+    }, {
+      "heading" : "5 Related Work",
+      "text" : "There is an increasing interest in computational argumentation to evaluate the qualitative impact of arguments based on corpus extracted from Web Argumentation sources such as CMV sub-forum of Reddit (Tan et al., 2016). Studies explored the importance and effectiveness of various factors on determining the persuasiveness and convincingness of arguments, such as surface texture, social interaction and argumentation related features (Wei et al., 2016), characteristics of the source and audience (Durmus and Cardie, 2019; ShmueliScheuer et al., 2019; Durmus and Cardie, 2018), sequence ordering of arguments (Hidey and McKeown, 2018), and argument structure features (Li et al., 2020). The style feature is also proved to be significant in evaluating the persuasiveness of news editorial argumentation (Baff et al., 2020). Habernal and Gurevych (2016) conducted experiments in an entirely empirical manner, constructing a corpus for argument quality label classification and proposing several neural network models.\nIn addition to the features mentioned above, the role of pragmatic and discourse contexts has shown to be crucial by not yet fully explored. Zeng et al. (2020) examined how the contexts and the dynamic progress of argumentative conversations influence the comparative persuasiveness of an argumentation process. Durmus et al. (2019) created a new dataset based on argument claims and impact votes from a debate platform kialo.com, and experiments showed that incorporating contexts is useful to classify the argument impact.\nUnderstanding discourse relations is one of the fundamental tasks of natural language understanding, and it is beneficial for various downstream tasks such as sentiment analysis (Nejat et al., 2017; Bhatia et al., 2015), machine translation (Li et al., 2014) and text generation (Bosselut et al., 2018). Discourse information is also considered indicative for various tasks of computational argumentation. Eckle-Kohler et al. (2015) analyzed the role of discourse markers for discriminating claims and premises in argumentative discourse and found that particular semantic group of discourse markers are highly predictive features. Hidey and McKeown (2018) concatenated sentence vectors with discourse relation embeddings as sentence features for persuasiveness prediction and showed that discourse embeddings helped improve performance."
+    }, {
+      "heading" : "6 Conclusion",
+      "text" : "In this paper, we explicitly investigate how discourse structures influence the impact and the persuasiveness of an argument claim. We present DISCOC to produce discourse-dependent contextualized representations. Experiments and ablation studies show that our model improves its backbone RoBERTa around 1.67%. Instead, HAN and other attention mechanisms bring side effects. We discover distinct discourse relation path patterns and analyze representatives. In the future, we plan to explore discourse structures in other NLU tasks."
+    }, {
+      "heading" : "Acknowledgements",
+      "text" : "This paper was supported by the NSFC Grant (No. U20B2053) from China, the Early Career Scheme (ECS, No. 26206717), the General Research Fund (GRF, No. 16211520), and the Research Impact Fund (RIF, No. R6020-19 and No. R6021-20) from the Research Grants Council (RGC) of Hong Kong, with special thanks to the Huawei Noah’s Ark Lab for their gift fund."
+    }, {
+      "heading" : "A Discourse Relation Path Patterns",
+      "text" : "To explicitly explore important high-order discourse relation patterns, we model the process of yielding a concrete discourse relation path pdisco(C\nl) = (r1, · · · , rl) as a generative process. For a given context path (C0, C1, · · · , C l−1) and the claim C l, we define the pattern set as all possible patterns connected to C l. Mathematically, it is denoted as P = ∑l i=1 \"lj=iR, where \" is the Cartesian product. We assume that every ri ∈ pdisco(C l) is independent and identically distributed (i.i.d). Under this assumption, the joint probability of a given path of discourse relations (r1, · · · , rl) is\nPr(r1, · · · , rl) = Πli=1di[ri], (4)\nwhere di is the discourse relation distribution between Ci−1 and Ci, di[ri] is the probability of a specific relation sense ri. Observing the consistently increased performance of BiLSTM on discourse relations in Figure 3 when l starts from 1 to 3 and no noticeable enhancement with longer contexts, we analyze path-generated distributions for up to three previous claims. We compute the joint probabilities Pr(rl), P r(rl−1, rl), P r(rl−2, rl−1, rl) respectively and then concatenate these probabilities to get path pattern features x ∈ R(|R|+|R|2+|R|3) where each dimension of x corresponds to the probability of a pattern belonging to P . Next, the feature vector x is fed into a logistic regression (LR) model to train a one-vs-rest binary classifier for each of the three impact labels.\nWe report the largest top 10 coefficients of converged LR models in Table 6. Some relation path patterns are shown distinguishing for classifying individual impact labels. Coefficients vary differently among different LRs except for RestatementRestatement, which occurs in both Impactful and Not Impactful. In general, Instantiation is a typical relation that only occurs in the top patterns of Impactful. Also, Restatement is relatively frequent for Impactful (5 of top 10), but it is the relation between the grandparent and the parent. Providing additional resources (Restatement-Result) or objecting others’ repetitions (Restatement-Contrast) can increase the persuasive power. For the Medium Impact class, its top 10 significant patterns are the longest on average. That indicates some views are usually considered ordinary in complex structures. Conjunction is the dominant relation (8 of top 10)\nso that we are suggested to avoid to go along with others. The case of Not Impactful is a little clearer, in the sense that it has a unique relation Chosen Alternative as one of the most significant patterns. Restatement also appears frequently, showing that neither generalization, nor specification, nor paraphrasing of others’ views can help make claims stand out. These interesting correlations between discourse relation path patterns and argument quality could be further analysis from the linguistic perspective in future works."
+    } ],
+    "references" : [ {
+      "title" : "Analyzing the persuasive effect of style in news editorial argumentation",
+      "author" : [ "Roxanne El Baff", "Henning Wachsmuth", "Khalid Al Khatib", "Benno Stein." ],
+      "venue" : "ACL, pages 3154–3160.",
+      "citeRegEx" : "Baff et al\\.,? 2020",
+      "shortCiteRegEx" : "Baff et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Better document-level sentiment analysis from RST discourse parsing",
+      "author" : [ "Parminder Bhatia", "Yangfeng Ji", "Jacob Eisenstein." ],
+      "venue" : "EMNLP, pages 2212–2218.",
+      "citeRegEx" : "Bhatia et al\\.,? 2015",
+      "shortCiteRegEx" : "Bhatia et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Discourse-aware neural rewards for coherent text generation",
+      "author" : [ "Antoine Bosselut", "Asli Celikyilmaz", "Xiaodong He", "Jianfeng Gao", "Po-Sen Huang", "Yejin Choi." ],
+      "venue" : "NAACL-HLT, pages 173–184.",
+      "citeRegEx" : "Bosselut et al\\.,? 2018",
+      "shortCiteRegEx" : "Bosselut et al\\.",
+      "year" : 2018
+    }, {
+      "title" : "Generating long sequences with sparse transformers",
+      "author" : [ "Rewon Child", "Scott Gray", "Alec Radford", "Ilya Sutskever." ],
+      "venue" : "CoRR, abs/1904.10509.",
+      "citeRegEx" : "Child et al\\.,? 2019",
+      "shortCiteRegEx" : "Child et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Transformer-xl: Attentive language models beyond a fixed-length context",
+      "author" : [ "Zihang Dai", "Zhilin Yang", "Yiming Yang", "Jaime G. Carbonell", "Quoc Viet Le", "Ruslan Salakhutdinov." ],
+      "venue" : "ACL, pages 2978– 2988.",
+      "citeRegEx" : "Dai et al\\.,? 2019",
+      "shortCiteRegEx" : "Dai et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "BERT: pre-training of deep bidirectional transformers for language understanding",
+      "author" : [ "Jacob Devlin", "Ming-Wei Chang", "Kenton Lee", "Kristina Toutanova." ],
+      "venue" : "NAACL-HLT, pages 4171–4186.",
+      "citeRegEx" : "Devlin et al\\.,? 2019",
+      "shortCiteRegEx" : "Devlin et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Exploring the role of prior beliefs for argument persuasion",
+      "author" : [ "Esin Durmus", "Claire Cardie." ],
+      "venue" : "NAACL-HLT, pages 1035–1045.",
+      "citeRegEx" : "Durmus and Cardie.,? 2018",
+      "shortCiteRegEx" : "Durmus and Cardie.",
+      "year" : 2018
+    }, {
+      "title" : "Modeling the factors of user success in online debate",
+      "author" : [ "Esin Durmus", "Claire Cardie." ],
+      "venue" : "WWW, pages 2701–2707.",
+      "citeRegEx" : "Durmus and Cardie.,? 2019",
+      "shortCiteRegEx" : "Durmus and Cardie.",
+      "year" : 2019
+    }, {
+      "title" : "The role of pragmatic and discourse context in determining argument impact",
+      "author" : [ "Esin Durmus", "Faisal Ladhak", "Claire Cardie." ],
+      "venue" : "EMNLP-IJCNLP, pages 5667–5677.",
+      "citeRegEx" : "Durmus et al\\.,? 2019",
+      "shortCiteRegEx" : "Durmus et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "On the role of discourse markers for discriminating claims and premises in argumentative discourse",
+      "author" : [ "Judith Eckle-Kohler", "Roland Kluge", "Iryna Gurevych." ],
+      "venue" : "EMNLP, pages 2236–2242.",
+      "citeRegEx" : "Eckle.Kohler et al\\.,? 2015",
+      "shortCiteRegEx" : "Eckle.Kohler et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "What makes a convincing argument? empirical analysis and detecting attributes of convincingness in web argumentation",
+      "author" : [ "Ivan Habernal", "Iryna Gurevych." ],
+      "venue" : "EMNLP, pages 1214–1223.",
+      "citeRegEx" : "Habernal and Gurevych.,? 2016",
+      "shortCiteRegEx" : "Habernal and Gurevych.",
+      "year" : 2016
+    }, {
+      "title" : "Persuasive influence detection: The role of argument sequencing",
+      "author" : [ "Christopher Hidey", "Kathleen R. McKeown." ],
+      "venue" : "AAAI, pages 5173–5180.",
+      "citeRegEx" : "Hidey and McKeown.,? 2018",
+      "shortCiteRegEx" : "Hidey and McKeown.",
+      "year" : 2018
+    }, {
+      "title" : "Adam: A method for stochastic optimization",
+      "author" : [ "Diederik P. Kingma", "Jimmy Ba." ],
+      "venue" : "ICLR.",
+      "citeRegEx" : "Kingma and Ba.,? 2015",
+      "shortCiteRegEx" : "Kingma and Ba.",
+      "year" : 2015
+    }, {
+      "title" : "Multi-task attentionbased neural networks for implicit discourse relationship representation and identification",
+      "author" : [ "Man Lan", "Jianxiang Wang", "Yuanbin Wu", "Zheng-Yu Niu", "Haifeng Wang." ],
+      "venue" : "EMNLP, pages 1299–1308.",
+      "citeRegEx" : "Lan et al\\.,? 2017",
+      "shortCiteRegEx" : "Lan et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Exploring the role of argument structure in online debate persuasion",
+      "author" : [ "Jialu Li", "Esin Durmus", "Claire Cardie." ],
+      "venue" : "EMNLP, pages 8905–8912.",
+      "citeRegEx" : "Li et al\\.,? 2020",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Assessing the discourse factors that influence the quality of machine translation",
+      "author" : [ "Junyi Jessy Li", "Marine Carpuat", "Ani Nenkova." ],
+      "venue" : "ACL, pages 283–288.",
+      "citeRegEx" : "Li et al\\.,? 2014",
+      "shortCiteRegEx" : "Li et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "Recognizing implicit discourse relations in the penn discourse treebank",
+      "author" : [ "Ziheng Lin", "Min-Yen Kan", "Hwee Tou Ng." ],
+      "venue" : "ACL, pages 343–351.",
+      "citeRegEx" : "Lin et al\\.,? 2009",
+      "shortCiteRegEx" : "Lin et al\\.",
+      "year" : 2009
+    }, {
+      "title" : "On the importance of word and sentence representation learning in implicit discourse relation classification",
+      "author" : [ "Xin Liu", "Jiefu Ou", "Yangqiu Song", "Xin Jiang." ],
+      "venue" : "IJCAI, pages 3830–3836.",
+      "citeRegEx" : "Liu et al\\.,? 2020",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2020
+    }, {
+      "title" : "Text summarization with pretrained encoders",
+      "author" : [ "Yang Liu", "Mirella Lapata." ],
+      "venue" : "EMNLP-IJCNLP, pages 3728–3738.",
+      "citeRegEx" : "Liu and Lapata.,? 2019",
+      "shortCiteRegEx" : "Liu and Lapata.",
+      "year" : 2019
+    }, {
+      "title" : "Roberta: A robustly optimized BERT pretraining approach",
+      "author" : [ "Yinhan Liu", "Myle Ott", "Naman Goyal", "Jingfei Du", "Mandar Joshi", "Danqi Chen", "Omer Levy", "Mike Lewis", "Luke Zettlemoyer", "Veselin Stoyanov." ],
+      "venue" : "CoRR, abs/1907.11692.",
+      "citeRegEx" : "Liu et al\\.,? 2019",
+      "shortCiteRegEx" : "Liu et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Exploring joint neural model for sentence level discourse parsing and sentiment analysis",
+      "author" : [ "Bita Nejat", "Giuseppe Carenini", "Raymond Ng." ],
+      "venue" : "SIGDIAL, pages 289–298.",
+      "citeRegEx" : "Nejat et al\\.,? 2017",
+      "shortCiteRegEx" : "Nejat et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Glove: Global vectors for word representation",
+      "author" : [ "Jeffrey Pennington", "Richard Socher", "Christopher D. Manning." ],
+      "venue" : "EMNLP, pages 1532–1543.",
+      "citeRegEx" : "Pennington et al\\.,? 2014",
+      "shortCiteRegEx" : "Pennington et al\\.",
+      "year" : 2014
+    }, {
+      "title" : "The penn discourse treebank",
+      "author" : [ "Rashmi Prasad", "Nikhil Dinesh", "Alan Lee", "Eleni Miltsakaki", "Livio Robaldo", "Aravind K. Joshi", "Bonnie L. Webber" ],
+      "venue" : null,
+      "citeRegEx" : "Prasad et al\\.,? \\Q2008\\E",
+      "shortCiteRegEx" : "Prasad et al\\.",
+      "year" : 2008
+    }, {
+      "title" : "Detecting persuasive arguments based on author-reader personality traits and their interaction",
+      "author" : [ "Michal Shmueli-Scheuer", "Jonathan Herzig", "David Konopnicki", "Tommy Sandbank." ],
+      "venue" : "ACMUMAP, pages 211–215.",
+      "citeRegEx" : "Shmueli.Scheuer et al\\.,? 2019",
+      "shortCiteRegEx" : "Shmueli.Scheuer et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Winning arguments: Interaction dynamics and persuasion strategies in good-faith online discussions",
+      "author" : [ "Chenhao Tan", "Vlad Niculae", "Cristian DanescuNiculescu-Mizil", "Lillian Lee." ],
+      "venue" : "WWW, pages 613–624.",
+      "citeRegEx" : "Tan et al\\.,? 2016",
+      "shortCiteRegEx" : "Tan et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "Discourse relation prediction: Revisiting word pairs with convolutional networks",
+      "author" : [ "Siddharth Varia", "Christopher Hidey", "Tuhin Chakrabarty." ],
+      "venue" : "SIGdial, pages 442–452.",
+      "citeRegEx" : "Varia et al\\.,? 2019",
+      "shortCiteRegEx" : "Varia et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Attention is all you need",
+      "author" : [ "Ashish Vaswani", "Noam Shazeer", "Niki Parmar", "Jakob Uszkoreit", "Llion Jones", "Aidan N. Gomez", "Lukasz Kaiser", "Illia Polosukhin." ],
+      "venue" : "NeurIPS, pages 5998–6008.",
+      "citeRegEx" : "Vaswani et al\\.,? 2017",
+      "shortCiteRegEx" : "Vaswani et al\\.",
+      "year" : 2017
+    }, {
+      "title" : "Is this post persuasive? ranking argumentative comments in online forum",
+      "author" : [ "Zhongyu Wei", "Yang Liu", "Yi Li." ],
+      "venue" : "ACL, pages 195–200.",
+      "citeRegEx" : "Wei et al\\.,? 2016",
+      "shortCiteRegEx" : "Wei et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "The conll-2015 shared task on shallow discourse parsing",
+      "author" : [ "Nianwen Xue", "Hwee Tou Ng", "Sameer Pradhan", "Rashmi Prasad", "Christopher Bryant", "Attapol Rutherford." ],
+      "venue" : "CoNLL, pages 1–16.",
+      "citeRegEx" : "Xue et al\\.,? 2015",
+      "shortCiteRegEx" : "Xue et al\\.",
+      "year" : 2015
+    }, {
+      "title" : "Xlnet: Generalized autoregressive pretraining for language understanding",
+      "author" : [ "Zhilin Yang", "Zihang Dai", "Yiming Yang", "Jaime G. Carbonell", "Ruslan Salakhutdinov", "Quoc V. Le." ],
+      "venue" : "NeurIPS, pages 5754– 5764.",
+      "citeRegEx" : "Yang et al\\.,? 2019",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2019
+    }, {
+      "title" : "Hierarchical attention networks for document classification",
+      "author" : [ "Zichao Yang", "Diyi Yang", "Chris Dyer", "Xiaodong He", "Alexander J. Smola", "Eduard H. Hovy." ],
+      "venue" : "NAACL, pages 1480–1489.",
+      "citeRegEx" : "Yang et al\\.,? 2016",
+      "shortCiteRegEx" : "Yang et al\\.",
+      "year" : 2016
+    }, {
+      "title" : "What changed your mind: The roles of dynamic topics and discourse in argumentation process",
+      "author" : [ "Jichuan Zeng", "Jing Li", "Yulan He", "Cuiyun Gao", "Michael R. Lyu", "Irwin King." ],
+      "venue" : "WWW, pages 1502–1513.",
+      "citeRegEx" : "Zeng et al\\.,? 2020",
+      "shortCiteRegEx" : "Zeng et al\\.",
+      "year" : 2020
+    } ],
+    "referenceMentions" : [ {
+      "referenceID" : 27,
+      "context" : "Previous works have shown that many factors can affect the persuasiveness prediction, ranging from textual and argumentation features (Wei et al., 2016), style factors (Baff et al.",
+      "startOffset" : 134,
+      "endOffset" : 152
+    }, {
+      "referenceID" : 0,
+      "context" : ", 2016), style factors (Baff et al., 2020), to the traits of source or audience (Durmus and Cardie, 2018, 2019; ShmueliScheuer et al.",
+      "startOffset" : 23,
+      "endOffset" : 42
+    }, {
+      "referenceID" : 22,
+      "context" : "They find BERT with flat context concatenation is the best, but discourse structures are not easily captured by this method because it is difficult to reflect implicit discourse relations by the surface form of two arguments (Prasad et al., 2008; Lin et al., 2009; Xue et al., 2015; Lan et al., 2017; Varia et al., 2019).",
+      "startOffset" : 225,
+      "endOffset" : 320
+    }, {
+      "referenceID" : 16,
+      "context" : "They find BERT with flat context concatenation is the best, but discourse structures are not easily captured by this method because it is difficult to reflect implicit discourse relations by the surface form of two arguments (Prasad et al., 2008; Lin et al., 2009; Xue et al., 2015; Lan et al., 2017; Varia et al., 2019).",
+      "startOffset" : 225,
+      "endOffset" : 320
+    }, {
+      "referenceID" : 28,
+      "context" : "They find BERT with flat context concatenation is the best, but discourse structures are not easily captured by this method because it is difficult to reflect implicit discourse relations by the surface form of two arguments (Prasad et al., 2008; Lin et al., 2009; Xue et al., 2015; Lan et al., 2017; Varia et al., 2019).",
+      "startOffset" : 225,
+      "endOffset" : 320
+    }, {
+      "referenceID" : 13,
+      "context" : "They find BERT with flat context concatenation is the best, but discourse structures are not easily captured by this method because it is difficult to reflect implicit discourse relations by the surface form of two arguments (Prasad et al., 2008; Lin et al., 2009; Xue et al., 2015; Lan et al., 2017; Varia et al., 2019).",
+      "startOffset" : 225,
+      "endOffset" : 320
+    }, {
+      "referenceID" : 25,
+      "context" : "They find BERT with flat context concatenation is the best, but discourse structures are not easily captured by this method because it is difficult to reflect implicit discourse relations by the surface form of two arguments (Prasad et al., 2008; Lin et al., 2009; Xue et al., 2015; Lan et al., 2017; Varia et al., 2019).",
+      "startOffset" : 225,
+      "endOffset" : 320
+    }, {
+      "referenceID" : 19,
+      "context" : "By simple finetuning, our model beats the backbone RoBERTa (Liu et al., 2019) over 1.",
+      "startOffset" : 59,
+      "endOffset" : 77
+    }, {
+      "referenceID" : 22,
+      "context" : "relations (Prasad et al., 2008), we model the discourse structures from a view of discourse relations.",
+      "startOffset" : 10,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 17,
+      "context" : "BMGF-RoBERTa (Liu et al., 2020) is the state-of-the-art model proposed to detect implicit",
+      "startOffset" : 13,
+      "endOffset" : 31
+    }, {
+      "referenceID" : 28,
+      "context" : "In this work, we adopt the 14 discourse relation senses in CoNLL2015 Shared Task (Xue et al., 2015) as R.",
+      "startOffset" : 81,
+      "endOffset" : 99
+    }, {
+      "referenceID" : 21,
+      "context" : "Each claim has [BOS] and [EOS] tokens to clarify boundaries and we use 300-dim pretrained GloVe word embeddings (Pennington et al., 2014) and remain them fixed.",
+      "startOffset" : 112,
+      "endOffset" : 137
+    }, {
+      "referenceID" : 26,
+      "context" : "Transformer (Vaswani et al., 2017) and BERT (Devlin et al.",
+      "startOffset" : 12,
+      "endOffset" : 34
+    }, {
+      "referenceID" : 5,
+      "context" : ", 2017) and BERT (Devlin et al., 2019) adopt full-range attentions while TransformerXL (Dai et al.",
+      "startOffset" : 17,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 4,
+      "context" : ", 2019) adopt full-range attentions while TransformerXL (Dai et al., 2019) and XLNet (Yang et al.",
+      "startOffset" : 56,
+      "endOffset" : 74
+    }, {
+      "referenceID" : 3,
+      "context" : "SparseTransformer (Child et al., 2019), in the opposite direction, stacks hundreds of layers by narrow the attention scope by sparse factorization.",
+      "startOffset" : 18,
+      "endOffset" : 38
+    }, {
+      "referenceID" : 17,
+      "context" : "The gated fusion (Liu et al., 2020) has been shown of a better mixture than the combination of multihead attention and layer normalization.",
+      "startOffset" : 17,
+      "endOffset" : 35
+    }, {
+      "referenceID" : 18,
+      "context" : "We borrow the idea from BERT-SUM (Liu and Lapata, 2019): segment embeddings of Ci are assigned depending on whether the distance to C l is odd or even.",
+      "startOffset" : 33,
+      "endOffset" : 55
+    }, {
+      "referenceID" : 12,
+      "context" : "We follow the same finetuning setting: classifiers are optimized by Adam (Kingma and Ba, 2015) with a scheduler and a maximum learn-",
+      "startOffset" : 73,
+      "endOffset" : 94
+    }, {
+      "referenceID" : 24,
+      "context" : "There is an increasing interest in computational argumentation to evaluate the qualitative impact of arguments based on corpus extracted from Web Argumentation sources such as CMV sub-forum of Reddit (Tan et al., 2016).",
+      "startOffset" : 200,
+      "endOffset" : 218
+    }, {
+      "referenceID" : 27,
+      "context" : "tures (Wei et al., 2016), characteristics of the source and audience (Durmus and Cardie, 2019; ShmueliScheuer et al.",
+      "startOffset" : 6,
+      "endOffset" : 24
+    }, {
+      "referenceID" : 7,
+      "context" : ", 2016), characteristics of the source and audience (Durmus and Cardie, 2019; ShmueliScheuer et al., 2019; Durmus and Cardie, 2018), sequence ordering of arguments (Hidey and McKeown, 2018), and argument structure features (Li et al.",
+      "startOffset" : 52,
+      "endOffset" : 131
+    }, {
+      "referenceID" : 6,
+      "context" : ", 2016), characteristics of the source and audience (Durmus and Cardie, 2019; ShmueliScheuer et al., 2019; Durmus and Cardie, 2018), sequence ordering of arguments (Hidey and McKeown, 2018), and argument structure features (Li et al.",
+      "startOffset" : 52,
+      "endOffset" : 131
+    }, {
+      "referenceID" : 11,
+      "context" : ", 2019; Durmus and Cardie, 2018), sequence ordering of arguments (Hidey and McKeown, 2018), and argument structure features (Li et al.",
+      "startOffset" : 65,
+      "endOffset" : 90
+    }, {
+      "referenceID" : 14,
+      "context" : ", 2019; Durmus and Cardie, 2018), sequence ordering of arguments (Hidey and McKeown, 2018), and argument structure features (Li et al., 2020).",
+      "startOffset" : 124,
+      "endOffset" : 141
+    }, {
+      "referenceID" : 0,
+      "context" : "The style feature is also proved to be significant in evaluating the persuasiveness of news editorial argumentation (Baff et al., 2020).",
+      "startOffset" : 116,
+      "endOffset" : 135
+    }, {
+      "referenceID" : 20,
+      "context" : "Understanding discourse relations is one of the fundamental tasks of natural language understanding, and it is beneficial for various downstream tasks such as sentiment analysis (Nejat et al., 2017; Bhatia et al., 2015), machine translation (Li et al.",
+      "startOffset" : 178,
+      "endOffset" : 219
+    }, {
+      "referenceID" : 1,
+      "context" : "Understanding discourse relations is one of the fundamental tasks of natural language understanding, and it is beneficial for various downstream tasks such as sentiment analysis (Nejat et al., 2017; Bhatia et al., 2015), machine translation (Li et al.",
+      "startOffset" : 178,
+      "endOffset" : 219
+    }, {
+      "referenceID" : 15,
+      "context" : ", 2015), machine translation (Li et al., 2014) and text generation (Bosselut et al.",
+      "startOffset" : 29,
+      "endOffset" : 46
+    } ],
+    "year" : 2021,
+    "abstractText" : "Discourse relations among arguments reveal logical structures of a debate conversation. However, no prior work has explicitly studied how the sequence of discourse relations influence a claim’s impact. This paper empirically shows that the discourse relations between two arguments along the context path are essential factors for identifying the persuasive power of an argument. We further propose DISCOC to inject and fuse the sentence-level structural discourse information with contextualized features derived from large-scale language models. Experimental results and extensive analysis show that the attention and gate mechanisms that explicitly model contexts and texts can indeed help the argument impact classification task defined by Durmus et al. (2019), and discourse structures among the context path of the claim to be classified can further boost the performance.",
+    "creator" : "LaTeX with hyperref"
+  }
+}
