@@ -58,11 +58,12 @@ def tagger(sent,dict):
 	# make it to lower
 	sent = sent.lower()
 	words_list = word_tokenize(sent)
-	temp = ' '.join(words_list)
-	# labels = np.array(['O']*len(words_list))
 	labels = ['O']*len(words_list)
 	for i in dict:
 		for j in dict[i]:
+			# if j.lower() not in ' '.join(words_list):
+			# 	continue
+			print(j)
 			j=word_tokenize(j)
 			for k in range(len(words_list)):
 				if words_list[k:k+len(j)] == j:
@@ -73,6 +74,13 @@ def tagger(sent,dict):
 	return words_list,labels
 # loop through the .json files in pdfjson
 def formatter(text,header,s):
+		text=text.replace('\ud835','')
+		text=text.replace('\udc60','')
+		text=text.replace('\udc3a','')
+		text=text.replace('\udc56','')
+		text=text.replace('\udc63','')
+		text=text.replace('\udc3a','')
+		# text=text.replace('\ud835','')
 		sents = sent_tokenize(text)
 		for sent in sents:
 			s+=header
@@ -83,10 +91,11 @@ def formatter(text,header,s):
 		return s
 # main function
 if __name__ == '__main__':
-	dict_loader(dict)
+	# dict_loader(dict)
 	s=''
 	count = 0
 	document_size = 40
+	# document_size = 575
 	for filename in tqdm(os.listdir(pdfjson)):
 		if count==document_size:
 			break
@@ -104,12 +113,14 @@ if __name__ == '__main__':
 				s=formatter(section['text'],'section '+str(i)+'\nid '+pdfjson+'/'+filename+'\n',s)
 				i+=1
 		# save s to a text file
-		if count<=document_size*0.70:
+		if count==int(document_size*0.70):
 			with open('train.txt','w') as f:
 				f.write(s)
-		elif count<=document_size*0.85:
+			s=''
+		elif count==int(document_size*0.85):
 			with open('dev.txt','w') as f:
 				f.write(s)
+			s=''
 		else:
 			with open('test.txt','w') as f:
 				f.write(s)
